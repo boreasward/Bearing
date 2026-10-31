@@ -39,7 +39,7 @@
 
 | 位置 | 内容 |
 | --- | --- |
-| [roadmap/roadmap.md](roadmap/roadmap.md) | 唯一的路线文档：最终目标与成功标准、原则与边界、版本总览、当前路线 v2.5–v2.12（v2.8 于 2026-10-28 重定义为每日工作流，2026-10-29 发布 `v2.8.0`；v2.9 可执行的计划于 2026-10-30 插入并发布 `v2.9.0`——[spec](specs/2026-10-30-v2.9-executable-plans-design.md)、[plan](plans/2026-10-30-v2.9-executable-plans.md)；v2.10 设计标准与界面重构于同日插入，2026-10-31 发布 `v2.10.0`、同日修正版 `v2.10.1`——[spec](specs/2026-10-30-v2.10-design-system-and-ui-refactor-design.md)、[plan](plans/2026-10-30-v2.10-design-system-and-ui-refactor.md)）、远期方向、backlog、DoD 与状态用语、决策记录；同目录 `v2.x-acceptance.md` 是各版验收证据 |
+| [roadmap/roadmap.md](roadmap/roadmap.md) | 唯一的路线文档：最终目标与成功标准、原则与边界、版本总览、当前路线 v2.5–v2.13（v2.8 于 2026-10-28 重定义为每日工作流，2026-10-29 发布 `v2.8.0`；v2.9 可执行的计划于 2026-10-30 插入并发布 `v2.9.0`——[spec](specs/2026-10-30-v2.9-executable-plans-design.md)、[plan](plans/2026-10-30-v2.9-executable-plans.md)；v2.10 设计标准与界面重构于同日插入，2026-10-31 发布 `v2.10.0`、同日修正版 `v2.10.1`——[spec](specs/2026-10-30-v2.10-design-system-and-ui-refactor-design.md)、[plan](plans/2026-10-30-v2.10-design-system-and-ui-refactor.md)；v2.11 账户与模拟交易于 2026-10-31 插入，实施已开工——[spec](specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md)、[plan](plans/2026-10-31-v2.11-accounts-and-paper-trading.md)）、远期方向、backlog、DoD 与状态用语、决策记录；同目录 `v2.x-acceptance.md` 是各版验收证据 |
 | [roadmap/v2.8-runtime-feasibility.md](roadmap/v2.8-runtime-feasibility.md) | 本地 CLI 运行时可行性报告（2026-10-28）：`claude-code`、`codex`、`pi` 在无人值守、禁用自带工具、接本地 MCP、token 用量、批处理时限五项上的实测。**同日被 roadmap 决策 #63 取代**（v2.8 不再做运行时切换），保留为历史依据 |
 | [specs/](specs/) | 各阶段的设计 spec |
 | [plans/](plans/) | 各阶段的实施 plan |
