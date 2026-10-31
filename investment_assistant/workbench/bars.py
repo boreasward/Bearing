@@ -31,9 +31,16 @@ def _yfinance_fetcher(ticker: str, start: date, end: date) -> pd.DataFrame:
     # The shared curl_cffi session, so libcurl's total / connect timeouts apply to every request yfinance makes
     # (cookie, crumb, history), plus a thread-level backstop (fetch-1 spec §6.2 row 1, §6.3).
     def call() -> pd.DataFrame:
-        return yf.Ticker(ticker, session=fetch_policy.shared_yf_session()).history(
-            start=start.isoformat(), end=end.isoformat(), auto_adjust=False, actions=True,
-            timeout=fetch_policy.TOTAL_TIMEOUT_S)
+        from yfinance.exceptions import YFPricesMissingError, YFTzMissingError
+
+        try:
+            return yf.Ticker(ticker, session=fetch_policy.shared_yf_session()).history(
+                start=start.isoformat(), end=end.isoformat(), auto_adjust=False, actions=True,
+                timeout=fetch_policy.TOTAL_TIMEOUT_S)
+        except (YFPricesMissingError, YFTzMissingError):
+            # Yahoo answered and had nothing for this ticker / range (the shared session shows yfinance's
+            # exceptions, so a transport failure never lands here): the caller's final ``empty``.
+            return pd.DataFrame()
 
     return fetch_policy.hard_deadline(call, seconds=fetch_policy.YF_HARD_DEADLINE_S)
 

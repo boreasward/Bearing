@@ -124,7 +124,10 @@ def _chain(exc: BaseException):
             continue
         seen.add(id(item))
         yield item
-        stack.extend([item.__cause__, item.__context__, getattr(item, 'reason', None)])
+        # ``reason`` is an exception on urllib3 / requests errors but a plain str on ``ssl.SSLError`` and
+        # ``urllib.error.HTTPError``: only exceptions continue the chain.
+        stack.extend(x for x in (item.__cause__, item.__context__, getattr(item, 'reason', None))
+                     if isinstance(x, BaseException))
         stack.extend(a for a in getattr(item, 'args', ()) if isinstance(a, BaseException))
 
 
@@ -416,5 +419,13 @@ def shared_yf_session():
     jar each time and make Yahoo's crumb check fail and refetch. Built with the default ``fetch-1`` numbers."""
     with _SHARED_YF_LOCK:
         if not _SHARED_YF:
+            import yfinance as yf
+
+            # yfinance's default swallows every transport error inside ``history()`` / the timezone lookup and hands
+            # back an empty frame ("possibly delisted; no price data found"), which the callers can only classify as
+            # a final ``empty``. With exceptions visible a proxy or connection failure reaches ``fetch`` as
+            # ``network`` / ``timeout`` and is retried; Yahoo's own "no data" answers stay typed exceptions the
+            # callers map to ``empty`` themselves (2026-10-31 ``benchmark_missing``).
+            yf.config.debug.hide_exceptions = False
             _SHARED_YF.append(yf_session())
         return _SHARED_YF[0]

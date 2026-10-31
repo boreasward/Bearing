@@ -343,6 +343,22 @@ def test_post_policy_resend_is_off_even_for_reset_after_send(server):
     assert err.kind == 'network' and server.hits['/reset'] == 1 and sleeps == []
 
 
+
+def test_post_policy_survives_a_string_reason_in_the_chain():
+    """``ssl.SSLError.reason`` is a str; walking the chain to decide "did the POST leave?" must skip it, not crash."""
+    import ssl
+
+    inner = ssl.SSLError(1, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred')
+    inner.reason = 'UNEXPECTED_EOF_WHILE_READING'
+
+    def fn():
+        raise requests.exceptions.SSLError('tls handshake failed') from inner
+
+    assert fp.request_never_sent(inner) is False
+    with pytest.raises(fp.FetchError) as caught:
+        fp.fetch('t', fn, policy=FAST_POST, sleep=lambda s: None)
+    assert caught.value.kind == 'network' and len(caught.value.attempts) == 1
+
 # ---------------------------------------------------------------- hard_deadline / yf_session
 
 def test_hard_deadline_raises_timeout():

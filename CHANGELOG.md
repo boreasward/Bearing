@@ -2,6 +2,14 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/roadmap/roadmap.md)。
 
+## 未发布
+
+### 修正
+
+- **Agent 单元被「`'str' object has no attribute '__cause__'`」记成 `model_error`**（2026-10-31 定时运行，ROP）：`data/fetch_policy._chain` 沿异常链走时把 `reason` 属性也当异常压栈，而 `ssl.SSLError.reason` 是字符串，下一步取 `__cause__` 就崩；这一步只在「POST 不重发」策略判断请求是否发出时经过，所以恰好打在 ChatGPT 令牌续期经代理出 TLS 错误的那一次，AttributeError 穿过 `_run_agent_unit` 被记成模型错误，真正的网络错误文本也丢了。现在链上只跟进异常对象；新增测试 `test_post_policy_survives_a_string_reason_in_the_chain`。
+- **代理抖动被当成「Yahoo 无数据」，筛选 `benchmark_missing`**（同一次运行，QQQ 等 19 只 10/30 日线缺失）：yfinance 默认 `hide_exceptions=True`，`history()` 与时区查询遇到任何传输错误都只打一行「possibly delisted; no price data found」并返回空表，`bars.py` 只能记成不重试的 `empty`。现在建立共享 yfinance 会话时关掉 `hide_exceptions`：传输失败按 `network` / `timeout` 走 fetch-1 重试，日线那一路只把 `YFPricesMissingError` / `YFTzMissingError` 收成原来的 `empty`（失败文案不变）。顺带的口径变化：财报日的 `4xx` / `5xx` 与资讯搜索的解析失败从此是该目标的失败而不是空结果。概念卡 `system.fetch_policy` 升到 `version: 2`；[data-menu.md](docs/features/data-menu.md) 同步。新增测试 `test_yfinance_transport_failure_surfaces_as_a_network_error`（死代理端口）与 `test_yfinance_no_data_answer_is_still_an_empty_result`。
+- 两处都是后端修正，**无迁移，`.env` 与 LaunchAgent plist 不变**；需要重启服务生效，10/30 缺失的日线要手动补拉一次并重跑筛选。
+
 ## v2.10.1 — 2026-10-31
 
 修正 v2.10 真实验收发现的两处「今日」布局问题，只改前端样式。功能、接口、口径、地址不变；**无迁移，`.env` 与 LaunchAgent plist 不变**。版本号：`web/package.json` 与 `web/package-lock.json` 的根包 `2.10.1`。

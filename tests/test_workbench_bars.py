@@ -57,6 +57,43 @@ def test_fetch_history_raises_on_empty():
         bars.fetch_history('NVDA', date(2026, 10, 1), date(2026, 10, 21), fetcher=lambda *a: pd.DataFrame())
 
 
+
+def test_yfinance_transport_failure_surfaces_as_a_network_error(monkeypatch):
+    """A proxy / connection failure must reach fetch-1 as ``network`` (retried), not come back as an empty frame
+    that bars.py turns into a final ``empty`` (the 2026-10-31 QQQ ``benchmark_missing``)."""
+    import socket
+
+    from investment_assistant.data import fetch_policy as fp
+
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        dead_proxy = f'http://127.0.0.1:{sock.getsockname()[1]}'
+    for name in ('HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'):
+        monkeypatch.setenv(name, dead_proxy)
+    monkeypatch.setattr(fp, '_SHARED_YF', [])        # a session built under this environment
+    with pytest.raises(Exception) as caught:
+        bars._yfinance_fetcher('QQQ', date(2026, 10, 20), date(2026, 10, 31))
+    assert not isinstance(caught.value, bars.BarsUnavailable)
+    assert fp.classify_exception(caught.value)[0] == 'network'
+
+
+def test_yfinance_no_data_answer_is_still_an_empty_result(monkeypatch):
+    """Yahoo answering "no price data" (or no timezone) for the range stays the final ``empty`` with the usual text."""
+    import yfinance as yf
+    from yfinance.exceptions import YFPricesMissingError, YFTzMissingError
+
+    for exc in (YFPricesMissingError('QQQ', ' (1d 2026-10-20 -> 2026-10-31)'), YFTzMissingError('QQQ')):
+        class FakeTicker:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def history(self, **kwargs):
+                raise exc
+
+        monkeypatch.setattr(yf, 'Ticker', FakeTicker)
+        with pytest.raises(bars.BarsUnavailable, match='no bars returned for QQQ 2026-10-20..2026-10-31'):
+            bars.fetch_history('QQQ', date(2026, 10, 20), date(2026, 10, 31))
+
 @pytest.mark.parametrize('now, expected', [
     (datetime(2026, 10, 22, 22, 30, tzinfo=UTC), date(2026, 10, 22)),  # Thu 18:30 NY, session closed
     (datetime(2026, 10, 22, 19, 0, tzinfo=UTC), date(2026, 10, 21)),   # Thu 15:00 NY, still open
