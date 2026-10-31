@@ -83,6 +83,47 @@ def test_seq_increments_across_phases():
     assert [c['phase'] for c in rec.calls] == ['propose', 'propose', 'counter']
 
 
+def test_concurrent_records_get_distinct_monotonic_seqs():
+    """ToolNode runs a round's parallel tool calls on a thread pool; two records that interleave must still
+    get distinct ``call:N`` (MU 2026-10-28 attempt 2 and LIN 2026-10-30 both wrote two calls with one seq
+    and the unit died on the ``(run_id, seq)`` unique key)."""
+    import threading
+
+    barrier = threading.Barrier(2)
+
+    class RendezvousList(list):
+        """``len()`` waits for the other recorder thread, so an unguarded ``len + 1`` numbering
+        hands both threads the same number; a guarded one times the barrier out and proceeds."""
+        def __len__(self):
+            n = super().__len__()
+            try:
+                barrier.wait(timeout=0.5)
+            except threading.BrokenBarrierError:
+                pass
+            return n
+
+    rec = Recorder()
+    rec.calls = RendezvousList()
+    envelopes: list[dict] = []
+    errors: list[BaseException] = []
+
+    def worker(tool):
+        try:
+            envelopes.append(rec.record(tool, {}, data={'x': tool}, now=CUTOFF))
+        except BaseException as exc:   # noqa: BLE001 - surfaced by the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(t,)) for t in ('get_indicators', 'get_news')]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+    assert not errors
+    assert sorted(e['ref'] for e in envelopes) == ['call:1', 'call:2']
+    assert sorted(c['seq'] for c in rec.calls) == [1, 2]
+    assert [c['result']['ref'] for c in rec.calls] == [f"call:{c['seq']}" for c in rec.calls]
+
+
 def test_price_refs_exclude_errors():
     rec = Recorder()
     rec.record('get_price_bars', {}, data={'bars': []}, now=CUTOFF)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -62,17 +63,23 @@ class ToolContext:
 class Recorder:
     phase: str = 'propose'
     calls: list[dict] = field(default_factory=list)
+    # LangGraph's ToolNode runs the tool calls of one model turn on a thread pool, so records interleave;
+    # numbering and appending happen under one lock so ``seq`` is unique, gapless and monotonic
+    # (``agent_tool_calls`` has a unique key on ``(run_id, seq)``).
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     def record(self, tool: str, args: dict, *, data: Any = None, error: str | None = None,
                now: datetime) -> dict:
-        seq = len(self.calls) + 1
-        envelope: dict = {'ref': f'call:{seq}'}
-        if error is not None:
-            envelope['error'] = error
-        else:
-            envelope['data'] = data
-        self.calls.append({'seq': seq, 'phase': self.phase, 'tool': tool, 'args': args, 'result': envelope,
-                           'result_sha256': result_hash(envelope), 'called_at': now})
+        envelope: dict = {}
+        with self._lock:
+            seq = len(self.calls) + 1
+            envelope['ref'] = f'call:{seq}'
+            if error is not None:
+                envelope['error'] = error
+            else:
+                envelope['data'] = data
+            self.calls.append({'seq': seq, 'phase': self.phase, 'tool': tool, 'args': args, 'result': envelope,
+                               'result_sha256': result_hash(envelope), 'called_at': now})
         return envelope
 
     def refs(self, phase: str | None = None) -> set[str]:

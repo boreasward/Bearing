@@ -174,6 +174,34 @@ def test_wrapped_tools_expose_schemas(monkeypatch):
 
 
 
+def test_parallel_tool_calls_in_one_round_get_distinct_refs(monkeypatch):
+    """The real path: one AI message with many tool calls, executed by langgraph's ToolNode on its
+    thread pool. Every tool message must carry its own ``call:N`` and the recorder must hold 1..N
+    exactly once each, or ``insert_agent_run`` hits the ``(run_id, seq)`` unique key."""
+    import time
+    from langgraph.graph import END, START, MessagesState, StateGraph
+    from langgraph.prebuilt import ToolNode
+    from investment_assistant.workbench.agent.tools import Recorder
+
+    ctx = _ctx(monkeypatch)
+    slow_ctx = ToolContext(ticker=ctx.ticker, session=ctx.session, cutoff_at=ctx.cutoff_at,
+                           read=lambda fn: (time.sleep(0.02), fn(object()))[1])
+    recorder = Recorder(phase='counter')
+    tools = graph._wrapped_tools(slow_ctx, recorder, now=lambda: NOW)
+    n = 8
+    ai = AIMessage(content='', tool_calls=[{'name': 'get_price_bars', 'args': {'ticker': 'AMD', 'lookback': 20 + i},
+                                            'id': f't{i}'} for i in range(n)])
+    builder = StateGraph(MessagesState)
+    builder.add_node('tools', ToolNode(tools))
+    builder.add_edge(START, 'tools')
+    builder.add_edge('tools', END)
+    out = builder.compile().invoke({'messages': [ai]})
+    refs = sorted(json.loads(m.content)['ref'] for m in out['messages'] if m.type == 'tool')
+    assert refs == sorted(f'call:{i}' for i in range(1, n + 1))
+    assert sorted(c['seq'] for c in recorder.calls) == list(range(1, n + 1))
+    assert all(c['result']['ref'] == f"call:{c['seq']}" for c in recorder.calls)
+
+
 # --- run_interpret (P4 design §7.2) ---
 
 def interpret_run(monkeypatch, make, responses, *, candidates=None, run_id='brief-1'):

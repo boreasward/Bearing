@@ -8,7 +8,8 @@
 
 - **Agent 单元被「`'str' object has no attribute '__cause__'`」记成 `model_error`**（2026-10-31 定时运行，ROP）：`data/fetch_policy._chain` 沿异常链走时把 `reason` 属性也当异常压栈，而 `ssl.SSLError.reason` 是字符串，下一步取 `__cause__` 就崩；这一步只在「POST 不重发」策略判断请求是否发出时经过，所以恰好打在 ChatGPT 令牌续期经代理出 TLS 错误的那一次，AttributeError 穿过 `_run_agent_unit` 被记成模型错误，真正的网络错误文本也丢了。现在链上只跟进异常对象；新增测试 `test_post_policy_survives_a_string_reason_in_the_chain`。
 - **代理抖动被当成「Yahoo 无数据」，筛选 `benchmark_missing`**（同一次运行，QQQ 等 19 只 10/30 日线缺失）：yfinance 默认 `hide_exceptions=True`，`history()` 与时区查询遇到任何传输错误都只打一行「possibly delisted; no price data found」并返回空表，`bars.py` 只能记成不重试的 `empty`。现在建立共享 yfinance 会话时关掉 `hide_exceptions`：传输失败按 `network` / `timeout` 走 fetch-1 重试，日线那一路只把 `YFPricesMissingError` / `YFTzMissingError` 收成原来的 `empty`（失败文案不变）。顺带的口径变化：财报日的 `4xx` / `5xx` 与资讯搜索的解析失败从此是该目标的失败而不是空结果。概念卡 `system.fetch_policy` 升到 `version: 2`；[data-menu.md](docs/features/data-menu.md) 同步。新增测试 `test_yfinance_transport_failure_surfaces_as_a_network_error`（死代理端口）与 `test_yfinance_no_data_answer_is_still_an_empty_result`。
-- 两处都是后端修正，**无迁移，`.env` 与 LaunchAgent plist 不变**；需要重启服务生效，10/30 缺失的日线要手动补拉一次并重跑筛选。
+- **并行工具调用撞 `agent_tool_calls` 的 `(run_id, seq)` 唯一键，整个单元记成 `model_error`**（2026-10-29 MU 2026-10-28 attempt 2 的 `seq 10`、2026-10-31 14:30 手动重跑 LIN 2026-10-30 的 `seq 8`，都在反方阶段）：`Recorder.record` 用 `len(calls) + 1` 编号再追加，两步不是原子的；模型一轮里并行发出多个工具调用时LangGraph 的 `ToolNode` 在线程池里同时执行它们，两个调用算出同一个 `call:N`（检查点里能看到 MU 的 `get_indicators` / `get_news` 都是 `call:10`、LIN 的 `get_trigger` / `get_concept` 都是 `call:8`，各缺一个号），运行结束逐条 INSERT 时撞唯一键，事务回滚、token 白花。现在编号与追加在同一把锁内完成，`call:N` 引用形式不变。新增测试 `test_concurrent_records_get_distinct_monotonic_seqs`（屏障确定性复现）与 `test_parallel_tool_calls_in_one_round_get_distinct_refs`（走真实 `ToolNode`）；[agent-track.md](docs/features/agent-track.md) 工具层一段补上编号规则。
+- 三处都是后端修正，**无迁移，`.env` 与 LaunchAgent plist 不变**；需要重启服务生效，10/30 缺失的日线要手动补拉一次并重跑筛选，MU 2026-10-28 与 LIN 2026-10-30 两个单元要手动「重新运行 Agent」。
 
 ## v2.10.1 — 2026-10-31
 
