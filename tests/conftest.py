@@ -59,7 +59,7 @@ WORKBENCH_MIGRATIONS = ('002_watchlist_items.sql', '006_job_reports.sql', '007_s
                         '018_pool_and_market_context.sql', '019_agent_track.sql', '020_review_expansion.sql',
                         '023_screen_and_beijing_jobs.sql', '024_data_fetch_runs.sql', '025_stage_runs.sql',
                         '026_plan_timeline.sql', '027_growth_loop.sql', '028_daily_workflow.sql',
-                        '029_executable_plans.sql')
+                        '029_executable_plans.sql', '030_accounts.sql')
 
 
 @pytest.fixture

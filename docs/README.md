@@ -32,7 +32,7 @@
 | --- | --- |
 | [local-service.md](operations/local-service.md) | LaunchAgent、启动链路、重启、日志与路径、认证 |
 | [scheduling-and-notifications.md](operations/scheduling-and-notifications.md) | 调度线程、任务注册表、运行报告、通知配置 |
-| [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–029、真实库备份与执行、一次性测试库 |
+| [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–030、真实库备份与执行、一次性测试库 |
 | [../scripts/README.md](../scripts/README.md) | 一次性核查脚本：`scripts/siwc_precheck.py`（v2.8 开工前 ChatGPT 核查，由你在运行服务的这台 Mac 上执行，结果追加到 v2.8 spec §17） |
 
 ## 方向与历史

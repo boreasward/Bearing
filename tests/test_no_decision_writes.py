@@ -49,17 +49,20 @@ def test_signal_decisions_has_only_selects_in_production_code():
 
 
 def test_decision_insert_helper_is_private_and_unused_by_production_code():
-    callers = []
+    """The fixture helper stays private and uncalled, and no `record_decision` bridge exists; the v2.11
+    `insert_decision` (the `paper_decisions` writer of migration 030) lives in the repository and may be
+    called by the service layer — writes to `signal_decisions` are the first test's business."""
+    offences = []
     for path in _python_files():
         tree = ast.parse(path.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             name = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
-            if name in ('insert_decision', 'record_decision'):
-                callers.append(f'{path.relative_to(ROOT)}:{node.lineno}')
-            if name == FIXTURE_HELPER:
-                callers.append(f'{path.relative_to(ROOT)}:{node.lineno}')
-            if isinstance(node, ast.FunctionDef) and node.name in ('insert_decision', 'record_decision'):
-                callers.append(f'{path.relative_to(ROOT)}:{node.lineno}')
+            if name == 'record_decision':
+                offences.append(f'{path.relative_to(ROOT)}:{node.lineno}')
+            if name == FIXTURE_HELPER and path != HELPER_FILE:
+                offences.append(f'{path.relative_to(ROOT)}:{node.lineno}')
+            if isinstance(node, ast.FunctionDef) and node.name == 'record_decision':
+                offences.append(f'{path.relative_to(ROOT)}:{node.lineno}')
             if isinstance(node, ast.FunctionDef) and node.name == FIXTURE_HELPER and path != HELPER_FILE:
-                callers.append(f'{path.relative_to(ROOT)}:{node.lineno}')
-    assert not callers, f'decision writers must not exist outside the repository fixture helper: {callers}'
+                offences.append(f'{path.relative_to(ROOT)}:{node.lineno}')
+    assert not offences, f'decision writers must not exist outside the repository: {offences}'

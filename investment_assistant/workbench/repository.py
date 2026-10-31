@@ -14,6 +14,12 @@ from psycopg.rows import dict_row
 BAR_VALUES = ('open', 'high', 'low', 'close', 'adj_close', 'volume', 'split_factor')
 _FLOAT_FIELDS = ('open', 'high', 'low', 'close', 'adj_close', 'split_factor')
 
+# The default real account (migration 030, spec D2): its id is fixed, the seed row is the only real account, and
+# every pre-030 row landed in it through the column defaults. All ledger readers below default to it, so the
+# existing call sites keep seeing exactly the real account's view (spec D4). A later task replaces the literal
+# with the constant of `workbench.accounts`.
+REAL_ACCOUNT_ID = uuid.UUID('00000000-0000-0000-0000-000000000001')
+
 
 # yfinance re-derives adj_close with ~1e-7 relative float noise between fetches; a real dividend
 # adjustment is around 1e-3 or larger. Raw prices and volume still compare exactly.
@@ -216,7 +222,7 @@ def lock(conn, key: str) -> None:
 _DECISION_COLUMNS = ('id, request_id, request_hash, ticker, signal_date, candidate_ids, brief_id, proposed_action, '
                      'final_action, decision, reason, decided_at, supersedes_id, plan_id')
 _TRADE_COLUMNS = ('id, request_id, request_hash, ticker, side, quantity, price, fee, executed_at, decision_id, '
-                  'plan_id, note, recorded_at, voided_at, void_reason')
+                  'plan_id, note, recorded_at, voided_at, void_reason, account_id, recorded_by, detail')
 
 
 def _one(conn, sql: str, params) -> dict[str, Any] | None:
@@ -320,9 +326,14 @@ def trade_by_id(conn, trade_id):
     return _one(conn, f'SELECT {_TRADE_COLUMNS} FROM trades WHERE id = %s', (trade_id,))
 
 
-def _trades_where(conn, clause: str | None, params: list[Any], cutoff: datetime | None) -> list[dict[str, Any]]:
+def _trades_where(conn, clause: str | None, params: list[Any], cutoff: datetime | None,
+                  account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
+    """Trades of one account (`account_id=None` reads every account's), oldest first."""
     clauses = [clause] if clause else []
     params = list(params)
+    if account_id is not None:
+        clauses.append('account_id = %s')
+        params.append(account_id)
     columns, head = _TRADE_COLUMNS, []
     if cutoff is not None:
         clauses.append('recorded_at <= %s AND executed_at <= %s')
@@ -337,32 +348,39 @@ def _trades_where(conn, clause: str | None, params: list[Any], cutoff: datetime 
     return _all(conn, f'SELECT {columns} FROM trades{where} ORDER BY executed_at, id', head + params)
 
 
-def list_trades(conn, ticker: str | None = None, *, cutoff: datetime | None = None) -> list[dict[str, Any]]:
-    """Trades oldest first. With `cutoff` only what was both executed and recorded by then (a later back-fill of an
-    earlier trade is invisible), and a void recorded after `cutoff` is not applied yet (v2.9 D33)."""
+def list_trades(conn, ticker: str | None = None, *, cutoff: datetime | None = None,
+                account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
+    """Trades oldest first, by default the real account's only (spec D4: every pre-030 reader keeps that view;
+    `account_id=None` reads all accounts). With `cutoff` only what was both executed and recorded by then (a later
+    back-fill of an earlier trade is invisible), and a void recorded after `cutoff` is not applied yet (v2.9 D33)."""
     if ticker is None:
-        return _trades_where(conn, None, [], cutoff)
-    return _trades_where(conn, 'ticker = %s', [ticker.upper()], cutoff)
+        return _trades_where(conn, None, [], cutoff, account_id)
+    return _trades_where(conn, 'ticker = %s', [ticker.upper()], cutoff, account_id)
 
 
 def insert_trade(conn, rec: dict[str, Any], digest: str, *, recorded_at: datetime) -> dict[str, Any]:
     """`plan_id` (migration 029) is the plan version the trade followed; it and the legacy `decision_id` never both
-    carry a value (`trades_link_one_check`). Both default to None."""
+    carry a value (`trades_link_one_check`). Both default to None. `account_id` (migration 030) defaults to the real
+    account, `recorded_by` marks host-written paper fills, `detail` carries the fill case / opening-position flag."""
     return _one(conn,
                 'INSERT INTO trades (request_id, request_hash, ticker, side, quantity, price, fee, executed_at, '
-                'decision_id, plan_id, note, recorded_at) '
-                f'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_TRADE_COLUMNS}',
+                'decision_id, plan_id, note, recorded_at, account_id, recorded_by, detail) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) '
+                f'RETURNING {_TRADE_COLUMNS}',
                 (rec['request_id'], digest, rec['ticker'], rec['side'], rec['quantity'], rec['price'], rec['fee'],
-                 rec['executed_at'], rec.get('decision_id'), rec.get('plan_id'), rec['note'], recorded_at))
+                 rec['executed_at'], rec.get('decision_id'), rec.get('plan_id'), rec['note'], recorded_at,
+                 rec.get('account_id') or REAL_ACCOUNT_ID, rec.get('recorded_by', 'user'),
+                 _plan_json(rec.get('detail') or {})))
 
 
-def trades_by_plan_ids(conn, plan_ids, *, cutoff: datetime | None = None) -> list[dict[str, Any]]:
+def trades_by_plan_ids(conn, plan_ids, *, cutoff: datetime | None = None,
+                       account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
     """Trades (voided ones included; the caller filters) linked to any of the plan versions, oldest first.
-    `cutoff` as in `list_trades`."""
+    `cutoff` and `account_id` as in `list_trades`."""
     ids = list(plan_ids)
     if not ids:
         return []
-    return _trades_where(conn, 'plan_id = ANY(%s)', [ids], cutoff)
+    return _trades_where(conn, 'plan_id = ANY(%s)', [ids], cutoff, account_id)
 
 
 def mark_trade_voided(conn, trade_id, reason: str, *, voided_at: datetime) -> dict[str, Any]:
@@ -454,15 +472,16 @@ def insert_plan(conn, plan: dict[str, Any]) -> dict[str, Any]:
                  plan.get('max_hold_sessions')))
 
 
-def plan_for_buy_trades(conn, trade_ids: list) -> dict[Any, dict[str, Any]]:
-    """Trade id -> the plan its decision confirmed, for trades that have one."""
+def plan_for_buy_trades(conn, trade_ids: list, *, account_id=REAL_ACCOUNT_ID) -> dict[Any, dict[str, Any]]:
+    """Trade id -> the plan its decision confirmed, for trades that have one (default the real account's)."""
     if not trade_ids:
         return {}
     plan_columns = ', '.join('p.' + c.strip() for c in _PLAN_COLUMNS.split(','))
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(f'SELECT t.id AS trade_id, {plan_columns} FROM trades t '
                     'JOIN signal_decisions d ON d.id = t.decision_id '
-                    'JOIN trade_plans p ON p.id = d.plan_id WHERE t.id = ANY(%s)', (list(trade_ids),))
+                    'JOIN trade_plans p ON p.id = d.plan_id WHERE t.id = ANY(%s) AND t.account_id = %s',
+                    (list(trade_ids), account_id))
         return {row['trade_id']: {k: row[k] for k in row if k != 'trade_id'} for row in cur.fetchall()}
 
 
@@ -508,11 +527,13 @@ def snapshot_by_request(conn, request_id):
     return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots WHERE request_id = %s', (request_id,))
 
 
-def snapshot_head(conn) -> dict[str, Any] | None:
-    """The latest snapshot nothing else supersedes; a correction must target this row."""
+def snapshot_head(conn, *, account_id=REAL_ACCOUNT_ID) -> dict[str, Any] | None:
+    """The latest snapshot nothing else supersedes; a correction must target this row. The real account's by
+    default (snapshots only exist for it, spec §7.2)."""
+    clause, params = ('', []) if account_id is None else (' AND s.account_id = %s', [account_id])
     return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots s WHERE NOT EXISTS '
-                      '(SELECT 1 FROM account_snapshots x WHERE x.supersedes_id = s.id) '
-                      'ORDER BY recorded_at DESC, created_at DESC LIMIT 1', ())
+                      f'(SELECT 1 FROM account_snapshots x WHERE x.supersedes_id = s.id){clause} '
+                      f'ORDER BY recorded_at DESC, created_at DESC LIMIT 1', params)
 
 
 def snapshot_by_id(conn, snapshot_id) -> dict[str, Any] | None:
@@ -521,22 +542,28 @@ def snapshot_by_id(conn, snapshot_id) -> dict[str, Any] | None:
 
 def insert_snapshot(conn, rec: dict[str, Any], digest: str, *, recorded_at: datetime) -> dict[str, Any]:
     return _one(conn, 'INSERT INTO account_snapshots (request_id, request_hash, as_of, equity, note, recorded_at, '
-                      f'supersedes_id) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_SNAPSHOT_COLUMNS}',
+                      f'supersedes_id, account_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) '
+                      f'RETURNING {_SNAPSHOT_COLUMNS}',
                 (rec['request_id'], digest, rec['as_of'], rec['equity'], rec['note'], recorded_at,
-                 rec['supersedes_id']))
+                 rec['supersedes_id'], rec.get('account_id') or REAL_ACCOUNT_ID))
 
 
-def snapshot_at(conn, as_of: date, *, cutoff_at: datetime) -> dict[str, Any] | None:
-    """Latest valid snapshot usable at ``cutoff_at``: recorded on time, not superseded, as_of on or before."""
+def snapshot_at(conn, as_of: date, *, cutoff_at: datetime, account_id=REAL_ACCOUNT_ID) -> dict[str, Any] | None:
+    """Latest valid snapshot usable at ``cutoff_at``: recorded on time, not superseded, as_of on or before.
+    The real account's by default."""
+    clause, params = ('', []) if account_id is None else (' AND s.account_id = %s', [account_id])
     return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots s WHERE s.as_of <= %s '
                       'AND s.recorded_at <= %s AND NOT EXISTS '
-                      '(SELECT 1 FROM account_snapshots x WHERE x.supersedes_id = s.id) '
-                      'ORDER BY s.as_of DESC, s.recorded_at DESC LIMIT 1', (as_of, cutoff_at))
+                      '(SELECT 1 FROM account_snapshots x WHERE x.supersedes_id = s.id)'
+                      f'{clause} ORDER BY s.as_of DESC, s.recorded_at DESC LIMIT 1',
+                [as_of, cutoff_at, *params])
 
 
-def list_snapshots(conn) -> list[dict[str, Any]]:
-    return _all(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots ORDER BY recorded_at DESC, '
-                      'created_at DESC', ())
+def list_snapshots(conn, *, account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
+    """Snapshots newest recorded first; the real account's by default (`account_id=None` reads every account's)."""
+    where, params = ('', []) if account_id is None else (' WHERE account_id = %s', [account_id])
+    return _all(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots{where} '
+                      'ORDER BY recorded_at DESC, created_at DESC', params)
 
 
 def flow_by_request(conn, request_id):
@@ -548,9 +575,10 @@ def flow_by_id(conn, flow_id):
 
 
 def insert_flow(conn, rec: dict[str, Any], digest: str, *, recorded_at: datetime) -> dict[str, Any]:
-    return _one(conn, 'INSERT INTO cash_flows (request_id, request_hash, flow_date, amount, note, recorded_at) '
-                      f'VALUES (%s, %s, %s, %s, %s, %s) RETURNING {_FLOW_COLUMNS}',
-                (rec['request_id'], digest, rec['flow_date'], rec['amount'], rec['note'], recorded_at))
+    return _one(conn, 'INSERT INTO cash_flows (request_id, request_hash, flow_date, amount, note, recorded_at, '
+                      f'account_id) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_FLOW_COLUMNS}',
+                (rec['request_id'], digest, rec['flow_date'], rec['amount'], rec['note'], recorded_at,
+                 rec.get('account_id') or REAL_ACCOUNT_ID))
 
 
 def mark_flow_voided(conn, flow_id, reason: str, *, voided_at: datetime) -> dict[str, Any]:
@@ -559,8 +587,10 @@ def mark_flow_voided(conn, flow_id, reason: str, *, voided_at: datetime) -> dict
                       f'RETURNING {_FLOW_COLUMNS}', (voided_at, reason, flow_id))
 
 
-def list_flows(conn) -> list[dict[str, Any]]:
-    return _all(conn, f'SELECT {_FLOW_COLUMNS} FROM cash_flows ORDER BY flow_date, created_at', ())
+def list_flows(conn, *, account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
+    """Flows oldest first; the real account's by default (`account_id=None` reads every account's)."""
+    where, params = ('', []) if account_id is None else (' WHERE account_id = %s', [account_id])
+    return _all(conn, f'SELECT {_FLOW_COLUMNS} FROM cash_flows{where} ORDER BY flow_date, created_at', params)
 
 
 _EARNINGS_COLUMNS = 'id, ticker, earnings_date, status, source, fetched_at, created_at'
@@ -884,13 +914,16 @@ def screen_lockable_tickers(conn) -> set[str]:
     return {row[0] for row in rows}
 
 
-def open_position_tickers(conn) -> set[str]:
+def open_position_tickers(conn, *, account_id=REAL_ACCOUNT_ID) -> set[str]:
+    """Tickers the account still holds a position in, from its unvoided trades (the real account's by default)."""
     from investment_assistant.workbench import positions
 
     held: set[str] = set()
-    for ticker in sorted({t['ticker'] for t in list_trades(conn) if t['voided_at'] is None}):
+    for ticker in sorted({t['ticker'] for t in list_trades(conn, account_id=account_id)
+                          if t['voided_at'] is None}):
         try:
-            book = positions.build(list_trades(conn, ticker), splits=split_events(conn, ticker))
+            book = positions.build(list_trades(conn, ticker, account_id=account_id),
+                                   splits=split_events(conn, ticker))
         except positions.PositionError:
             continue  # a broken trade history must not fail the whole screen
         if book['position'] is not None:
@@ -1675,13 +1708,15 @@ def _ny_date(moment: datetime) -> date:
 def _open_before(conn, ticker: str, since: date) -> bool:
     """True when the ticker still has shares after the live trades executed before ``since`` (New York date).
     A running quantity with the splits applied the way ``positions.build`` does; it does not match lots to
-    units, so it errs towards True (the caller then lets ``retro.end_event`` decide)."""
+    units, so it errs towards True (the caller then lets ``retro.end_event`` decide). The real account's trades
+    only: retro cards are about what you actually did (spec D4/D18)."""
     pending = split_events(conn, ticker)
     quantity = Decimal(0)
     for side, qty, day in conn.execute(
             "SELECT side, quantity, (executed_at AT TIME ZONE 'America/New_York')::date FROM trades "
             "WHERE ticker = %s AND voided_at IS NULL AND (executed_at AT TIME ZONE 'America/New_York')::date < %s "
-            'ORDER BY executed_at, id', (ticker.upper(), since)).fetchall():
+            'AND account_id = %s ORDER BY executed_at, id',
+            (ticker.upper(), since, REAL_ACCOUNT_ID)).fetchall():
         while pending and pending[0][0] <= day:
             quantity *= pending.pop(0)[1]
         quantity += Decimal(str(qty)) if side == 'buy' else -Decimal(str(qty))
@@ -1720,7 +1755,8 @@ def retro_subjects(conn, *, since: date, until: date) -> list[dict[str, Any]]:
                            'AND signal_date = %s ORDER BY decided_at, id', (ticker, signal_date))
         decision_ids = [row['id'] for row in chain]
         buys = _all(conn, f"SELECT {_TRADE_COLUMNS} FROM trades WHERE side = 'buy' AND voided_at IS NULL "
-                          'AND decision_id = ANY(%s) ORDER BY executed_at, id', (decision_ids,))
+                          'AND decision_id = ANY(%s) AND account_id = %s ORDER BY executed_at, id',
+                    (decision_ids, REAL_ACCOUNT_ID))
         if buys:
             if all(_ny_date(b['executed_at']) < since for b in buys) and closed_before(ticker):
                 continue
@@ -1734,7 +1770,7 @@ def retro_subjects(conn, *, since: date, until: date) -> list[dict[str, Any]]:
                          'reviews': chain_reviews(conn, ticker, signal_date)})
     for buy in _all(conn, f"SELECT {_TRADE_COLUMNS} FROM trades WHERE side = 'buy' AND decision_id IS NULL "
                           "AND voided_at IS NULL AND (executed_at AT TIME ZONE 'America/New_York')::date <= %s "
-                          'ORDER BY executed_at, id', (until,)):
+                          'AND account_id = %s ORDER BY executed_at, id', (until, REAL_ACCOUNT_ID)):
         if _ny_date(buy['executed_at']) < since and closed_before(buy['ticker']):
             continue
         subjects.append({'kind': 'trade', 'ticker': buy['ticker'], 'signal_date': None, 'buy_trade_id': buy['id'],
@@ -1989,10 +2025,10 @@ def turns(conn, discussion_id: int) -> list[dict[str, Any]]:
 
 _RETRIGGER_COLUMNS = ('id, ticker, unit_signal_date, chain_signal_date, chain_state, rule_ids, baseline_plan_id, '
                       'entry_cap, run_id, timeline_version, created_at')
-_HOLDING_STATUS_COLUMNS = ('id, ticker, session, chain_signal_date, plan_id, review_id, run_id, quantity, avg_cost, '
-                           'last_close, stop, target1, stop_mode, t1_reached, reached_1r, to_stop_pct, to_t1_pct, '
-                           'r_now, held_sessions, max_hold_sessions, remaining_sessions, instruction, exit_reason, '
-                           'reason, detail, timeline_version, created_at')
+_HOLDING_STATUS_COLUMNS = ('id, account_id, ticker, session, chain_signal_date, plan_id, review_id, run_id, '
+                           'quantity, avg_cost, last_close, stop, target1, stop_mode, t1_reached, reached_1r, '
+                           'to_stop_pct, to_t1_pct, r_now, held_sessions, max_hold_sessions, remaining_sessions, '
+                           'instruction, exit_reason, reason, detail, timeline_version, created_at')
 _PLAN_NOTE_COLUMNS = ('id, request_id, request_hash, ticker, chain_signal_date, plan_id, kind, body, supersedes_id, '
                       'created_at')
 
@@ -2060,38 +2096,46 @@ def chain_retriggers_for(conn, ticker: str, *, chain_signal_date: date | None = 
 
 
 def insert_holding_status(conn, row: dict[str, Any]) -> dict[str, Any]:
-    """Append one holding-status row. `(ticker, session)` is unique: a second write of the same session returns the
-    stored row with `replayed` True and changes nothing.
+    """Append one holding-status row. `(account_id, ticker, session)` is unique (migration 030): a second write of
+    the same session returns the stored row with `replayed` True and changes nothing. `account_id` defaults to the
+    real account — the `review` node writes those; the `accounts` node passes a paper account's id.
 
     `row` keys: the §8.4 columns except id / created_at; ticker, session, run_id, quantity, avg_cost, held_sessions,
     instruction, reason and timeline_version are required, the rest default to NULL (`detail` to {})."""
     ticker = row['ticker'].upper()
+    account_id = row.get('account_id') or REAL_ACCOUNT_ID
     inserted = _one(conn,
-                    'INSERT INTO holding_status (ticker, session, chain_signal_date, plan_id, review_id, run_id, '
-                    'quantity, avg_cost, last_close, stop, target1, stop_mode, t1_reached, reached_1r, to_stop_pct, '
-                    'to_t1_pct, r_now, held_sessions, max_hold_sessions, remaining_sessions, instruction, '
-                    'exit_reason, reason, detail, timeline_version) '
+                    'INSERT INTO holding_status (account_id, ticker, session, chain_signal_date, plan_id, '
+                    'review_id, run_id, quantity, avg_cost, last_close, stop, target1, stop_mode, t1_reached, '
+                    'reached_1r, to_stop_pct, to_t1_pct, r_now, held_sessions, max_hold_sessions, '
+                    'remaining_sessions, instruction, exit_reason, reason, detail, timeline_version) '
                     'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '
-                    '%s, %s, %s::jsonb, %s) ON CONFLICT (ticker, session) DO NOTHING '
+                    '%s, %s, %s, %s::jsonb, %s) ON CONFLICT (account_id, ticker, session) DO NOTHING '
                     f'RETURNING {_HOLDING_STATUS_COLUMNS}',
-                    (ticker, row['session'], row.get('chain_signal_date'), row.get('plan_id'), row.get('review_id'),
-                     row['run_id'], row['quantity'], row['avg_cost'], row.get('last_close'), row.get('stop'),
-                     row.get('target1'), row.get('stop_mode'), row.get('t1_reached'), row.get('reached_1r'),
-                     row.get('to_stop_pct'), row.get('to_t1_pct'), row.get('r_now'), row['held_sessions'],
-                     row.get('max_hold_sessions'), row.get('remaining_sessions'), row['instruction'],
-                     row.get('exit_reason'), row['reason'], _plan_json(row.get('detail') or {}),
+                    (account_id, ticker, row['session'], row.get('chain_signal_date'), row.get('plan_id'),
+                     row.get('review_id'), row['run_id'], row['quantity'], row['avg_cost'], row.get('last_close'),
+                     row.get('stop'), row.get('target1'), row.get('stop_mode'), row.get('t1_reached'),
+                     row.get('reached_1r'), row.get('to_stop_pct'), row.get('to_t1_pct'), row.get('r_now'),
+                     row['held_sessions'], row.get('max_hold_sessions'), row.get('remaining_sessions'),
+                     row['instruction'], row.get('exit_reason'), row['reason'], _plan_json(row.get('detail') or {}),
                      row['timeline_version']))
     if inserted is not None:
         return {**inserted, 'replayed': False}
-    existing = _one(conn, f'SELECT {_HOLDING_STATUS_COLUMNS} FROM holding_status WHERE ticker = %s AND session = %s',
-                    (ticker, row['session']))
+    existing = _one(conn, f'SELECT {_HOLDING_STATUS_COLUMNS} FROM holding_status '
+                          'WHERE account_id = %s AND ticker = %s AND session = %s',
+                    (account_id, ticker, row['session']))
     return {**existing, 'replayed': True}
 
 
 def holding_status_for(conn, *, session: date | None = None, ticker: str | None = None,
-                       chain_signal_date: date | None = None) -> list[dict[str, Any]]:
-    """Holding-status rows matching every given filter, oldest session first (then ticker)."""
+                       chain_signal_date: date | None = None,
+                       account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
+    """Holding-status rows matching every given filter, oldest session first (then ticker). One account's by
+    default (`account_id=None` reads every account's)."""
     clauses, params = [], []
+    if account_id is not None:
+        clauses.append('account_id = %s')
+        params.append(account_id)
     if session is not None:
         clauses.append('session = %s')
         params.append(session)
@@ -2218,20 +2262,22 @@ def retro_subject_keys(conn, *, until: date) -> dict[str, Any]:
                   'ELSE COALESCE((SELECT r.chain_signal_date FROM chain_retriggers r WHERE r.ticker = p.ticker '
                   'AND r.unit_signal_date = p.signal_date), p.signal_date) END AS signal_date '
                   'FROM trades t JOIN trade_plans p ON p.id = t.plan_id '
-                  f"WHERE t.side = 'buy' AND t.voided_at IS NULL AND {day} <= %s", (until,))
+                  f"WHERE t.side = 'buy' AND t.voided_at IS NULL AND t.account_id = %s AND {day} <= %s",
+                  (REAL_ACCOUNT_ID, until))
     legacy = _all(conn,
                   'SELECT DISTINCT d.ticker, d.signal_date FROM signal_decisions d JOIN trades t '
                   "ON t.decision_id IN (SELECT x.id FROM signal_decisions x WHERE x.ticker = d.ticker "
                   "AND x.signal_date = d.signal_date) WHERE t.side = 'buy' AND t.voided_at IS NULL "
-                  f"AND d.signal_date <= %s AND {day} <= %s", (until, until))
+                  f"AND t.account_id = %s AND d.signal_date <= %s AND {day} <= %s",
+                  (REAL_ACCOUNT_ID, until, until))
     noted = _all(conn,
                  'SELECT DISTINCT n.ticker, COALESCE(n.chain_signal_date, p.signal_date) AS signal_date '
                  'FROM plan_notes n LEFT JOIN trade_plans p ON p.id = n.plan_id '
                  "WHERE n.kind = 'note' AND NOT EXISTS (SELECT 1 FROM plan_notes s WHERE s.supersedes_id = n.id "
                  "AND s.kind = 'retract') AND COALESCE(n.chain_signal_date, p.signal_date) <= %s", (until,))
     plan_less = _all(conn, f"SELECT {_TRADE_COLUMNS} FROM trades t WHERE t.side = 'buy' AND t.voided_at IS NULL "
-                           f'AND t.decision_id IS NULL AND t.plan_id IS NULL AND {day} <= %s '
-                           'ORDER BY t.executed_at, t.id', (until,))
+                           f'AND t.decision_id IS NULL AND t.plan_id IS NULL AND t.account_id = %s AND {day} <= %s '
+                           'ORDER BY t.executed_at, t.id', (REAL_ACCOUNT_ID, until))
     keys = sorted({(r['ticker'], r['signal_date']) for r in (*linked, *legacy, *noted)},
                   key=lambda k: (k[1], k[0]))
     return {'units': keys, 'trades': plan_less}
@@ -2242,3 +2288,261 @@ def unit_decision_chain(conn, ticker: str, signal_date: date) -> list[dict[str, 
     the decision a fill was attached to, not only the head decision)."""
     return _all(conn, 'SELECT id, plan_id, decided_at FROM signal_decisions WHERE ticker = %s AND signal_date = %s '
                       'ORDER BY decided_at, id', (ticker.upper(), signal_date))
+
+
+# --- v2.11 accounts and paper trading (migration 030, spec §7) ---
+# Six new tables, deliberately not in WORKBENCH_TABLES: an unmigrated database degrades through
+# accounts_ready() — the account reads answer 503 and `daily` refuses to run (spec D22). REAL_ACCOUNT_ID
+# (top of this module) scopes every pre-030 reader above, so the existing call sites are unchanged (D4).
+
+_ACCOUNT_COLUMNS = ('id, kind, strategy, name, opening_cash, opened_on, params, status, closed_at, close_reason, '
+                    'settled_through, created_at')
+
+
+def accounts_ready(conn) -> bool:
+    """True when migration 030 has run: the six new tables and `trades.account_id` all exist (spec §7).
+    A pure existence check; never raises on a missing table."""
+    tables = conn.execute(
+        "SELECT to_regclass('accounts'), to_regclass('account_param_changes'), to_regclass('account_equity_days'), "
+        "to_regclass('paper_orders'), to_regclass('paper_decisions'), to_regclass('paper_chain_done')").fetchone()
+    if any(item is None for item in tables):
+        return False
+    has_account = conn.execute("SELECT 1 FROM pg_attribute WHERE attrelid = 'trades'::regclass "
+                               "AND attname = 'account_id' AND NOT attisdropped").fetchone()
+    return bool(has_account)
+
+
+def list_accounts(conn, *, include_closed: bool = False) -> list[dict[str, Any]]:
+    """Accounts oldest first; closed ones only when asked (D19: closing keeps the history, it never deletes)."""
+    where = '' if include_closed else " WHERE status = 'active'"
+    return _all(conn, f'SELECT {_ACCOUNT_COLUMNS} FROM accounts{where} ORDER BY created_at, id', ())
+
+
+def account_by_id(conn, account_id) -> dict[str, Any] | None:
+    return _one(conn, f'SELECT {_ACCOUNT_COLUMNS} FROM accounts WHERE id = %s', (account_id,))
+
+
+def account_by_name(conn, name) -> dict[str, Any] | None:
+    return _one(conn, f'SELECT {_ACCOUNT_COLUMNS} FROM accounts WHERE name = %s', (name,))
+
+
+def insert_account(conn, rec: dict[str, Any]) -> dict[str, Any]:
+    """One account row; `id` is the caller's (a fresh UUID for a paper account). `params` defaults to the empty
+    object — the service layer layers `config.workbench`'s defaults on top."""
+    return _one(conn,
+                'INSERT INTO accounts (id, kind, strategy, name, opening_cash, opened_on, params) '
+                f'VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb) RETURNING {_ACCOUNT_COLUMNS}',
+                (rec['id'], rec['kind'], rec['strategy'], rec['name'], rec.get('opening_cash'),
+                 rec.get('opened_on'), _plan_json(rec.get('params') or {})))
+
+
+def set_account_opening(conn, account_id, *, opening_cash, opened_on) -> dict[str, Any] | None:
+    """Record the real account's opening cash and day once (D3); None when it was already opened — opening twice
+    is the caller's conflict, not a second write."""
+    return _one(conn, 'UPDATE accounts SET opening_cash = %s, opened_on = %s '
+                      f'WHERE id = %s AND opening_cash IS NULL RETURNING {_ACCOUNT_COLUMNS}',
+                (opening_cash, opened_on, account_id))
+
+
+def update_account_params(conn, account_id, params: dict[str, Any]) -> dict[str, Any]:
+    """Set the account's position parameters; the caller books the change row (insert_param_change) in the same
+    transaction — effective from the next trading day, history untouched (§4.1)."""
+    return _one(conn, f'UPDATE accounts SET params = %s::jsonb WHERE id = %s RETURNING {_ACCOUNT_COLUMNS}',
+                (_plan_json(params), account_id))
+
+
+def close_account(conn, account_id, reason, *, closed_at) -> dict[str, Any] | None:
+    """Close an account once (D19): no more decisions or settlement, history stays; None when already closed."""
+    return _one(conn, "UPDATE accounts SET status = 'closed', closed_at = %s, close_reason = %s "
+                      f"WHERE id = %s AND status = 'active' RETURNING {_ACCOUNT_COLUMNS}",
+                (closed_at, reason, account_id))
+
+
+def advance_settled_through(conn, account_id, session) -> None:
+    """Move a paper account's settlement watermark forward only (D26); a replayed settlement never moves it
+    backwards."""
+    conn.execute('UPDATE accounts SET settled_through = %s WHERE id = %s '
+                 'AND (settled_through IS NULL OR settled_through < %s)', (session, account_id, session))
+
+
+_PARAM_CHANGE_COLUMNS = 'id, account_id, kind, params_before, params_after, reason, effective_from, created_at'
+
+
+def insert_param_change(conn, row: dict[str, Any]) -> dict[str, Any]:
+    """One parameter or opening change (§7.1), `effective_from` the next trading day."""
+    return _one(conn,
+                'INSERT INTO account_param_changes (account_id, kind, params_before, params_after, reason, '
+                f'effective_from) VALUES (%s, %s, %s::jsonb, %s::jsonb, %s, %s) RETURNING {_PARAM_CHANGE_COLUMNS}',
+                (row['account_id'], row['kind'],
+                 _plan_json(row['params_before']) if row.get('params_before') is not None else None,
+                 _plan_json(row['params_after']) if row.get('params_after') is not None else None,
+                 row.get('reason'), row['effective_from']))
+
+
+def param_changes(conn, account_id) -> list[dict[str, Any]]:
+    """The account's parameter and opening changes, oldest first."""
+    return _all(conn, f'SELECT {_PARAM_CHANGE_COLUMNS} FROM account_param_changes WHERE account_id = %s '
+                      'ORDER BY created_at, id', (account_id,))
+
+
+def paper_tickers(conn) -> set[str]:
+    """Active paper accounts' traded tickers plus their pending buys' (D29): the `collect` scope keeps fetching
+    bars for tickers that may have left the pool while a paper position or order still needs them. Errs towards
+    keeping — every unvoided trade of an active paper account counts, closed positions included."""
+    rows = conn.execute(
+        'SELECT DISTINCT t.ticker FROM trades t JOIN accounts a ON a.id = t.account_id '
+        "WHERE a.kind = 'paper' AND a.status = 'active' AND t.voided_at IS NULL "
+        'UNION SELECT DISTINCT o.ticker FROM paper_orders o JOIN accounts a ON a.id = o.account_id '
+        "WHERE a.kind = 'paper' AND a.status = 'active' AND o.status = 'pending'").fetchall()
+    return {row[0] for row in rows}
+
+
+_EQUITY_DAY_COLUMNS = ('id, account_id, session, cash, positions_value, equity, realized_pnl_cum, unrealized_pnl, '
+                       'net_flows_cum, day_pnl, positions_count, detail, account_version, run_id, computed_at')
+
+
+def insert_equity_day(conn, row: dict[str, Any]) -> dict[str, Any]:
+    """Append one day's equity row (§7.4, append-only): a recompute of the same session appends a newer
+    `computed_at` row and readers take the latest (D15). `computed_at` may be pinned, the default is the
+    database clock."""
+    return _one(conn,
+                'INSERT INTO account_equity_days (account_id, session, cash, positions_value, equity, '
+                'realized_pnl_cum, unrealized_pnl, net_flows_cum, day_pnl, positions_count, detail, '
+                'account_version, run_id, computed_at) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, COALESCE(%s, clock_timestamp()))'
+                f' RETURNING {_EQUITY_DAY_COLUMNS}',
+                (row['account_id'], row['session'], row['cash'], row['positions_value'], row['equity'],
+                 row['realized_pnl_cum'], row['unrealized_pnl'], row['net_flows_cum'], row.get('day_pnl'),
+                 row['positions_count'], _plan_json(row.get('detail') or {}), row['account_version'],
+                 row['run_id'], row.get('computed_at')))
+
+
+def equity_days(conn, account_id, *, from_session: date | None = None,
+                to_session: date | None = None) -> list[dict[str, Any]]:
+    """The account's equity per session — the latest `computed_at` row of each (D15) — oldest session first;
+    `from_session` / `to_session` bound the range (inclusive)."""
+    clauses, params = ['account_id = %s'], [account_id]
+    if from_session is not None:
+        clauses.append('session >= %s')
+        params.append(from_session)
+    if to_session is not None:
+        clauses.append('session <= %s')
+        params.append(to_session)
+    return _all(conn, f'SELECT DISTINCT ON (session) {_EQUITY_DAY_COLUMNS} FROM account_equity_days '
+                      f"WHERE {' AND '.join(clauses)} ORDER BY session, computed_at DESC, id DESC", params)
+
+
+def latest_equity_day(conn, account_id, *, on_or_before: date) -> dict[str, Any] | None:
+    """The newest equity row of the session at or before the date (D6: that day's ledger equity)."""
+    return _one(conn, f'SELECT {_EQUITY_DAY_COLUMNS} FROM account_equity_days WHERE account_id = %s '
+                      'AND session <= %s ORDER BY session DESC, computed_at DESC, id DESC LIMIT 1',
+                (account_id, on_or_before))
+
+
+_ORDER_COLUMNS = ('id, account_id, decision_id, action, ticker, plan_id, chain_signal_date, shares, portion, '
+                  'target_order_id, placed_on, placed_by, reason, status, status_reason, settled_on, trade_id, '
+                  'created_at, updated_at')
+
+
+def insert_order(conn, row: dict[str, Any]) -> dict[str, Any]:
+    """One paper-order intent (§7.5); `id` is the caller's UUID. The status fields arrive as given — a rejected
+    order is inserted as rejected (D9), everything else starts pending and settles through settle_order."""
+    return _one(conn,
+                'INSERT INTO paper_orders (id, account_id, decision_id, action, ticker, plan_id, '
+                'chain_signal_date, shares, portion, target_order_id, placed_on, placed_by, reason, status, '
+                'status_reason, settled_on, trade_id) '
+                f"VALUES ({', '.join(['%s'] * 17)}) RETURNING {_ORDER_COLUMNS}",
+                (row['id'], row['account_id'], row.get('decision_id'), row['action'], row['ticker'],
+                 row.get('plan_id'), row.get('chain_signal_date'), row.get('shares'), row.get('portion'),
+                 row.get('target_order_id'), row['placed_on'], row['placed_by'], row.get('reason'),
+                 row['status'], row.get('status_reason'), row.get('settled_on'), row.get('trade_id')))
+
+
+def order_by_id(conn, order_id) -> dict[str, Any] | None:
+    return _one(conn, f'SELECT {_ORDER_COLUMNS} FROM paper_orders WHERE id = %s', (order_id,))
+
+
+def pending_orders(conn, account_id) -> list[dict[str, Any]]:
+    """The account's pending orders, oldest first."""
+    return _all(conn, f"SELECT {_ORDER_COLUMNS} FROM paper_orders WHERE account_id = %s AND status = 'pending' "
+                      'ORDER BY created_at, id', (account_id,))
+
+
+def orders_for(conn, account_id, *, status: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+    """The account's orders, newest first; `status` narrows them."""
+    clauses, params = ['account_id = %s'], [account_id]
+    if status is not None:
+        clauses.append('status = %s')
+        params.append(status)
+    params.append(limit)
+    return _all(conn, f"SELECT {_ORDER_COLUMNS} FROM paper_orders WHERE {' AND '.join(clauses)} "
+                      'ORDER BY created_at DESC, id DESC LIMIT %s', params)
+
+
+def settle_order(conn, order_id, *, status, status_reason, settled_on, trade_id=None) -> dict[str, Any] | None:
+    """Move a pending order to its outcome once (§7.5: the status columns are the one updatable pair, `updated_at`
+    records it); None when the order is no longer pending, so a replayed settlement cannot overwrite the first
+    outcome."""
+    return _one(conn,
+                'UPDATE paper_orders SET status = %s, status_reason = %s, settled_on = %s, trade_id = %s, '
+                "updated_at = clock_timestamp() WHERE id = %s AND status = 'pending' "
+                f'RETURNING {_ORDER_COLUMNS}',
+                (status, status_reason, settled_on, trade_id, order_id))
+
+
+def tried_plan_ids(conn, account_id) -> set[uuid.UUID]:
+    """The plan versions this account has ever placed a buy order on, any status (D24's per-version filter:
+    an order that expired only ends its version, not the chain)."""
+    rows = conn.execute('SELECT DISTINCT plan_id FROM paper_orders WHERE account_id = %s '
+                        "AND action = 'buy' AND plan_id IS NOT NULL", (account_id,)).fetchall()
+    return {row[0] for row in rows}
+
+
+_PAPER_DECISION_COLUMNS = ('id, account_id, session, status, status_reason, agent_run_id, agent_version, '
+                     'strategy_version, evidence, output, summary, holds, detail, run_id, created_at')
+
+
+def insert_decision(conn, row: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """The account's decision row of the session (D14): `(row, inserted)`. `(account_id, session)` is unique, so a
+    same-session rerun inserts nothing and returns the stored row with False — the model is not called twice."""
+    inserted = _one(conn,
+                    'INSERT INTO paper_decisions (account_id, session, status, status_reason, agent_run_id, '
+                    'agent_version, strategy_version, evidence, output, summary, holds, detail, run_id) '
+                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s::jsonb, %s) '
+                    'ON CONFLICT (account_id, session) DO NOTHING '
+                    f'RETURNING {_PAPER_DECISION_COLUMNS}',
+                    (row['account_id'], row['session'], row['status'], row.get('status_reason'),
+                     row.get('agent_run_id'), row.get('agent_version'), row.get('strategy_version'),
+                     _plan_json(row['evidence']) if row.get('evidence') is not None else None,
+                     _plan_json(row['output']) if row.get('output') is not None else None,
+                     row.get('summary'),
+                     _plan_json(row['holds']) if row.get('holds') is not None else None,
+                     _plan_json(row.get('detail') or {}), row.get('run_id')))
+    if inserted is not None:
+        return inserted, True
+    return decision_for(conn, row['account_id'], row['session']), False
+
+
+def decision_for(conn, account_id, session) -> dict[str, Any] | None:
+    return _one(conn, f'SELECT {_PAPER_DECISION_COLUMNS} FROM paper_decisions WHERE account_id = %s AND session = %s',
+                (account_id, session))
+
+
+def decisions_for(conn, account_id, *, limit: int = 60) -> list[dict[str, Any]]:
+    """The account's decision rows, newest session first."""
+    return _all(conn, f'SELECT {_PAPER_DECISION_COLUMNS} FROM paper_decisions WHERE account_id = %s '
+                      'ORDER BY session DESC, created_at DESC LIMIT %s', (account_id, limit))
+
+
+def insert_chain_done(conn, *, account_id, ticker, chain_signal_date, reason) -> None:
+    """Mark the chain consumed for this account (D24: `entry_voided` after an entry-1 void, `exited` after a stop
+    or an exit); a repeated write changes nothing."""
+    conn.execute('INSERT INTO paper_chain_done (account_id, ticker, chain_signal_date, reason) '
+                 'VALUES (%s, %s, %s, %s) ON CONFLICT (account_id, ticker, chain_signal_date) DO NOTHING',
+                 (account_id, ticker.upper(), chain_signal_date, reason))
+
+
+def chain_done(conn, account_id) -> set[tuple[str, date]]:
+    """The `(ticker, chain_signal_date)` pairs this account has consumed (D24's per-chain filter)."""
+    return {(row[0], row[1]) for row in conn.execute(
+        'SELECT ticker, chain_signal_date FROM paper_chain_done WHERE account_id = %s', (account_id,)).fetchall()}

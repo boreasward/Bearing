@@ -48,6 +48,7 @@ KNOWN_VERSIONS: frozenset[str] = frozenset({
     'stages-4', 'daily-1', 'fetch-1', 'siwc-1',
     'timeline-2', 'condition-2', 'plan-2', 'plan-shadow-2', 'agent-3', 'agent-review-2', 'agent-retro-2',
     'entry-1', 'execution-1', 'discipline-1', 'discipline-2', 'tracks-2', 'retro-2', 'review-8', 'monthly-4',
+    'account-1', 'paper-fill-1', 'follow-plans-1', 'agent-portfolio-1', 'stages-5', 'daily-2', 'monthly-5',
 })
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

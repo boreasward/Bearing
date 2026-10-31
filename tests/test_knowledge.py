@@ -362,7 +362,11 @@ def test_known_versions_cover_code_constants():
     assert {'timeline-2', 'condition-2', 'plan-2', 'plan-shadow-2', 'agent-3', 'agent-review-2', 'agent-retro-2',
             'entry-1', 'execution-1', 'discipline-1', 'discipline-2', 'tracks-2', 'retro-2', 'review-8',
             'monthly-4'} <= knowledge.KNOWN_VERSIONS
-    assert isinstance(knowledge.KNOWN_VERSIONS, frozenset) and len(knowledge.KNOWN_VERSIONS) == 51
+    # v2.11 adds seven literals (their constants land with the later tasks: accounts, paper_fill, paper_strategies,
+    # agent.graph, stages, workflow, monthly)
+    assert {'account-1', 'paper-fill-1', 'follow-plans-1', 'agent-portfolio-1', 'stages-5', 'daily-2',
+            'monthly-5'} <= knowledge.KNOWN_VERSIONS
+    assert isinstance(knowledge.KNOWN_VERSIONS, frozenset) and len(knowledge.KNOWN_VERSIONS) == 58
 
 
 def test_knowledge_module_does_not_import_agent_or_service_at_top_level():

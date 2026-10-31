@@ -452,23 +452,28 @@ def test_store_plan_still_keys_on_plan_version(workbench_db):
     assert second['status'] == 'inserted'                                     # another version is not a conflict
 
 
-# --- insert_decision is private ---
+# --- insert_decision: the paper_decisions writer (signal_decisions stays read-only) ---
 
-def test_insert_decision_is_private():
-    assert not hasattr(repository, 'insert_decision')
-    assert callable(repository._insert_decision_for_tests)
+def test_insert_decision_writes_paper_decisions_only():
+    """v2.9 D24's invariant keeps holding after v2.11: the public `insert_decision` is the `paper_decisions`
+    writer of migration 030, never touches `signal_decisions`, and the old-style fixture helper stays private
+    (the stricter scan lives in tests/test_no_decision_writes.py)."""
+    assert callable(repository.insert_decision) and callable(repository._insert_decision_for_tests)
+    source = Path(repository.__file__).read_text(encoding='utf-8')
+    start = source.index('def insert_decision(')
+    body = source[start:source.index('\ndef ', start)]
+    assert 'paper_decisions' in body and 'signal_decisions' not in body
 
 
-def test_no_production_caller_of_decision_insert_besides_ledger():
-    """`signal_decisions` is read-only in production code; `ledger.record_decision` is the one bridge until Task 4
-    deletes it (the stricter scan, tests/test_no_decision_writes.py, comes with Task 6)."""
+def test_insert_decision_is_defined_only_in_the_repository():
+    """`signal_decisions` is read-only in production code: the one `insert_decision` definition is the
+    repository's paper_decisions writer, and no `record_decision` bridge exists anywhere."""
     root = Path('investment_assistant')
-    callers = set()
     for path in root.rglob('*.py'):
         for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
-            if isinstance(node, ast.Attribute) and node.attr in ('insert_decision', '_insert_decision_for_tests'):
-                callers.add(str(path))
             if isinstance(node, ast.FunctionDef) and node.name == 'insert_decision':
-                callers.add(str(path))
-    assert callers <= {str(root / 'workbench' / 'ledger.py')}, callers
+                assert path == root / 'workbench' / 'repository.py', path
+            name = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+            if name == 'record_decision':
+                raise AssertionError(f'{path}:{node.lineno}')
 
