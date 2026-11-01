@@ -11,6 +11,7 @@ the counterfactual pair for plans that carry execution fields.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -117,6 +118,53 @@ def has_exec_fields(plan: dict[str, Any]) -> bool:
     return plan.get('entry_type') is not None and plan.get('max_hold_sessions') is not None
 
 
+@dataclass(frozen=True)
+class PositionState:
+    """One position in the bars' current split basis; callers own share counts."""
+    fill_price: Decimal
+    stop: Decimal
+    stop0: Decimal
+    risk: Decimal
+    t1_done: bool = False
+    reached_1r: bool = False
+    highest_close: Decimal | None = None
+    held_sessions: int = 0
+    time_stop_due: bool = False
+
+
+def step_position(state: PositionState, bar: dict[str, Any], *, target1: Decimal, atr: Decimal,
+                  trail_multiple: Decimal, max_hold: int) -> tuple[PositionState, list[dict[str, Any]]]:
+    """Advance one observed session, preserving plan-shadow-2 leg types and priority.
+
+    Fractions refer to the original position (T1 is half, a later trail the other half).
+    The returned stop applies tomorrow. This function never mutates the incoming state.
+    """
+    op, hi, lo, cl = (Decimal(str(bar[k])) for k in ('open', 'high', 'low', 'close'))
+    state = replace(state, held_sessions=state.held_sessions + 1)
+
+    def leg(fraction: float, price: Decimal, reason: str) -> dict:
+        return {'fraction': fraction, 'exit_date': bar['price_date'].isoformat(),
+                'exit_price': price, 'reason': reason}
+
+    if state.time_stop_due:
+        return replace(state, time_stop_due=False), [leg(1.0, op, 'time_stop')]
+    state = replace(state, highest_close=cl if state.highest_close is None else max(state.highest_close, cl))
+    if lo <= state.stop:
+        return state, [leg(0.5 if state.t1_done else 1.0, op if op < state.stop else state.stop,
+                           'trail' if state.t1_done else 'stop')]
+    legs = []
+    if not state.t1_done and hi >= target1:
+        legs.append(leg(0.5, max(op, target1), 'target1'))
+        state = replace(state, t1_done=True)
+    if state.t1_done:
+        state = replace(state, stop=max(state.stop, state.highest_close - trail_multiple * atr, state.fill_price))
+    elif not state.reached_1r and state.risk > 0 and cl >= state.fill_price + state.risk:
+        state = replace(state, reached_1r=True)
+    if not state.t1_done and not state.reached_1r and state.risk > 0 and state.held_sessions >= max_hold:
+        state = replace(state, time_stop_due=True)
+    return state, legs
+
+
 def simulate_v2(plan: dict[str, Any], bars: list[dict[str, Any]], spy_bars: list[dict[str, Any]],
                 *, splits: list[tuple[date, Decimal]]) -> dict[str, Any]:
     """`plan-shadow-2`: replay one plan with the open scenarios and the time stop.
@@ -148,39 +196,16 @@ def simulate_v2(plan: dict[str, Any], bars: list[dict[str, Any]], spy_bars: list
                 'void_date': entry['void_date']}
     fill_date, fill_price = entry['fill_date'], entry['fill_price']
 
-    stop = stop0
-    risk = fill_price - stop0
-    t1_done = False
-    reached_1r = False
-    time_stop_due = False
-    highest_close = None
+    state = PositionState(fill_price=fill_price, stop=stop0, stop0=stop0, risk=fill_price - stop0)
     legs: list[dict[str, Any]] = []
     last_day = fill_date
-    for index, bar in enumerate((b for b in bars if b['price_date'] >= fill_date), start=1):
-        op, hi, lo, cl = (Decimal(str(bar['open'])), Decimal(str(bar['high'])),
-                          Decimal(str(bar['low'])), Decimal(str(bar['close'])))
+    for bar in (b for b in bars if b['price_date'] >= fill_date):
         last_day = bar['price_date']
-        if time_stop_due:                        # decided at yesterday's close: leave at today's open
-            legs.append({'fraction': 1.0, 'exit_date': bar['price_date'].isoformat(), 'exit_price': op,
-                         'reason': 'time_stop'})
-            time_stop_due = False
+        state, daily_legs = step_position(state, bar, target1=target1, atr=atr,
+                                          trail_multiple=plan['trail_atr_multiple'], max_hold=max_hold)
+        legs.extend(daily_legs)
+        if sum(leg['fraction'] for leg in legs) >= 1.0:
             break
-        highest_close = cl if highest_close is None else max(highest_close, cl)
-        if lo <= stop:  # stop first when both stop and T1 touch on the same day
-            price = op if op < stop else stop
-            legs.append({'fraction': 0.5 if t1_done else 1.0, 'exit_date': bar['price_date'].isoformat(),
-                         'exit_price': price, 'reason': 'trail' if t1_done else 'stop'})
-            break
-        if not t1_done and hi >= target1:
-            legs.append({'fraction': 0.5, 'exit_date': bar['price_date'].isoformat(),
-                         'exit_price': max(op, target1), 'reason': 'target1'})
-            t1_done = True
-        if t1_done:  # trailing stop updates after the close, effective next session
-            stop = max(highest_close - plan['trail_atr_multiple'] * atr, fill_price)
-        elif not reached_1r and risk > 0 and cl >= fill_price + risk:
-            reached_1r = True
-        if not t1_done and not reached_1r and risk > 0 and index >= max_hold:
-            time_stop_due = True
 
     risk = fill_price - stop0
     closed_fraction = sum(leg['fraction'] for leg in legs)
@@ -195,7 +220,7 @@ def simulate_v2(plan: dict[str, Any], bars: list[dict[str, Any]], spy_bars: list
     return {**base, 'status': 'open', 'fill_date': fill_date, 'fill_price': fill_price, 'legs': legs,
             'r': r_sum + open_fraction * float((last_close - fill_price) / risk),
             'return': float((closed_value + Decimal(str(open_fraction)) * last_close) / fill_price - 1),
-            'spy_return': _spy_return(spy_bars, fill_date, None), 'time_stop_due': time_stop_due}
+            'spy_return': _spy_return(spy_bars, fill_date, None), 'time_stop_due': state.time_stop_due}
 
 
 def simulate_both(plan: dict[str, Any], bars: list[dict[str, Any]], spy_bars: list[dict[str, Any]],

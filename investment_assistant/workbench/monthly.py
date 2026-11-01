@@ -10,7 +10,8 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
-MONTHLY_VERSION = 'monthly-4'      # v2.9 D30: tracks-2, discipline-2, plans by shadow version (monthly-3: plans.agent = first versions)
+MONTHLY_VERSION = 'monthly-5'
+MONTHLY_V4 = 'monthly-4'      # v2.9 D30: tracks-2, discipline-2, plans by shadow version (monthly-3: plans.agent = first versions)
 SENSITIVITY_PCTS = (0.005, 0.01, 0.015, 0.02)
 
 
@@ -44,6 +45,24 @@ def month_return(month: date, snapshots: list[dict[str, Any]], flows: list[dict[
                and start['as_of'] < f['flow_date'] <= end['as_of']), Decimal(0))
     return {'status': 'ok', 'start': start, 'end': end, 'net_flow': float(net),
             'return': float((end['equity'] - start['equity'] - net) / start['equity'])}
+
+
+def month_return_v2(month: date, *, equity_rows: list[dict], snapshots: list[dict],
+                    flows: list[dict], opened: bool) -> dict:
+    """monthly-5: complete latest month-end ledger rows, otherwise the unchanged snapshot formula."""
+    from investment_assistant.workbench.accounts import month_window
+
+    start, end = month_window(equity_rows, month) if opened else (None, None)
+    incomplete = any((row.get('detail') or {}).get('bars_missing') or
+                     (row.get('detail') or {}).get('stale') for row in (start, end) if row is not None)
+    if start is None or end is None or incomplete:
+        return {**month_return(month, snapshots, flows), 'source': 'snapshot'}
+    net = sum((Decimal(str(f['amount'])) for f in flows if f.get('voided_at') is None
+               and start['session'] < f['flow_date'] <= end['session']), Decimal(0))
+    start_equity, end_equity = Decimal(str(start['equity'])), Decimal(str(end['equity']))
+    return {'status': 'ok' if start_equity > 0 else 'no_equity', 'source': 'ledger',
+            'start': start, 'end': end, 'net_flow': float(net),
+            'return': float((end_equity - start_equity - net) / start_equity) if start_equity > 0 else None}
 
 
 def tier(r: float, tiers: tuple[float, float, float]) -> str:

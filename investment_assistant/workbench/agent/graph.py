@@ -633,3 +633,65 @@ def run_discuss(*, discussion: dict, ctx: DiscussContext, model: BaseChatModel, 
                          tools=TOOLS | DISCUSS_TOOLS, recorder=recorder, check=check, system=DISCUSS_PROMPT,
                          human='\n\n'.join(parts))
     return {**result, 'draft_dropped': dropped[0] if result['status'] == 'ok' else None}
+
+
+# ---------------------------------------------------------------- v2.11: one portfolio decision per account/session
+
+PORTFOLIO_AGENT_VERSION = 'agent-portfolio-1'
+PORTFOLIO_TOOLS = ('get_price_bars', 'get_indicators', 'get_market_context', 'get_concept', 'get_knowledge')
+PORTFOLIO_PROMPT = """你管理一个模拟账户，目标是用 Agent 已经给出的交易计划管好一个组合。
+只能买 buyable 里列出的 plan_id，股数 ≤ max_shares，价位一律用计划的、不能另定；卖出按次一交易日开盘价成交；止损、T1 卖半、时间止损由程序自动执行，你不能取消，只能更早卖；每条订单与每只持有都要一句理由（≤ 300 字）；可以撤掉自己在挂的买单；不要考虑计划之外的标的。
+只能使用 get_price_bars、get_indicators、get_market_context、get_concept、get_knowledge，标的限持仓与 buyable 的并集。
+完成后只输出一个 JSON 对象，不要输出其他文字：
+{"orders": [{"action": "buy", "plan_id": "…", "shares": 60, "reason": "…"},
+            {"action": "sell", "ticker": "NVDA", "portion": "all" 或 "half", "reason": "…"},
+            {"action": "cancel", "order_id": "…", "reason": "…"}],
+ "holds": [{"ticker": "AMD", "reason": "…"}],
+ "summary": "…（1 到 200 字）"}
+holds 必须覆盖每只没有卖出订单的持仓；buyable 里没买的不必解释。"""
+
+
+def run_portfolio(*, account: dict, ctx: ToolContext, model: BaseChatModel, checkpointer, run_id: str,
+                  now: Callable[[], datetime], evidence: str) -> dict:
+    """The caller supplies trusted, account-scoped evidence; no citation checking.
+
+    Unlike a unit graph, benchmark extras are not allowed unless held or listed in
+    buyable. A scoped copy of ToolContext lets the existing read tools serve each
+    allowed ticker without changing their unit-level permissions.
+    """
+    from dataclasses import replace
+    from investment_assistant.workbench.agent import portfolio_check
+    from investment_assistant.workbench.agent.tools import ToolError
+
+    facts = portfolio_check.evidence_facts(evidence)
+    held = facts.get('positions', [])
+    allowed = portfolio_check._tickers(held) | portfolio_check._tickers(facts.get('buyable', []))
+
+    def scoped(context, ticker):
+        if not isinstance(ticker, str) or ticker.strip().upper() not in allowed:
+            raise ToolError(f'{ticker} 不在本账户持仓与可买计划的标的内')
+        return replace(context, ticker=ticker.strip().upper())
+
+    def get_price_bars(context: ToolContext, ticker: str, lookback: int = 60):
+        scoped_ctx = scoped(context, ticker)
+        return TOOLS['get_price_bars'](scoped_ctx, scoped_ctx.ticker, lookback)
+
+    def get_indicators(context: ToolContext, ticker: str):
+        scoped_ctx = scoped(context, ticker)
+        return TOOLS['get_indicators'](scoped_ctx, scoped_ctx.ticker)
+
+    def get_knowledge(context: ToolContext, ticker: str | None = None, concept: str | None = None):
+        scoped_ctx = scoped(context, ticker) if ticker is not None else context
+        return TOOLS['get_knowledge'](scoped_ctx, ticker=scoped_ctx.ticker if ticker is not None else None,
+                                      concept=concept)
+
+    tools = {name: TOOLS[name] for name in PORTFOLIO_TOOLS}
+    tools.update(get_price_bars=get_price_bars, get_indicators=get_indicators, get_knowledge=get_knowledge)
+    recorder = Recorder(phase='portfolio')
+    # The raw account name may echo a secret already removed from the evidence.
+    account_name = (facts.get('account') or {}).get('name', '模拟账户')
+    return _single_run(phase='portfolio', ctx=ctx, model=model, checkpointer=checkpointer, run_id=run_id,
+                       now=now, tools=tools, recorder=recorder,
+                       check=lambda text: portfolio_check.check_portfolio(text, expected_positions=held),
+                       system=PORTFOLIO_PROMPT,
+                       human=f"账户 {account_name} · 决策交易日 {ctx.session} · 数据截至 {ctx.cutoff_at.isoformat()}\n\n{evidence}")

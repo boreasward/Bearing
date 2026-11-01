@@ -329,3 +329,33 @@ def test_agent_summary_needs_five_samples():
              _shadow_row(3.0, version_no=2, is_head=True), _shadow_row(4.0, version_no=None)]
     out = review.shadow_agent_summary(chain)
     assert out['first']['count'] == 2 and out['latest']['count'] == 2      # agent-1 两边都算
+
+
+@pytest.mark.parametrize('p,bars,expected', [
+    (plan2(), [bar(D1, 100, 103, 99, 101), bar(D2, 105, 113, 104, 111), bar(D3, 106, 108, 104, 105)],
+     {'fill_date': D1, 'fill_price': D('100.0'),
+      'legs': [{'fraction': 0.5, 'exit_date': '2026-10-22', 'exit_price': D('112'), 'reason': 'target1'},
+               {'fraction': 0.5, 'exit_date': '2026-10-23', 'exit_price': D('105.0'), 'reason': 'trail'}],
+      'r': 1.4166666666666667, 'return': 0.085, 'spy_return': 0.0, 'void_reason': None,
+      'void_date': None, 'time_stop_due': False, 'status': 'closed'}),
+    (plan2(max_hold=3), [bar(D1, 100, 101, 99.5, 101), bar(D2, 101, 102, 100.5, 101),
+                        bar(D3, 101, 102, 100.5, 101.5)],
+     {'fill_date': D1, 'fill_price': D('100.0'), 'legs': [], 'r': 0.25, 'return': 0.015,
+      'spy_return': 0.0, 'void_reason': None, 'void_date': None, 'time_stop_due': True, 'status': 'open'}),
+    (plan2(), [bar(D1, 93, 99, 92, 95)],
+     {'fill_date': None, 'fill_price': None, 'legs': [], 'r': None, 'return': None, 'spy_return': None,
+      'void_reason': 'gap_below_stop', 'void_date': D1, 'time_stop_due': False, 'status': 'voided'}),
+])
+def test_v2_literal_golden_before_shared_step(p, bars, expected):
+    # Captured from unchanged HEAD 92eab02. repr pins Decimal exponents, float values and dict ordering too.
+    assert repr(sim2(p, bars)) == repr(expected)
+
+
+def test_shared_step_is_pure_and_stop_never_moves_down():
+    assert hasattr(plan_shadow, 'PositionState') and hasattr(plan_shadow, 'step_position')
+    state = plan_shadow.PositionState(D('100'), D('110'), D('94'), D('6'), True, False,
+                                       D('115'), 4, False)
+    updated, legs = plan_shadow.step_position(state, bar(D4, 114, 116, 111, 114),
+                                              target1=D('112'), atr=D('4'), trail_multiple=D('3'), max_hold=10)
+    assert state.held_sessions == 4 and state.stop == D('110')
+    assert updated.held_sessions == 5 and updated.stop == D('110') and legs == []

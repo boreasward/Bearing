@@ -120,8 +120,9 @@ def test_review_detail_missing_month_nulls():
 
 # --- v2.5 D17: first versions in plans.agent, heads in agent_latest; v2.9 D30: monthly-4 ---
 
-def test_monthly_version_is_monthly_4():
-    assert monthly.MONTHLY_VERSION == 'monthly-4'
+def test_monthly_version_is_monthly_5_with_4_preserved():
+    assert monthly.MONTHLY_VERSION == 'monthly-5'
+    assert monthly.MONTHLY_V4 == 'monthly-4'
 
 
 def test_generate_monthly_counts_first_and_latest(workbench_db, monkeypatch):
@@ -160,7 +161,7 @@ def test_generate_monthly_counts_first_and_latest(workbench_db, monkeypatch):
             'schema_version': 'agent-2'})
         previous = plan['id']
     stats = service.generate_monthly(date(2026, 10, 1), now=now)['stats']
-    assert stats['calc_version'] == 'monthly-4'
+    assert stats['calc_version'] == 'monthly-5'
     # agent-2 versions have no execution fields: summarised under plan-shadow-1, apart from plan-shadow-2 plans
     assert set(stats['plans']) == {'Agent 首版（旧计划 · plan-shadow-1）', 'Agent 最新版（旧计划 · plan-shadow-1）'}
     assert stats['shadow_versions']['plans_v1'] == 'plan-shadow-1'
@@ -169,8 +170,8 @@ def test_generate_monthly_counts_first_and_latest(workbench_db, monkeypatch):
     assert stats['tracks']['units'][0]['agent']['version_basis'] == 'first'
 
 
-def test_monthly4_freezes_tracks2_discipline2_two_shadows(workbench_db, monkeypatch):
-    """monthly-4: the snapshot carries `tracks-2` rows (with the merged count), `discipline-2` and both shadow
+def test_monthly5_retains_tracks2_discipline2_two_shadows(workbench_db, monkeypatch):
+    """monthly-5 retains monthly-4 facts: the snapshot carries `tracks-2` rows (with the merged count), `discipline-2` and both shadow
     versions: a plan with execution fields is summarised under plan-shadow-2 and again, as the counterfactual, under
     plan-shadow-1; an older plan only under plan-shadow-1."""
     from contextlib import contextmanager
@@ -196,7 +197,7 @@ def test_monthly4_freezes_tracks2_discipline2_two_shadows(workbench_db, monkeypa
     plan('plan-1')
     plan('plan-2', entry_type='zone_limit', max_hold_sessions=10)
     stats = service.generate_monthly(date(2026, 10, 1), now=now)['stats']
-    assert stats['calc_version'] == 'monthly-4'
+    assert stats['calc_version'] == 'monthly-5'
     assert stats['shadow_versions'] == {'plans': 'plan-shadow-2', 'plans_v1': 'plan-shadow-1',
                                         'plans_counterfactual': 'plan-shadow-1'}
     assert stats['plans']['rule']['count'] == 1 and stats['plans_v1']['rule']['count'] == 1
@@ -205,3 +206,107 @@ def test_monthly4_freezes_tracks2_discipline2_two_shadows(workbench_db, monkeypa
     assert stats['discipline']['calc_version'] == 'discipline-2'
     assert 'merged' in stats['tracks']['summary']['all']['agent']
     assert stats['tracks']['units'][0]['rule']['plan_id'] is not None
+
+
+def test_monthly_v5_ledger_endpoints_latest_and_net_flows():
+    assert hasattr(monthly, 'month_return_v2')
+    start = {'session': date(2026, 9, 30), 'equity': D('100000'), 'computed_at': datetime(2026, 10, 1, tzinfo=UTC)}
+    end = {'session': date(2026, 10, 30), 'equity': D('112000'), 'computed_at': datetime(2026, 11, 1, tzinfo=UTC)}
+    stale_revision = {**end, 'equity': D('90000'), 'computed_at': datetime(2026, 10, 31, tzinfo=UTC)}
+    out = monthly.month_return_v2(date(2026, 10, 1), equity_rows=[end, start, stale_revision], snapshots=[],
+                                  flows=[flow(date(2026, 10, 15), 5000), flow(date(2026, 10, 16), 999, voided=True)],
+                                  opened=True)
+    assert out == {'status': 'ok', 'source': 'ledger', 'start': start, 'end': end,
+                   'net_flow': 5000.0, 'return': .07}
+    assert monthly.MONTHLY_VERSION == 'monthly-5' and monthly.MONTHLY_V4 == 'monthly-4'
+
+
+@pytest.mark.parametrize('opened,end_day', [(False, 30), (True, 29)])
+def test_monthly_v5_snapshot_fallback_unopened_or_missing_exact_endpoint(opened, end_day):
+    assert hasattr(monthly, 'month_return_v2')
+    snapshots = [snap(date(2026, 9, 30), 100000), snap(date(2026, 10, 31), 110000)]
+    rows = [{'session': date(2026, 9, 30), 'equity': D('100000')},
+            {'session': date(2026, 10, end_day), 'equity': D('90000')}]
+    expected = monthly.month_return(date(2026, 10, 1), snapshots, [])
+    assert monthly.month_return_v2(date(2026, 10, 1), equity_rows=rows, snapshots=snapshots, flows=[], opened=opened) == {
+        **expected, 'source': 'snapshot'}
+
+
+@pytest.mark.parametrize('endpoint', ['start', 'end'])
+@pytest.mark.parametrize('quality_field', ['bars_missing', 'stale'])
+@pytest.mark.parametrize('has_snapshots', [True, False], ids=['snapshot_fallback', 'missing_snapshot'])
+def test_monthly_v5_incomplete_latest_endpoint_falls_back(endpoint, quality_field, has_snapshots):
+    rows = {
+        'start': {'session': date(2026, 9, 30), 'equity': D('100000')},
+        'end': {'session': date(2026, 10, 30), 'equity': D('112000')},
+    }
+    older_complete = {**rows[endpoint], 'computed_at': datetime(2026, 11, 1, tzinfo=UTC)}
+    rows[endpoint] = {**rows[endpoint], 'equity': D('10000'),
+                      'computed_at': datetime(2026, 11, 2, tzinfo=UTC),
+                      'detail': {quality_field: ['NVDA']}}
+    snapshots = [snap(date(2026, 9, 29), 100000), snap(date(2026, 10, 29), 112000)] if has_snapshots else []
+    # An older complete revision cannot stand in for the latest, incomplete valuation.
+    out = monthly.month_return_v2(date(2026, 10, 1), equity_rows=[*rows.values(), older_complete],
+                                  snapshots=snapshots, opened=True,
+                                  flows=[flow(date(2026, 9, 30), 2000), flow(date(2026, 10, 15), 5000),
+                                         flow(date(2026, 10, 30), 9000), flow(date(2026, 10, 15), 999, voided=True)])
+
+    assert out['source'] == 'snapshot'
+    if has_snapshots:
+        assert out['status'] == 'ok'
+        assert out['start'] == snapshots[0] and out['end'] == snapshots[1]
+        assert out['net_flow'] == 7000.0
+        assert out['return'] == pytest.approx(.05)
+    else:
+        assert out['status'] == 'missing_snapshot'
+        assert out['start'] is None and out['end'] is None
+        assert out['net_flow'] is None and out['return'] is None
+
+
+@pytest.mark.parametrize('detail', [None, {}, {'bars_missing': [], 'stale': []}])
+def test_monthly_v5_complete_or_absent_quality_metadata_keeps_ledger_return(detail):
+    rows = [{'session': date(2026, 9, 30), 'equity': D('100000'), 'detail': detail},
+            {'session': date(2026, 10, 30), 'equity': D('112000'), 'detail': detail}]
+    out = monthly.month_return_v2(date(2026, 10, 1), equity_rows=rows, snapshots=[],
+                                  flows=[flow(date(2026, 10, 15), 5000)], opened=True)
+    assert out['status'] == 'ok' and out['source'] == 'ledger'
+    assert out['net_flow'] == 5000.0
+    assert out['return'] == pytest.approx(.07)
+
+
+def test_generate_monthly_uses_ledger_and_checks_the_three_month_window(workbench_db, monkeypatch):
+    from contextlib import contextmanager
+    from investment_assistant.workbench import repository, service, accounts
+    @contextmanager
+    def connection(): yield workbench_db
+    monkeypatch.setattr(service, 'connection', connection)
+    now=datetime(2026,11,2,23,tzinfo=UTC)
+    repository.set_account_opening(workbench_db,accounts.REAL_ACCOUNT_ID,opening_cash=100000,opened_on=date(2026,9,1))
+    for day,value in [(date(2026,9,30),100000),(date(2026,10,30),110000)]:
+        repository.insert_equity_day(workbench_db,{'account_id':accounts.REAL_ACCOUNT_ID,'session':day,'cash':D(value),
+            'positions_value':D(0),'equity':D(value),'realized_pnl_cum':D(0),'unrealized_pnl':D(0),
+            'net_flows_cum':D(0),'positions_count':0,'account_version':'account-1','run_id':'t','computed_at':now})
+    seen=[]; original=monthly.month_return_v2
+    def capture(month,**kwargs): seen.append(month); return original(month,**kwargs)
+    monkeypatch.setattr(monthly,'month_return_v2',capture)
+    stats=service.generate_monthly(date(2026,10,1),now=now)['stats']
+    assert stats['return']['source']=='ledger' and stats['return']['return']==.1
+    assert set(seen)=={date(2026,m,1) for m in (8,9,10)}
+
+
+def test_automatic_monthly_can_generate_from_ledger_without_broker_snapshot(workbench_db,monkeypatch):
+    from contextlib import contextmanager
+    from investment_assistant.workbench import repository,service,accounts
+    @contextmanager
+    def connection(): yield workbench_db
+    monkeypatch.setattr(service,'connection',connection)
+    now=datetime(2026,11,2,23,tzinfo=UTC)
+    repository.set_account_opening(workbench_db,accounts.REAL_ACCOUNT_ID,opening_cash=100000,opened_on=date(2026,9,1))
+    for day,value in [(date(2026,9,30),100000),(date(2026,10,30),110000)]:
+        repository.insert_equity_day(workbench_db,{'account_id':accounts.REAL_ACCOUNT_ID,'session':day,'cash':D(value),
+            'positions_value':D(0),'equity':D(value),'realized_pnl_cum':D(0),'unrealized_pnl':D(0),
+            'net_flows_cum':D(0),'positions_count':0,'account_version':'account-1','run_id':'t','computed_at':now})
+    workbench_db.commit()
+    out=service._tick_monthly(now=now,notify_cfg=None,trigger_source='manual',client=None,push=False)
+    assert out['action']=='generated' and out['push']=='manual_run'
+    assert repository.monthly_head(workbench_db,date(2026,10,1))['stats']['return']['source']=='ledger'
