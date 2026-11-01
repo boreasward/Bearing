@@ -3,6 +3,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+from datetime import UTC, date, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -57,15 +58,74 @@ def fixture(tmp_path):
         'method':'sum_four_contiguous_quarters', 'input_ids':[10,11,12,13],
         'sources':[s for q in quarters for s in q['metrics']['revenue']['sources']], 'missing_reason':None}
     view = {'security_id':'US:stock:MU', 'ticker':'MU', 'financials':quarters,
-        'market':{'bars':[], 'benchmarks':{}, 'quote':{}, 'performance':{'windows':{}}},
+        'market':{'bars':[], 'benchmarks':{'SPY':[], 'QQQ':[]}, 'quote':{}, 'performance':{'windows':{}}},
         'valuation':{name:{'value':None,'missing_reason':'unverified'} for name in ('pe_ttm','ps_ttm','fcf_yield')},
         'guidance':{'comparisons':[]}, 'pit':{'strict':False}}
-    bundle = {'active_tickers':['MU'], 'companies':{'MU':{'view':view,'history':{'financials':rows,'market':[],'filings':[],'guidance':[]},'states':{}}}}
+    bundle = {'active_tickers':['MU'], 'companies':{'MU':{'view':view,'history':{'financials':rows,'market':[],'filings':[],'guidance':[]},'states':{},
+                                                       'price_bars':{'MU':[], 'SPY':[], 'QQQ':[]}}}}
     return bundle, root
 
 
 def verify(bundle, root):
     return verifier().verify_bundle(bundle, raw_root=root, expected_tickers=('MU',), required_provenance=('MU',))
+
+
+def stored_market(company):
+    from investment_assistant.analysis.fundamentals import market_from_bars
+
+    rows = {'MU': [{'id': 901, 'price_date': date(2026, 10, 16),
+                    'open': 9, 'high': 11, 'low': 8, 'close': 10, 'adj_close': 5, 'volume': 100}],
+            'SPY': [{'id': 902, 'price_date': date(2026, 10, 16),
+                     'open': 500, 'high': 510, 'low': 490, 'close': 505, 'adj_close': 500, 'volume': 200}],
+            'QQQ': []}
+    company['price_bars'] = copy.deepcopy(rows)
+    company['view']['market'] = market_from_bars(rows['MU'], {k: rows[k] for k in ('SPY', 'QQQ')})
+
+
+def test_real_price_bars_projection_passes_independent_readback(tmp_path):
+    bundle, root = fixture(tmp_path)
+    stored_market(bundle['companies']['MU'])
+    assert verify(bundle, root)['passed']
+
+
+@pytest.mark.parametrize('field,value', [
+    ('id', 902), ('date', '2026-10-15'), ('open', 8), ('high', 12), ('low', 7),
+    ('close', 5), ('adjusted_close', 10), ('volume', 101), ('source_hash', 'invented'),
+])
+def test_price_projection_rejects_wrong_ticker_date_or_value(tmp_path, field, value):
+    bundle, root = fixture(tmp_path)
+    company = bundle['companies']['MU']
+    stored_market(company)
+    company['view']['market']['bars'][0][field] = value
+    with pytest.raises(verifier().VerificationError, match='market_'):
+        verify(bundle, root)
+
+
+@pytest.mark.parametrize('mutation', ['benchmark_ticker', 'benchmark_value', 'missing_bars', 'quote_price', 'quote_date'])
+def test_price_projection_checks_benchmarks_coverage_and_daily_quote(tmp_path, mutation):
+    bundle, root = fixture(tmp_path)
+    company = bundle['companies']['MU']
+    stored_market(company)
+    market = company['view']['market']
+    if mutation == 'benchmark_ticker': market['benchmarks']['QQQ'] = market['benchmarks'].pop('SPY')
+    elif mutation == 'benchmark_value': market['benchmarks']['SPY'][0]['close'] = 1
+    elif mutation == 'missing_bars': market['bars'] = []
+    elif mutation == 'quote_price': market['quote']['price'] = 5
+    elif mutation == 'quote_date': market['quote']['date'] = '2026-10-15'
+    with pytest.raises(verifier().VerificationError, match='market_'):
+        verify(bundle, root)
+
+
+def test_price_and_financial_ids_have_separate_ownership(tmp_path):
+    bundle, root = fixture(tmp_path)
+    company = bundle['companies']['MU']
+    stored_market(company)
+    company['price_bars']['MU'][0]['id'] = 10  # valid collision with an observation ID
+    company['view']['market']['bars'][0]['id'] = 10
+    assert verify(bundle, root)['passed']
+    company['view']['market']['bars'][0]['close'] = 100  # the financial row's value
+    with pytest.raises(verifier().VerificationError, match='market_readback'):
+        verify(bundle, root)
 
 
 def test_exact_source_values_and_independent_quarter_arithmetic(tmp_path):
@@ -144,7 +204,7 @@ def add_market(bundle, root):
         'currency':'USD','open':9,'high':11,'low':8,'close':10,'volume':100,'adjusted_close':5,
         'snapshot_path':str(path),'source_hash':digest,'source_url':'https://query1.finance.yahoo.com/v8/finance/chart/MU'}
     bundle['companies']['MU']['history']['market'].append(row)
-    bundle['companies']['MU']['view']['market']['bars'].append(copy.deepcopy(row))
+    return row
 
 
 def test_raw_and_adjusted_prices_are_checked_against_distinct_source_arrays(tmp_path):
@@ -152,6 +212,20 @@ def test_raw_and_adjusted_prices_are_checked_against_distinct_source_arrays(tmp_
     assert verify(bundle, root)['snapshot_count'] == 2
     bundle['companies']['MU']['history']['market'][0]['close'] = 5
     with pytest.raises(verifier().VerificationError, match='raw_price'): verify(bundle, root)
+
+
+@pytest.mark.parametrize('collision', [False, True])
+def test_old_market_history_cannot_authorize_price_bars_output(tmp_path, collision):
+    bundle, root = fixture(tmp_path)
+    company = bundle['companies']['MU']
+    stored_market(company)
+    old = add_market(bundle, root)
+    if collision:
+        old['id'] = 901
+    assert verify(bundle, root)['passed']  # historical snapshots are still independently checked
+    company['view']['market']['bars'] = [copy.deepcopy(old)]
+    with pytest.raises(verifier().VerificationError, match='market_'):
+        verify(bundle, root)
 
 
 def test_live_entrypoint_has_no_collection_or_migration_dependencies():
@@ -197,13 +271,24 @@ def test_live_required_cik_is_checked_against_exact_archived_companyfacts(tmp_pa
         verifier().verify_bundle(bundle,raw_root=root,expected_tickers=('MU',),required_provenance=('MU',),expected_ciks={'MU':723125})
 
 
-def test_read_only_reader_uses_get_and_forces_transaction_mode(monkeypatch):
+@pytest.mark.parametrize('cutoff,session', [
+    (datetime(2026, 10, 19, 20, 59, tzinfo=UTC), date(2026, 10, 16)),
+    (datetime(2026, 10, 19, 21, 1, tzinfo=UTC), date(2026, 10, 19)),
+])
+def test_read_only_reader_uses_one_cutoff_for_get_history_and_price_revisions(monkeypatch, cutoff, session):
     from contextlib import contextmanager
     import psycopg
     import requests
     from investment_assistant import db
     from investment_assistant.data import repo as repository
     calls = []
+    clock_calls = []
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz):
+            clock_calls.append(tz)
+            return cutoff
+    monkeypatch.setattr(verifier(), 'datetime', Clock)
     class Connection:
         def execute(self, sql): calls.append(('sql',sql))
     @contextmanager
@@ -212,14 +297,21 @@ def test_read_only_reader_uses_get_and_forces_transaction_mode(monkeypatch):
         yield Connection()
     class Response:
         status_code = 200
-        def json(self): return {'security_id':'US:stock:MU'}
+        def json(self): return {'security_id':'US:stock:MU', 'pit':{'as_of':cutoff.isoformat()}}
     def get(url, **kwargs):
         calls.append(('get',url,kwargs)); return Response()
     monkeypatch.setenv('INVESTMENT_ASSISTANT_DATABASE_URL','postgresql://offline.invalid')
     monkeypatch.setattr(psycopg,'connect',connection)
     monkeypatch.setattr(requests,'get',get)
     monkeypatch.setattr(db,'list_watchlist_items',lambda conn:[{'ticker':'MU','status':'active'},{'ticker':'688008.SH','status':'active'}])
-    monkeypatch.setattr(repository,'read_history',lambda *args:[])
+    def history(conn, sid, dataset, *, as_of=None):
+        calls.append(('history', sid, dataset, as_of))
+        return []
+    def bars(conn, ticker, end_date, *, cutoff_at, limit):
+        calls.append(('bars', ticker, end_date, cutoff_at, limit))
+        return [{'id': 901, 'price_date': session, 'revision': 2, 'close': 10}]
+    monkeypatch.setattr(repository,'read_history',history)
+    monkeypatch.setattr(repository,'read_bars',bars)
     monkeypatch.setattr(repository,'states',lambda *args:{})
     result = verifier().read_bundle('http://127.0.0.1:8787')
     assert result['active_tickers'] == ['MU']
@@ -227,6 +319,33 @@ def test_read_only_reader_uses_get_and_forces_transaction_mode(monkeypatch):
     assert 'READ ONLY' in calls[1][1]
     assert len([c for c in calls if c[0] == 'get']) == 8
     assert all(c[2]['allow_redirects'] is False for c in calls if c[0] == 'get')
+    assert clock_calls == [UTC]
+    assert result['as_of'] == cutoff.isoformat()
+    assert all(c[2]['params'] == {'as_of': cutoff.isoformat()} for c in calls if c[0] == 'get')
+    assert [c[1:] for c in calls if c[0] == 'bars'] == [
+        (symbol, session, cutoff, 2000) for ticker in verifier().EXPECTED_TICKERS for symbol in (ticker, 'SPY', 'QQQ')]
+    assert all(c[3] == cutoff for c in calls if c[0] == 'history')
+    assert result['companies']['MU']['price_bars'] == {
+        symbol: [{'id': 901, 'price_date': session, 'revision': 2, 'close': 10}] for symbol in ('MU', 'SPY', 'QQQ')}
+
+
+def test_read_bundle_rejects_http_ignoring_the_requested_cutoff(monkeypatch):
+    from contextlib import nullcontext
+    import psycopg
+    import requests
+    from investment_assistant import db
+
+    class Connection:
+        def execute(self, sql): pass
+    class Response:
+        status_code = 200
+        def json(self): return {'pit': {'as_of': None}}
+    monkeypatch.setenv('INVESTMENT_ASSISTANT_DATABASE_URL', 'postgresql://offline.invalid')
+    monkeypatch.setattr(psycopg, 'connect', lambda *a, **kw: nullcontext(Connection()))
+    monkeypatch.setattr(db, 'list_watchlist_items', lambda conn: [])
+    monkeypatch.setattr(requests, 'get', lambda *a, **kw: Response())
+    with pytest.raises(verifier().VerificationError, match='view_cutoff'):
+        verifier().read_bundle('http://127.0.0.1:8787')
 
 
 def test_large_integer_source_values_are_exact_not_relative_tolerance():

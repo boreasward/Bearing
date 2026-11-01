@@ -132,6 +132,42 @@ def browser_login(auth_server, db, *, subject='user-1', scope=chatgpt.SCOPES, cl
 
 # ---------------------------------------------------------------------------------------------- refresh
 
+def test_agent_transaction_commits_without_workbench_schema_gate(monkeypatch):
+    calls = []
+    class Connection:
+        def commit(self): calls.append('commit')
+        def rollback(self): calls.append('rollback')
+    conn = Connection()
+    monkeypatch.setattr(core_tx, 'connection', lambda: contextlib.nullcontext(conn))
+    with agent_connection._agent_connection_tx() as current:
+        assert current is conn
+    assert calls == ['commit']
+
+
+@pytest.mark.parametrize('failure', ['body', 'commit', 'undefined_table', 'interrupt'])
+def test_agent_transaction_rolls_back_and_preserves_failure_contract(monkeypatch, failure):
+    import psycopg
+
+    error = (psycopg.errors.UndefinedTable('missing') if failure == 'undefined_table'
+             else KeyboardInterrupt() if failure == 'interrupt' else RuntimeError('transaction failed'))
+    calls = []
+    class Connection:
+        def commit(self):
+            calls.append('commit')
+            if failure == 'commit': raise error
+        def rollback(self): calls.append('rollback')
+    monkeypatch.setattr(core_tx, 'connection', lambda: contextlib.nullcontext(Connection()))
+    expected = ChatGPTError if failure == 'undefined_table' else type(error)
+    with pytest.raises(expected) as caught:
+        with agent_connection._agent_connection_tx():
+            if failure != 'commit': raise error
+    assert calls == (['commit', 'rollback'] if failure == 'commit' else ['rollback'])
+    if failure == 'undefined_table':
+        assert caught.value.code == 'migration_028_missing'
+    else:
+        assert caught.value is error
+
+
 def test_no_refresh_when_enough_time_left(db, auth):
     seed(db, expires_in=301)
     assert agent_connection.access_token(now=NOW) == OLD_ACCESS

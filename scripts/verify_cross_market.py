@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 import sys
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -143,6 +143,36 @@ def verify_market(row, ticker, snapshots):
         raise VerificationError('market_source_structure') from None
 
 
+def verify_price_projection(ticker, market, prices):
+    """Compare D48 output to independently queried price_bars, never observation IDs.
+
+    read_bars binds the ticker in SQL; its result omits that column, so prices keeps
+    each result under the queried ticker. IDs are only meaningful in this table.
+    """
+    require(isinstance(prices, dict) and set(prices) == {ticker, 'SPY', 'QQQ'}, 'market_ownership')
+    benchmarks = market.get('benchmarks', {})
+    require(set(benchmarks) == {'SPY', 'QQQ'}, 'market_ownership')
+    fields = [('open', 'open'), ('high', 'high'), ('low', 'low'), ('close', 'close'),
+              ('volume', 'volume'), ('adjusted_close', 'adj_close')]
+    for symbol, bars in [(ticker, market.get('bars', [])), *benchmarks.items()]:
+        stored = prices[symbol]
+        require(all(isinstance(b.get('id'), int) and not isinstance(b['id'], bool) and b['id'] > 0
+                    for b in bars), 'market_ownership')
+        require([b['id'] for b in bars] == [r['id'] for r in stored], 'market_ownership')
+        for bar, row in zip(bars, stored):
+            require(bar.get('date') == row['price_date'].isoformat(), 'market_readback')
+            require(all(number(bar.get(output)) and bar[output] == row[source]
+                        for output, source in fields), 'market_readback')
+            require(all(bar.get(key) is None for key in ('currency', 'source_url', 'source_hash')),
+                    'market_readback')
+    last = prices[ticker][-1] if prices[ticker] else None
+    quote = ({'date': last['price_date'].isoformat(), 'currency': None, 'price': last['close'],
+              'price_basis': 'stored_daily_close', 'shares': None, 'market_cap': None,
+              'market_cap_verified': False, 'share_class_basis': 'unverified',
+              'source_url': None, 'source_hash': None} if last else {})
+    require(market.get('quote', {}) == quote, 'market_quote')
+
+
 def matched_sources(metric, rows):
     ids = metric.get('input_ids', [])
     require(all(isinstance(i, int) and not isinstance(i, bool) and i in rows for i in ids), 'input_ownership')
@@ -266,13 +296,7 @@ def verify_company(ticker, company, snapshots):
         if comparison.get('basis') not in VERIFIED_BASES:
             require(comparison.get('status') == 'not_comparable' and comparison.get('actual') is None, 'guidance_basis')
         require(all(i in rows and rows[i]['dataset'] == 'financials' for i in comparison.get('input_ids',[])), 'guidance_ownership')
-    # Compare the deployed bars with the actual persisted rows as well as source arrays.
-    market = view.get('market',{})
-    for group,bars in [('stock',market.get('bars',[])), *market.get('benchmarks',{}).items()]:
-        for bar in bars:
-            stored = rows.get(bar.get('id'),{})
-            require(stored.get('dataset') == 'market' and stored.get('group') == group, 'market_ownership')
-            require(all(bar.get(k) == stored.get(k) for k in ('date','close','adjusted_close','source_hash')), 'market_readback')
+    verify_price_projection(ticker, view.get('market', {}), company.get('price_bars'))
     return {'quarter_coverage':{'target':12,'actual':len(financials),'complete':len(financials) == 12},
         'arithmetic_checks':arithmetic,'quarter_arithmetic_examples':list(examples.values()),
         'proven_financial_input_ids':sorted(proven),
@@ -292,7 +316,7 @@ def verify_bundle(bundle, *, raw_root, expected_tickers=EXPECTED_TICKERS, requir
                 require(int(snapshots.document(candidate)['cik']) == cik, 'company_cik')
     for ticker in required_provenance:
         require(companies[ticker]['arithmetic_checks'] > 0 and companies[ticker]['proven_financial_input_ids'], 'required_provenance')
-    return {'passed':True,'active_tickers':list(expected_tickers),'companies':companies,'snapshot_count':len(snapshots.checked),
+    return {'passed':True,'as_of':bundle.get('as_of'),'active_tickers':list(expected_tickers),'companies':companies,'snapshot_count':len(snapshots.checked),
         'strict_historical_snapshots':False,'scope':'read-only database history, archived source bytes and deployed HTTP GETs; browser and user acceptance pending'}
 
 
@@ -303,11 +327,14 @@ def read_bundle(api_url):
     import requests
     from investment_assistant.db import list_watchlist_items
     from investment_assistant.data import repo as repository
+    from investment_assistant.data.adapters import bars
     url = os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL')
     require(bool(url), 'database_configuration')
     parsed = urlsplit(api_url)
     require(parsed.scheme == 'http' and parsed.hostname in {'127.0.0.1','localhost'} and not parsed.username and not parsed.password, 'loopback_api')
-    bundle = {'companies':{}}
+    cutoff = datetime.now(UTC)
+    session = bars.latest_closed_session(cutoff)
+    bundle = {'as_of': cutoff.isoformat(), 'companies':{}}
     with psycopg.connect(url, options='-c default_transaction_read_only=on') as conn:
         conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         bundle['active_tickers'] = sorted(r['ticker'] for r in list_watchlist_items(conn) if r['status'] == 'active' and r['ticker'] in EXPECTED_TICKERS)
@@ -323,11 +350,16 @@ def read_bundle(api_url):
             bundle['active_tickers'].append(row['ticker'])
         for ticker in EXPECTED_TICKERS:
             sid = stock_id(ticker)
-            response = requests.get(api_url.rstrip('/')+'/api/us-research/'+ticker, timeout=60, allow_redirects=False)
+            response = requests.get(api_url.rstrip('/')+'/api/us-research/'+ticker,
+                                    params={'as_of': cutoff.isoformat()}, timeout=60, allow_redirects=False)
             require(response.status_code == 200, 'deployed_http_read')
             payload = response.json()
-            bundle['companies'][ticker] = {'view':payload.get('data',payload),
-                'history':{ds:repository.read_history(conn,sid,ds) for ds in ('financials','market','filings','guidance')},
+            view = payload.get('data', payload)
+            require(view.get('pit', {}).get('as_of') == cutoff.isoformat(), 'view_cutoff')
+            bundle['companies'][ticker] = {'view':view,
+                'price_bars':{symbol:repository.read_bars(conn, symbol, session, cutoff_at=cutoff, limit=2000)
+                              for symbol in dict.fromkeys((ticker, 'SPY', 'QQQ'))},
+                'history':{ds:repository.read_history(conn,sid,ds,as_of=cutoff) for ds in ('financials','market','filings','guidance')},
                 'states':repository.states(conn,sid)}
     return bundle
 

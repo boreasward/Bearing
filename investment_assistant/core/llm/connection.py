@@ -58,7 +58,7 @@ def _connect():
 
 
 @contextmanager
-def _tx() -> Iterator[Any]:
+def _agent_connection_tx() -> Iterator[Any]:
     import psycopg
 
     with _connect() as conn:
@@ -186,7 +186,7 @@ def _expire_pending(now: datetime) -> None:
             return
         _PENDING = None
     pending.server.close()
-    with _tx() as conn:
+    with _agent_connection_tx() as conn:
         _restore(conn, pending.prior, 'login_expired', now)
 
 
@@ -210,7 +210,7 @@ def start_login(*, now: datetime, open_port: int | None = None) -> dict:
     pending: _Pending | None = None
     try:
         with _TOKEN_LOCK:
-            with _tx() as conn:
+            with _agent_connection_tx() as conn:
                 _ensure_row(conn)
                 row = _load(conn, lock=True)
                 server = chatgpt.CallbackServer(pkce['state'], row['client_id'])
@@ -260,7 +260,7 @@ def cancel_login() -> dict:
         _PENDING = None
     if pending is not None:
         pending.server.close()
-    with _tx() as conn:
+    with _agent_connection_tx() as conn:
         row = _load(conn)
         if pending is not None or (row is not None and row['status'] == 'pending'):
             _restore(conn, pending.prior if pending else _prior_status(conn), 'cancelled', now)
@@ -294,7 +294,7 @@ def _complete(pending: _Pending, callback: dict, now: datetime) -> dict:
 
 def _login_failed(pending: _Pending, code: str, now: datetime, message: str | None = None) -> dict:
     code = chatgpt.safe_code(code) or 'login_failed'
-    with _tx() as conn:
+    with _agent_connection_tx() as conn:
         row = _load(conn, lock=True)
         _restore(conn, pending.prior, code, now, note=False)
         if row is not None and row['status'] in ('pending', *_PRIOR):
@@ -313,7 +313,7 @@ def _finish_login(pending: _Pending, callback: dict, now: datetime) -> dict:
     with _TOKEN_LOCK:
         try:
             # a one-time code can fail to exchange after registration succeeded: keep the issued client_id first
-            with _tx() as conn:
+            with _agent_connection_tx() as conn:
                 _ensure_row(conn)
                 conn.execute('UPDATE agent_connections SET client_id = %s, updated_at = %s WHERE id = 1',
                              (client_id, now))
@@ -326,7 +326,7 @@ def _finish_login(pending: _Pending, callback: dict, now: datetime) -> dict:
         except Exception as exc:        # noqa: BLE001 - nothing of a raw exception may reach the row or the log
             log.warning('chatgpt login failed: %s', type(exc).__name__)
             return _login_failed(pending, 'login_failed', now)
-        with _tx() as conn:
+        with _agent_connection_tx() as conn:
             _load(conn, lock=True)
             expires = now + timedelta(seconds=fields['expires_in'])
             refresh_expires = now + REFRESH_TTL
@@ -367,7 +367,7 @@ def access_token(*, now: datetime | None = None) -> str:
     failure: ChatGPTError | None = None
     token: str | None = None
     with _TOKEN_LOCK:
-        with _tx() as conn:
+        with _agent_connection_tx() as conn:
             row = _load(conn, lock=True)
             if row is None or row['status'] != 'connected':
                 raise error_for('not_connected')
@@ -415,7 +415,7 @@ def mark_needs_login(code: str, *, now: datetime | None = None) -> bool:
     the tokens and go to ``needs_login``. True when a connected row was changed."""
     now = now or _utcnow()
     with _TOKEN_LOCK:
-        with _tx() as conn:
+        with _agent_connection_tx() as conn:
             row = _load(conn, lock=True)
             if row is None or row['status'] != 'connected':
                 return False
@@ -433,7 +433,7 @@ def report_unauthorized(token: str, *, now: datetime | None = None) -> str:
     - ``'ignored'``: the row no longer holds this token (already refreshed, disconnected, ...)."""
     now = now or _utcnow()
     with _TOKEN_LOCK:
-        with _tx() as conn:
+        with _agent_connection_tx() as conn:
             row = _load(conn, lock=True)
             if row is None or row['status'] != 'connected' or row['access_token'] != token:
                 return 'ignored'
@@ -452,7 +452,7 @@ def first_failure_since_ok(*, since: datetime | None = None) -> bool:
 
     A caller passes the start time of its previous run: each failure episode is then reported once, by the first run
     that starts after it. Transient refresh failures never count (they write no ``refresh_failed`` event)."""
-    with _tx() as conn:
+    with _agent_connection_tx() as conn:
         row = _load(conn)
         events = conn.execute("SELECT kind, detail, created_at FROM agent_connection_events "
                               "WHERE kind IN ('connected', 'refreshed', 'refresh_failed') ORDER BY id DESC").fetchall()
@@ -478,7 +478,7 @@ def disconnect(*, now: datetime) -> dict:
     if pending is not None:
         pending.server.close()
     with _TOKEN_LOCK:
-        with _tx() as conn:
+        with _agent_connection_tx() as conn:
             row = _load(conn, lock=True)
             if row is None:
                 return {'revoked': False}
@@ -512,7 +512,7 @@ def select_model(slug: str, *, now: datetime) -> dict:
     chosen = next((item for item in models() if item['slug'] == slug), None)
     if chosen is None:
         raise error_for('model_not_listed')
-    with _tx() as conn:
+    with _agent_connection_tx() as conn:
         _load(conn, lock=True)
         conn.execute('UPDATE agent_connections SET model = %s, model_display_name = %s, updated_at = %s WHERE id = 1',
                      (chosen['slug'], chosen['display_name'], now))
@@ -537,7 +537,7 @@ def status_view(*, now: datetime | None = None) -> dict:
     a connected row whose account did not grant plan-usage sharing."""
     now = now or _utcnow()
     _expire_pending(now)
-    with _tx() as conn:
+    with _agent_connection_tx() as conn:
         row = _heal(conn, now)
     with _PENDING_LOCK:
         pending = _PENDING
@@ -565,7 +565,7 @@ def read_for_settings() -> dict:
     token, used only to scrub error texts; it must never be returned by an API. Raises when the table is unreadable."""
     now = _utcnow()
     _expire_pending(now)
-    with _tx() as conn:
+    with _agent_connection_tx() as conn:
         row = _heal(conn, now)
     if row is None:
         return {'status': 'disconnected', 'scopes_ok': False, 'model': None, 'secret': None}
