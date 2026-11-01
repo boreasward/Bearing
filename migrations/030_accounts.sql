@@ -211,12 +211,41 @@ CREATE TABLE IF NOT EXISTS paper_orders (
   trade_id          UUID REFERENCES trades(id),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-  CHECK (action <> 'buy' OR (plan_id IS NOT NULL AND chain_signal_date IS NOT NULL)),
-  CHECK (shares IS NOT NULL OR action = 'cancel' OR (action = 'sell' AND portion = 'half'))
+  CONSTRAINT paper_orders_buy_plan_check CHECK (action <> 'buy' OR status = 'rejected' OR (plan_id IS NOT NULL AND chain_signal_date IS NOT NULL))
 );
--- 同一账户同一条链至多一个在挂买单（D5 / §5.5）。
+-- Unknown plan intent is auditable as rejected without inventing an FK target. Raw intent stays in decision.output.
+-- Replace the draft's unnamed buy-plan check on reapplication; accepted orders still require a real plan and chain.
+DO $$
+DECLARE cname text;
+BEGIN
+  FOR cname IN SELECT conname FROM pg_constraint
+    WHERE conrelid = 'paper_orders'::regclass AND contype = 'c'
+      AND pg_get_constraintdef(oid) ~ '\mchain_signal_date\M'
+  LOOP EXECUTE format('ALTER TABLE paper_orders DROP CONSTRAINT %I', cname); END LOOP;
+END $$;
+ALTER TABLE paper_orders ADD CONSTRAINT paper_orders_buy_plan_check
+  CHECK (action <> 'buy' OR status = 'rejected' OR (plan_id IS NOT NULL AND chain_signal_date IS NOT NULL));
+-- CHECK 默认放过 NULL；明确要求表达式为 TRUE，并替换本地旧草案中可被 NULL 绕过的约束。
+DO $$
+DECLARE
+  cname text;
+BEGIN
+  FOR cname IN
+    SELECT conname FROM pg_constraint
+    WHERE conrelid = 'paper_orders'::regclass AND contype = 'c'
+      AND pg_get_constraintdef(oid) ~ '\mshares\M'
+      AND pg_get_constraintdef(oid) ~ '\mportion\M'
+  LOOP
+    EXECUTE format('ALTER TABLE paper_orders DROP CONSTRAINT %I', cname);
+  END LOOP;
+END $$;
+ALTER TABLE paper_orders ADD CONSTRAINT paper_orders_shares_check
+  CHECK ((shares IS NOT NULL OR action = 'cancel' OR (action = 'sell' AND portion = 'half')) IS TRUE);
+-- 同一账户同一条链（ticker + 信号日）至多一个在挂买单（D5 / §5.5）。
+-- 重建同名索引也修复曾在本地执行的 030 草案（漏了 ticker，导致同日不同标的相互阻挡）。
+DROP INDEX IF EXISTS idx_paper_orders_one_pending_buy;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_orders_one_pending_buy
-  ON paper_orders (account_id, chain_signal_date) WHERE status = 'pending' AND action = 'buy';
+  ON paper_orders (account_id, ticker, chain_signal_date) WHERE status = 'pending' AND action = 'buy';
 CREATE INDEX IF NOT EXISTS idx_paper_orders_account ON paper_orders (account_id, created_at);
 
 -- ---------------------------------------------------------------- §7.6 paper_decisions

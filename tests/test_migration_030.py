@@ -116,6 +116,13 @@ def _snapshot(conn, **overrides):
     return _insert(conn, 'account_snapshots', values)
 
 
+def _flow(conn, **overrides):
+    values = {'request_id': uuid.uuid4(), 'request_hash': 'h', 'flow_date': DAY, 'amount': 1000,
+              'recorded_at': NOW}
+    values.update(overrides)
+    return _insert(conn, 'cash_flows', values)
+
+
 def _status(conn, **overrides):
     values = {'ticker': 'NVDA', 'session': SESSION, 'run_id': 'run-1', 'quantity': 10, 'avg_cost': 100,
               'held_sessions': 3, 'instruction': 'hold', 'reason': 'ok', 'timeline_version': 'timeline-2'}
@@ -168,11 +175,14 @@ def test_old_rows_get_real_account(migrated_db):
     conn = migrated_db
     trade = _trade(conn)
     snap = _snapshot(conn)
+    flow = _flow(conn)
+    status = _status(conn)
     _apply(conn)                                              # the default folds old rows into the real account
     assert conn.execute('SELECT account_id, recorded_by, detail FROM trades WHERE id = %s', (trade,)
                         ).fetchone() == (REAL, 'user', {})
     assert conn.execute('SELECT account_id FROM account_snapshots WHERE id = %s', (snap,)).fetchone()[0] == REAL
-    assert conn.execute('SELECT count(*) FROM cash_flows').fetchone()[0] == 0
+    assert conn.execute('SELECT account_id FROM cash_flows WHERE id = %s', (flow,)).fetchone()[0] == REAL
+    assert conn.execute('SELECT account_id FROM holding_status WHERE id = %s', (status,)).fetchone()[0] == REAL
 
 
 def test_accounts_checks(migrated_db):
@@ -209,6 +219,8 @@ def test_paper_orders_one_pending_buy_per_chain(migrated_db):
     acct = _account(conn)
     other = _account(conn, name='照计划执行', strategy='follow_plans')
     assert _order(conn, acct)
+    # Same signal date on a different ticker is a different chain and must remain independently buyable.
+    assert _order(conn, acct, ticker='AMD', plan_id=_plan(conn, ticker='AMD'))
     # one pending buy per chain per account (spec §7.5): a second pending buy of the same chain is rejected
     # (another plan version of the same chain — the chain, not the version, is what the index keys on)
     _reject('UniqueViolation', _order, conn, acct)
@@ -223,12 +235,66 @@ def test_paper_orders_one_pending_buy_per_chain(migrated_db):
     assert _order(conn, acct, action='sell', plan_id=None, chain_signal_date=None, shares=None, portion='half')
     _reject('CheckViolation', _order, conn, acct, action='sell', plan_id=None, chain_signal_date=None, shares=None,
             portion='all')
+    _reject('CheckViolation', _order, conn, acct, action='sell', plan_id=None, chain_signal_date=None, shares=None,
+            portion=None)
     assert _order(conn, acct, action='cancel', plan_id=None, chain_signal_date=None, shares=None,
                   target_order_id=uuid.uuid4())
     _reject('CheckViolation', _order, conn, acct, action='short')
     _reject('CheckViolation', _order, conn, acct, placed_by='model')
     _reject('CheckViolation', _order, conn, acct, status='done')
     _reject('ForeignKeyViolation', _order, conn, acct, plan_id=uuid.uuid4(), chain_signal_date=date(2026, 10, 16))
+
+
+def test_rerun_repairs_pending_buy_index_without_ticker(migrated_db):
+    conn = migrated_db
+    _apply(conn)
+    # A locally applied earlier 030 draft used the date alone; rerunning the corrected migration repairs it.
+    conn.execute('DROP INDEX idx_paper_orders_one_pending_buy')
+    conn.execute("CREATE UNIQUE INDEX idx_paper_orders_one_pending_buy ON paper_orders "
+                 "(account_id, chain_signal_date) WHERE status = 'pending' AND action = 'buy'")
+    acct = _account(conn)
+    _order(conn, acct)
+    _apply(conn)
+    assert _order(conn, acct, ticker='AMD', plan_id=_plan(conn, ticker='AMD'))
+    _reject('UniqueViolation', _order, conn, acct)
+
+
+def test_paper_sell_without_shares_requires_half_portion(migrated_db):
+    conn = migrated_db
+    _apply(conn)
+    acct = _account(conn)
+    assert _order(conn, acct, action='sell', plan_id=None, chain_signal_date=None, shares=None, portion='half')
+    for portion in (None, 'all'):
+        _reject('CheckViolation', _order, conn, acct, action='sell', plan_id=None, chain_signal_date=None,
+                shares=None, portion=portion)
+
+
+def test_rerun_repairs_nullable_shares_check(migrated_db):
+    from psycopg import sql
+
+    conn = migrated_db
+    _apply(conn)
+    checks = conn.execute("SELECT conname FROM pg_constraint WHERE conrelid = 'paper_orders'::regclass "
+                          "AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%shares%'").fetchall()
+    for (name,) in checks:
+        conn.execute(sql.SQL('ALTER TABLE paper_orders DROP CONSTRAINT {}').format(sql.Identifier(name)))
+    conn.execute("ALTER TABLE paper_orders ADD CONSTRAINT old_shares_check "
+                 "CHECK (shares IS NOT NULL OR action = 'cancel' OR (action = 'sell' AND portion = 'half'))")
+    _apply(conn)
+    acct = _account(conn)
+    _reject('CheckViolation', _order, conn, acct, action='sell', plan_id=None, chain_signal_date=None,
+            shares=None, portion=None)
+
+
+def test_rejected_unknown_buy_plan_keeps_pending_and_fk_checks(migrated_db):
+    conn=migrated_db
+    _apply(conn)
+    aid=_account(conn)
+    assert _order(conn,aid,status='rejected',plan_id=None,chain_signal_date=None)
+    _reject('CheckViolation',_order,conn,aid,plan_id=None,chain_signal_date=None)
+    _reject('ForeignKeyViolation',_order,conn,aid,status='rejected',plan_id=uuid.uuid4())
+    _apply(conn)
+    assert _order(conn,aid,status='rejected',plan_id=None,chain_signal_date=None)
 
 
 def test_stage_runs_accepts_accounts(migrated_db):

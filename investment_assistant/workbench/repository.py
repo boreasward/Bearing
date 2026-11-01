@@ -18,7 +18,7 @@ _FLOAT_FIELDS = ('open', 'high', 'low', 'close', 'adj_close', 'split_factor')
 # every pre-030 row landed in it through the column defaults. All ledger readers below default to it, so the
 # existing call sites keep seeing exactly the real account's view (spec D4). A later task replaces the literal
 # with the constant of `workbench.accounts`.
-REAL_ACCOUNT_ID = uuid.UUID('00000000-0000-0000-0000-000000000001')
+from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
 
 
 # yfinance re-derives adj_close with ~1e-7 relative float noise between fetches; a real dividend
@@ -225,6 +225,31 @@ _TRADE_COLUMNS = ('id, request_id, request_hash, ticker, side, quantity, price, 
                   'plan_id, note, recorded_at, voided_at, void_reason, account_id, recorded_by, detail')
 
 
+def _account_columns_ready(conn) -> bool:
+    """Inspect this connection's current schema, without caching across schemas or migration 030."""
+    return bool(conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'trades'::regclass "
+        "AND attname = 'account_id' AND NOT attisdropped)").fetchone()[0])
+
+
+def _account_scope(conn, account_id=REAL_ACCOUNT_ID, *, alias: str = '', allow_all: bool = False
+                   ) -> tuple[bool, str, list[Any]]:
+    """SQL account predicate plus layout flag. Before 030 only the legacy default-real path is safe (§11)."""
+    ready = _account_columns_ready(conn)
+    if not ready:
+        if str(account_id) != str(REAL_ACCOUNT_ID):
+            raise RuntimeError('migration_030_missing')
+        return False, '', []
+    if account_id is None and allow_all:
+        return True, '', []
+    prefix = f'{alias}.' if alias else ''
+    return True, f' AND {prefix}account_id = %s', [account_id]
+
+
+def _trade_columns(accounts_enabled: bool) -> str:
+    return _TRADE_COLUMNS if accounts_enabled else _TRADE_COLUMNS.removesuffix(', account_id, recorded_by, detail')
+
+
 def _one(conn, sql: str, params) -> dict[str, Any] | None:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
@@ -318,12 +343,15 @@ def _insert_decision_for_tests(conn, rec: dict[str, Any], digest: str, *,
                  rec['supersedes_id'], rec.get('plan_id')))
 
 
-def trade_by_request(conn, request_id):
-    return _one(conn, f'SELECT {_TRADE_COLUMNS} FROM trades WHERE request_id = %s', (request_id,))
+def trade_by_request(conn, request_id, *, account_id=REAL_ACCOUNT_ID):
+    ready, scope, params = _account_scope(conn, account_id)
+    return _one(conn, f'SELECT {_trade_columns(ready)} FROM trades WHERE request_id = %s{scope}',
+                [request_id, *params])
 
 
-def trade_by_id(conn, trade_id):
-    return _one(conn, f'SELECT {_TRADE_COLUMNS} FROM trades WHERE id = %s', (trade_id,))
+def trade_by_id(conn, trade_id, *, account_id=REAL_ACCOUNT_ID):
+    ready, scope, params = _account_scope(conn, account_id)
+    return _one(conn, f'SELECT {_trade_columns(ready)} FROM trades WHERE id = %s{scope}', [trade_id, *params])
 
 
 def _trades_where(conn, clause: str | None, params: list[Any], cutoff: datetime | None,
@@ -331,15 +359,16 @@ def _trades_where(conn, clause: str | None, params: list[Any], cutoff: datetime 
     """Trades of one account (`account_id=None` reads every account's), oldest first."""
     clauses = [clause] if clause else []
     params = list(params)
-    if account_id is not None:
-        clauses.append('account_id = %s')
-        params.append(account_id)
-    columns, head = _TRADE_COLUMNS, []
+    ready, scope, account_params = _account_scope(conn, account_id, allow_all=True)
+    if scope:
+        clauses.append(scope.removeprefix(' AND '))
+        params.extend(account_params)
+    columns, head = _trade_columns(ready), []
     if cutoff is not None:
         clauses.append('recorded_at <= %s AND executed_at <= %s')
         params.extend([cutoff, cutoff])
         # a void made after the cutoff is not known yet (compared in SQL, so a naive cutoff behaves like the rest)
-        columns = _TRADE_COLUMNS.replace(
+        columns = columns.replace(
             'voided_at, void_reason',
             'CASE WHEN voided_at <= %s THEN voided_at END AS voided_at, '
             'CASE WHEN voided_at <= %s THEN void_reason END AS void_reason')
@@ -362,15 +391,19 @@ def insert_trade(conn, rec: dict[str, Any], digest: str, *, recorded_at: datetim
     """`plan_id` (migration 029) is the plan version the trade followed; it and the legacy `decision_id` never both
     carry a value (`trades_link_one_check`). Both default to None. `account_id` (migration 030) defaults to the real
     account, `recorded_by` marks host-written paper fills, `detail` carries the fill case / opening-position flag."""
+    account_id = rec.get('account_id') or REAL_ACCOUNT_ID
+    ready, _, _ = _account_scope(conn, account_id)
+    extra_columns = ', account_id, recorded_by, detail' if ready else ''
+    extra_values = ', %s, %s, %s::jsonb' if ready else ''
+    extra_params = [account_id, rec.get('recorded_by', 'user'), _plan_json(rec.get('detail') or {})] if ready else []
     return _one(conn,
                 'INSERT INTO trades (request_id, request_hash, ticker, side, quantity, price, fee, executed_at, '
-                'decision_id, plan_id, note, recorded_at, account_id, recorded_by, detail) '
-                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) '
-                f'RETURNING {_TRADE_COLUMNS}',
-                (rec['request_id'], digest, rec['ticker'], rec['side'], rec['quantity'], rec['price'], rec['fee'],
+                f'decision_id, plan_id, note, recorded_at{extra_columns}) '
+                f'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s{extra_values}) '
+                f'RETURNING {_trade_columns(ready)}',
+                [rec['request_id'], digest, rec['ticker'], rec['side'], rec['quantity'], rec['price'], rec['fee'],
                  rec['executed_at'], rec.get('decision_id'), rec.get('plan_id'), rec['note'], recorded_at,
-                 rec.get('account_id') or REAL_ACCOUNT_ID, rec.get('recorded_by', 'user'),
-                 _plan_json(rec.get('detail') or {})))
+                 *extra_params])
 
 
 def trades_by_plan_ids(conn, plan_ids, *, cutoff: datetime | None = None,
@@ -385,15 +418,20 @@ def trades_by_plan_ids(conn, plan_ids, *, cutoff: datetime | None = None,
 
 def mark_trade_voided(conn, trade_id, reason: str, *, voided_at: datetime) -> dict[str, Any]:
     # The only post-insert write in the workbench: status fields, never the trade itself.
+    columns = _trade_columns(_account_columns_ready(conn))
     return _one(conn, f'UPDATE trades SET voided_at = %s, void_reason = %s WHERE id = %s AND voided_at IS NULL '
-                      f'RETURNING {_TRADE_COLUMNS}', (voided_at, reason, trade_id))
+                      f'RETURNING {columns}', (voided_at, reason, trade_id))
 
 
-def split_events(conn, ticker: str) -> list[tuple[date, Decimal]]:
+def split_events(conn, ticker: str, *, cutoff_at: datetime | None = None) -> list[tuple[date, Decimal]]:
+    clause = ' AND fetched_at <= %s AND price_date <= %s' if cutoff_at is not None else ''
+    params = [ticker.upper()]
+    if cutoff_at is not None:
+        params += [cutoff_at, cutoff_at.astimezone(ZoneInfo('America/New_York')).date()]
     rows = conn.execute(
         'SELECT price_date, split_factor FROM (SELECT DISTINCT ON (price_date) price_date, split_factor '
-        '  FROM price_bars WHERE ticker = %s ORDER BY price_date, revision DESC) latest '
-        'WHERE split_factor <> 1 ORDER BY price_date', (ticker.upper(),)).fetchall()
+        f'  FROM price_bars WHERE ticker = %s{clause} ORDER BY price_date, revision DESC) latest '
+        'WHERE split_factor <> 1 ORDER BY price_date', params).fetchall()
     return [(d, Decimal(f)) for d, f in rows]
 
 
@@ -443,10 +481,14 @@ def store_plan(conn, plan: dict[str, Any]) -> dict[str, Any]:
     if plan.get('kind') == 'rule':
         existing = rule_plan(conn, plan['ticker'], plan['signal_date'], plan.get('plan_version', 'plan-1'))
         if existing is not None:
+            # Before v2.11 a missing source meant snapshot. Normalize only the
+            # comparison: frozen rows and all actual sizing inputs stay intact.
+            existing_sizing = {'equity_source': 'snapshot', **existing['sizing']}
+            proposed_sizing = {'equity_source': 'snapshot', **plan['sizing']}
             same = (existing['status'] == plan['status']
                     and all(Decimal(existing[k]) == plan[k]
                             for k in ('ref_price', 'atr', 'entry_low', 'entry_high', 'stop', 'target1'))
-                    and _plan_json(existing['sizing']) == _plan_json(plan['sizing'])
+                    and _plan_json(existing_sizing) == _plan_json(proposed_sizing)
                     and existing['entry_type'] == plan.get('entry_type')
                     and existing['max_hold_sessions'] == plan.get('max_hold_sessions'))
             if same:
@@ -476,12 +518,13 @@ def plan_for_buy_trades(conn, trade_ids: list, *, account_id=REAL_ACCOUNT_ID) ->
     """Trade id -> the plan its decision confirmed, for trades that have one (default the real account's)."""
     if not trade_ids:
         return {}
+    _, scope, params = _account_scope(conn, account_id, alias='t')
     plan_columns = ', '.join('p.' + c.strip() for c in _PLAN_COLUMNS.split(','))
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(f'SELECT t.id AS trade_id, {plan_columns} FROM trades t '
                     'JOIN signal_decisions d ON d.id = t.decision_id '
-                    'JOIN trade_plans p ON p.id = d.plan_id WHERE t.id = ANY(%s) AND t.account_id = %s',
-                    (list(trade_ids), account_id))
+                    f'JOIN trade_plans p ON p.id = d.plan_id WHERE t.id = ANY(%s){scope}',
+                    [list(trade_ids), *params])
         return {row['trade_id']: {k: row[k] for k in row if k != 'trade_id'} for row in cur.fetchall()}
 
 
@@ -523,62 +566,76 @@ _SNAPSHOT_COLUMNS = ('id, request_id, request_hash, as_of, equity, note, recorde
 _FLOW_COLUMNS = 'id, request_id, request_hash, flow_date, amount, note, recorded_at, voided_at, void_reason'
 
 
-def snapshot_by_request(conn, request_id):
-    return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots WHERE request_id = %s', (request_id,))
+def snapshot_by_request(conn, request_id, *, account_id=REAL_ACCOUNT_ID):
+    _, scope, params = _account_scope(conn, account_id)
+    return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots WHERE request_id = %s{scope}',
+                [request_id, *params])
 
 
 def snapshot_head(conn, *, account_id=REAL_ACCOUNT_ID) -> dict[str, Any] | None:
     """The latest snapshot nothing else supersedes; a correction must target this row. The real account's by
     default (snapshots only exist for it, spec §7.2)."""
-    clause, params = ('', []) if account_id is None else (' AND s.account_id = %s', [account_id])
+    _, scope, params = _account_scope(conn, account_id, alias='s', allow_all=True)
     return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots s WHERE NOT EXISTS '
-                      f'(SELECT 1 FROM account_snapshots x WHERE x.supersedes_id = s.id){clause} '
+                      f'(SELECT 1 FROM account_snapshots x WHERE x.supersedes_id = s.id){scope} '
                       f'ORDER BY recorded_at DESC, created_at DESC LIMIT 1', params)
 
 
-def snapshot_by_id(conn, snapshot_id) -> dict[str, Any] | None:
-    return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots WHERE id = %s', (snapshot_id,))
+def snapshot_by_id(conn, snapshot_id, *, account_id=REAL_ACCOUNT_ID) -> dict[str, Any] | None:
+    _, scope, params = _account_scope(conn, account_id)
+    return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots WHERE id = %s{scope}',
+                [snapshot_id, *params])
 
 
 def insert_snapshot(conn, rec: dict[str, Any], digest: str, *, recorded_at: datetime) -> dict[str, Any]:
+    account_id = rec.get('account_id') or REAL_ACCOUNT_ID
+    ready, _, _ = _account_scope(conn, account_id)
+    extra_column, extra_value, extra_params = (', account_id', ', %s', [account_id]) if ready else ('', '', [])
     return _one(conn, 'INSERT INTO account_snapshots (request_id, request_hash, as_of, equity, note, recorded_at, '
-                      f'supersedes_id, account_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) '
+                      f'supersedes_id{extra_column}) VALUES (%s, %s, %s, %s, %s, %s, %s{extra_value}) '
                       f'RETURNING {_SNAPSHOT_COLUMNS}',
-                (rec['request_id'], digest, rec['as_of'], rec['equity'], rec['note'], recorded_at,
-                 rec['supersedes_id'], rec.get('account_id') or REAL_ACCOUNT_ID))
+                [rec['request_id'], digest, rec['as_of'], rec['equity'], rec['note'], recorded_at,
+                 rec['supersedes_id'], *extra_params])
 
 
 def snapshot_at(conn, as_of: date, *, cutoff_at: datetime, account_id=REAL_ACCOUNT_ID) -> dict[str, Any] | None:
     """Latest valid snapshot usable at ``cutoff_at``: recorded on time, not superseded, as_of on or before.
     The real account's by default."""
-    clause, params = ('', []) if account_id is None else (' AND s.account_id = %s', [account_id])
+    _, scope, params = _account_scope(conn, account_id, alias='s', allow_all=True)
     return _one(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots s WHERE s.as_of <= %s '
                       'AND s.recorded_at <= %s AND NOT EXISTS '
                       '(SELECT 1 FROM account_snapshots x WHERE x.supersedes_id = s.id)'
-                      f'{clause} ORDER BY s.as_of DESC, s.recorded_at DESC LIMIT 1',
+                      f'{scope} ORDER BY s.as_of DESC, s.recorded_at DESC LIMIT 1',
                 [as_of, cutoff_at, *params])
 
 
 def list_snapshots(conn, *, account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
     """Snapshots newest recorded first; the real account's by default (`account_id=None` reads every account's)."""
-    where, params = ('', []) if account_id is None else (' WHERE account_id = %s', [account_id])
+    _, scope, params = _account_scope(conn, account_id, allow_all=True)
+    where = scope.replace(' AND ', ' WHERE ', 1)
     return _all(conn, f'SELECT {_SNAPSHOT_COLUMNS} FROM account_snapshots{where} '
                       'ORDER BY recorded_at DESC, created_at DESC', params)
 
 
-def flow_by_request(conn, request_id):
-    return _one(conn, f'SELECT {_FLOW_COLUMNS} FROM cash_flows WHERE request_id = %s', (request_id,))
+def flow_by_request(conn, request_id, *, account_id=REAL_ACCOUNT_ID):
+    _, scope, params = _account_scope(conn, account_id)
+    return _one(conn, f'SELECT {_FLOW_COLUMNS} FROM cash_flows WHERE request_id = %s{scope}',
+                [request_id, *params])
 
 
-def flow_by_id(conn, flow_id):
-    return _one(conn, f'SELECT {_FLOW_COLUMNS} FROM cash_flows WHERE id = %s', (flow_id,))
+def flow_by_id(conn, flow_id, *, account_id=REAL_ACCOUNT_ID):
+    _, scope, params = _account_scope(conn, account_id)
+    return _one(conn, f'SELECT {_FLOW_COLUMNS} FROM cash_flows WHERE id = %s{scope}', [flow_id, *params])
 
 
 def insert_flow(conn, rec: dict[str, Any], digest: str, *, recorded_at: datetime) -> dict[str, Any]:
-    return _one(conn, 'INSERT INTO cash_flows (request_id, request_hash, flow_date, amount, note, recorded_at, '
-                      f'account_id) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_FLOW_COLUMNS}',
-                (rec['request_id'], digest, rec['flow_date'], rec['amount'], rec['note'], recorded_at,
-                 rec.get('account_id') or REAL_ACCOUNT_ID))
+    account_id = rec.get('account_id') or REAL_ACCOUNT_ID
+    ready, _, _ = _account_scope(conn, account_id)
+    extra_column, extra_value, extra_params = (', account_id', ', %s', [account_id]) if ready else ('', '', [])
+    return _one(conn, 'INSERT INTO cash_flows (request_id, request_hash, flow_date, amount, note, recorded_at'
+                      f'{extra_column}) '
+                      f'VALUES (%s, %s, %s, %s, %s, %s{extra_value}) RETURNING {_FLOW_COLUMNS}',
+                [rec['request_id'], digest, rec['flow_date'], rec['amount'], rec['note'], recorded_at, *extra_params])
 
 
 def mark_flow_voided(conn, flow_id, reason: str, *, voided_at: datetime) -> dict[str, Any]:
@@ -589,7 +646,8 @@ def mark_flow_voided(conn, flow_id, reason: str, *, voided_at: datetime) -> dict
 
 def list_flows(conn, *, account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
     """Flows oldest first; the real account's by default (`account_id=None` reads every account's)."""
-    where, params = ('', []) if account_id is None else (' WHERE account_id = %s', [account_id])
+    _, scope, params = _account_scope(conn, account_id, allow_all=True)
+    where = scope.replace(' AND ', ' WHERE ', 1)
     return _all(conn, f'SELECT {_FLOW_COLUMNS} FROM cash_flows{where} ORDER BY flow_date, created_at', params)
 
 
@@ -1034,6 +1092,8 @@ _STAGE_ORDER = {
     'stages-3': ('collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'retro', 'push'),
     'stages-4': ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'push',
                  'retro'),
+    'stages-5': ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'accounts',
+                 'push', 'retro'),
 }
 _ATTEMPT_RESET_COLUMNS = 'id, ticker, signal_date, mode, request_id, origin, created_at'
 
@@ -1711,12 +1771,13 @@ def _open_before(conn, ticker: str, since: date) -> bool:
     units, so it errs towards True (the caller then lets ``retro.end_event`` decide). The real account's trades
     only: retro cards are about what you actually did (spec D4/D18)."""
     pending = split_events(conn, ticker)
+    _, scope, params = _account_scope(conn)
     quantity = Decimal(0)
     for side, qty, day in conn.execute(
             "SELECT side, quantity, (executed_at AT TIME ZONE 'America/New_York')::date FROM trades "
             "WHERE ticker = %s AND voided_at IS NULL AND (executed_at AT TIME ZONE 'America/New_York')::date < %s "
-            'AND account_id = %s ORDER BY executed_at, id',
-            (ticker.upper(), since, REAL_ACCOUNT_ID)).fetchall():
+            f'{scope} ORDER BY executed_at, id',
+            [ticker.upper(), since, *params]).fetchall():
         while pending and pending[0][0] <= day:
             quantity *= pending.pop(0)[1]
         quantity += Decimal(str(qty)) if side == 'buy' else -Decimal(str(qty))
@@ -1740,6 +1801,8 @@ def retro_subjects(conn, *, since: date, until: date) -> list[dict[str, Any]]:
       same flat-before-``since`` rule.
 
     Units come first (by signal date, ticker), then trades by execution time."""
+    ready, scope, params = _account_scope(conn)
+    columns = _trade_columns(ready)
     subjects: list[dict[str, Any]] = []
     flat: dict[str, bool] = {}
 
@@ -1754,9 +1817,8 @@ def retro_subjects(conn, *, since: date, until: date) -> list[dict[str, Any]]:
         chain = _all(conn, 'SELECT id, plan_id, decided_at FROM signal_decisions WHERE ticker = %s '
                            'AND signal_date = %s ORDER BY decided_at, id', (ticker, signal_date))
         decision_ids = [row['id'] for row in chain]
-        buys = _all(conn, f"SELECT {_TRADE_COLUMNS} FROM trades WHERE side = 'buy' AND voided_at IS NULL "
-                          'AND decision_id = ANY(%s) AND account_id = %s ORDER BY executed_at, id',
-                    (decision_ids, REAL_ACCOUNT_ID))
+        buys = _all(conn, f"SELECT {columns} FROM trades WHERE side = 'buy' AND voided_at IS NULL "
+                          f'AND decision_id = ANY(%s){scope} ORDER BY executed_at, id', [decision_ids, *params])
         if buys:
             if all(_ny_date(b['executed_at']) < since for b in buys) and closed_before(ticker):
                 continue
@@ -1768,9 +1830,9 @@ def retro_subjects(conn, *, since: date, until: date) -> list[dict[str, Any]]:
                          'decision_ids': decision_ids, 'decisions': chain, 'buys': buys,
                          'plans': plans_for_unit(conn, ticker, signal_date),
                          'reviews': chain_reviews(conn, ticker, signal_date)})
-    for buy in _all(conn, f"SELECT {_TRADE_COLUMNS} FROM trades WHERE side = 'buy' AND decision_id IS NULL "
+    for buy in _all(conn, f"SELECT {columns} FROM trades WHERE side = 'buy' AND decision_id IS NULL "
                           "AND voided_at IS NULL AND (executed_at AT TIME ZONE 'America/New_York')::date <= %s "
-                          'AND account_id = %s ORDER BY executed_at, id', (until, REAL_ACCOUNT_ID)):
+                          f'{scope} ORDER BY executed_at, id', [until, *params]):
         if _ny_date(buy['executed_at']) < since and closed_before(buy['ticker']):
             continue
         subjects.append({'kind': 'trade', 'ticker': buy['ticker'], 'signal_date': None, 'buy_trade_id': buy['id'],
@@ -2033,6 +2095,10 @@ _PLAN_NOTE_COLUMNS = ('id, request_id, request_hash, ticker, chain_signal_date, 
                       'created_at')
 
 
+def _holding_status_columns(accounts_enabled: bool) -> str:
+    return _HOLDING_STATUS_COLUMNS if accounts_enabled else _HOLDING_STATUS_COLUMNS.replace('id, account_id,', 'id,')
+
+
 def executable_ready(conn) -> bool:
     """True when migration 029 has run: the three new tables, `trades.plan_id` and the two execution columns of
     `trade_plans` all exist (spec §8). A pure existence check; never raises on a missing table."""
@@ -2104,26 +2170,30 @@ def insert_holding_status(conn, row: dict[str, Any]) -> dict[str, Any]:
     instruction, reason and timeline_version are required, the rest default to NULL (`detail` to {})."""
     ticker = row['ticker'].upper()
     account_id = row.get('account_id') or REAL_ACCOUNT_ID
+    ready, scope, account_params = _account_scope(conn, account_id)
+    account_column, account_value = ('account_id, ', '%s, ') if ready else ('', '')
+    conflict_columns = f'{account_column}ticker, session'
+    columns = _holding_status_columns(ready)
     inserted = _one(conn,
-                    'INSERT INTO holding_status (account_id, ticker, session, chain_signal_date, plan_id, '
+                    f'INSERT INTO holding_status ({account_column}ticker, session, chain_signal_date, plan_id, '
                     'review_id, run_id, quantity, avg_cost, last_close, stop, target1, stop_mode, t1_reached, '
                     'reached_1r, to_stop_pct, to_t1_pct, r_now, held_sessions, max_hold_sessions, '
                     'remaining_sessions, instruction, exit_reason, reason, detail, timeline_version) '
-                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '
-                    '%s, %s, %s, %s::jsonb, %s) ON CONFLICT (account_id, ticker, session) DO NOTHING '
-                    f'RETURNING {_HOLDING_STATUS_COLUMNS}',
-                    (account_id, ticker, row['session'], row.get('chain_signal_date'), row.get('plan_id'),
+                    f'VALUES ({account_value}%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '
+                    '%s, %s, %s, '
+                    f'%s, %s, %s, %s::jsonb, %s) ON CONFLICT ({conflict_columns}) DO NOTHING '
+                    f'RETURNING {columns}',
+                    [*account_params, ticker, row['session'], row.get('chain_signal_date'), row.get('plan_id'),
                      row.get('review_id'), row['run_id'], row['quantity'], row['avg_cost'], row.get('last_close'),
                      row.get('stop'), row.get('target1'), row.get('stop_mode'), row.get('t1_reached'),
                      row.get('reached_1r'), row.get('to_stop_pct'), row.get('to_t1_pct'), row.get('r_now'),
                      row['held_sessions'], row.get('max_hold_sessions'), row.get('remaining_sessions'),
                      row['instruction'], row.get('exit_reason'), row['reason'], _plan_json(row.get('detail') or {}),
-                     row['timeline_version']))
+                     row['timeline_version']])
     if inserted is not None:
         return {**inserted, 'replayed': False}
-    existing = _one(conn, f'SELECT {_HOLDING_STATUS_COLUMNS} FROM holding_status '
-                          'WHERE account_id = %s AND ticker = %s AND session = %s',
-                    (account_id, ticker, row['session']))
+    existing = _one(conn, f'SELECT {columns} FROM holding_status WHERE ticker = %s AND session = %s{scope}',
+                    [ticker, row['session'], *account_params])
     return {**existing, 'replayed': True}
 
 
@@ -2133,9 +2203,10 @@ def holding_status_for(conn, *, session: date | None = None, ticker: str | None 
     """Holding-status rows matching every given filter, oldest session first (then ticker). One account's by
     default (`account_id=None` reads every account's)."""
     clauses, params = [], []
-    if account_id is not None:
-        clauses.append('account_id = %s')
-        params.append(account_id)
+    ready, scope, account_params = _account_scope(conn, account_id, allow_all=True)
+    if scope:
+        clauses.append(scope.removeprefix(' AND '))
+        params.extend(account_params)
     if session is not None:
         clauses.append('session = %s')
         params.append(session)
@@ -2146,8 +2217,8 @@ def holding_status_for(conn, *, session: date | None = None, ticker: str | None 
         clauses.append('chain_signal_date = %s')
         params.append(chain_signal_date)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ''
-    return _all(conn, f'SELECT {_HOLDING_STATUS_COLUMNS} FROM holding_status{where} ORDER BY session, ticker, id',
-                params)
+    return _all(conn, f'SELECT {_holding_status_columns(ready)} FROM holding_status{where} '
+                      'ORDER BY session, ticker, id', params)
 
 
 def plan_note_by_request(conn, request_id) -> dict[str, Any] | None:
@@ -2254,6 +2325,7 @@ def retro_subject_keys(conn, *, until: date) -> dict[str, Any]:
     counts for the chain) or, for old data, through a decision of the unit — or that carries a live plan note (a note
     on a chain, or on a rule / own plan, which counts for the plan's unit). ``trades``: the live buys with neither a
     plan nor a decision, oldest first (the plan-less trades)."""
+    ready, scope, params = _account_scope(conn, alias='t')
     day = "(t.executed_at AT TIME ZONE 'America/New_York')::date"
     linked = _all(conn,
                   'SELECT DISTINCT t.ticker, CASE '
@@ -2262,22 +2334,20 @@ def retro_subject_keys(conn, *, until: date) -> dict[str, Any]:
                   'ELSE COALESCE((SELECT r.chain_signal_date FROM chain_retriggers r WHERE r.ticker = p.ticker '
                   'AND r.unit_signal_date = p.signal_date), p.signal_date) END AS signal_date '
                   'FROM trades t JOIN trade_plans p ON p.id = t.plan_id '
-                  f"WHERE t.side = 'buy' AND t.voided_at IS NULL AND t.account_id = %s AND {day} <= %s",
-                  (REAL_ACCOUNT_ID, until))
+                  f"WHERE t.side = 'buy' AND t.voided_at IS NULL{scope} AND {day} <= %s", [*params, until])
     legacy = _all(conn,
                   'SELECT DISTINCT d.ticker, d.signal_date FROM signal_decisions d JOIN trades t '
                   "ON t.decision_id IN (SELECT x.id FROM signal_decisions x WHERE x.ticker = d.ticker "
                   "AND x.signal_date = d.signal_date) WHERE t.side = 'buy' AND t.voided_at IS NULL "
-                  f"AND t.account_id = %s AND d.signal_date <= %s AND {day} <= %s",
-                  (REAL_ACCOUNT_ID, until, until))
+                  f"{scope} AND d.signal_date <= %s AND {day} <= %s", [*params, until, until])
     noted = _all(conn,
                  'SELECT DISTINCT n.ticker, COALESCE(n.chain_signal_date, p.signal_date) AS signal_date '
                  'FROM plan_notes n LEFT JOIN trade_plans p ON p.id = n.plan_id '
                  "WHERE n.kind = 'note' AND NOT EXISTS (SELECT 1 FROM plan_notes s WHERE s.supersedes_id = n.id "
                  "AND s.kind = 'retract') AND COALESCE(n.chain_signal_date, p.signal_date) <= %s", (until,))
-    plan_less = _all(conn, f"SELECT {_TRADE_COLUMNS} FROM trades t WHERE t.side = 'buy' AND t.voided_at IS NULL "
-                           f'AND t.decision_id IS NULL AND t.plan_id IS NULL AND t.account_id = %s AND {day} <= %s '
-                           'ORDER BY t.executed_at, t.id', (REAL_ACCOUNT_ID, until))
+    plan_less = _all(conn, f"SELECT {_trade_columns(ready)} FROM trades t WHERE t.side = 'buy' "
+                           f'AND t.voided_at IS NULL AND t.decision_id IS NULL AND t.plan_id IS NULL{scope} '
+                           f'AND {day} <= %s ORDER BY t.executed_at, t.id', [*params, until])
     keys = sorted({(r['ticker'], r['signal_date']) for r in (*linked, *legacy, *noted)},
                   key=lambda k: (k[1], k[0]))
     return {'units': keys, 'trades': plan_less}
@@ -2386,15 +2456,15 @@ def param_changes(conn, account_id) -> list[dict[str, Any]]:
 
 
 def paper_tickers(conn) -> set[str]:
-    """Active paper accounts' traded tickers plus their pending buys' (D29): the `collect` scope keeps fetching
-    bars for tickers that may have left the pool while a paper position or order still needs them. Errs towards
-    keeping — every unvoided trade of an active paper account counts, closed positions included."""
+    """Active paper accounts' current positions plus pending buys (D29), with each account's split-adjusted book."""
+    held = set()
+    for account in list_accounts(conn):
+        if account['kind'] == 'paper':
+            held |= open_position_tickers(conn, account_id=account['id'])
     rows = conn.execute(
-        'SELECT DISTINCT t.ticker FROM trades t JOIN accounts a ON a.id = t.account_id '
-        "WHERE a.kind = 'paper' AND a.status = 'active' AND t.voided_at IS NULL "
-        'UNION SELECT DISTINCT o.ticker FROM paper_orders o JOIN accounts a ON a.id = o.account_id '
-        "WHERE a.kind = 'paper' AND a.status = 'active' AND o.status = 'pending'").fetchall()
-    return {row[0] for row in rows}
+        'SELECT DISTINCT o.ticker FROM paper_orders o JOIN accounts a ON a.id = o.account_id '
+        "WHERE a.kind = 'paper' AND a.status = 'active' AND o.status = 'pending' AND o.action = 'buy'").fetchall()
+    return held | {row[0] for row in rows}
 
 
 _EQUITY_DAY_COLUMNS = ('id, account_id, session, cash, positions_value, equity, realized_pnl_cum, unrealized_pnl, '
@@ -2418,7 +2488,7 @@ def insert_equity_day(conn, row: dict[str, Any]) -> dict[str, Any]:
 
 
 def equity_days(conn, account_id, *, from_session: date | None = None,
-                to_session: date | None = None) -> list[dict[str, Any]]:
+                to_session: date | None = None, cutoff_at: datetime | None = None) -> list[dict[str, Any]]:
     """The account's equity per session — the latest `computed_at` row of each (D15) — oldest session first;
     `from_session` / `to_session` bound the range (inclusive)."""
     clauses, params = ['account_id = %s'], [account_id]
@@ -2428,6 +2498,9 @@ def equity_days(conn, account_id, *, from_session: date | None = None,
     if to_session is not None:
         clauses.append('session <= %s')
         params.append(to_session)
+    if cutoff_at is not None:
+        clauses.append('computed_at <= %s')
+        params.append(cutoff_at)
     return _all(conn, f'SELECT DISTINCT ON (session) {_EQUITY_DAY_COLUMNS} FROM account_equity_days '
                       f"WHERE {' AND '.join(clauses)} ORDER BY session, computed_at DESC, id DESC", params)
 
@@ -2437,6 +2510,12 @@ def latest_equity_day(conn, account_id, *, on_or_before: date) -> dict[str, Any]
     return _one(conn, f'SELECT {_EQUITY_DAY_COLUMNS} FROM account_equity_days WHERE account_id = %s '
                       'AND session <= %s ORDER BY session DESC, computed_at DESC, id DESC LIMIT 1',
                 (account_id, on_or_before))
+
+
+def equity_day_by_id(conn, row_id: int, *, account_id=REAL_ACCOUNT_ID) -> dict[str, Any] | None:
+    """Read the exact frozen equity source, scoped to its account; never replace it with a newer revision."""
+    return _one(conn, f'SELECT {_EQUITY_DAY_COLUMNS} FROM account_equity_days WHERE id = %s AND account_id = %s',
+                (row_id, account_id))
 
 
 _ORDER_COLUMNS = ('id, account_id, decision_id, action, ticker, plan_id, chain_signal_date, shares, portion, '
@@ -2480,9 +2559,11 @@ def orders_for(conn, account_id, *, status: str | None = None, limit: int = 500)
 
 
 def settle_order(conn, order_id, *, status, status_reason, settled_on, trade_id=None) -> dict[str, Any] | None:
-    """Move a pending order to its outcome once (§7.5: the status columns are the one updatable pair, `updated_at`
+    """Move a pending order to a terminal outcome once (§7.5: the status columns are updatable, `updated_at`
     records it); None when the order is no longer pending, so a replayed settlement cannot overwrite the first
     outcome."""
+    if status not in ('filled', 'voided', 'expired', 'cancelled', 'rejected'):
+        raise ValueError('order settlement requires a terminal status')
     return _one(conn,
                 'UPDATE paper_orders SET status = %s, status_reason = %s, settled_on = %s, trade_id = %s, '
                 "updated_at = clock_timestamp() WHERE id = %s AND status = 'pending' "
@@ -2491,10 +2572,11 @@ def settle_order(conn, order_id, *, status, status_reason, settled_on, trade_id=
 
 
 def tried_plan_ids(conn, account_id) -> set[uuid.UUID]:
-    """The plan versions this account has ever placed a buy order on, any status (D24's per-version filter:
-    an order that expired only ends its version, not the chain)."""
+    """The plan versions this account has placed a buy order on, except host-rejected ones (D24's per-version
+    filter: an order that expired only ends its version, not the chain; a rejected intent never reached the
+    market, so its version stays available for a corrected retry)."""
     rows = conn.execute('SELECT DISTINCT plan_id FROM paper_orders WHERE account_id = %s '
-                        "AND action = 'buy' AND plan_id IS NOT NULL", (account_id,)).fetchall()
+                        "AND action = 'buy' AND plan_id IS NOT NULL AND status <> 'rejected'", (account_id,)).fetchall()
     return {row[0] for row in rows}
 
 
