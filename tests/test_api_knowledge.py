@@ -37,9 +37,11 @@ def test_index_shape(client, root):
     body = resp.json()
     assert set(body) == {'knowledge_version', 'groups', 'concepts'}
     assert body['knowledge_version'] == 'knowledge-1'
-    assert [g['id'] for g in body['groups']] == ['family', 'indicator', 'rule', 'plan', 'agent', 'review', 'system']
+    assert [g['id'] for g in body['groups']] == [
+        'family', 'indicator', 'rule', 'plan', 'agent', 'account', 'review', 'system']
     assert all(set(g) == {'id', 'title', 'count'} for g in body['groups'])
     assert {g['id']: g['count'] for g in body['groups']}['plan'] == 1
+    assert {g['id']: g['count'] for g in body['groups']}['account'] == 0
     assert [c['id'] for c in body['concepts']] == ['indicator.atr14', 'plan.stop']
     assert body['concepts'][1]['ref'] == 'concept:plan.stop@1'
 

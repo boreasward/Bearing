@@ -76,7 +76,7 @@
 - **页头**（每个路由与每个大段落一致）：标题 + 口径 / 时点 / 版本的一行次要文字 + 右侧动作区（**至多一个主按钮**，其余描边或链接）。用 `PageHeader`。
 - **分段**：`Section`（标题 + 可选说明 + 内容），不嵌套超过两层；卡片只给「一个对象」（一份计划、一张复盘卡、一个数据族），列表性内容用表格不用卡片堆。
 - **网格**：桌面 ≥ 1024px 两栏或四栏；768–1023 两栏；< 768 单栏。
-- **窄屏（< 768px）**：「今日」计划表、计划页 `#plan/<id>`、运行详情 `#tools/runs/<id>` 三个只读路径以**行转卡**呈现（每行变一张紧凑卡，字段名在左，`DataTable` 的 `cards="narrow"`）；其余页面表格横向滚动、侧栏变顶部抽屉。不做 < 375px。判断窄屏用 `useNarrow()`（`web/src/lib/ui/narrow.svelte.ts`，查询串 `(max-width: 767px)`）；没有 `matchMedia`（jsdom、旧浏览器）时按桌面。
+- **窄屏（< 768px）**：「今日」计划表、计划页 `#plan/<id>`、运行详情 `#tools/runs/<id>`，以及账户页的持仓（含已平仓批次）、成交与模拟订单表以**行转卡**呈现（每行变一张紧凑卡，字段名在左，`DataTable` 的 `cards="narrow"`）；其余页面表格横向滚动、侧栏变顶部抽屉。不做 < 375px。判断窄屏用 `useNarrow()`（`web/src/lib/ui/narrow.svelte.ts`，查询串 `(max-width: 767px)`）；没有 `matchMedia`（jsdom、旧浏览器）时按桌面。
 
 ## 4. 状态词汇与语气
 
@@ -114,6 +114,10 @@
 | `system` | `services/health.py` 的检查状态（`up` / `degraded` / `down` / `unknown`） | `up` 成功；`degraded` 警告；`down` 危险；`unknown` 中性 |
 | `consistency` | `derivation.CONSISTENCY_TEXT`（计划推导核对） | `consistent` 成功；`mismatch` 危险；`incomplete` 警告 |
 | `block` | 数据块状态（`DataBlock`、`MetricValue`、`SampleSize`、`CutoffTime`） | `not_computed` 没算、`insufficient` 样本不足，都是警告 |
+| `account` | `accounts.status` | `active` 成功；`closed` 中性 |
+| `paper_order` | `paper_orders.status` | `pending` 信息；`filled` 成功；`voided`、`expired`、`cancelled` 中性；`rejected` 危险 |
+| `paper_decision` | `paper_decisions.status` | `ok` 成功；`skipped` 中性；`rejected` 危险 |
+| `reconcile` | 账户对账结果（`RECONCILE_TEXT`） | `matched` 成功；`mismatch` 危险（文字「待核对」）；`no_ledger` 中性（文字「暂无账本权益」） |
 
 与 spec §4.4 表的差异（D16）：表里写的 `green` / `yellow` / `red`、`done`、`gate_hold` 等在后端没有对应枚举（数据族卡显示的是拉取记录状态，即 `fetch` 域），不进词汇表；旧 `StatusPill` 的这几个键无调用方。
 
@@ -182,7 +186,7 @@
 | `CutoffTime` | `{ at: string \| null \| undefined; label?: string }`（默认「截止」） | `{label} {fmtBeijing(at)}`，后缀是 `fmtBeijing` 的「北京」（D17，`lib/format.ts` 不改）；`<time datetime>` 的 `title` 是相对时间（「3 小时前」「45 分钟前」「2 天前」「刚刚」）；`at` 为空显示 `StatusPill block.not_computed`，不透传「—」；无法解析的值原样显示、不带提示 |
 | `SampleSize` | `{ n: number \| null; min?: number }`（默认 5） | `n = {n}`；`n < min`（含 0）加 `block.insufficient`；`null` 显示 `block.not_computed`（没算） |
 | `CalcVersion` | `{ version: string; concept?: string }` | `口径 ` + 等宽代码样式的版本号；有 `concept` 时链接到 `#knowledge/<concept>` |
-| `MetricValue` | `{ value: number \| null \| undefined; unit?: string; digits?: number; signed?: boolean; percent?: boolean; tone?: 'updown' \| 'none' }`（`digits` 默认 2，`tone` 默认 `none`） | 等宽数字（`tabular-nums`），单位前加半角空格（`12 股`），`percent` 的值是小数（0.032 → `3.2%`，与 `fmtPct` 一致，无空格），`signed` 给正数加 `+`；`updown` 时正 `text-up`、负 `text-down`、零不着色；`-0.00` 归一成 `0.00`；`null` / `undefined` / `NaN` 显示 `block.not_computed` |
+| `MetricValue` | `{ value: number \| null \| undefined; raw?: string \| null; unit?: string; digits?: number; signed?: boolean; percent?: boolean; tone?: 'updown' \| 'none' }`（`digits` 默认 2，`tone` 默认 `none`） | 等宽数字（`tabular-nums`），单位前加半角空格（`12 股`），`percent` 的值是小数（0.032 → `3.2%`，与 `fmtPct` 一致，无空格），`signed` 给正数加 `+`；`updown` 时正 `text-up`、负 `text-down`、零不着色；`-0.00` 归一成 `0.00`；`null` / `undefined` / `NaN` 显示 `block.not_computed`；传非空 `raw` 时优先显示原文，不解析或舍入后端 Decimal 字符串，`unit` 仍保留，长值可换行 |
 | `PlanLevels` | `{ low: number \| null; high: number \| null; stop: number \| null; target1: number \| null; shares?: number \| null; lead?: string; sharesLabel?: string }` | 一行标准写法 `入场 95.10–97.30 · 止损 91.40 · T1 104.70`，有股数时加 ` · 建议 120 股`；`lead`（默认「入场」）换掉区间前的词，`sharesLabel`（默认「建议」，空字符串则只写 `120 股`）换掉股数前的词——`PlanTable` 窄屏价位行传入场类型文字和空 `sharesLabel`，保持旧写法 `区间限价 95.10–97.30 · 止损 91.40 · T1 104.70 · 120 股`（价格两位小数，区间用 U+2013）；props 是数字，而接口里的价位是字符串（`"95.10"`）：**调用方用 `Number()` 转换**再传（接口不变；无法转成数字的值按缺失处理）。缺的价位写「没算」，四个都缺时是一个 `block.not_computed` 徽标。格式取自现有 `PlanHistoryTable` / `PlanTimeline` / `RuleBaseline` / `PlanRowDetail` 的写法，`PlanLevels.test.ts` 钉住的是数字格式（两位小数、U+2013、缺值写「没算」）和 `lead` / `sharesLabel` 的默认值 |
 | `RefLink` | `{ ref: string; onFact?: (key) => void; onCall?: (ref) => void; expanded?: boolean }` | `RefList` 单项的渲染：`fact:` 有 `onFact` 时是调用回调的链接式按钮，否则纯文字；`call:` 有 `onCall`（调用方能展开）时是 `aria-expanded` 按钮，否则纯文字；`know:` 链到 `knowHref`；`concept:` 用 `ConceptTerm` 就地展开；其余（`user:` 等）纯文字。列表外壳与展开的工具调用区域仍归调用方（`RefList`） |
 | `SourceBadge` | `{ source: string; fallback?: boolean }` | 数据来源名（等宽）；`fallback` 时加淡警告底与文字「备源」。为 v2.11 预留，本版只定义并进画廊，不接页面 |

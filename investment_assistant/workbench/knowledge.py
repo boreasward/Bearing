@@ -33,6 +33,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ('rule', '规则 v1'),
     ('plan', '规则计划 plan-1'),
     ('agent', 'Agent 计划'),
+    ('account', '账户与模拟交易'),
     ('review', '复盘'),
     ('system', '系统运作'),
 )
@@ -54,7 +55,7 @@ KNOWN_VERSIONS: frozenset[str] = frozenset({
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ROOT = REPO_ROOT / 'docs' / 'knowledge'
 
-ID_BODY = r'(?:family|indicator|rule|plan|agent|review|system)\.[a-z0-9_]+'
+ID_BODY = r'(?:family|indicator|rule|plan|agent|account|review|system)\.[a-z0-9_]+'
 ID_RE = re.compile(rf'^{ID_BODY}$')
 REF_RE = re.compile(rf'^(?:concept:)?({ID_BODY})(?:@([1-9][0-9]*))?$')
 CARD_LINK_RE = re.compile(rf'^(?:(concepts/))?({ID_BODY})\.md$')

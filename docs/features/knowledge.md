@@ -4,7 +4,7 @@ v2.6 新增（知识层 `knowledge-1`）：把「系统里每个概念是什么�
 
 ## 做什么
 
-- **一卡一概念**：`docs/knowledge/concepts/<id>.md`，开头 YAML frontmatter，后面 Markdown 正文。分七组：数据族、指标、规则 v1、规则计划 `plan-1`、Agent 计划、复盘、系统运作。
+- **一卡一概念**：`docs/knowledge/concepts/<id>.md`，开头 YAML frontmatter，后面 Markdown 正文。分八组：数据族、指标、规则 v1、规则计划 `plan-1`、Agent 计划、账户与模拟交易、复盘、系统运作。
 - **一页原理**：`docs/knowledge/principles.md`，按 `## ` 二级标题分节，讲系统每天怎么跑。
 - **随代码走**：卡与代码版本同在仓库里；定义或口径变了，卡的 `version` 加 1（改措辞、补例子不加）。系统不保存旧版正文，旧版看 git 历史。
 - **源文件只来自仓库**：渲染时关闭原始 HTML，卡内只允许指向其它卡的链接，不会把人引回仓库其它文档。
@@ -16,9 +16,9 @@ frontmatter 字段只有下表这些，多余字段校验失败：
 
 | 字段 | 必填 | 规则 |
 | --- | --- | --- |
-| `id` | 是 | `^(family\|indicator\|rule\|plan\|agent\|review\|system)\.[a-z0-9_]+$`；必须等于文件名去掉 `.md` |
+| `id` | 是 | `^(family\|indicator\|rule\|plan\|agent\|account\|review\|system)\.[a-z0-9_]+$`；必须等于文件名去掉 `.md` |
 | `title` | 是 | 中文名，1–30 字 |
-| `group` | 是 | 七组之一，且等于 id 的前缀 |
+| `group` | 是 | 八组之一，且等于 id 的前缀 |
 | `version` | 是 | 正整数 |
 | `applies_to` | 是 | 代码版本号列表，可为空；每项必须在 `knowledge.KNOWN_VERSIONS` 里 |
 | `summary` | 是 | 一句话摘要，1–120 字，不含换行（就地展开显示它） |
@@ -29,7 +29,7 @@ frontmatter 字段只有下表这些，多余字段校验失败：
 
 **链接**：卡内只许行内写法 `[文字](<id>.md)` 指向其它卡（目标必须存在）；引用式（`[文字][r]`）、带标题（`"…"`）和文字里含方括号的写法校验失败，这样给 Agent 的纯文本改写与反链才与渲染结果一致。外链、图片、`../` 路径、锚点一律校验失败。原理页另许 `concepts/<id>.md` 与 `#stage-<阶段 id>`；原理页的 `## ` 标题里不能有链接，接口里的 `heading` 是纯文本（行内代码不带反引号）；每个阶段在原理页里最多被链一次，一节里最多链一个阶段，阶段 id 必须是注册表 `stages.STAGE_IDS` 里的。
 
-`KNOWN_VERSIONS` 是字面集合（当前与仍留在旧行里的历史版本号，共 25 个）。它不 import 各模块的常量，因为 Agent 工具要 import 本模块；`tests/test_knowledge.py` 逐一对齐代码常量，代码发了新版本号而这里没加，测试失败。
+`KNOWN_VERSIONS` 是字面集合（当前与仍留在旧行里的历史版本号，共 58 个，含 v2.11 账户与模拟交易口径）。它不 import 各模块的常量，因为 Agent 工具要 import 本模块；`tests/test_knowledge.py` 逐一对齐代码常量，代码发了新版本号而这里没加，测试失败。
 
 校验**一次收集全部问题**再报（缺字段、多余字段、链接问题各自成一条，不会互相挡住；`related` 的存在性按 `concepts/` 下全部文件名判断，一张卡 YAML 写坏不会让别的卡误报）；`sources` 必须是仓库内的相对路径；`title` / `summary` 先去首尾空白再判长度。每条形如 `concepts/plan.stop.md: related 里的 indicator.atr 不存在`。目录不存在或为空是空目录，不是错误；原理页缺失则 `principles` 为空。
 
@@ -87,7 +87,7 @@ python -m investment_assistant.workbench.knowledge show <ref> [--root PATH]   # 
 v2.6 起前端接入知识层（设计见 [v2.6 §5、§6、§12](../specs/2026-10-28-v2.6-understanding-the-system-design.md)）。
 
 - **「知识」菜单**：主菜单「数据」之后，子项「概念」（`#knowledge`）与「原理」（`#knowledge/principles`）；`#knowledge/<id>[@<版本>]` 是卡片页。
-- **概念页 `#knowledge`**：顶部一行「概念卡随代码版本更新，`knowledge-1`；所有规则与 Agent 都未经验证」；过滤框按 id、标题、摘要在前端过滤；按七组分段，每段「分组标题 · n 张」，每张一行：标题（点进卡片页）· id · 摘要 · 适用版本徽标。目录为空显示「还没有概念卡」。
+- **概念页 `#knowledge`**：顶部一行「概念卡随代码版本更新，`knowledge-1`；所有规则与 Agent 都未经验证」；过滤框按 id、标题、摘要在前端过滤；按八组分段，每段「分组标题 · n 张」，每张一行：标题（点进卡片页）· id · 摘要 · 适用版本徽标。目录为空显示「还没有概念卡」。
 - **卡片页**：标题、分组、`concept:<id>@<版本>`、适用版本、摘要，正文是后端渲染的 HTML（`{@html}` 只用于知识接口返回的内容，原始 HTML 在后端已关闭，卡内链接直接可点）；「相关」与「被这些卡提到」；请求的版本不是当前版时顶部显示 `stale` 说明；id 不存在显示「没有这张概念卡：<id>」与返回列表的链接。
 - **原理页 `#knowledge/principles`**：顶部日期选择（默认最近已收盘交易日）；逐节渲染，对应某个批处理阶段的节在正文下方有一个框「当天这一步（<交易日>）」，里面是[运行一览](daily-plan.md)里这一阶段的那一行，并附「在『今日』看完整运行一览」；改日期只重新请求运行一览，不重新加载原理页。原理页不存在显示「还没有原理页」。
 - **加载失败（503）**：概念页与卡片页都显示「概念卡加载失败」与后端给的问题清单前 10 条；`ConceptTerm` 照常显示文字和「ⓘ」，点开写「概念卡暂不可用：<原因>」；批处理、运行一览、推理视图、「标的」页不受影响。

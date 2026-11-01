@@ -16,9 +16,10 @@
 
 | 文档 | 功能 |
 | --- | --- |
-| [daily-plan.md](features/daily-plan.md) | 每日工作流（十个节点、检查点与续跑、运行详情页）、规则 v1、交易计划（`plan-2` 的执行字段）、「今日」计划表与成交关联计划（v2.9）、持仓止损、每日推送 |
+| [daily-plan.md](features/daily-plan.md) | 每日工作流（`daily-2` / `stages-5` 的十一个节点、检查点与续跑、运行详情页）、规则 v1、交易计划（`plan-2` 的执行字段）、「今日」计划表与成交关联计划（v2.9）、持仓止损、每日推送 |
 | [agent-track.md](features/agent-track.md) | Agent 轨道：ChatGPT 订阅模型层与连接、工具层、提议与反方、引用校验、预算、解读；一只股票一条活跃链、再次触发、退出期与持仓状态（v2.9） |
-| [review.md](features/review.md) | 影子跟踪、纪律、三方对比、周/月复盘（`review-8` / `monthly-4` 的执行口径）、资金与月度收益、复盘推送 |
+| [accounts.md](features/accounts.md) | 真实账本与券商对账、开账与参数、Agent 自管与照计划执行模拟账户、日线成交、订单和决策证据、权益曲线与账户对比（v2.11，本地实现与发布准备） |
+| [review.md](features/review.md) | 影子跟踪、可切换账户的纪律与三方对比、真实账户周/月复盘（`review-8` / `monthly-5`；缺账本端点回退快照）、复盘推送 |
 | [pool-and-context.md](features/pool-and-context.md) | 观察池分层、每日筛选（纳指 100 `screen-1`、成员轮换、报告与只读回放）、市场环境（广度、区制、行业、FRED）、上线前检查 |
 | [data-menu.md](features/data-menu.md) | 「数据」菜单：数据族覆盖与最新时点、拉取记录、单族手动拉取、原始值浏览 |
 | [knowledge.md](features/knowledge.md) | 知识层：版本化的概念卡与原理页——卡的格式与校验、引用形式、加载与缓存、`/api/knowledge/*` 接口、`knowledge check` / `show` 命令 |

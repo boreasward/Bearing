@@ -6,8 +6,9 @@ import pytest
 
 from investment_assistant.data import fetch_policy
 from investment_assistant.workbench import (
-    backcheck, derivation, discipline, entry_rules, execution, families, knowledge, knowledge_items, knowledge_perf,
-    labels, monthly, plan_shadow, plans, regime, retro, review, rules, screen, stages, timeline, tracks, workflow,
+    accounts, backcheck, derivation, discipline, entry_rules, execution, families, knowledge, knowledge_items,
+    knowledge_perf, labels, monthly, paper_fill, paper_strategies, plan_shadow, plans, regime, retro, review, rules,
+    screen, stages, timeline, tracks, workflow,
 )
 from investment_assistant.workbench.agent import REASON_TEXT, chatgpt, conditions, graph, tools
 from investment_assistant.workbench.agent.discuss_tools import DISCUSS_TOOLS
@@ -50,6 +51,9 @@ REQUIRED_IDS = (
     # v2.9 executable plans (7): six from Task 3, review.execution_status from Task 4
     'plan.entry_type', 'plan.open_scenarios', 'plan.max_hold', 'agent.retrigger', 'system.active_chain',
     'review.holding_status', 'review.execution_status',
+    # v2.11 accounts and paper trading (7)
+    'account.ledger', 'account.paper', 'account.agent_portfolio', 'account.follow_plans',
+    'account.fill_rules', 'account.reconciliation', 'account.comparison',
 )
 
 STAGE_STATUSES = ('success', 'partial', 'degraded', 'failed', 'skipped')
@@ -93,6 +97,11 @@ CURRENT_VERSIONS = {
     'discipline.DISCIPLINE_VERSION': discipline.DISCIPLINE_VERSION,
     'tracks.TRACKS_V2': tracks.TRACKS_V2,
     'retro.RETRO_V2': retro.RETRO_V2,
+    # v2.11 account math, settlement and the two paper strategies
+    'accounts.ACCOUNT_VERSION': accounts.ACCOUNT_VERSION,
+    'paper_fill.PAPER_FILL_VERSION': paper_fill.PAPER_FILL_VERSION,
+    'paper_strategies.FOLLOW_PLANS_VERSION': paper_strategies.FOLLOW_PLANS_VERSION,
+    'graph.PORTFOLIO_AGENT_VERSION': graph.PORTFOLIO_AGENT_VERSION,
 }
 
 
@@ -106,7 +115,7 @@ def body_of(catalog, card_id: str) -> str:
 
 
 def test_catalog_loads_and_matches_required_ids(catalog):
-    assert len(REQUIRED_IDS) == 105 and len(set(REQUIRED_IDS)) == 105
+    assert len(REQUIRED_IDS) == 112 and len(set(REQUIRED_IDS)) == 112
     assert set(catalog.concepts) == set(REQUIRED_IDS)
 
 
@@ -165,17 +174,22 @@ def test_principles_structure(catalog):
     principles = catalog.principles
     assert principles is not None
     headings = [section.heading for section in principles.sections]
-    assert len(headings) == 15                       # v2.8: intro, ten nodes, three closing sections; v2.9 adds 「从计划到成交」
+    assert len(headings) == 16                       # v2.11 adds the accounts node before push
     assert headings[0] == '系统做什么、不做什么'
     assert headings[-1] == '怎么在系统里核对'
     staged = [section for section in principles.sections if section.stage]
     assert [section.stage for section in staged] == list(stages.STAGE_IDS)
-    assert len({section.stage for section in staged}) == len(staged) == 10      # one section per node, sec_monitor included
+    assert len({section.stage for section in staged}) == len(staged) == 11      # one section per node, accounts included
     for section in staged:
         assert section.concepts, f'{section.heading}: 阶段小节没有链任何概念卡'
-    assert [section.heading for section in principles.sections[11:14]] == ['你做什么：决定与成交', '从计划到成交', '复盘口径']
-    first, last = principles.sections[1], principles.sections[10]
+    assert [section.heading for section in principles.sections[12:15]] == ['你做什么：决定与成交', '从计划到成交', '复盘口径']
+    first, last = principles.sections[1], principles.sections[11]
     assert first.stage == 'sec_monitor' and first.heading == '⓪ SEC 监控' and 'family.sec_filings' in first.concepts
-    assert last.stage == 'retro' and last.heading == '⑨ 复盘'                    # after push, with the weekly / monthly part
+    assert last.stage == 'retro' and last.heading == '⑩ 复盘'                    # after push, with the weekly / monthly part
     assert set(last.concepts) == {'review.retro_card', 'review.retro_end', 'review.weekly'}
-    assert principles.sections[9].stage == 'push' and principles.sections[2].stage == 'collect'
+    assert principles.sections[10].stage == 'push' and principles.sections[2].stage == 'collect'
+    accounts = principles.sections[9]
+    assert accounts.stage == 'accounts' and accounts.heading == '账户与模拟交易'
+    assert set(accounts.concepts) == {'account.ledger', 'account.paper', 'account.agent_portfolio',
+                                     'account.follow_plans', 'account.fill_rules', 'account.reconciliation',
+                                     'account.comparison'}

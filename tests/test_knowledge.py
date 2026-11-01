@@ -336,9 +336,9 @@ def test_catalog_failure_not_cached(tmp_path, monkeypatch):
 
 def test_known_versions_cover_code_constants():
     from investment_assistant.data import fetch_policy
-    from investment_assistant.workbench import (backcheck, derivation, knowledge_items, knowledge_perf, monthly,
-                                                plan_shadow, plans, regime, retro, review, rules, screen, stages,
-                                                timeline, tracks, workflow)
+    from investment_assistant.workbench import (accounts, backcheck, derivation, knowledge_items, knowledge_perf, monthly,
+                                                paper_fill, paper_strategies, plan_shadow, plans, regime, retro,
+                                                review, rules, screen, stages, timeline, tracks, workflow)
     from investment_assistant.workbench.agent import chatgpt, conditions, graph
     current = {plans.PLAN_VERSION, plans.AGENT_VERSION, timeline.AGENT_V2, graph.REVIEW_VERSION,
                graph.INTERPRET_VERSION, conditions.CONDITIONS_VERSION, timeline.TIMELINE_VERSION,
@@ -347,9 +347,11 @@ def test_known_versions_cover_code_constants():
                stages.STAGES_VERSION, backcheck.CALC_VERSION, 'rules-' + rules.RULE_VERSION,
                knowledge.KNOWLEDGE_VERSION, retro.RETRO_VERSION, knowledge_items.MY_KNOWLEDGE_VERSION,
                knowledge_perf.KNOWLEDGE_PERF_VERSION, graph.RETRO_AGENT_VERSION, graph.DISCUSS_AGENT_VERSION,
-               fetch_policy.FETCH_POLICY_VERSION, workflow.DAILY_GRAPH_VERSION, chatgpt.CHATGPT_PROTOCOL_VERSION}
+               fetch_policy.FETCH_POLICY_VERSION, workflow.DAILY_GRAPH_VERSION, chatgpt.CHATGPT_PROTOCOL_VERSION,
+               accounts.ACCOUNT_VERSION, paper_fill.PAPER_FILL_VERSION, paper_strategies.FOLLOW_PLANS_VERSION,
+               graph.PORTFOLIO_AGENT_VERSION}
     assert current <= knowledge.KNOWN_VERSIONS
-    assert {'stages-4', 'daily-1', 'retro-2', 'agent-retro-2', 'agent-discuss-1', 'my-knowledge-1',
+    assert {'stages-5', 'daily-2', 'retro-2', 'agent-retro-2', 'agent-discuss-1', 'my-knowledge-1',
             'knowledge-perf-1', 'review-8'} == {stages.STAGES_VERSION, workflow.DAILY_GRAPH_VERSION,
                                                  retro.RETRO_VERSION, graph.RETRO_AGENT_VERSION,
                                                  graph.DISCUSS_AGENT_VERSION, knowledge_items.MY_KNOWLEDGE_VERSION,
@@ -362,10 +364,11 @@ def test_known_versions_cover_code_constants():
     assert {'timeline-2', 'condition-2', 'plan-2', 'plan-shadow-2', 'agent-3', 'agent-review-2', 'agent-retro-2',
             'entry-1', 'execution-1', 'discipline-1', 'discipline-2', 'tracks-2', 'retro-2', 'review-8',
             'monthly-4'} <= knowledge.KNOWN_VERSIONS
-    # v2.11 adds seven literals (their constants land with the later tasks: accounts, paper_fill, paper_strategies,
-    # agent.graph, stages, workflow, monthly)
+    # v2.11 keeps the historical versions above and registers each current account-related constant.
     assert {'account-1', 'paper-fill-1', 'follow-plans-1', 'agent-portfolio-1', 'stages-5', 'daily-2',
-            'monthly-5'} <= knowledge.KNOWN_VERSIONS
+            'monthly-5'} == {accounts.ACCOUNT_VERSION, paper_fill.PAPER_FILL_VERSION,
+                             paper_strategies.FOLLOW_PLANS_VERSION, graph.PORTFOLIO_AGENT_VERSION,
+                             stages.STAGES_VERSION, workflow.DAILY_GRAPH_VERSION, monthly.MONTHLY_VERSION}
     assert isinstance(knowledge.KNOWN_VERSIONS, frozenset) and len(knowledge.KNOWN_VERSIONS) == 58
 
 
@@ -376,8 +379,9 @@ def test_knowledge_module_does_not_import_agent_or_service_at_top_level():
 
 
 def test_groups_order():
-    assert [g for g, _ in knowledge.GROUPS] == ['family', 'indicator', 'rule', 'plan', 'agent', 'review', 'system']
+    assert [g for g, _ in knowledge.GROUPS] == ['family', 'indicator', 'rule', 'plan', 'agent', 'account', 'review', 'system']
     assert dict(knowledge.GROUPS)['family'] == '数据族' and dict(knowledge.GROUPS)['system'] == '系统运作'
+    assert dict(knowledge.GROUPS)['account'] == '账户与模拟交易'
 
 
 def test_agent_text(tmp_path):
@@ -413,7 +417,7 @@ def test_views(tmp_path):
     index = knowledge.index_view(cat)
     assert index['knowledge_version'] == 'knowledge-1'
     assert [(g['id'], g['count']) for g in index['groups']] == [
-        ('family', 0), ('indicator', 1), ('rule', 0), ('plan', 1), ('agent', 0), ('review', 0), ('system', 0)]
+        ('family', 0), ('indicator', 1), ('rule', 0), ('plan', 1), ('agent', 0), ('account', 0), ('review', 0), ('system', 0)]
     assert [c['id'] for c in index['concepts']] == ['indicator.atr14', 'plan.stop']
     assert set(index['concepts'][1]) == {'id', 'ref', 'title', 'group', 'version', 'applies_to', 'summary', 'related'}
     card = knowledge.card_view(cat, 'indicator.atr14')
