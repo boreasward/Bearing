@@ -44,7 +44,7 @@ def test_trade_hash_of_a_plain_fill_matches_the_pre_v29_hash():
     """A request recorded before v2.9 replays to the same hash: ``decision_id: None`` stays in the hashed body and
     ``plan_id`` / ``own_plan`` enter only when given."""
     rec = ledger.validate_trade(trade_payload(), now=NOW + timedelta(days=1))
-    old_body = {k: v for k, v in rec.items() if k not in ('plan_id', 'own_plan')}
+    old_body = {k: v for k, v in rec.items() if k not in ('plan_id', 'own_plan', 'account_id')}
     old_body['decision_id'] = None
     assert ledger.trade_hash(rec) == ledger.request_hash(old_body)
     with_plan = ledger.validate_trade(trade_payload(plan_id=str(uuid.uuid4())), now=NOW + timedelta(days=1))
@@ -393,3 +393,90 @@ def test_no_insert_decision_outside_tests():
     for path in root.rglob('*.py'):
         text = path.read_text(encoding='utf-8')
         assert 'INSERT INTO signal_decisions' not in text or path.name == 'repository.py', path
+
+
+def test_explicit_real_account_preserves_old_request_hash():
+    from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
+    payload=trade_payload()
+    old=ledger.validate_trade(payload,now=NOW+timedelta(days=1))
+    explicit=ledger.validate_trade({**payload,'account_id':str(REAL_ACCOUNT_ID)},now=NOW+timedelta(days=1))
+    assert ledger.trade_hash(old)==ledger.trade_hash(explicit)
+    nonreal={**old,'account_id':uuid.uuid4()}
+    assert ledger.trade_hash(nonreal)!=ledger.trade_hash(old)
+
+
+def test_snapshot_and_flow_reject_paper_account_before_writing():
+    from investment_assistant.workbench import account
+    for fn in (account.record_snapshot,account.record_flow):
+        with pytest.raises(ledger.LedgerError,match='flows_only_for_real_account'):
+            fn(None,{'account_id':str(uuid.uuid4())},now=NOW)
+
+
+def _fake_real_record_write(monkeypatch, kind, *, opened_on=T, ready=True, existing=None):
+    """Exercise command validation and lock order without opening any database connection."""
+    from investment_assistant.workbench import account
+    events = []
+    def lock(conn, key):
+        events.append(('lock', key))
+    def replay(conn, request_id):
+        events.append(('replay', request_id))
+        return existing
+    def read_account(conn, account_id):
+        assert ready, 'pre-030 must never query accounts'
+        events.append(('account', account_id))
+        return {'id': account_id, 'opened_on': opened_on}
+    def insert(conn, record, digest, *, recorded_at):
+        events.append(('insert', record))
+        return {**record, 'id': uuid.uuid4(), 'request_hash': digest}
+    monkeypatch.setattr(repository, 'lock', lock)
+    monkeypatch.setattr(repository, 'accounts_ready', lambda conn: ready)
+    monkeypatch.setattr(repository, 'account_by_id', read_account)
+    monkeypatch.setattr(repository, f'{kind}_by_request', replay)
+    monkeypatch.setattr(repository, f'insert_{kind}', insert)
+    if kind == 'trade':
+        monkeypatch.setattr(repository, 'list_trades', lambda *args, **kwargs: [])
+        monkeypatch.setattr(repository, 'split_events', lambda *args, **kwargs: [])
+    return ledger.record_trade if kind == 'trade' else account.record_flow, events
+
+
+@pytest.mark.parametrize('kind, value, accepted', [
+    ('trade', '2026-10-22T03:59:59+00:00', False),  # still 10-21 in New York
+    ('trade', '2026-10-22T04:00:00+00:00', True),
+    ('trade', '2026-10-23T14:00:00+00:00', True),
+    ('flow', '2026-10-21', False), ('flow', '2026-10-22', True), ('flow', '2026-10-23', True),
+])
+def test_new_real_record_respects_opening_date_after_account_lock(monkeypatch, kind, value, accepted):
+    fn, events = _fake_real_record_write(monkeypatch, kind)
+    payload = trade_payload(executed_at=value) if kind == 'trade' else {
+        'request_id': str(uuid.uuid4()), 'flow_date': value, 'amount': '500'}
+    if accepted:
+        assert fn(None, payload, now=NOW+timedelta(days=1))['status'] == 'created'
+    else:
+        with pytest.raises(ledger.LedgerError, match='^record_before_opened_on$'):
+            fn(None, payload, now=NOW+timedelta(days=1))
+        assert not any(event[0] == 'insert' for event in events)
+    assert events[:2] == [('lock', f'account:{repository.REAL_ACCOUNT_ID}'),
+                          ('lock', 'trades:NVDA' if kind == 'trade' else 'account:flows')]
+    assert events[2][0] == 'replay' and events[3] == ('account', repository.REAL_ACCOUNT_ID)
+
+
+@pytest.mark.parametrize('kind', ['trade', 'flow'])
+def test_real_record_exact_replay_precedes_new_opening_date_check(monkeypatch, kind):
+    from investment_assistant.workbench import account
+    payload = trade_payload(executed_at='2026-10-21T14:00:00+00:00') if kind == 'trade' else {
+        'request_id': str(uuid.uuid4()), 'flow_date': '2026-10-21', 'amount': '500'}
+    record = ledger.validate_trade(payload, now=NOW) if kind == 'trade' else account._validate_flow(payload)
+    digest = ledger.trade_hash(record) if kind == 'trade' else ledger.request_hash(record)
+    existing = {**record, 'id': uuid.uuid4(), 'request_hash': digest, 'voided_at': NOW}
+    fn, events = _fake_real_record_write(monkeypatch, kind, existing=existing)
+    assert fn(None, payload, now=NOW) == {'status': 'existing', 'record': existing}
+    assert not any(event[0] in ('account', 'insert') for event in events)
+
+
+@pytest.mark.parametrize('kind', ['trade', 'flow'])
+@pytest.mark.parametrize('ready', [False, True])
+def test_unopened_and_pre030_records_keep_legacy_dates(monkeypatch, kind, ready):
+    fn, _ = _fake_real_record_write(monkeypatch, kind, ready=ready, opened_on=None)
+    payload = trade_payload(executed_at='2020-01-02T14:00:00+00:00') if kind == 'trade' else {
+        'request_id': str(uuid.uuid4()), 'flow_date': '2020-01-02', 'amount': '500'}
+    assert fn(None, payload, now=NOW)['status'] == 'created'

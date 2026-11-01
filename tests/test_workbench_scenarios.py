@@ -733,7 +733,14 @@ def test_review_expansion_end_to_end(offline, scripted_model):
     sunday = datetime(2026, 9, 6, 0, 0, tzinfo=UTC)
     tick3 = service.review_tick(now=sunday, notify_cfg=notify, trigger_source='scheduled', client=client)
     assert tick3['monthly']['action'] == 'generated' and tick3['monthly']['push']['sent'] is True
-    assert repository.monthly_head(offline, date(2026, 8, 1))['calc_version'] == 'monthly-4'
+    monthly_head = repository.monthly_head(offline, date(2026, 8, 1))
+    assert monthly_head['calc_version'] == 'monthly-5'
+    monthly_return = monthly_head['stats']['return']
+    assert monthly_return['status'] == 'ok' and monthly_return['source'] == 'snapshot'
+    assert monthly_return['start']['as_of'] == '2026-07-31'
+    assert monthly_return['end']['as_of'] == '2026-08-31'
+    assert monthly_return['net_flow'] == 0.0
+    assert monthly_return['return'] == pytest.approx(0.1)
     assert len([s for s in client.sent if '月度复盘 · 2026-08' in str(s[1])]) == 1
 
     live = service.tracks(now=sunday, since=week_monday, until=week_monday + timedelta(days=6))

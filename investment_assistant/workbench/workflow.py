@@ -1,4 +1,4 @@
-"""The ``daily`` LangGraph workflow (v2.8, ``daily-1``): ten nodes in a line, checkpoints, node retry, resume.
+"""The ``daily`` LangGraph workflow (v2.11, ``daily-2``): eleven nodes in a line, checkpoints, node retry, resume.
 
 The stage functions live in ``service.py`` (and ``tasks/filings.py`` for ``sec_monitor``); this module wraps each in a
 node that opens the stage's accumulator, runs the body, retries it once after ``NODE_RETRY_WAIT_S`` when it raises,
@@ -22,9 +22,9 @@ from investment_assistant.workbench import bars, collect, families, pool as pool
 from investment_assistant.workbench import stages as stages_module
 from investment_assistant.workbench.agent import model as agent_model
 
-DAILY_GRAPH_VERSION = 'daily-1'
+DAILY_GRAPH_VERSION = 'daily-2'
 NODE_RETRY_WAIT_S = 60
-NODES: tuple[str, ...] = stages_module.STAGE_IDS            # the ten ids of stages-4; the order is the edges
+NODES: tuple[str, ...] = stages_module.STAGE_IDS            # the eleven ids of stages-5; the order is the edges
 NY = ZoneInfo('America/New_York')
 FAULT_ENV = 'INVESTMENT_ASSISTANT_FAULT_ONCE'                # Task 7 drill only: one injected failure of one node
 TRIGGERS = ('scheduled', 'manual_batch')
@@ -267,6 +267,7 @@ BODIES: dict[str, Callable] = {
     'plan': _on_trading_day('plan', _plan),
     'agent': _on_trading_day('agent', service.stage_agent),
     'review': _on_trading_day('review', service.stage_review),
+    'accounts': _on_trading_day('accounts', service.stage_accounts),
     'push': service.stage_push,
     'retro': service.stage_retro,
 }

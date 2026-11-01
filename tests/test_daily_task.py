@@ -31,8 +31,8 @@ def test_job_report_row_per_execution(daily_db, clock, notices, job_reports, mon
     assert [(r['task'], r['run_id']) for r in reports] == [('daily', RUN_ID)] * 2
     assert [r['trigger_source'] for r in reports] == ['manual', 'resume']
     assert all(r['target_start_date'] == SESSION for r in reports)
-    assert reports[0]['summary']['graph_version'] == 'daily-1' and reports[0]['summary']['failed_node'] == 'regime'
-    assert reports[0]['summary']['stage_status']['written'] == 10
+    assert reports[0]['summary']['graph_version'] == 'daily-2' and reports[0]['summary']['failed_node'] == 'regime'
+    assert reports[0]['summary']['stage_status']['written'] == 11
 
 
 def test_status_mapping_success_degraded_error(daily_db, clock, notices, job_reports, monkeypatch):

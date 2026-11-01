@@ -59,10 +59,13 @@ def test_resume_error_codes_match():
 
 def test_node_ids_match():
     """The detail page takes its nodes (id, title, order) from the API; the front end has no node list of its own
-    in `runs.ts`. The node list used by its tests must be the back end's ten, in order."""
+    in `runs.ts`. Its current fixture follows stages-5; historical stages-4 keeps its ten nodes."""
     assert stages.STAGE_IDS == ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review',
-                                'push', 'retro')
-    assert derivation.RUN_STAGE_COUNT[stages.STAGES_VERSION] == len(stages.STAGE_IDS) == 10
+                                'accounts', 'push', 'retro')
+    assert derivation.RUN_STAGE_COUNT[stages.STAGES_VERSION] == len(stages.STAGE_IDS) == 11
+    assert stages.STAGE_IDS_BY_VERSION['stages-4'] == ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan',
+                                                      'agent', 'review', 'push', 'retro')
+    assert derivation.RUN_STAGE_COUNT['stages-4'] == 10
     runs_ts = RUNS_TS.read_text(encoding='utf-8')
     listed = re.search(r'export const NODE_IDS\b[^=]*=\s*\[(.*?)\]', runs_ts, re.S)
     if listed:                                               # if the front end ever grows a list, it must match

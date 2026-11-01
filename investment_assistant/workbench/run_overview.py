@@ -76,6 +76,8 @@ STAGE_CONCEPTS: dict[str, tuple[str, ...]] = {
     'plan': ('plan.entry_zone', 'plan.stop', 'plan.target1', 'plan.status', 'plan.derivation'),
     'agent': ('agent.action_levels', 'agent.thesis', 'agent.counter', 'agent.reject_reasons'),
     'review': ('agent.review_outcome', 'agent.signals', 'review.chain_state'),
+    'accounts': ('account.ledger', 'account.paper', 'account.fill_rules', 'account.follow_plans',
+                 'account.agent_portfolio'),
     'retro': ('review.retro_card', 'review.retro_end'),
     'push': ('system.push',),
 }
@@ -311,8 +313,12 @@ def _push(r: dict) -> str:
     return f'发送 {messages} 条消息'
 
 
+def _accounts(r: dict) -> str:
+    return f"处理 {r['input_count']} 个账户，完成 {r['output_count']} 个"
+
+
 TEMPLATES = {'sec_monitor': _sec_monitor, 'collect': _collect, 'screen': _screen, 'regime': _regime, 'signals': _signals, 'plan': _plan,
-             'agent': _agent, 'review': _review, 'retro': _retro, 'push': _push}
+             'agent': _agent, 'review': _review, 'accounts': _accounts, 'retro': _retro, 'push': _push}
 
 
 def _suffixes(skips: list[dict], failures: list[dict], degradations: list[dict]) -> str:
@@ -423,8 +429,10 @@ LEGACY_VERSIONS = (stages_module.STAGES_VERSION_V1, stages_module.STAGES_VERSION
 
 def _display_ids(version: str) -> tuple[str, ...]:
     """The stage list a run of this version is drawn with: the v2.7 nine for ``stages-1`` .. ``stages-3`` (the two older
-    ones show their missing stages as ``not_recorded``), the ten of ``stages-4`` otherwise."""
-    return stages_module.STAGE_IDS_V3 if version in LEGACY_VERSIONS else stages_module.STAGE_IDS
+    ones show their missing stages as ``not_recorded``), otherwise the run's own registered order."""
+    if version in LEGACY_VERSIONS:
+        return stages_module.STAGE_IDS_V3
+    return stages_module.STAGE_IDS_BY_VERSION.get(version, stages_module.STAGE_IDS)
 
 
 def _stage_def(stage_id: str, version: str) -> stages_module.StageDef:
@@ -509,9 +517,10 @@ def _headline(run: dict, stages: list[dict]) -> str:
     version = run['stages_version']
     members = _effective(run['_members'])
     counts = _attempt_counts(run['_members'])
-    executions = max(counts.values(), default=1) if version == stages_module.STAGES_VERSION else 1
+    resumable = version in stages_module.STAGE_IDS_BY_VERSION and version not in LEGACY_VERSIONS
+    executions = max(counts.values(), default=1) if resumable else 1
     failed = next((s for s in stages if s['status'] == 'failed'), None)
-    if failed is not None and version == stages_module.STAGES_VERSION:
+    if failed is not None and resumable:
         # v2.8 §7.4: "<date>的运行在「<节点>」失败（已自动重试 1 次）：<原因>；其后 <n> 个节点未执行"
         day = run['_members'][0]['session']
         row = members.get(failed['id']) or {}
@@ -530,7 +539,8 @@ def _headline(run: dict, stages: list[dict]) -> str:
                 f"{len(stages)} 个阶段：{' · '.join(shown)}{suffix}")
     if executions > 1:
         # the node the last resume started from: the first stage (in order) booked that many times
-        node = next((i for i in stages_module.STAGE_IDS if counts.get(i) == executions), None)
+        ids = stages_module.STAGE_IDS_BY_VERSION.get(version, stages_module.STAGE_IDS)
+        node = next((i for i in ids if counts.get(i) == executions), None)
         text += f"（第 {executions} 次执行，从「{_stage_title(node, version)}」续跑）" if node else ''
     return text
 

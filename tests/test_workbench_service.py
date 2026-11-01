@@ -224,6 +224,7 @@ def test_batch_writes_rule_plan_for_buy_unit(db):
     plan = unit['plan']
     assert plan['kind'] == 'rule' and plan['plan_version'] == 'plan-2' and plan['status'] == 'ok'
     assert plan['sizing']['status'] == 'no_equity'
+    assert plan['sizing']['equity_source'] == 'snapshot'
     bars = repository.read_bars(db, 'NVDA', SESSION, cutoff_at=NOW)
     levels = plans.rule_levels(Decimal(str(bars[-1]['close'])), plans.atr14(bars))
     for key, value in levels.items():
@@ -585,9 +586,13 @@ def test_100_tickers_complete_with_timings(db):
     assert set(summary['timings']) == {'collect', 'regime', 'rules', 'agent', 'total'}
 
 
-def test_rerun_with_context_returns_existing_p1_plan(db):
+@pytest.mark.parametrize('with_snapshot', [False, True])
+def test_rerun_with_context_returns_existing_p1_plan(db, with_snapshot):
     from investment_assistant.config import load_config
     seed_watchlist(db, [('NVDA', ['core'])])
+    if with_snapshot:
+        account.record_snapshot(db, {'request_id': str(uuid.uuid4()), 'as_of': SESSION.isoformat(),
+            'equity': '100000'}, now=NOW)
     service.run_batch(now=NOW, deps=deps(Sources()))  # stores bars and candidates
     plan_id = db.execute("SELECT id FROM trade_plans WHERE kind = 'rule' AND ticker = 'NVDA'").fetchone()[0]
     db.execute('DELETE FROM trade_plans WHERE id = %s', [plan_id])
@@ -598,11 +603,40 @@ def test_rerun_with_context_returns_existing_p1_plan(db):
             snapshot=repository.snapshot_at(conn, SESSION, cutoff_at=NOW),
             exposure=service.exposure(conn, SESSION, cutoff_at=NOW, ticker='NVDA'),
             params=load_config().workbench, version=plans.PLAN_V2)       # v2.9: the baseline is plan-2
-        assert repository.store_plan(conn, p1)['status'] == 'inserted'
+        saved = repository.store_plan(conn, p1)
+        assert saved['status'] == 'inserted'
+        frozen = saved['record']
         assert 'context' not in p1['inputs']
+        assert 'equity_source' not in p1['sizing']
     again = service.run_batch(now=NOW + timedelta(minutes=5), deps=deps(Sources()))
     assert again['plans']['NVDA'] == 'existing'
     assert again['conflicts'] == []
+    assert repository.plan_by_id(db, frozen['id']) == frozen
+
+
+@pytest.mark.parametrize('change, expected', [
+    ({'equity_source': 'snapshot'}, 'existing'),
+    ({'equity_source': 'ledger'}, 'conflict'),
+    ({'equity_source': None}, 'conflict'),
+    ({'equity_source': 'snapshot', 'snapshot_id': 'other-snapshot'}, 'conflict'),
+    ({'equity_source': 'snapshot', 'equity': Decimal(200000)}, 'conflict'),
+    ({'equity_source': 'snapshot', 'shares': 99}, 'conflict'),
+])
+def test_legacy_plan_source_default_preserves_real_sizing_conflicts(monkeypatch, change, expected):
+    from copy import deepcopy
+    stored = {'id': uuid.uuid4(), 'ticker': 'NVDA', 'signal_date': SESSION, 'kind': 'rule',
+        'plan_version': plans.PLAN_V2, 'status': 'ok', 'ref_price': Decimal(100), 'atr': Decimal(2),
+        'entry_low': Decimal(98), 'entry_high': Decimal(102), 'stop': Decimal(94), 'target1': Decimal(112),
+        'entry_type': 'zone_limit', 'max_hold_sessions': 10,
+        'sizing': {'snapshot_id': 'frozen-snapshot', 'equity': Decimal(100000), 'shares': 10}}
+    frozen = deepcopy(stored)
+    rebuilt = {**deepcopy(stored), 'sizing': {**stored['sizing'], **change}}
+    intended = deepcopy(rebuilt)
+    monkeypatch.setattr(repository, 'rule_plan', lambda *args, **kwargs: stored)
+    monkeypatch.setattr(repository, 'insert_plan', lambda *args, **kwargs: pytest.fail('existing plan rewritten'))
+    result = repository.store_plan(None, rebuilt)
+    assert result == {'status': expected, 'record': frozen}
+    assert stored == frozen and rebuilt == intended
 
 
 # --- P2: today split, market block ---

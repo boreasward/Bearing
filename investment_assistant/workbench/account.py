@@ -10,7 +10,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from investment_assistant.workbench import repository
-from investment_assistant.workbench.ledger import Conflict, LedgerError, NotFound, _decimal, _replay, _text, _uuid, request_hash
+from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
+from investment_assistant.workbench.ledger import (Conflict, LedgerError, NotFound, _check_opening_date,
+                                                   _decimal, _replay, _text, _uuid, request_hash)
 
 
 def _validate_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
@@ -49,6 +51,8 @@ def _validate_flow(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def record_snapshot(conn, payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
+    if _uuid(payload.get('account_id', REAL_ACCOUNT_ID), 'account_id') != REAL_ACCOUNT_ID:
+        raise LedgerError('flows_only_for_real_account')
     rec = _validate_snapshot(payload)
     digest = request_hash(rec)
     repository.lock(conn, 'account:snapshots')
@@ -61,11 +65,15 @@ def record_snapshot(conn, payload: dict[str, Any], *, now: datetime) -> dict[str
 
 
 def record_flow(conn, payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
+    if _uuid(payload.get('account_id', REAL_ACCOUNT_ID), 'account_id') != REAL_ACCOUNT_ID:
+        raise LedgerError('flows_only_for_real_account')
     rec = _validate_flow(payload)
     digest = request_hash(rec)
+    repository.lock(conn, f'account:{REAL_ACCOUNT_ID}')
     repository.lock(conn, 'account:flows')
     if replay := _replay(repository.flow_by_request(conn, rec['request_id']), digest):
         return replay
+    _check_opening_date(conn, rec['flow_date'])
     return {'status': 'created', 'record': repository.insert_flow(conn, rec, digest, recorded_at=now)}
 
 

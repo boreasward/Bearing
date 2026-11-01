@@ -162,7 +162,8 @@ def test_stages_missing_row_fails(wired, monkeypatch, capsys):
 
 
 def test_run_stage_count_by_version():
-    assert derivation.RUN_STAGE_COUNT == {'stages-1': 7, 'stages-2': 8, 'stages-3': 9, 'stages-4': 10}
+    assert derivation.RUN_STAGE_COUNT == {'stages-1': 7, 'stages-2': 8, 'stages-3': 9, 'stages-4': 10,
+                                          'stages-5': 11}
     assert {v: len(ids) for v, ids in stages_module.STAGE_IDS_BY_VERSION.items()} == derivation.RUN_STAGE_COUNT
 
 
@@ -269,7 +270,7 @@ def _insert_run(conn, run_id, *, resumed=False):
     """Ten rows; ``resumed`` = collect failed in the first execution and the second one re-ran it and what followed."""
     from investment_assistant.workbench import repository
 
-    nodes = stages_module.STAGE_IDS
+    nodes = stages_module.STAGE_IDS_V4
     if not resumed:
         for stage in nodes:
             repository.insert_stage_run(conn, _row(run_id, stage, 1, 'success'))
@@ -318,9 +319,21 @@ def test_derivation_stages_accepts_resumed_runs_cli(db28, capsys):
 def test_derivation_stages_short_stages_4_run_fails(db28, capsys):
     from investment_assistant.workbench import repository
 
-    for stage in stages_module.STAGE_IDS[:-1]:
+    for stage in stages_module.STAGE_IDS_V4[:-1]:
         repository.insert_stage_run(db28, _row('daily-20261023033000-cccccccc', stage, 1, 'success'))
     _insert_report(db28, 'daily-20261023033000-cccccccc', datetime(2026, 10, 23, 3, 30, tzinfo=UTC), task='daily')
     db28.commit()
     code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())
     assert code == 1 and 'retro' in _line(out, '缺少阶段')
+
+
+def test_derivation_stages_5_counts_account_node(db28, capsys):
+    from investment_assistant.workbench import repository
+
+    run_id = 'daily-20261023033000-dddddddd'
+    for stage in stages_module.STAGE_IDS:
+        repository.insert_stage_run(db28, {**_row(run_id, stage, 1, 'success'), 'stages_version': 'stages-5'})
+    _insert_report(db28, run_id, datetime(2026, 10, 23, 3, 30, tzinfo=UTC), task='daily')
+    db28.commit()
+    code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())
+    assert code == 0 and '11 行' in _line(out, run_id) and 'stages-5' in _line(out, run_id)

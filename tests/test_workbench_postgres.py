@@ -276,8 +276,10 @@ def test_monthly_frozen_and_supersede(workbench_db, monkeypatch):
     monkeypatch.setattr(service, 'connection', connection)
     now = datetime(2026, 11, 1, 22, 30, tzinfo=UTC)
     first = service.generate_monthly(date(2026, 10, 1), notes='初版', now=now)
-    assert first['stats']['calc_version'] == 'monthly-4'   # P4 起带 review 明细与 tracks
-    assert first['stats']['return']['status'] == 'missing_snapshot'
+    assert first['stats']['calc_version'] == 'monthly-5'
+    assert first['stats']['return'] == {
+        'status': 'missing_snapshot', 'source': 'snapshot', 'start': None, 'end': None,
+        'net_flow': None, 'return': None}
     with pytest.raises(ledger.Conflict):
         service.generate_monthly(date(2026, 10, 1), notes='重复生成', now=now)
     fix = service.generate_monthly(date(2026, 10, 1), notes='更正', supersedes_id=first['id'], now=now)
@@ -918,7 +920,8 @@ def test_monthly_snapshot_has_tracks_and_detail(workbench_db, monkeypatch):
     _mt_round_trip(workbench_db, 'NVDA', date(2026, 10, 1), plan['id'],
                    sell_day=date(2026, 10, 5), sell_price=D('110'))
     stats = service.generate_monthly(date(2026, 10, 1), now=datetime(2026, 11, 20, 22, 30, tzinfo=UTC))['stats']
-    assert stats['calc_version'] == 'monthly-4'
+    assert stats['calc_version'] == 'monthly-5'
+    assert stats['return']['source'] == 'snapshot'
     assert 'units' in stats['tracks'] and 'summary' in stats['tracks']
     assert set(stats['review']) >= {'flag', 'months', 'compound', 'spy_compound'}
 

@@ -17,6 +17,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from investment_assistant.workbench import positions, repository
+from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
 
 NY = ZoneInfo('America/New_York')
 OWN_PLAN_UNIT_SESSIONS = 20      # R12: how far back an own plan looks for the unit it belongs to
@@ -117,6 +118,9 @@ def _own_plan(value: Any) -> dict[str, Any] | None:
 def validate_trade(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
     """v2.9 §6.1: a fill follows a plan (``plan_id``), carries its own levels (``own_plan``) or neither; a request
     that names a ``decision_id`` is refused (400 ``decision_link_retired``)."""
+    account_id = _uuid(payload.get('account_id', REAL_ACCOUNT_ID), 'account_id')
+    if account_id != REAL_ACCOUNT_ID:
+        raise LedgerError('paper_account_is_host_managed')
     if payload.get('decision_id') not in (None, ''):
         raise LedgerError(DECISION_LINK_RETIRED)
     try:
@@ -129,6 +133,7 @@ def validate_trade(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
         raise LedgerError('executed_at cannot be in the future')
     note = payload.get('note')
     rec = {
+        'account_id': account_id,
         'request_id': _uuid(payload.get('request_id'), 'request_id'),
         'ticker': _ticker(payload.get('ticker')),
         'side': _choice(payload.get('side'), 'side', ('buy', 'sell')),
@@ -150,7 +155,9 @@ def validate_trade(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
 def trade_hash(rec: dict[str, Any]) -> str:
     """request_hash of a validated trade. ``decision_id`` stays in the hashed body as ``None`` and the v2.9 fields
     enter only when given, so a request recorded before v2.9 still replays to the same hash."""
-    body = {k: v for k, v in rec.items() if k not in ('plan_id', 'own_plan')}
+    body = {k: v for k, v in rec.items() if k not in ('plan_id', 'own_plan', 'account_id')}
+    if str(rec.get('account_id', REAL_ACCOUNT_ID)) != str(REAL_ACCOUNT_ID):
+        body['account_id'] = rec['account_id']
     body['decision_id'] = None
     body.update({k: rec[k] for k in ('plan_id', 'own_plan') if rec[k] is not None})
     return request_hash(body)
@@ -173,6 +180,14 @@ def _need_executable(conn) -> None:
 
 def _ny_day(moment: datetime) -> date:
     return moment.astimezone(NY).date()
+
+
+def _check_opening_date(conn, record_date: date) -> None:
+    """New ledger facts cannot precede opening; caller holds the real-account lock and has checked replay."""
+    if repository.accounts_ready(conn):
+        account = repository.account_by_id(conn, REAL_ACCOUNT_ID)
+        if account and account['opened_on'] is not None and record_date < account['opened_on']:
+            raise LedgerError('record_before_opened_on')
 
 
 def _checked_plan(conn, rec: dict[str, Any]) -> uuid.UUID | None:
@@ -256,9 +271,13 @@ def record_trade(conn, payload: dict[str, Any], *, now: datetime) -> dict[str, A
     is ``Unavailable`` (503 ``migration_029_missing``)."""
     rec = validate_trade(payload, now=now)
     digest = trade_hash(rec)
+    # Serialize with open_real_account before taking the ticker lock. This also
+    # works before migration 030 because advisory locks do not depend on tables.
+    repository.lock(conn, f'account:{REAL_ACCOUNT_ID}')
     repository.lock(conn, f"trades:{rec['ticker']}")
     if replay := _replay(repository.trade_by_request(conn, rec['request_id']), digest):
         return replay
+    _check_opening_date(conn, _ny_day(rec['executed_at']))
     if rec['plan_id'] is not None or rec['own_plan'] is not None:
         _need_executable(conn)
     plan_id = _checked_plan(conn, rec) if rec['plan_id'] is not None else None

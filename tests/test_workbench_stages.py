@@ -26,23 +26,25 @@ def test_stage_ids_match_migration_check():
     assert stages.STAGE_IDS_V1 == _check_ids('025_stage_runs.sql')       # stages-1：025 的七个阶段
     assert stages.STAGE_IDS_V2 == _check_ids('026_plan_timeline.sql')    # stages-2：026 的八个阶段
     assert stages.STAGE_IDS_V3 == _check_ids('027_growth_loop.sql')      # stages-3：027 的九个阶段
-    assert stages.STAGE_IDS == _check_ids('028_daily_workflow.sql')      # stages-4：028 的十个阶段
+    assert stages.STAGE_IDS_V4 == _check_ids('028_daily_workflow.sql')      # stages-4：028 的十个阶段
+    assert stages.STAGE_IDS == _check_ids('030_accounts.sql')           # stages-5：030 的十一个阶段
     assert stages.STAGE_IDS_BY_VERSION == {'stages-1': stages.STAGE_IDS_V1, 'stages-2': stages.STAGE_IDS_V2,
-                                           'stages-3': stages.STAGE_IDS_V3, 'stages-4': stages.STAGE_IDS}
+                                           'stages-3': stages.STAGE_IDS_V3, 'stages-4': stages.STAGE_IDS_V4,
+                                           'stages-5': stages.STAGE_IDS}
 
 
-def test_stages_registry_ten():
-    """v2.8 §4.4: stages-4 puts sec_monitor first and retro after push; ids equal 028's stage_runs CHECK; the older
+def test_stages_registry_eleven():
+    """v2.11: stages-5 inserts accounts after review; ids equal 030's stage_runs CHECK; the older
     versions are literal tuples, not derived from the registry."""
-    assert stages.STAGES_VERSION == 'stages-4'
+    assert stages.STAGES_VERSION == 'stages-5'
     assert stages.STAGE_IDS == ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review',
-                                'push', 'retro')
+                                'accounts', 'push', 'retro')
     assert stages.STAGE_IDS_V3 == ('collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'retro', 'push')
     assert stages.STAGE_IDS_V2 == ('collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'push')
     assert stages.STAGE_IDS_V1 == ('collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'push')
     assert [s.title for s in stages.STAGES] == [
         'SEC 监控', '数据采集', '筛选 `screen-1`', '市场环境 `regime-2`', '信号与候选', '规则计划 `plan-1`',
-        'Agent 建议', '每日复查', '复核与推送', '复盘']
+        'Agent 建议', '每日复查', '账户', '复核与推送', '复盘']
     by_id = {s.id: s for s in stages.STAGES}
     assert by_id['review'].purpose == '对每份有效 Agent 计划做一次复查：维持、修订或作废；系统信号与你的输入触发认真复查。'
     assert by_id['sec_monitor'] == stages.StageDef(
@@ -55,9 +57,9 @@ def test_stages_registry_ten():
     rec = _recorder(rows)
     with rec.stage('collect'):
         pass
-    assert rec.close(None) == {'written': 10, 'error': None}
+    assert rec.close(None) == {'written': 11, 'error': None}
     assert {row['stage'] for row in rows} == set(stages.STAGE_IDS)
-    assert {row['stages_version'] for row in rows} == {'stages-4'}
+    assert {row['stages_version'] for row in rows} == {'stages-5'}
 
 
 def test_stages_3_recorder_writes_nine_in_the_v27_order():
@@ -180,7 +182,7 @@ def test_row_shape():
                         'outputs', 'detail', 'started_at', 'finished_at', 'duration_ms'}
     assert row['run_id'] == 'run-1' and row['job'] == 'workbench'
     assert row['trigger'] == 'manual_batch' and row['session'] == SESSION
-    assert row['stage'] == 'collect' and row['stages_version'] == 'stages-4'
+    assert row['stage'] == 'collect' and row['stages_version'] == 'stages-5'
     assert row['status'] == 'partial' and row['reason'] is None
     assert row['input_count'] == 20 and row['output_count'] == 18
     assert row['skips'] == [{'reason': 'trend_reclaim:insufficient_history', 'count': 1, 'samples': ['MU']}]
@@ -204,7 +206,7 @@ def test_recorder_writes_attempt_and_job():
         pass
     resumed.skip('screen', 'upstream_failed')
     assert [(r['stage'], r['attempt'], r['job']) for r in rows[1:]] == [('collect', 2, 'daily'), ('screen', 2, 'daily')]
-    assert resumed.close(None)['written'] == 10              # still one row per stage of the (stages-4) set
+    assert resumed.close(None)['written'] == 11              # still one row per stage of the (stages-5) set
 
 
 def test_duration_ms_is_wall_span():
@@ -247,8 +249,8 @@ def test_close_fills_remaining_stages():
     rec = _recorder(rows, run_id='r-skip')
     with rec.stage('collect') as acc:
         acc.input(3)
-    assert rec.close(None) == {'written': 10, 'error': None}
-    assert len(rows) == 10
+    assert rec.close(None) == {'written': 11, 'error': None}
+    assert len(rows) == 11
     assert rows[0]['stage'] == 'collect' and rows[0]['status'] == 'success'
     rest = [row for row in rows if row['stage'] != 'collect']
     assert {row['stage'] for row in rest} == set(stages.STAGE_IDS) - {'collect'}
@@ -297,3 +299,17 @@ def test_writer_failure_is_swallowed():
     with rec.stage('collect'):
         pass
     assert rec.close() == {'written': 0, 'error': 'db down'}
+
+
+def test_stages_v4_remains_literal_ten_and_accounts_purpose():
+    assert stages.STAGES_VERSION_V4 == 'stages-4'
+    assert stages.STAGE_IDS_V4 == ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent',
+                                   'review', 'push', 'retro')
+    stage = next(s for s in stages.STAGES if s.id == 'accounts')
+    assert stage.title == '账户'
+    assert stage.purpose == '结算模拟账户昨天的挂单与退出，给每个账户记一行当日权益，再由照计划执行账户机械挂单、Agent 自管账户决定明天买卖什么。'
+    rows = []
+    rec = stages.StageRecorder('v4', 'scheduled', SESSION, writer=rows.append, version='stages-4')
+    rec.skip('accounts', 'not_in_v4')
+    assert rec.close(None) == {'written': 10, 'error': None}
+    assert [r['stage'] for r in rows] == list(stages.STAGE_IDS_V4)

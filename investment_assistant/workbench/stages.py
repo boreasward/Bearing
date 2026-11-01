@@ -8,9 +8,9 @@ bookkeeping must never fail the batch.
 
 ``stages-2`` (v2.5) has eight stages, ``review`` between ``agent`` and ``push``; ``stages-3`` (v2.7) has nine,
 ``retro`` between ``review`` and ``push``; ``stages-4`` (v2.8) has ten: ``sec_monitor`` in front and ``retro`` after
-``push``. A run against a database without migration 026 is booked as ``stages-1`` (D22): the recorder then knows
+``push``. ``stages-5`` inserts ``accounts`` between ``review`` and ``push`` (eleven stages). A run against a database without migration 026 is booked as ``stages-1`` (D22): the recorder then knows
 only the seven v2.4 stages and ignores ``review`` and ``retro``; without migration 027 as ``stages-2`` (v2.7 D29),
-which ignores ``retro``. ``stages-1`` .. ``stages-3`` are history: only the v2.7 ``run_batch`` shell still writes them.
+which ignores ``retro``. ``stages-1`` .. ``stages-4`` remain registered for historical runs.
 """
 from __future__ import annotations
 
@@ -23,7 +23,8 @@ from typing import Any
 
 from investment_assistant.workbench import collect, families, repository
 
-STAGES_VERSION = 'stages-4'
+STAGES_VERSION = 'stages-5'
+STAGES_VERSION_V4 = 'stages-4'
 STAGES_VERSION_V3 = 'stages-3'
 STAGES_VERSION_V2 = 'stages-2'
 STAGES_VERSION_V1 = 'stages-1'
@@ -79,6 +80,11 @@ STAGES: tuple[StageDef, ...] = (
         purpose='对每份有效 Agent 计划做一次复查：维持、修订或作废；系统信号与你的输入触发认真复查。',
     ),
     StageDef(
+        id='accounts',
+        title='账户',
+        purpose='结算模拟账户昨天的挂单与退出，给每个账户记一行当日权益，再由照计划执行账户机械挂单、Agent 自管账户决定明天买卖什么。',
+    ),
+    StageDef(
         id='push',
         title='复核与推送',
         purpose='组装今日视图并把摘要推送 Discord；手动运行不推送。',
@@ -90,13 +96,16 @@ STAGES: tuple[StageDef, ...] = (
     ),
 )
 
-# stages-1 .. stages-3 are history: their orders are literal tuples, never derived from STAGES (spec §4.4).
+# stages-1 .. stages-4 are history: their orders are literal tuples, never derived from STAGES (spec §4.4).
+STAGE_IDS_V4: tuple[str, ...] = ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent',
+                                 'review', 'push', 'retro')
 STAGE_IDS_V3: tuple[str, ...] = ('collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'retro', 'push')
 STAGE_IDS_V2: tuple[str, ...] = ('collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'push')
 STAGE_IDS_V1: tuple[str, ...] = ('collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'push')
 STAGE_IDS: tuple[str, ...] = tuple(stage.id for stage in STAGES)
 STAGE_IDS_BY_VERSION: dict[str, tuple[str, ...]] = {STAGES_VERSION_V1: STAGE_IDS_V1, STAGES_VERSION_V2: STAGE_IDS_V2,
-                                                    STAGES_VERSION_V3: STAGE_IDS_V3, STAGES_VERSION: STAGE_IDS}
+                                                    STAGES_VERSION_V3: STAGE_IDS_V3, STAGES_VERSION_V4: STAGE_IDS_V4,
+                                                    STAGES_VERSION: STAGE_IDS}
 
 # What a stage was called before ``stages-4`` (display of historic runs only): ``retro`` was the retro-card stage.
 LEGACY_STAGES: dict[str, StageDef] = {

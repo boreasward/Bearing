@@ -15,6 +15,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from investment_assistant.data.calendar import is_trading_day
+from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
 from investment_assistant.db import connect, list_watchlist_items
 from investment_assistant.workbench import (account, bars, briefs, chart, collect, earnings, exits, families, ledger, monthly,
                                                plans, positions, repository, review, rules, synthesis)
@@ -125,8 +126,8 @@ def read_only_tx():
         raise Unavailable('数据库不可达') from None
 
 
-def _book(conn, ticker: str) -> dict[str, Any]:
-    return positions.build(repository.list_trades(conn, ticker), splits=repository.split_events(conn, ticker))
+def _book(conn, ticker: str, *, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
+    return positions.build(repository.list_trades(conn, ticker, account_id=account_id), splits=repository.split_events(conn, ticker))
 
 
 def _midnight(day: date) -> datetime:
@@ -235,6 +236,23 @@ def plan_context(conn, ticker: str, session: date, *, now: datetime,
             'sector': sector, 'next_earnings': next_earnings}
 
 
+def sizing_equity(conn, session: date, *, now: datetime) -> dict | None:
+    """A real opened ledger takes priority; a not-yet-valued ledger keeps the existing snapshot fallback."""
+    if repository.accounts_ready(conn):
+        account_ = repository.account_by_id(conn, REAL_ACCOUNT_ID)
+        rows = repository.equity_days(conn, REAL_ACCOUNT_ID, to_session=session, cutoff_at=now)
+        if account_ and account_['opened_on'] and account_['opened_on'] <= session and rows:
+            row = rows[-1]
+            return {'id': row['id'], 'as_of': row['session'], 'equity': row['equity'], 'equity_source': 'ledger'}
+    snapshot = repository.snapshot_at(conn, session, cutoff_at=now)
+    return {**snapshot, 'equity_source': 'snapshot'} if snapshot else None
+
+
+def mark_sizing_source(plan: dict, source: dict | None) -> None:
+    if 'sizing' in plan:
+        plan['sizing']['equity_source'] = source.get('equity_source', 'snapshot') if source else 'snapshot'
+
+
 def _generate_rule_plan(conn, ticker: str, session: date, ticker_bars: list[dict[str, Any]], summary: dict[str, Any],
                         *, now: datetime, active_chain: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Build and store the rule baseline (`plan-2`, v2.9 §5.4) for a fresh buy unit; record skip/conflict in the summary.
@@ -248,14 +266,16 @@ def _generate_rule_plan(conn, ticker: str, session: date, ticker_bars: list[dict
     entry = repository.pool_entry_at(conn, ticker, session, cutoff_at=now)
     screen_ref = (screening.screen_ref(conn, ticker, session)
                   if entry is not None and entry.get('source') == 'screen' else None)
+    equity_source = sizing_equity(conn, session, now=now)
     plan = plans.build_rule_plan(
         ticker=ticker, signal_date=session, bars=ticker_bars,
         earnings_row=repository.latest_earnings(conn, ticker, cutoff_at=now),
-        snapshot=repository.snapshot_at(conn, session, cutoff_at=now),
+        snapshot=equity_source,
         exposure=exposure(conn, session, cutoff_at=now, ticker=ticker),
         params=load_config().workbench,
         context=plan_context(conn, ticker, session, now=now, screen_ref=screen_ref),
         version=plans.PLAN_VERSION, active_chain=active_chain)
+    mark_sizing_source(plan, equity_source)
     if 'skip' in plan:
         summary['plans'][ticker] = f"skip: {plan['skip']}"
         return None
@@ -523,6 +543,8 @@ def stage_collect(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None
         # Holdings join the batch even off the pool: plan stops and earnings reminders need their data.
         held = [t for t in sorted({r['ticker'] for r in repository.list_trades(conn) if r['voided_at'] is None})
                 if t not in watchlist]
+        if repository.accounts_ready(conn):
+            held = sorted(set(held) | (repository.paper_tickers(conn) - set(watchlist)))
         ready = repository.timeline_ready(conn) if state.get('timeline_ready') is None else state['timeline_ready']
         growth = repository.growth_ready(conn) if state.get('growth_ready') is None else state['growth_ready']
     summary: dict[str, Any] = {
@@ -1093,6 +1115,25 @@ def stage_review(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None)
     return {'summary': summary}
 
 
+def stage_accounts(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[str, Any]:
+    """Account failures are recorded without preventing push or retro; its own 600-second budget starts here."""
+    from investment_assistant.workbench import paper_accounts
+    _, session = _moment(state)
+    # Upstream plans/reviews are committed after the run cutoff. Freeze this node's own cutoff once.
+    now = _wall(ctx)()
+    if acc is not None:
+        acc.detail['cutoff_at'] = now.isoformat()
+    summary = state['summary']
+    try:
+        summary['accounts'] = paper_accounts.run_stage(session, now=now, deps=ctx.deps,
+            run_id=state.get('run_id'), acc=acc, settings=ctx.deps.agent_settings)
+    except Exception as exc:
+        reason = families.sanitize_reason(exc)
+        summary.setdefault('errors', []).append(f'accounts: {reason}')
+        _stage_finish(ctx, 'accounts', failed=reason or type(exc).__name__)
+    return {'summary': summary}
+
+
 def account_push(recorder: stages_module.StageRecorder | None, acc: stages_module.StageAcc,
                  out: dict[str, Any]) -> None:
     """Close the push stage from the notifier's result (v2.4 §4): a skip for the two non-events, success for sent /
@@ -1225,6 +1266,8 @@ def _jsonable(value: Any) -> Any:
         return [_jsonable(item) for item in value]
     if isinstance(value, (date, datetime)):
         return value.isoformat()
+    if isinstance(value, (Decimal, uuid.UUID)):
+        return str(value)
     return value
 
 
@@ -1499,12 +1542,12 @@ def add_plan_note(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
         return ledger.record_note(conn, payload, now=now)
 
 
-def list_trades() -> list[dict[str, Any]]:
+def list_trades(*, account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
     """Every fill, newest first. A fill that follows a plan carries ``plan_label`` (the label the link list uses)."""
     from investment_assistant.workbench import plan_views
 
-    with _tx() as conn:
-        rows = list(reversed(repository.list_trades(conn)))
+    with read_only_tx() as conn:
+        rows = list(reversed(repository.list_trades(conn, account_id=ledger._uuid(account_id, 'account_id'))))
         labels_ = plan_views.trade_plan_labels(conn, rows)
         return [{**t, 'plan_label': labels_[t['id']]} if t['id'] in labels_ else t for t in rows]
 
@@ -1514,15 +1557,19 @@ def void_trade(trade_id: str, reason: Any, *, now: datetime) -> dict[str, Any]:
         return ledger.void_trade(conn, trade_id, reason, now=now)
 
 
-def account_view() -> dict[str, Any]:
+def account_view(*, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
     from investment_assistant.config import load_config
-
+    from investment_assistant.workbench import accounts, paper_accounts
     params = load_config().workbench
-    with _tx() as conn:
-        return {'snapshots': repository.list_snapshots(conn), 'flows': repository.list_flows(conn),
-                'params': {'risk_pct': params.risk_pct, 'single_cap': params.single_cap,
-                           'total_cap': params.total_cap, 'public_url': params.public_url,
-                           'return_tiers': list(params.return_tiers)}}
+    aid = ledger._uuid(account_id, 'account_id')
+    with read_only_tx() as conn:
+        snapshots = repository.list_snapshots(conn, account_id=aid)
+        rows = repository.equity_days(conn, aid) if repository.accounts_ready(conn) else []
+        account_ = repository.account_by_id(conn, aid) if repository.accounts_ready(conn) else None
+        effective = paper_accounts.effective_params(conn, account_) if account_ else accounts.default_params(params)
+        return {'snapshots': snapshots, 'flows': repository.list_flows(conn, account_id=aid),
+                'ledger': rows[-1] if rows else None, 'reconciliation': accounts.reconcile(snapshots, rows, effective),
+                'params': {**effective, 'public_url': params.public_url, 'return_tiers': list(params.return_tiers)}}
 
 
 def add_snapshot(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
@@ -1948,7 +1995,7 @@ def plan_shadow(*, now: datetime, since: date | None = None) -> dict[str, Any]:
 
 
 def _discipline_v2(conn, *, trades: list[dict[str, Any]], segments: list[dict[str, Any]], tickers: list[str],
-                   session: date, now: datetime, since: date, until: date | None = None) -> dict[str, Any]:
+                   session: date, now: datetime, since: date, until: date | None = None, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
     """`discipline-2` over ``trades`` (v2.9 D28): every buy is judged against the plan its fill is linked to
     (``trades.plan_id``; an old fill through its decision), the chain's newest version at the sale for the early take
     and the daily holding status for the held loser. ``segments`` are the closed lots, ``tickers`` the ones whose
@@ -1969,9 +2016,9 @@ def _discipline_v2(conn, *, trades: list[dict[str, Any]], segments: list[dict[st
                 continue
             plans_by_trade[t['id']] = plan
             context = contexts.get(t['ticker']) or contexts.setdefault(
-                t['ticker'], plan_review.ticker_context(conn, t['ticker'], now=now))
+                t['ticker'], plan_review.ticker_context(conn, t['ticker'], now=now, account_id=account_id))
             key = context['plan_chain'].get(t['plan_id'])
-            if key is not None:
+            if key is not None and str(account_id) == str(REAL_ACCOUNT_ID):
                 chain_head_by_trade[t['id']] = [repository.plan_by_id(conn, v['plan_id'])
                                                 for v in repository.chain_versions(conn, key[0], key[1])]
         elif t.get('decision_id') and t['decision_id'] not in legacy_decisions:
@@ -1985,9 +2032,9 @@ def _discipline_v2(conn, *, trades: list[dict[str, Any]], segments: list[dict[st
     stop_events, holding_rows = [], []
     for tk in tickers:
         stop_events += [c for c in repository.read_candidates(conn, tk, since=since)
-                        if c['rule_id'] == 'plan_stop' and (until is None or c['signal_date'] <= until)]
+                        if str(account_id) == str(REAL_ACCOUNT_ID) and c['rule_id'] == 'plan_stop' and (until is None or c['signal_date'] <= until)]
         if repository.executable_ready(conn):
-            holding_rows += [r for r in repository.holding_status_for(conn, ticker=tk) if r['session'] >= since]
+            holding_rows += [r for r in repository.holding_status_for(conn, ticker=tk, account_id=account_id) if r['session'] >= since]
     out = _discipline_module.evaluate_v2(
         trades=trades, plans_by_trade=plans_by_trade, chain_head_by_trade=chain_head_by_trade,
         holding_rows=holding_rows, legacy_decisions=legacy_decisions,
@@ -1996,20 +2043,20 @@ def _discipline_v2(conn, *, trades: list[dict[str, Any]], segments: list[dict[st
     return {**out, 'calc_version': _discipline_module.DISCIPLINE_VERSION}
 
 
-def discipline(*, now: datetime, since: date | None = None) -> dict[str, Any]:
+def discipline(*, now: datetime, since: date | None = None, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
     """Execution discipline of recorded buys against the plans their fills follow (`discipline-2`)."""
     session = bars.latest_closed_session(now)
     since = since or session - timedelta(days=90)
-    with _tx() as conn:
+    with read_only_tx() as conn:
         # Buys and stop events share one window, or old buys see no stops and flag false early_takes.
-        trades = [t for t in repository.list_trades(conn)
+        trades = [t for t in repository.list_trades(conn, cutoff=now, account_id=ledger._uuid(account_id, 'account_id'))
                   if t['voided_at'] is None and t['executed_at'].astimezone(NY).date() >= since]
         tickers = sorted({t['ticker'] for t in trades})
         segments = []
         for tk in tickers:
-            segments += _book(conn, tk)['closed']
+            segments += _book(conn, tk, account_id=account_id)['closed']
         out = _discipline_v2(conn, trades=trades, segments=segments, tickers=tickers, session=session, now=now,
-                             since=since)
+                             since=since, account_id=account_id)
     return {'session': session, 'since': since, **out}
 
 
@@ -2077,7 +2124,7 @@ def _track_agent_pick(conn, ticker: str, signal_date: date, decision: dict[str, 
 
 
 def _track_rows(conn, since: date, until: date, *, session: date, now: datetime,
-                version: str = _tracks_module.TRACKS_V2) -> list[dict[str, Any]]:
+                version: str = _tracks_module.TRACKS_V2, account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
     """§4.4: one row per unit in the window — rule, agent and actual side by side, every id traceable. Bars and books
     are cached per ticker within the transaction; ids and dates are stringified so the rows freeze into JSONB
     snapshots as-is. ``version`` picks `tracks-2` (default, v2.9 D27) or the old `tracks-1` reading."""
@@ -2087,7 +2134,7 @@ def _track_rows(conn, since: date, until: date, *, session: date, now: datetime,
     contexts: dict[str, dict[str, Any]] = {}
     builder = _track_row if version == _tracks_module.TRACKS_V2 else _track_row_v1
     return [builder(conn, unit['ticker'], unit['signal_date'], spy=spy, bars_by_ticker=bars_by_ticker, ready=ready,
-                    session=session, now=now, **({'contexts': contexts} if builder is _track_row else {}))
+                    session=session, now=now, **({'contexts': contexts, 'account_id': account_id} if builder is _track_row else {}))
             for unit in repository.track_units(conn, since, until)]
 
 
@@ -2129,7 +2176,7 @@ def unit_fills(conn, ticker: str, signal_date: date, context: dict[str, Any]) ->
 
 def _track_row(conn, ticker: str, signal_date: date, *, spy: list[dict[str, Any]],
                bars_by_ticker: dict[str, list[dict[str, Any]]], ready: bool, session: date,
-               now: datetime, contexts: dict[str, dict[str, Any]]) -> dict[str, Any]:
+               now: datetime, contexts: dict[str, dict[str, Any]], account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
     """The `tracks-2` row of one unit (v2.9 D27): the Agent track takes the version the first fill was linked to
     (`fill`), an old decision's version (`decision`) or the first version; a unit merged into another chain has
     `merged` (no R); the actual track takes its plan from the fills' own plan link."""
@@ -2139,9 +2186,9 @@ def _track_row(conn, ticker: str, signal_date: date, *, spy: list[dict[str, Any]
         bars_by_ticker[ticker] = repository.read_bars(conn, ticker, session, cutoff_at=now, limit=400)
     ticker_bars = bars_by_ticker[ticker]
     splits = repository.split_events(conn, ticker)
-    context = contexts.get(ticker) or contexts.setdefault(ticker, plan_review.ticker_context(conn, ticker, now=now))
+    context = contexts.get(ticker) or contexts.setdefault(ticker, plan_review.ticker_context(conn, ticker, now=now, account_id=account_id))
     rule = repository.rule_plan(conn, ticker, signal_date)
-    legacy = repository.decision_head(conn, ticker, signal_date, timeline=ready)
+    legacy = repository.decision_head(conn, ticker, signal_date, timeline=ready) if str(account_id) == str(REAL_ACCOUNT_ID) else None
     versions = repository.chain_versions(conn, ticker, signal_date) if ready else []
     fills = unit_fills(conn, ticker, signal_date, context)
     merged = (not versions and repository.executable_ready(conn)
@@ -2256,14 +2303,14 @@ def _track_row_v1(conn, ticker: str, signal_date: date, *, spy: list[dict[str, A
     }
 
 
-def tracks(*, now: datetime, since: date | None = None, until: date | None = None) -> dict[str, Any]:
+def tracks(*, now: datetime, since: date | None = None, until: date | None = None, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
     """§4.5: the live three-track view, defaulting to the last 90 days of signal dates;
     not frozen — weekly and monthly snapshots carry their own copy."""
     session = bars.latest_closed_session(now)
     since = since if since is not None else session - timedelta(days=90)
     until = until if until is not None else session
-    with _tx() as conn:
-        rows = _track_rows(conn, since, until, session=session, now=now)
+    with read_only_tx() as conn:
+        rows = _track_rows(conn, since, until, session=session, now=now, account_id=ledger._uuid(account_id, 'account_id'))
     return {'session': session.isoformat(), 'since': since.isoformat(), 'until': until.isoformat(),
             'calc_version': _tracks_module.TRACKS_VERSION, 'units': rows,
             'summary': _tracks_module.summarize_v2(rows)}
@@ -2426,22 +2473,28 @@ def generate_monthly(month: date, *, notes: str = '', supersedes_id=None, now: d
         head = repository.monthly_head(conn, month)
         if (head['id'] if head else None) != supersedes_id:
             raise ledger.Conflict('该月已有更新的月度复盘；请更正最新一条')
-        snapshots, flows = repository.list_snapshots(conn), repository.list_flows(conn)
-
+        snapshots = [s for s in repository.list_snapshots(conn) if s['recorded_at'] <= now]
+        from investment_assistant.workbench.paper_accounts import known_flows
+        flows = known_flows(conn, REAL_ACCOUNT_ID, now)
+        ledger_rows = repository.equity_days(conn, REAL_ACCOUNT_ID, cutoff_at=now) if repository.accounts_ready(conn) else []
+        real_account = repository.account_by_id(conn, REAL_ACCOUNT_ID) if repository.accounts_ready(conn) else None
+        opened = bool(real_account and real_account['opened_on'])
+        def month_return(m):
+            return monthly.month_return_v2(m, equity_rows=ledger_rows, snapshots=snapshots, flows=flows, opened=opened)
         months = [month]
         for _ in range(2):
             months.insert(0, _prev_month(months[0]))
         per_month, spy_ret = [], None
         for m in months:
-            ret = monthly.month_return(m, snapshots, flows)
+            ret = month_return(m)
             if ret['status'] != 'ok':
                 per_month.append({'month': m.isoformat(), 'return': None, 'spy_return': None})
                 continue
-            spy_r = _spy_return_between(conn, ret['start']['as_of'], ret['end']['as_of'], now=now)
+            spy_r = _spy_return_between(conn, ret['start'].get('session', ret['start'].get('as_of')), ret['end'].get('session', ret['end'].get('as_of')), now=now)
             per_month.append({'month': m.isoformat(), 'return': ret['return'], 'spy_return': spy_r})
             if m == month:
                 spy_ret = spy_r
-        ret = monthly.month_return(month, snapshots, flows)
+        ret = month_return(month)
 
         from investment_assistant.workbench import plan_review     # imports this module
 
@@ -2768,15 +2821,17 @@ def _run_agent_unit(unit: dict, *, now: datetime, deps: Deps, settings, attempt:
                         repository.store_brief(conn, briefs.for_run(_brief_run(skipped), result['calls'], unit=unit,
                                                                     candidates=unit['candidates']))
                     return record
+                equity_source = sizing_equity(conn, signal_date, now=now)
                 plan = timeline.build_version_plan(
                     output=result['output'], agent_run_id=agent_run_id, model=settings.model, ticker=ticker,
                     signal_date=signal_date, as_of_session=signal_date, version_no=0, supersedes_plan_id=None,
                     mode='entry', bars=bars_,
                     earnings_row=repository.latest_earnings(conn, ticker, cutoff_at=now),
-                    snapshot=repository.snapshot_at(conn, signal_date, cutoff_at=now),
+                    snapshot=equity_source,
                     exposure=exposure(conn, signal_date, cutoff_at=now, ticker=ticker),
                     params=load_config().workbench,
                     context=plan_context(conn, ticker, signal_date, now=now), version=timeline.AGENT_V3)
+                mark_sizing_source(plan, equity_source)
                 plan_id = repository.store_plan(conn, plan)['record']['id']
                 run_row = row('ok', plan_id=plan_id, output={**result['output'], **digest},
                               counter=result['counter'], input_tokens=result['input_tokens'],
@@ -3475,7 +3530,7 @@ def _tick_weekly(*, now: datetime, notify_cfg, trigger_source: str, client, push
 
 
 def _tick_monthly(*, now: datetime, notify_cfg, trigger_source: str, client, push: bool = True) -> dict[str, Any]:
-    """§6.1 monthly: with the month-end snapshot, reuse-or-generate then push; without it,
+    """With ledger month endpoints or a broker month-end snapshot, reuse-or-generate then push; without either,
     remind once from the first Saturday of the next month on — unless the month predates
     the workbench (no decision or account snapshot on or before its last day)."""
     from investment_assistant.notify import notifier, templates
@@ -3491,7 +3546,14 @@ def _tick_monthly(*, now: datetime, notify_cfg, trigger_source: str, client, pus
         head = repository.monthly_head(conn, month)
         account_recorded = repository.latest_account_record_at(conn)
         started_on = repository.workbench_started_on(conn)
-    if monthly.month_end_snapshot(snapshots, month) is None:
+        real = repository.account_by_id(conn, REAL_ACCOUNT_ID) if repository.accounts_ready(conn) else None
+        equity_rows = repository.equity_days(conn, REAL_ACCOUNT_ID, cutoff_at=now) if real else []
+        ledger_ready = monthly.month_return_v2(month, equity_rows=equity_rows, snapshots=snapshots, flows=flows,
+                                               opened=bool(real and real['opened_on'])).get('source') == 'ledger'
+        if ledger_ready:
+            account_recorded = max([r['computed_at'] for r in equity_rows]
+                                   + ([account_recorded] if account_recorded else []))
+    if not ledger_ready and monthly.month_end_snapshot(snapshots, month) is None:
         if started_on is None or started_on > month_end:
             return {'period': month, 'action': 'before_start'}
         if reminded_before:

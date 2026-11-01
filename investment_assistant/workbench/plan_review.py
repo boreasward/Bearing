@@ -36,6 +36,7 @@ from decimal import Decimal
 from typing import Any, Callable, Iterable
 
 from investment_assistant.data import identity
+from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
 from investment_assistant.workbench import bars as bars_module
 from investment_assistant.workbench import (execution, exits, families, labels, my_knowledge, positions, repository,
                                                service, timeline, user_inputs)
@@ -61,7 +62,7 @@ EMPTY_REASON = '（无理由）'
 
 # ---------------------------------------------------------------- chain facts (timeline-2, R10, R11)
 
-def ticker_context(conn, ticker: str, *, now: datetime, point_in_time: bool = False) -> dict[str, Any]:
+def ticker_context(conn, ticker: str, *, now: datetime, point_in_time: bool = False, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
     """What every chain of one ticker is judged from, read once at cutoff ``now``: the fills as the cutoff knew
     them (``list_trades(cutoff=now)``, R11), the position they build, the ticker's chains and retrigger rows, and
     the plan -> chain map of the fills' linked plans (D22). Raises ``positions.PositionError`` on a broken fill
@@ -71,8 +72,8 @@ def ticker_context(conn, ticker: str, *, now: datetime, point_in_time: bool = Fa
     later is not there yet). Readers of a past day (the plan table of an older session, the plans a back-filled fill
     may follow) read this way together with ``read_chain_facts(point_in_time=True)``."""
     ticker = ticker.upper()
-    trades = repository.list_trades(conn, ticker, cutoff=now)
-    book = positions.build(trades, splits=repository.split_events(conn, ticker))
+    trades = repository.list_trades(conn, ticker, cutoff=now, account_id=account_id)
+    book = positions.build(trades, splits=repository.split_events(conn, ticker, **({'cutoff_at': now} if str(account_id) != str(REAL_ACCOUNT_ID) else {})))
     chains = repository.chains_for_ticker(conn, ticker, cutoff=now if point_in_time else None)
     retriggers = repository.chain_retriggers_for(conn, ticker, cutoff=now)
     versions_by_plan = {v['plan_id']: v for c in chains for v in repository.chain_versions(conn, ticker, c['signal_date'])}
@@ -863,15 +864,17 @@ def _revision(conn, attempt: int, *, seen: dict, said_base: dict, review_run: Ca
 
     ticker, signal_date, mode = seen['version']['ticker'], seen['version']['signal_date'], seen['mode']
     head_plan, head_version = seen['plan'], seen['version']
+    equity_source = service.sizing_equity(conn, session, now=now)
     plan = timeline.build_version_plan(
         output=revised['output'], agent_run_id=revise_id, model=settings.model, ticker=ticker,
         signal_date=signal_date, as_of_session=session, version_no=head_version['version_no'] + 1,
         supersedes_plan_id=str(head_plan['id']), mode=mode, bars=seen['bars'],
         earnings_row=repository.latest_earnings(conn, ticker, cutoff_at=now),
-        snapshot=repository.snapshot_at(conn, session, cutoff_at=now),
+        snapshot=equity_source,
         exposure=service.exposure(conn, session, cutoff_at=now, ticker=ticker),
         params=load_config().workbench, context=service.plan_context(conn, ticker, session, now=now),
         version=timeline.AGENT_V3, entry_cap=seen['entry_cap'] if mode == 'entry' else None)
+    service.mark_sizing_source(plan, equity_source)
     # D7: the host diff = the model's changed fields plus the host fields (valid_until, entry_cap) that moved
     before = {**((seen['run'] or {}).get('output') or {}), 'valid_until': head_plan['valid_until'],
               'entry_cap': (head_plan.get('inputs') or {}).get('chain_entry_cap')}
@@ -1009,26 +1012,27 @@ def _exiting_signals(conn, *, ticker: str, plan: dict, bars: list[dict], retrigg
 
 def _holding_row(conn, ticker: str, session: date, run_id: str | None, *, now: datetime,
                  skipped: dict[tuple[str, str], str], unavailable: str | None,
-                 point_in_time: bool = False) -> dict | None:
+                 point_in_time: bool = False, account_id=REAL_ACCOUNT_ID) -> dict | None:
     """One position's ``holding_status`` values at S: the chain it belongs to (its latest version sets the stop and
     T1, D20), today's review (whatever became of it), the exit instruction if one stands, or — without a chain —
     the plan its fills follow. None when the cutoff holds no position."""
-    ctx = ticker_context(conn, ticker, now=now, point_in_time=point_in_time)
+    ctx = ticker_context(conn, ticker, now=now, point_in_time=point_in_time, account_id=account_id)
     book = ctx['book']
     position = book['position']
     if position is None:
         return None
-    items = [i for i in ticker_chain_items(conn, ticker, session=session, now=now, context=ctx,
+    items = [] if str(account_id) != str(REAL_ACCOUNT_ID) else [i for i in ticker_chain_items(conn, ticker, session=session, now=now, context=ctx,
                                            point_in_time=point_in_time)
              if i['state']['state'] in ('holding', 'exiting')]
     item = max(items, key=lambda i: i['chain']['signal_date']) if items else None
     bars = repository.read_bars(conn, ticker, session, cutoff_at=now)
-    earlier = [r for r in repository.holding_status_for(conn, ticker=ticker) if r['session'] < session]
+    earlier = [r for r in repository.holding_status_for(conn, ticker=ticker, account_id=account_id) if r['session'] < session]
     first_buy = position['opened_at'].astimezone(service.NY).date()
     previous = earlier[-1] if earlier and earlier[-1]['session'] >= first_buy else None
     facts: dict[str, Any] = {
         'ticker': ticker, 'quantity': position['quantity'], 'avg_cost': position['avg_cost'],
-        'first_buy_session': first_buy, 'bars': bars, 'splits': repository.split_events(conn, ticker),
+        'first_buy_session': first_buy, 'bars': bars,
+        'splits': repository.split_events(conn, ticker, **({'cutoff_at': now} if str(account_id) != str(REAL_ACCOUNT_ID) else {})),
         'previous': previous,
         'sold_after_t1': any(t['side'] == 'sell' and t.get('voided_at') is None
                              and t['executed_at'].astimezone(service.NY).date() >= session for t in ctx['trades'])}
@@ -1083,6 +1087,40 @@ def _holding_row(conn, ticker: str, session: date, run_id: str | None, *, now: d
     status = timeline.holding_status(facts, session=session)
     if status['instruction'] == 'exit':
         status['detail'] = {**status['detail'], 'exit_since': (facts.get('exit_since') or session).isoformat()}
+    if str(account_id) != str(REAL_ACCOUNT_ID):
+        equity = repository.latest_equity_day(conn, account_id, on_or_before=session)
+        saved = ((equity or {}).get('detail') or {}).get('paper_states', {}).get(ticker)
+        if saved:
+            from investment_assistant.workbench import paper_fill
+            state = paper_fill._state(saved['state'])
+            status.update(stop=state.stop, t1_reached=state.t1_done, reached_1r=state.reached_1r,
+                          held_sessions=state.held_sessions,
+                          stop_mode='trailing' if state.t1_done else 'initial')
+            # Paper states are AFTER the host settled this session. A stop touch
+            # has already sold the position; a surviving T1 half is already sold.
+            # Do not re-derive either instruction from the real ledger's fee-
+            # inclusive average cost or count missing bars as observed sessions.
+            due = state.time_stop_due
+            status.update(instruction='exit' if due else 'hold', exit_reason='time_stop' if due else None,
+                          remaining_sessions=max(status['max_hold_sessions'] - state.held_sessions, 0)
+                          if status['max_hold_sessions'] is not None and not state.t1_done and not state.reached_1r else None)
+            status['detail'].pop('exit_since', None)
+            if due:
+                since = ((previous or {}).get('detail') or {}).get('exit_since') or session.isoformat()
+                status['detail']['exit_since'] = since
+                status['reason'] = timeline.maintain_reason('exiting', since=since,
+                    why=timeline.EXIT_REASON_TEXT['time_stop'], quantity=status['quantity'])
+            else:
+                status['reason'] = '按冻结入场计划管理' + ('；T1 已卖出一半，余仓按移动止损' if state.t1_done else '')
+            if status['detail'].get('bars_missing'):
+                status['reason'] = timeline.maintain_reason('agent', reason=status['reason'],
+                    note=f'缺 {session.isoformat()} 的日线')
+            close = status['last_close']
+            status['to_stop_pct'] = timeline._pct(close - state.stop, close) if close else None
+            if state.t1_done:
+                status['to_t1_pct'] = None
+            status['detail'].update(paper_state=saved['state'], paper_state_split_factor=saved['split_factor'])
+        status['account_id'] = account_id
     return {**status, 'run_id': run_id or 'review'}
 
 
@@ -1765,6 +1803,9 @@ def check(session: date, out: Callable[[str], None] = print, *, now: datetime | 
                                  excluded=excluded, out=out)
                     for chain in repository.all_chains(conn)]
         new_versions, problems = _check_versions(conn, session, inputs_of)
+        if repository.accounts_ready(conn):
+            from investment_assistant.workbench import paper_accounts
+            problems += paper_accounts.check_accounts(conn, session=session, now=now)
         problems += _check_unique_active(conn, session, now=now, contexts=contexts, out=out)
         problems += _check_retriggers(conn, session, now=now, contexts=contexts, excluded=excluded, out=out)
         problems += _check_holding_status(conn, session, cutoff=_run_cutoff(conn, session) or stage_start or now,

@@ -208,6 +208,7 @@ def _inputs_view(plan: dict[str, Any], rows: Rows) -> dict[str, Any]:
         'earnings_note': None if rows.earnings is not None else '无记录',
         'snapshot': ({'id': rows.snapshot.get('id'), 'as_of': rows.snapshot.get('as_of'),
                       'equity': rows.snapshot.get('equity')} if rows.snapshot is not None else None),
+        'equity_source': sizing.get('equity_source', 'snapshot'),
         'snapshot_note': None if rows.snapshot is not None else '无快照（no_equity）',
         'exposure': {'ticker_value': exposure.get('ticker_value'), 'total_value': exposure.get('total_value'),
                      'note': '生成时冻结，不重算'},
@@ -247,7 +248,8 @@ def _frozen_missing(plan: dict[str, Any], rows: Rows) -> list[str]:
     inp = plan.get('inputs') or {}
     missing: list[str] = []
     if inp.get('snapshot_id') is not None and rows.snapshot is None:
-        missing.append(f"account_snapshots:{inp['snapshot_id']}")
+        table = 'account_equity_days' if (plan.get('sizing') or {}).get('equity_source') == 'ledger' else 'account_snapshots'
+        missing.append(f"{table}:{inp['snapshot_id']}")
     if inp.get('earnings_date_id') is not None and rows.earnings is None:
         missing.append(f"earnings_dates:{inp['earnings_date_id']}")
     if inp.get('snapshot_id') is not None and rows.snapshot is not None:
@@ -259,7 +261,7 @@ def _frozen_missing(plan: dict[str, Any], rows: Rows) -> list[str]:
 
 
 def _snapshot_ok(missing: list[str]) -> bool:
-    return not any(m.startswith(('account_snapshots:', 'exposure.', 'sizing.')) for m in missing)
+    return not any(m.startswith(('account_snapshots:', 'account_equity_days:', 'exposure.', 'sizing.')) for m in missing)
 
 
 def _earnings_ok(missing: list[str]) -> bool:
@@ -360,7 +362,8 @@ def _sizing_steps(plan: dict[str, Any], rows: Rows, *, ref: Decimal, ref_name: s
     equity = _dec(rows.snapshot['equity'])
     risk_pct, single_cap, total_cap = (_dec(sizing[k]) for k in ('risk_pct', 'single_cap', 'total_cap'))
     ticker_value, total_value = _dec(exposure['ticker_value']), _dec(exposure['total_value'])
-    steps.append(_step('equity', '资金', '资金快照 equity', {'snapshot_as_of': rows.snapshot.get('as_of')},
+    source_label = '账本权益 equity' if sizing.get('equity_source') == 'ledger' else '资金快照 equity'
+    steps.append(_step('equity', '资金', source_label, {'snapshot_as_of': rows.snapshot.get('as_of')},
                        equity, _opt_dec(sizing.get('equity')), source='frozen'))
     steps.append(_step('ticker_value', '该票市值', '生成时冻结，不重算', {}, ticker_value, source='frozen'))
     steps.append(_step('total_value', '总持仓市值', '生成时冻结，不重算', {}, total_value, source='frozen'))
@@ -1042,7 +1045,7 @@ def derive_unit(candidates: list[dict[str, Any]]) -> dict[str, Any]:
 NY = ZoneInfo('America/New_York')
 PLAN_KINDS = ('rule', 'own', 'agent')
 # effective stage rows per run (the highest attempt of each stage), by stages_version (v2.5 §7.1, v2.7 §9, v2.8 D9)
-RUN_STAGE_COUNT = {'stages-1': 7, 'stages-2': 8, 'stages-3': 9, 'stages-4': 10}
+RUN_STAGE_COUNT = {'stages-1': 7, 'stages-2': 8, 'stages-3': 9, 'stages-4': 10, 'stages-5': 11}
 
 
 def session_window(session: date) -> tuple[datetime, datetime]:

@@ -158,8 +158,8 @@ def decide(payload: dict[str, Any] = Body(default_factory=dict)):
 
 
 @router.get('/api/workbench/trades')
-def list_trades():
-    return {'trades': _call(service.list_trades)}
+def list_trades(account_id: str | None = None):
+    return {'trades': _call(service.list_trades, **({'account_id': account_id} if account_id else {}))}
 
 
 @router.post('/api/workbench/trades')
@@ -173,8 +173,8 @@ def void_trade(trade_id: str, payload: dict[str, Any] = Body(default_factory=dic
 
 
 @router.get('/api/workbench/account/snapshots')
-def account_view():
-    return _call(service.account_view)
+def account_view(account_id: str | None = None):
+    return _call(service.account_view, **({'account_id': account_id} if account_id else {}))
 
 
 @router.post('/api/workbench/account/snapshots')
@@ -183,8 +183,8 @@ def add_snapshot(payload: dict[str, Any] = Body(default_factory=dict)):
 
 
 @router.get('/api/workbench/account/flows')
-def account_flows():
-    return _call(service.account_view)
+def account_flows(account_id: str | None = None):
+    return _call(service.account_view, **({'account_id': account_id} if account_id else {}))
 
 
 @router.post('/api/workbench/account/flows')
@@ -208,8 +208,8 @@ def shadow(since: str | None = None):
 
 
 @router.get('/api/workbench/discipline')
-def workbench_discipline():
-    return _call(service.discipline, now=_now())
+def workbench_discipline(account_id: str | None = None):
+    return _call(service.discipline, now=_now(), **({'account_id': account_id} if account_id else {}))
 
 
 @router.get('/api/workbench/review/trades')
@@ -232,12 +232,12 @@ def generate_weekly(payload: dict[str, Any] = Body(default_factory=dict)):
 
 
 @router.get('/api/workbench/review/tracks')
-def review_tracks(since: str | None = None, until: str | None = None):
+def review_tracks(since: str | None = None, until: str | None = None, account_id: str | None = None):
     since_d = _date(since, 'since')
     until_d = _date(until, 'until')
     if since_d is not None and until_d is not None and since_d > until_d:
         raise HTTPException(status_code=400, detail='since must not be after until')
-    return _call(service.tracks, now=_now(), since=since_d, until=until_d)
+    return _call(service.tracks, now=_now(), since=since_d, until=until_d, **({'account_id': account_id} if account_id else {}))
 
 
 @router.get('/api/workbench/monthly-reviews')

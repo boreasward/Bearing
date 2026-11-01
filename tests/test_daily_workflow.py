@@ -1,4 +1,4 @@
-"""The ``daily`` graph (v2.8): ten nodes, rows, node retry, holidays, budgets, locks, the fault drill.
+"""The ``daily`` graph (v2.8): eleven nodes, rows, node retry, holidays, budgets, locks, the fault drill.
 
 SQL tests on the disposable database (``daily_db``: the workbench schema plus migration 028). Fetchers, the model,
 the checkpointer, ``sleep``, the clocks, the notifier and ``job_reports`` are fakes; nothing leaves the process."""
@@ -73,7 +73,7 @@ def statuses(conn, run_id=RUN_ID):
 # ------------------------------------------------------------------------------------------------ rows per path
 
 @pytest.mark.parametrize('path', ['scheduled', 'manual', 'holiday', 'explicit_pool', 'failed_midway'])
-def test_daily_ten_rows_each_path(daily_db, clock, notices, path, monkeypatch):
+def test_daily_eleven_rows_each_path(daily_db, clock, notices, path, monkeypatch):
     kwargs: dict = {}
     if path == 'scheduled':
         kwargs.update(trigger='scheduled')
@@ -86,17 +86,17 @@ def test_daily_ten_rows_each_path(daily_db, clock, notices, path, monkeypatch):
         monkeypatch.setitem(workflow.BODIES, 'regime', service.stage_regime)
     result = go(daily_db, clock, **kwargs)
     eff = effective(daily_db)
-    assert list(eff) == list(workflow.NODES) and len(eff) == 10          # exactly ten effective rows, in stages-4 order
-    assert [r['stage'] for r in rows(daily_db)[:10]] == list(stages.STAGE_IDS)
-    assert {r['stages_version'] for r in rows(daily_db)} == {'stages-4'} and {r['job'] for r in rows(daily_db)} == {'daily'}
+    assert list(eff) == list(workflow.NODES) and len(eff) == 11          # exactly eleven effective rows, in stages-5 order
+    assert [r['stage'] for r in rows(daily_db)[:11]] == list(stages.STAGE_IDS)
+    assert {r['stages_version'] for r in rows(daily_db)} == {'stages-5'} and {r['job'] for r in rows(daily_db)} == {'daily'}
     if path == 'failed_midway':
         assert result['status'] == 'failed' and result['failed_node'] == 'regime'
-        assert [eff[s]['status'] for s in workflow.NODES[4:]] == ['skipped'] * 6
+        assert [eff[s]['status'] for s in workflow.NODES[4:]] == ['skipped'] * 7
         assert {eff[s]['reason'] for s in workflow.NODES[4:]} == {'upstream_failed'}
-        assert len(rows(daily_db)) == 10 and eff['regime']['status'] == 'failed'
+        assert len(rows(daily_db)) == 11 and eff['regime']['status'] == 'failed'
         assert eff['regime']['detail']['retry']['waited_s'] == 60 and clock.sleeps == [60]
     if path == 'holiday':
-        assert [eff[s]['reason'] for s in workflow.NODES[:8]] == ['not_trading_day'] * 8
+        assert [eff[s]['reason'] for s in workflow.NODES[:9]] == ['not_trading_day'] * 9
 
 
 @pytest.fixture(autouse=True)
@@ -145,7 +145,7 @@ def test_node_failed_twice_stops_chain(daily_db, clock, notices, monkeypatch):
     eff = effective(daily_db)
     assert eff['regime']['status'] == 'failed' and eff['regime']['reason'] == 'aborted: flaky regime'
     assert eff['regime']['detail']['retry']['waited_s'] == 60
-    assert [eff[s]['reason'] for s in workflow.NODES[4:]] == ['upstream_failed'] * 6
+    assert [eff[s]['reason'] for s in workflow.NODES[4:]] == ['upstream_failed'] * 7
     assert result['summary']['run_status'] == 'failed' and result['summary']['failed_node'] == 'regime'
     assert result['summary']['error'] == 'regime: aborted: flaky regime'
     assert daily_db.execute('SELECT count(*) FROM signal_candidates').fetchone()[0] == 0   # nothing after the stop
@@ -167,7 +167,7 @@ def test_a_state_read_failing_after_a_node_failure_keeps_that_failure(daily_db, 
     eff = effective(daily_db)
     assert [eff[s]['status'] for s in workflow.NODES if eff[s]['status'] == 'failed'] == ['failed']
     assert eff['regime']['reason'] == 'aborted: flaky regime'
-    assert [eff[s]['reason'] for s in workflow.NODES[4:]] == ['upstream_failed'] * 6
+    assert [eff[s]['reason'] for s in workflow.NODES[4:]] == ['upstream_failed'] * 7
 
 
 def test_unavailable_not_retried(daily_db, clock, notices, monkeypatch):
@@ -208,8 +208,8 @@ def test_target_failure_never_fails_node(daily_db, clock, notices):
 def test_holiday_skips_before_push_and_retro_judges_due(daily_db, clock, notices):
     result = go(daily_db, clock, trigger='scheduled', now=HOLIDAY, no_seed=True)
     eff = effective(daily_db)
-    assert [eff[s]['status'] for s in workflow.NODES[:8]] == ['skipped'] * 8
-    assert {eff[s]['reason'] for s in workflow.NODES[:8]} == {'not_trading_day'}
+    assert [eff[s]['status'] for s in workflow.NODES[:9]] == ['skipped'] * 9
+    assert {eff[s]['reason'] for s in workflow.NODES[:9]} == {'not_trading_day'}
     assert eff['push']['status'] == 'success' and eff['push']['detail']['closed'] is True
     assert any('休市' in title for title in notices.titles('workbench'))
     # the retro node judged the weekly / monthly review on a day without trading: the due week was generated
@@ -568,3 +568,44 @@ def test_run_batch_shell_non_explicit_literals(plain_db):
                                   'regime': [], 'agent': []}
     assert summary['errors'] == [] and 'data_status' not in summary
     assert set(summary['timings']) == {'collect', 'regime', 'rules', 'agent', 'total'}
+
+
+def test_migration_030_missing_refuses_before_graph(daily_db, clock, notices, job_reports):
+    from investment_assistant.tasks import daily
+    daily_db.execute('DROP TABLE paper_chain_done'); daily_db.commit()
+    with pytest.raises(service.Unavailable, match='migration_030_missing'):
+        daily.ensure_ready()
+    result=daily.run(daily_config(),trigger_source='manual',now=NOW,deps=world(clk=clock),run_id=RUN_ID,
+        checkpointer_factory=shared_saver()[1],sleep=clock.sleep,notify_cfg=NotifyCfg())
+    assert result['summary']['error']=='migration_030_missing'
+    assert job_reports.rows()[0]['status']=='error'
+    assert daily_db.execute('SELECT count(*) FROM stage_runs').fetchone()[0]==0
+
+
+@pytest.mark.parametrize('entry', ['function', 'cli'])
+def test_resume_migration_030_missing_refuses_before_graph_or_report(daily_db, monkeypatch, notices, job_reports, capsys, entry):
+    from investment_assistant.tasks import daily
+    import dotenv
+    daily_db.execute('DROP TABLE paper_chain_done'); daily_db.commit()
+    monkeypatch.setattr(workflow, 'resume', lambda *a, **kw: pytest.fail('resume graph must not be called'))
+    monkeypatch.setattr(dotenv, 'load_dotenv', lambda *a, **kw: False)
+    if entry == 'function':
+        with pytest.raises(service.Unavailable, match='migration_030_missing'):
+            daily.resume(RUN_ID, 'accounts', now=NOW, config=daily_config())
+    else:
+        assert daily.main(['resume', '--run-id', RUN_ID, '--node', 'accounts']) == 2
+        assert 'migration_030_missing' in capsys.readouterr().err
+    assert job_reports.rows() == []
+    assert daily_db.execute('SELECT count(*) FROM stage_runs').fetchone()[0] == 0
+    assert notices.calls == []
+
+
+def test_accounts_node_failure_preserves_push_and_retro(daily_db,clock,notices,monkeypatch):
+    from investment_assistant.workbench import paper_accounts
+    monkeypatch.setattr(paper_accounts,'run_stage',lambda *a,**k: (_ for _ in ()).throw(ValueError('account stage failure')))
+    result=go(daily_db,clock)
+    eff=effective(daily_db)
+    assert eff['accounts']['status']=='failed'
+    assert eff['push']['reason']=='manual_run'
+    assert eff['retro']['reason']!='upstream_failed'
+    assert result['failed_node']=='accounts' and result['failure']['resumable'] is False

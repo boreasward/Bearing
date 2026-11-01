@@ -18,6 +18,7 @@ SESSION = date(2026, 10, 27)
 T0 = datetime(2026, 10, 27, 22, 30, tzinfo=UTC)          # 06:30 Beijing on the 28th
 STAGE_TITLES = {s.id: s for s in stages_module.STAGES}
 V3 = stages_module.STAGE_IDS_V3                 # the nine stages of the v2.7 runs these older tests feed in
+V4 = stages_module.STAGE_IDS_V4                 # the literal ten-stage registry, independent of current STAGE_IDS
 
 
 def row(stage, *, run_id='run-1', status='success', reason=None, i=0, o=0, skips=(), failures=(),
@@ -48,6 +49,7 @@ TEMPLATE_CASES = [
      '2 个买入单元，生成规则计划 2 份（有效 1 · 作废 1）；推导核对一致 2/2'),
     ('agent', dict(i=3, o=2, outputs={'plan_ids': ['a', 'b']}, detail={'tokens': {'input': 900, 'output': 120}}),
      'Agent 处理 3 个单元，2 个给出结果，新 Agent 计划 2 份；token 输入 900 · 输出 120'),
+    ('accounts', dict(i=3, o=2), '处理 3 个账户，完成 2 个'),
     ('review', dict(i=4, o=4, outputs={'plan_ids': ['n1']},
                     detail={'outcomes': {'maintain': 2, 'revise': 1, 'invalidate': 1},
                             'decided_by': {'host': 1, 'agent': 3},
@@ -205,12 +207,15 @@ def test_stage_concepts_cover_registry():
     assert run_overview.STAGE_CONCEPTS['collect'] == ('family.bars', 'family.news', 'family.sec_filings',
                                                       'family.fred')
     assert run_overview.STAGE_CONCEPTS['push'] == ('system.push',)
+    assert run_overview.STAGE_CONCEPTS['accounts'] == (
+        'account.ledger', 'account.paper', 'account.fill_rules', 'account.follow_plans', 'account.agent_portfolio')
 
 
 @pytest.mark.parametrize('stage', stages_module.STAGE_IDS)
 def test_describe_tolerates_missing_detail_keys(stage):
     out = describe(row(stage, detail={}, outputs={}))
     assert out['sentence'] and '；' not in out['sentence'] or stage in ('push', 'retro')
+    assert out['sentence'] != run_overview.UNKNOWN_STAGE_NOTE
     assert out['concepts'] == list(run_overview.STAGE_CONCEPTS[stage])
     # an old row whose detail holds unrelated keys is fine too
     assert describe(row(stage, detail={'weird': 1}, outputs={'x': 1}))['sentence']
@@ -579,7 +584,7 @@ def test_reason_text_new_codes():
 def _v4_rows(*, failed_at=None, retried=True, attempts=1):
     """A stages-4 run; ``failed_at`` fails that node, the later ones are skipped as upstream_failed."""
     out, broken = [], False
-    for n, stage in enumerate(stages_module.STAGE_IDS):
+    for n, stage in enumerate(V4):
         kwargs = dict(version='stages-4', started=T0 + timedelta(seconds=10 * n), run_id='daily-x')
         if broken:
             out.append(row(stage, status='skipped', reason='upstream_failed', **kwargs))
@@ -595,7 +600,8 @@ def _v4_rows(*, failed_at=None, retried=True, attempts=1):
 
 def test_overview_of_a_stages_4_run_has_ten_stages():
     view = run_overview.build(_v4_rows(), session=SESSION, run_id=None, ready=True)
-    assert [s['id'] for s in view['stages']] == list(stages_module.STAGE_IDS) and len(view['stages']) == 10
+    assert [s['id'] for s in view['stages']] == list(V4) and len(view['stages']) == 10
+    assert 'accounts' not in [s['id'] for s in view['stages']]
     assert view['stages'][0]['id'] == 'sec_monitor' and view['stages'][-1]['id'] == 'retro'
     assert view['stages'][-1]['title'] == '复盘' and view['runs'][0]['rows'] == 10
     legacy = run_overview.build(_recorded_rows(), session=SESSION, run_id=None, ready=True)
@@ -611,7 +617,7 @@ def test_headline_failed_and_resumed():
     rows = _v4_rows(failed_at='collect')
     later = T0 + timedelta(hours=1)
     rows += [row(stage, i=1, o=1, version='stages-4', run_id='daily-x', started=later + timedelta(seconds=n))
-             for n, stage in enumerate(stages_module.STAGE_IDS[1:])]
+             for n, stage in enumerate(V4[1:])]
     resumed = run_overview.build(rows, session=SESSION, run_id=None, ready=True)
     assert resumed['headline'].endswith('（第 2 次执行，从「数据采集」续跑）')
     assert resumed['headline'].startswith('定时运行 · ') and '失败' not in resumed['headline'].split('·')[0]
@@ -621,11 +627,35 @@ def test_headline_failed_and_resumed():
 
 def test_a_closed_stages_4_run_is_recognised():
     rows = [row(stage, status='skipped', reason='not_trading_day', version='stages-4', run_id='daily-h')
-            for stage in stages_module.STAGE_IDS[:8]]
+            for stage in V4[:8]]
     rows += [row('push', version='stages-4', run_id='daily-h', i=1, o=1, detail={'closed': True}),
              row('retro', status='skipped', reason='not_due', version='stages-4', run_id='daily-h')]
     view = run_overview.build(rows, session=SESSION, run_id=None, ready=True)
     assert view['runs'][0]['closed'] is True and view['headline'] == run_overview.CLOSED_HEADLINE
+
+
+def test_overview_of_a_stages_5_run_has_accounts_between_review_and_push():
+    rows = [row(stage, version='stages-5', i=1, o=1, started=T0 + timedelta(seconds=n))
+            for n, stage in enumerate(stages_module.STAGE_IDS)]
+    view = run_overview.build(rows, session=SESSION, run_id=None, ready=True)
+    ids = [s['id'] for s in view['stages']]
+    assert ids == list(stages_module.STAGE_IDS) and len(ids) == 11
+    assert ids[7:10] == ['review', 'accounts', 'push']
+    assert view['stages'][8]['sentence'] == '处理 1 个账户，完成 1 个'
+    assert view['runs'][0]['rows'] == 11
+
+
+def test_stages_5_headline_resumes_from_accounts():
+    ids = stages_module.STAGE_IDS
+    rows = [row(stage, version='stages-5', i=1, o=1, run_id='daily-account',
+                started=T0 + timedelta(seconds=n)) for n, stage in enumerate(ids)]
+    later = T0 + timedelta(hours=1)
+    rows += [row(stage, version='stages-5', i=1, o=1, run_id='daily-account',
+                 started=later + timedelta(seconds=n)) | {'attempt': 2} for n, stage in enumerate(ids[8:])]
+    view = run_overview.build(rows, session=SESSION, run_id=None, ready=True)
+    assert view['headline'].endswith('（第 2 次执行，从「账户」续跑）')
+    assert [s['status'] for s in view['stages']].count('success') == 11
+    assert view['runs'][0]['rows'] == 14
 
 
 # --- v2.9 (spec §6.3, §4.2, §4.3): the new ended breakdown and the new counts of plan / agent / review ---

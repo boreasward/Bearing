@@ -213,6 +213,8 @@ def _results(conn, stage_id: str, row: dict, *, rerun: bool = False, resets_read
         items = [{'ticker': r['ticker'], 'signal_date': _ts(r['signal_date']), 'outcome': r['outcome'],
                   'review_id': r['id'], 'plan_id': _text(r['new_plan_id'] or r['head_plan_id'])}
                  for i in ordered[:RESULTS_MAX] if (r := found.get(int(i))) is not None]
+    elif stage_id == 'accounts':
+        items = [dict(item) for item in detail.get('accounts') or [] if isinstance(item, dict)]
     elif stage_id == 'push':
         push = outputs.get('push')
         if isinstance(push, dict):
@@ -373,7 +375,7 @@ def detail(run_id: str, *, now: datetime, checkpointer_factory=None) -> dict:
         rows = ([] if not ready else repository.stage_rows_for_run(conn, run_id) if modern
                 else repository.stage_runs_for_run(conn, run_id))
         reports = repository.job_reports_for_run(conn, run_id)
-        daily_rows = bool(rows) and rows[0]['stages_version'] == stages_module.STAGES_VERSION
+        daily_rows = bool(rows) and rows[0]['stages_version'] in ('stages-4', 'stages-5')
         busy = _executing(run_id)
         locked = _locked() if (daily_rows or (not rows and not reports and _fresh(run_id, now))) else False
         if not rows and not reports and not (busy or (locked and _fresh(run_id, now))):
@@ -387,7 +389,7 @@ def _assemble(conn, run_id: str, rows: list[dict], reports: list[dict], *, now: 
     latest = reports[-1] if reports else None
     summary = (latest or {}).get('summary') or {}
     version = rows[0]['stages_version'] if rows else None
-    is_daily = version == stages_module.STAGES_VERSION or (not rows and (latest is None or latest['task'] == 'daily'))
+    is_daily = version in ('stages-4', 'stages-5') or (not rows and (latest is None or latest['task'] == 'daily'))
     task = latest['task'] if latest else (rows[0]['job'] if rows else 'daily')
     base = {'run_id': run_id, 'task': task, 'executions': _executions(reports), 'resume': _no_resume(),
             'raw_summary': summary, 'nodes': []}
@@ -441,6 +443,6 @@ def _assemble(conn, run_id: str, rows: list[dict], reports: list[dict], *, now: 
                            rerun=is_daily and not locked, resets_ready=resets_ready, summary=summary))
     trigger = rows[0]['trigger'] if rows else (first_report or {}).get('trigger_source')
     return {**base, 'kind': 'daily' if is_daily else 'batch',
-            'graph_version': workflow.DAILY_GRAPH_VERSION if is_daily else None, 'stages_version': version,
+            'graph_version': (summary.get('graph_version') or ('daily-1' if version == 'stages-4' else workflow.DAILY_GRAPH_VERSION)) if is_daily else None, 'stages_version': version,
             'session': _ts(session), 'cutoff_at': cutoff, 'trigger': trigger, 'status': status,
             'headline': headline, 'resume': resume, 'nodes': nodes}

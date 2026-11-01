@@ -54,8 +54,18 @@ def load_rows(conn, plan: dict[str, Any]) -> derivation.Rows:
         rows.earnings = _by_id(conn, repository.earnings_row_by_id, inp['earnings_date_id'],
                                'earnings_dates', missing)
     if inp.get('snapshot_id') is not None:
-        rows.snapshot = _by_id(conn, repository.snapshot_by_id, inp['snapshot_id'],
-                               'account_snapshots', missing)
+        if (plan.get('sizing') or {}).get('equity_source') == 'ledger':
+            raw_id = inp['snapshot_id']
+            key = int(str(raw_id)) if str(raw_id).isdigit() else None
+            frozen = (repository.equity_day_by_id(conn, key)
+                      if key is not None and 0 < key < 2**63 and repository.accounts_ready(conn) else None)
+            if frozen is None:
+                missing.append(f'account_equity_days:{raw_id}')
+            else:
+                rows.snapshot = {**frozen, 'as_of': frozen['session'], 'equity_source': 'ledger'}
+        else:
+            rows.snapshot = _by_id(conn, repository.snapshot_by_id, inp['snapshot_id'],
+                                   'account_snapshots', missing)
     regime = (inp.get('context') or {}).get('regime')
     if regime and regime.get('id') is not None and _uuid(regime['id']) is not None:
         rows.regime = repository.regime_by_id(conn, _uuid(regime['id']))   # display only, never a blocker

@@ -141,6 +141,8 @@ def ensure_ready() -> None:
         return
     if not executable:
         raise service.Unavailable('migration_029_missing')       # v2.9 D36
+    if not _accounts_ready():
+        raise service.Unavailable('migration_030_missing')
 
 
 def _trigger(trigger_source: str) -> str:
@@ -304,6 +306,14 @@ def _executable_ready() -> bool:
         return False
 
 
+def _accounts_ready() -> bool:
+    try:
+        with service.read_only_tx() as conn:
+            return repository.accounts_ready(conn)
+    except Exception:
+        return False
+
+
 def run(config: AssistantConfig | None = None, *, trigger_source: str = 'scheduled', now: datetime | None = None,
         deps: service.Deps | None = None, run_id: str | None = None, checkpointer_factory=None, sleep=time.sleep,
         notify_cfg: Any = None, explicit_pool=None) -> dict[str, Any]:
@@ -322,6 +332,9 @@ def run(config: AssistantConfig | None = None, *, trigger_source: str = 'schedul
                                 config=effective, notify_cfg=notify_cfg)
             if not _executable_ready():     # v2.9 D36: the same rule for migration 029, checked before any plan / trade read
                 return _refused(rid, 'migration_029_missing', started_at=started_at, trigger_source=trigger_source,
+                                config=effective, notify_cfg=notify_cfg)
+            if not _accounts_ready():
+                return _refused(rid, 'migration_030_missing', started_at=started_at, trigger_source=trigger_source,
                                 config=effective, notify_cfg=notify_cfg)
             try:
                 result = workflow.run(run_id=rid, trigger=_trigger(trigger_source), now=moment, deps=deps,
@@ -353,6 +366,8 @@ def resume(run_id: str, node: str, *, now: datetime | None = None, deps: service
     with exclusive(), _active(run_id):
         if not _executable_ready():         # v2.9 D36: the same gate as a first run; refused before anything is written
             raise service.Unavailable('migration_029_missing')
+        if not _accounts_ready():           # the current graph includes accounts even when entered through the CLI
+            raise service.Unavailable('migration_030_missing')
         try:
             result = workflow.resume(run_id, node, now=now or datetime.now(UTC), deps=deps,
                                      checkpointer_factory=checkpointer_factory, sleep=sleep, notify_cfg=notify_cfg,

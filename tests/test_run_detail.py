@@ -88,7 +88,7 @@ def test_success_run_shape(daily_db):
     assert (detail['session'], detail['cutoff_at'], detail['trigger'], detail['status']) == (
         '2026-10-22', NOW.isoformat(), 'manual_batch', 'success')
     assert detail['resume'] == {'allowed': False, 'node': None, 'deadline_at': None, 'reason': 'not_failed'}
-    assert [n['id'] for n in detail['nodes']] == list(stages_module.STAGE_IDS)
+    assert [n['id'] for n in detail['nodes']] == list(stages_module.STAGE_IDS_BY_VERSION['stages-4'])
     for n in detail['nodes']:
         assert set(n) == NODE_KEYS and set(n['did']) == DID_KEYS and n['concept'] == 'system.stages'
         assert (n['status'], n['attempt'], n['duration_ms']) == ('success', 1, 30000)
@@ -162,7 +162,7 @@ def test_failed_run_can_be_resumed_and_resumed_run_shows_both_executions(daily_d
     failed = view(factory=factory)
     assert failed['status'] == 'failed' and failed['resume'] == {
         'allowed': True, 'node': 'screen', 'deadline_at': DEADLINE.astimezone(UTC).isoformat(), 'reason': None}
-    assert [n['status'] for n in failed['nodes']][2:] == ['failed'] + ['skipped'] * 7
+    assert [n['status'] for n in failed['nodes']][2:] == ['failed'] + ['skipped'] * 8
     assert {failed['nodes'][0]['status'], failed['nodes'][1]['status']} <= {'success', 'degraded'}
     screen = node(failed, 'screen')
     assert screen['reason'] == 'aborted: flaky screen' and screen['reason_text'] == '运行中断：flaky screen'
@@ -170,7 +170,7 @@ def test_failed_run_can_be_resumed_and_resumed_run_shows_both_executions(daily_d
     assert node(failed, 'regime')['reason_text'] == '上游节点失败，未执行'
     assert [n['id'] for n in failed['nodes'] if n['actions']['resume']] == ['screen']
     assert failed['headline'].startswith(
-        '10 月 22 日的运行在「筛选 `screen-1`」失败（已自动重试 1 次）：运行中断：flaky screen；其后 7 个节点未执行')
+        '10 月 22 日的运行在「筛选 `screen-1`」失败（已自动重试 1 次）：运行中断：flaky screen；其后 8 个节点未执行')
     assert [e['status'] for e in failed['executions']] == ['error'] and failed['executions'][0]['attempt'] == 1
     assert failed['raw_summary']['failed_node'] == 'screen'
     assert resume(clock, factory, 'screen')['run_status'] in ('success', 'degraded')
@@ -180,7 +180,7 @@ def test_failed_run_can_be_resumed_and_resumed_run_shows_both_executions(daily_d
         'allowed': False, 'node': None, 'deadline_at': None, 'reason': 'not_failed'}
     assert [(e['trigger_source'], e['status'], e['resume_node'], e['attempt']) for e in done['executions']] == [
         ('manual', 'error', None, 1), ('resume', done['executions'][1]['status'], 'screen', 2)]
-    assert [n['attempt'] for n in done['nodes']] == [1, 1] + [2] * 8
+    assert [n['attempt'] for n in done['nodes']] == [1, 1] + [2] * 9
     assert [(a['attempt'], a['status']) for a in node(done, 'screen')['attempts']] == [(1, 'failed'),
                                                                                    (2, node(done, 'screen')['status'])]
     assert len(node(done, 'sec_monitor')['attempts']) == 1                       # completed nodes did not run again
@@ -303,7 +303,7 @@ def test_executing_run_without_any_row_is_a_skeleton_whatever_its_age(daily_db):
     old = 'daily-20200101000000-0c0c0c0c'
     with daily._active(old):
         detail = view(old, now=NOW)
-    assert detail['status'] == 'running' and [n['status'] for n in detail['nodes']] == ['pending'] * 10
+    assert detail['status'] == 'running' and [n['status'] for n in detail['nodes']] == ['pending'] * 11
 
 
 def test_just_started_run_is_a_running_skeleton(daily_db):
@@ -317,14 +317,14 @@ def test_just_started_run_is_a_running_skeleton(daily_db):
         with pytest.raises(LookupError):
             view('workbench-' + NOW.strftime('%Y%m%d%H%M%S') + '-0c0c0c0c', now=NOW)
     assert detail['status'] == 'running' and detail['kind'] == 'daily' and set(detail) == TOP_KEYS
-    assert [n['status'] for n in detail['nodes']] == ['pending'] * 10 and detail['executions'] == []
+    assert [n['status'] for n in detail['nodes']] == ['pending'] * 11 and detail['executions'] == []
 
 
 def test_refused_run_without_rows(daily_db):
     report(daily_db, RUN_ID, status='error', summary={'error': 'migration_028_missing', 'run_status': 'failed'})
     detail = view()
     assert detail['kind'] == 'daily' and detail['status'] == 'failed' and detail['resume']['allowed'] is False
-    assert [n['status'] for n in detail['nodes']] == ['pending'] * 10
+    assert [n['status'] for n in detail['nodes']] == ['pending'] * 11
     assert 'migration_028_missing' in detail['headline'] and detail['raw_summary']['error'] == 'migration_028_missing'
 
 
@@ -679,7 +679,7 @@ def test_run_detail_never_calls_fetchers(daily_db, clock, notices, job_reports, 
         for name in names:
             monkeypatch.setattr(owner, name, forbidden)
     detail = view(factory=factory)
-    assert detail['status'] == 'degraded' and len(detail['nodes']) == 10
+    assert detail['status'] == 'degraded' and len(detail['nodes']) == 11
 
 
 def test_detail_json_is_serialisable(daily_db, clock, notices, job_reports, scripted_model):
@@ -691,3 +691,13 @@ def test_detail_json_is_serialisable(daily_db, clock, notices, job_reports, scri
     daily_db.commit()
     text = json.dumps(view(factory=factory), ensure_ascii=False, default=str)
     assert 'NVDA' in text and '\\u' not in text
+
+
+def test_accounts_results_expose_settlement_equity_holdings_and_decision(daily_db):
+    record={'account_id':'paper','name':'模拟','settled':{'filled':1,'voided':0,'expired':0,'cancelled':0,'exits':0},
+            'equity':{'equity':'100100'},'holdings':[{'ticker':'NVDA'}],
+            'decision':{'status':'ok','orders_placed':1,'orders_rejected':0,'skipped':[]}}
+    book(daily_db,RUN_ID,version='stages-5',rows_by_stage={'accounts':{'detail':{'accounts':[record]}}})
+    report(daily_db,RUN_ID,summary={'graph_version':'daily-2','run_status':'success'})
+    result=view()
+    assert len(result['nodes'])==11 and node(result,'accounts')['results']['items']==[record]
