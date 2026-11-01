@@ -5,18 +5,15 @@ from datetime import date
 from decimal import Decimal, ROUND_FLOOR
 
 from investment_assistant.config import WorkbenchConfig
+from investment_assistant.core.texts import REJECT_TEXT as REJECT_TEXT
+from investment_assistant.core.versions import FOLLOW_PLANS_VERSION as FOLLOW_PLANS_VERSION
 from investment_assistant.workbench import plans
 from investment_assistant.workbench.agent import portfolio_check
 from investment_assistant.workbench.agent.citations import Rejected
 
-FOLLOW_PLANS_VERSION = 'follow-plans-1'
 REJECT_CODES = ('schema_invalid', 'plan_not_buyable', 'chain_consumed', 'duplicate_order',
                 'exceeds_max_shares', 'max_positions', 'insufficient_cash', 'no_position',
                 'cannot_halve', 'order_not_pending')
-REJECT_TEXT = {'schema_invalid': '订单格式无效', 'plan_not_buyable': '计划不可买入', 'chain_consumed': '计划链已使用',
-               'duplicate_order': '重复订单', 'exceeds_max_shares': '超过计划股数上限', 'max_positions': '达到持仓数量上限',
-               'insufficient_cash': '现金不足', 'no_position': '无可卖持仓', 'cannot_halve': '持仓不足以卖出一半',
-               'order_not_pending': '订单已不在待成交状态'}
 ZERO = Decimal(0)
 
 

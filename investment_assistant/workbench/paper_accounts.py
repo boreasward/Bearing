@@ -14,13 +14,15 @@ from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 from uuid import NAMESPACE_URL, uuid5
 
 from investment_assistant.config import load_config
+from investment_assistant.core import idempotency as core_idempotency
+from investment_assistant.core.constants import ACCOUNTS_AGENT_DEADLINE_S as ACCOUNTS_AGENT_DEADLINE_S
 from investment_assistant.data.calendar import add_trading_days, is_trading_day, trading_days_between
 from investment_assistant.workbench import (accounts, bars, families, ledger, paper_fill, paper_strategies,
                                                plan_shadow, repository, service)
 from investment_assistant.workbench.agent import graph, model, portfolio_check, tools
+from investment_assistant.core import tx as core_tx
 
 REAL_ACCOUNT_ID = accounts.REAL_ACCOUNT_ID
-ACCOUNTS_AGENT_DEADLINE_S = 600
 REAL_EQUITY_RECOMPUTE_SESSIONS = 5
 ZERO = Decimal(0)
 
@@ -72,7 +74,7 @@ def create_paper_account(payload, *, now):
     rec = accounts.validate_new_account(supplied, defaults=accounts.default_params(load_config().workbench))
     digest = ledger.request_hash({'name':rec['name'], 'strategy':rec['strategy'], 'opening_cash':rec['opening_cash'],
         'opened_on': original.get('opened_on'), 'params':accounts.validate_params(original.get('params', {}))})
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         require_ready(conn)
         repository.lock(conn, 'account:create')
         existing = repository.account_by_id(conn, rec['request_id'])
@@ -104,7 +106,7 @@ def open_real_account(account_id, payload, *, now):
     request_id=ledger._uuid(payload.get('request_id'),'request_id')
     if rec['opened_on'] > now.astimezone(accounts.NY).date():
         raise ledger.LedgerError('opened_on cannot be in the future')
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         row=require_account(conn,account_id); repository.lock(conn,f"account:{row['id']}")
         row=require_account(conn,row['id'])
         if row['kind']!='real': raise ledger.LedgerError('paper_account_is_host_managed')
@@ -135,7 +137,7 @@ def change_params(account_id,payload,*,now):
     params=accounts.validate_params(payload.get('params'))
     reason=ledger._text(payload.get('reason'),'reason')
     digest=ledger.request_hash({'params':params,'reason':reason})
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         row=require_account(conn,account_id); repository.lock(conn,f"account:{row['id']}")
         row=require_account(conn,row['id']); _writable(row)
         replay=_audit_replay(conn,row['id'],request_id,digest)
@@ -155,7 +157,7 @@ def _clean_change(change):
 
 def close(account_id,payload,*,now):
     reason=ledger._text(payload.get('reason'),'reason')
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         row=require_account(conn,account_id); repository.lock(conn,f"account:{row['id']}")
         row=require_account(conn,row['id'])
         if row['kind']=='real': raise ledger.LedgerError('cannot_close_real_account')
@@ -198,7 +200,7 @@ def _equity(conn,account,session,now,run_id,*,extra=None):
     current=repository.latest_equity_day(conn,account['id'],on_or_before=session)
     keys=('cash','positions_value','equity','realized_pnl_cum','unrealized_pnl','net_flows_cum','day_pnl',
           'positions_count','detail','account_version')
-    if current and current['session']==session and all(ledger._plain(current[k])==ledger._plain(values[k]) for k in keys):
+    if current and current['session']==session and all(core_idempotency._plain(current[k])==core_idempotency._plain(values[k]) for k in keys):
         return current
     return repository.insert_equity_day(conn,{**values,'computed_at':now})
 
@@ -582,7 +584,7 @@ def _skip_decision(conn,account,*,session,now,run_id,reason,host_cancellations=N
 def run_stage(session,*,now,deps,run_id,acc,settings):
     if not is_trading_day(session): return {'accounts':[],'skipped':'not_trading_day'}
     clock=deps.clock or clock_module.monotonic; started=clock()
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         require_ready(conn)
         active=[a for a in repository.list_accounts(conn) if a['opened_on'] and a['opened_on']<=session]
     papers=[a for a in active if a['kind']=='paper']; results={str(a['id']):{'account_id':str(a['id']),'name':a['name'],
@@ -591,7 +593,7 @@ def run_stage(session,*,now,deps,run_id,acc,settings):
     def phase(account,fn,**kw):
         aid=str(account['id'])
         try:
-            with service._tx() as conn:
+            with core_tx._tx() as conn:
                 with conn.transaction(): return fn(conn,account,**kw)
         except Exception as exc:
             results[aid]['error']=families.sanitize_reason(exc); failed.add(aid)
@@ -606,7 +608,7 @@ def run_stage(session,*,now,deps,run_id,acc,settings):
                 results[str(account['id'])]['error']='negative_cash'
                 if acc: acc.fail(account['name'],'negative_cash')
     try:
-        with service._tx() as conn: real=write_real_equity(conn,session=session,now=now,run_id=run_id)
+        with core_tx._tx() as conn: real=write_real_equity(conn,session=session,now=now,run_id=run_id)
         if str(REAL_ACCOUNT_ID) in results: results[str(REAL_ACCOUNT_ID)]['equity']=real
     except Exception as exc:
         failed.add(str(REAL_ACCOUNT_ID))

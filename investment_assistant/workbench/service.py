@@ -5,14 +5,11 @@ import copy
 import os
 import uuid
 import time as _time_module
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import ExitStack, nullcontext
 from decimal import Decimal
-from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
 from investment_assistant.data.calendar import is_trading_day
 from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
@@ -37,93 +34,21 @@ from investment_assistant.workbench import execution as execution_module
 from investment_assistant.workbench import timeline
 from investment_assistant.workbench import tracks as _tracks_module
 
-NY = ZoneInfo('America/New_York')
-BENCHMARK = 'SPY'
+from investment_assistant.core.constants import (AGENT_DEADLINE_S as AGENT_DEADLINE_S, BENCHMARK as BENCHMARK,
+                                                 CONNECTION_LOST as CONNECTION_LOST, HISTORY_DAYS as HISTORY_DAYS,
+                                                 NEWS_LOOKBACK_DAYS as NEWS_LOOKBACK_DAYS, NY as NY,
+                                                 OPEN_UNIT_DAYS as OPEN_UNIT_DAYS, SEC_EVIDENCE_DIR as SEC_EVIDENCE_DIR)
+from investment_assistant.core import tx as core_tx
+from investment_assistant.core.tx import (Deps as Deps, Gone as Gone, Unavailable as Unavailable,
+                                          _jsonable as _jsonable, _read_only as _read_only, _tx as _tx,
+                                          connection as connection, read_only_tx as read_only_tx)
+
 ETF_TICKERS = pool_module.SECTOR_ETFS
-AGENT_DEADLINE_S = 1500     # no new agent unit starts after this many seconds since the agent node started (§8.1, v2.8 D24)
-CONNECTION_LOST = ('not_connected', 'model_unavailable')    # a unit proving the connection / model unusable stops the node (§8.8)
 AGENT_MAX_ATTEMPTS = 3      # a failed unit runs at most this many times per batch re-run cycle
-HISTORY_DAYS = 420          # calendar days fetched; covers MA200 plus look-backs
 FILING_LOOKBACK_DAYS = 10
-NEWS_LOOKBACK_DAYS = 7
-OPEN_UNIT_DAYS = 14
-SEC_EVIDENCE_DIR = Path(__file__).resolve().parents[2] / '.local/us-workbench/sec-evidence'
-
-
-class Unavailable(RuntimeError):
-    """Database or schema not ready (HTTP 503). Never shown as an empty result."""
-
-
-class Gone(RuntimeError):
-    """The endpoint was retired (HTTP 410): ``decisions_retired`` since v2.9 (spec §6.4, D24)."""
 
 
 DECISIONS_RETIRED = 'decisions_retired: v2.9 起不再记录决定，采纳由成交推导；可在计划上写备注'
-
-
-@dataclass
-class Deps:
-    bar_fetcher: Callable | None = None
-    news_fetcher: Callable | None = None
-    filing_source: Any = None           # object with discover(tickers, start_iso, end_iso)
-    earnings_fetcher: Callable | None = None
-    macro_fetcher: Callable | None = None
-    clock: Callable[[], float] | None = None
-    agent_model: Any = None                 # scripted model in tests; built from settings when None
-    agent_checkpointer: Callable[[], Any] | None = None
-    agent_settings: Any = None              # AgentSettings; settings_from_env() when None
-    universe: Any = None                    # screening universe; universe.load() when both are None
-    universe_loader: Callable[[], Any] | None = None
-
-
-def connection():
-    url = os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL')
-    if not url:
-        raise Unavailable('数据库未配置')
-    return connect(url)
-
-
-@contextmanager
-def _tx():
-    import psycopg
-
-    try:
-        with connection() as conn:
-            missing = repository.missing_tables(conn)
-            if missing:
-                raise Unavailable('工作台数据表未就绪（需执行迁移 016–020）：' + ', '.join(missing))
-            try:
-                yield conn
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
-    except psycopg.OperationalError:
-        raise Unavailable('数据库不可达') from None
-
-
-@contextmanager
-def read_only_tx():
-    """Read-only transaction for the GET use cases (data menu spec §8, derivation spec §9 只读性).
-
-    SET TRANSACTION READ ONLY comes first, so the database itself refuses any
-    write; commit on the way out simply ends the read-only transaction."""
-    import psycopg
-
-    try:
-        with connection() as conn:
-            conn.execute('SET TRANSACTION READ ONLY')
-            missing = repository.missing_tables(conn)
-            if missing:
-                raise Unavailable('工作台数据表未就绪（需执行迁移 016–020）：' + ', '.join(missing))
-            try:
-                yield conn
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
-    except psycopg.OperationalError:
-        raise Unavailable('数据库不可达') from None
 
 
 def _book(conn, ticker: str, *, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
@@ -500,7 +425,7 @@ class _Collector:
             try:
                 row, fetched = earnings.fetch_next_with_outcome(ticker, fetcher=deps.earnings_fetcher,
                                                                 today=self.ny_date)
-                with _tx() as conn:
+                with core_tx._tx() as conn:
                     summary['earnings'][ticker] = repository.store_earnings(conn, ticker, row, now=now)['status']
                 if self.earnings_tally is not None:
                     self.earnings_tally.record(ticker, fetched, latest=row.get('earnings_date'))
@@ -536,7 +461,7 @@ def stage_collect(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None
     drop_after = now if ctx.resumed else None       # a resumed run never reads past its own cutoff (§5.5)
     # The first transaction only reads the manual pool and holdings: the screen node runs between them and the
     # merged pool's tier sync.
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         pool = (_pool_from_state(state['pool']) if explicit
                 else pool_module.from_watchlist(list_watchlist_items(conn)))
         watchlist = list(pool.tickers)
@@ -627,7 +552,7 @@ def stage_collect(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None
             else:
                 targets = [t for t in loaded.tickers if t not in pool.tickers and t != screen_module.BENCHMARK]
                 fetched, fetch_failures, fetch_reasons = screening.collect_range(
-                    connection, session=session, now=now, targets=targets, deps=deps, tally=bars_tally)
+                    core_tx.connection, session=session, now=now, targets=targets, deps=deps, tally=bars_tally)
                 summary['sources']['bars'].extend(fetch_failures)
                 universe_meta = {'name': loaded.name, 'as_of': loaded.as_of.isoformat(),
                                  'tickers': list(loaded.tickers), 'fetched': sorted(fetched),
@@ -652,7 +577,7 @@ def stage_collect(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None
         if ready:
             try:
                 chain_failures: list[tuple[str, str]] = []
-                with _tx() as conn:
+                with core_tx._tx() as conn:
                     chain_tickers = plan_review.chain_tickers(conn, session, now=now, exclude=all_tickers,
                                                               failures=chain_failures)
                 if acc is not None:     # the review stage reports the same chain in summary['errors']
@@ -793,7 +718,7 @@ def stage_screen(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None)
     if stage['status'] == 'error':
         summary['errors'].append(f"screen: {stage['summary']['error']}")
     pool = pool_module.with_screen(pool, stage['members'])
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         tier_changes = _sync_pool(conn, pool, session, now)
     # A held screen member is in the pool now; run it once, not again as an off-pool holding.
     held = [t for t in held if t not in pool.tickers]
@@ -913,7 +838,7 @@ def stage_regime(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None)
     manual_pool = _pool_from_state(state.get('manual_pool') or state['pool'])
     t_regime = clock()
     try:
-        with _tx() as conn:
+        with core_tx._tx() as conn:
             if ctx.breadth_tickers is not None:
                 breadth_sample = list(ctx.breadth_tickers)
             elif not state.get('explicit'):
@@ -986,7 +911,7 @@ def stage_rules(state: dict[str, Any], ctx, sig_acc: stages_module.StageAcc | No
         phase = 'signals'          # 异常归到出错的那个阶段
         noted: dict[str, Any] = {}  # 本只的记账，事务提交后才并入阶段（回滚的写入不进证据）
         try:
-            with _tx() as conn:
+            with core_tx._tx() as conn:
                 ticker_bars = repository.read_bars(conn, ticker, session, cutoff_at=now)
                 events, _ = _filing_events(conn, ticker, session, now)
                 book = _book(conn, ticker)
@@ -1162,7 +1087,7 @@ def retro_push_counts(*, now: datetime) -> dict[str, int]:
     for review now. Without an earlier ``daily`` push nothing counts as new."""
     from investment_assistant.workbench import retro_cards
 
-    with read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         since = repository.latest_daily_push_finished_at(conn, before=now)
         cards = repository.review_cards(conn)
         new = sum(1 for card in cards if since is not None and card['created_at'] > since)
@@ -1206,7 +1131,7 @@ def stage_retro(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, 
     window = ctx.window_start if ctx.window_start is not None else ctx.clock()
     growth = state.get('growth_ready')
     if growth is None:
-        with _tx() as conn:
+        with core_tx._tx() as conn:
             growth = repository.growth_ready(conn)
     cards = bool(state.get('trading_day', True))
     if cards and not growth:
@@ -1256,19 +1181,6 @@ def stage_retro(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, 
     elif not cards and not acted and not out['errors']:
         _stage_skip(ctx, 'retro', 'not_due')
     return {'summary': summary}
-
-
-def _jsonable(value: Any) -> Any:
-    """Dates to ISO text, recursively: the review parts report their period as a ``date``."""
-    if isinstance(value, dict):
-        return {key: _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
-    if isinstance(value, (Decimal, uuid.UUID)):
-        return str(value)
-    return value
 
 
 def _wall(ctx) -> Callable[[], datetime]:
@@ -1483,7 +1395,7 @@ def today(*, now: datetime) -> dict[str, Any]:
     ``retired: true`` (the page reads ``GET /plan-table`` instead); the holdings, the active chains, the market and the
     screen report are as before, chains judged by `timeline-2`."""
     session = bars.latest_closed_session(now)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return _today_view(conn, session, now=now, cards=False)
 
 
@@ -1491,7 +1403,7 @@ def unit_cards(*, now: datetime) -> dict[str, Any]:
     """The old 「今日」 payload with its unit cards (the undecided units of the last 14 days). Not an endpoint any more;
     the push and the tests read the units through it."""
     session = bars.latest_closed_session(now)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return _today_view(conn, session, now=now, cards=True)
 
 
@@ -1500,7 +1412,7 @@ def run_backcheck(*, now: datetime, tickers: list[str] | None = None) -> dict[st
     from investment_assistant.workbench import backcheck as backcheck_module
     from investment_assistant.workbench import plan_shadow as shadow_module
 
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         symbols = (pool_module.Pool.all_core(tickers).tickers if tickers is not None
                    else pool_module.from_watchlist(list_watchlist_items(conn)).tickers)
         spy_bars = repository.read_bars(conn, BENCHMARK, bars.latest_closed_session(now), cutoff_at=now, limit=2000)
@@ -1520,7 +1432,7 @@ def run_backcheck(*, now: datetime, tickers: list[str] | None = None) -> dict[st
 
 
 def list_backchecks(limit: int = 10) -> list[dict[str, Any]]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         out = repository.list_backchecks(conn, limit)
     return [{**row, 'id': str(row['id'])} for row in out]
 
@@ -1532,13 +1444,13 @@ def decide(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
 
 
 def add_trade(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return ledger.record_trade(conn, payload, now=now)
 
 
 def add_plan_note(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
     """v2.9 §6.5: a note on a chain or a non-chain plan, a correction or a retraction. Never read by an Agent."""
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return ledger.record_note(conn, payload, now=now)
 
 
@@ -1546,14 +1458,14 @@ def list_trades(*, account_id=REAL_ACCOUNT_ID) -> list[dict[str, Any]]:
     """Every fill, newest first. A fill that follows a plan carries ``plan_label`` (the label the link list uses)."""
     from investment_assistant.workbench import plan_views
 
-    with read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         rows = list(reversed(repository.list_trades(conn, account_id=ledger._uuid(account_id, 'account_id'))))
         labels_ = plan_views.trade_plan_labels(conn, rows)
         return [{**t, 'plan_label': labels_[t['id']]} if t['id'] in labels_ else t for t in rows]
 
 
 def void_trade(trade_id: str, reason: Any, *, now: datetime) -> dict[str, Any]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return ledger.void_trade(conn, trade_id, reason, now=now)
 
 
@@ -1562,7 +1474,7 @@ def account_view(*, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
     from investment_assistant.workbench import accounts, paper_accounts
     params = load_config().workbench
     aid = ledger._uuid(account_id, 'account_id')
-    with read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         snapshots = repository.list_snapshots(conn, account_id=aid)
         rows = repository.equity_days(conn, aid) if repository.accounts_ready(conn) else []
         account_ = repository.account_by_id(conn, aid) if repository.accounts_ready(conn) else None
@@ -1573,17 +1485,17 @@ def account_view(*, account_id=REAL_ACCOUNT_ID) -> dict[str, Any]:
 
 
 def add_snapshot(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return account.record_snapshot(conn, payload, now=now)
 
 
 def add_flow(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return account.record_flow(conn, payload, now=now)
 
 
 def void_flow(flow_id: str, reason: Any, *, now: datetime) -> dict[str, Any]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return account.void_flow(conn, flow_id, reason, now=now)
 
 
@@ -1606,7 +1518,7 @@ def push(*, now: datetime, force: bool, summary: dict[str, Any] | None = None, n
     from investment_assistant.workbench import digest as digest_module
 
     session = bars.latest_closed_session(now)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         if not force:
             last = repository.last_push(conn, session=session)
             if last and last.get('sent') is True:
@@ -1746,7 +1658,7 @@ def screen_view(*, now: datetime, session: date | None = None, full: bool = Fals
 
     The newest run, not the latest closed session: between the New York close and the
     batch the closed session has no run yet, and the page should keep showing the last one."""
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         if session is None:
             run = repository.latest_screen_run(conn, session=None)
             if run is None:
@@ -1815,7 +1727,7 @@ def instrument(ticker: str, *, now: datetime) -> dict[str, Any]:
     ticker = ticker.strip().upper()
     session = bars.latest_closed_session(now)
     errors: dict[str, str] = {}
-    with read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         def guarded(key: str, fn: Callable[[], Any]) -> Any:
             try:
                 with conn.transaction():          # a savepoint: one failed statement must not poison the page
@@ -1916,7 +1828,7 @@ def shadow(*, now: datetime, since: date | None = None) -> dict[str, Any]:
     return over SPY. Old decided-only snapshots keep their own `review-7` shape in the weekly review."""
     session = bars.latest_closed_session(now)
     since = since or session - timedelta(days=90)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         units = []
         for group in sorted(repository.candidate_groups_since(conn, since), key=lambda g: (g['signal_date'], g['ticker'])):
             if group['signal_date'] > session:
@@ -1975,7 +1887,7 @@ def plan_shadow(*, now: datetime, since: date | None = None) -> dict[str, Any]:
     ``agent_summary.counterfactual`` sums the same agent rows under both."""
     session = bars.latest_closed_session(now)
     since = since or session - timedelta(days=90)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         spy = repository.read_bars(conn, BENCHMARK, session, cutoff_at=now, limit=400)
         plans = repository.plans_since(conn, since)
         chains = _plan_chains(conn, plans)
@@ -2047,7 +1959,7 @@ def discipline(*, now: datetime, since: date | None = None, account_id=REAL_ACCO
     """Execution discipline of recorded buys against the plans their fills follow (`discipline-2`)."""
     session = bars.latest_closed_session(now)
     since = since or session - timedelta(days=90)
-    with read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         # Buys and stop events share one window, or old buys see no stops and flag false early_takes.
         trades = [t for t in repository.list_trades(conn, cutoff=now, account_id=ledger._uuid(account_id, 'account_id'))
                   if t['voided_at'] is None and t['executed_at'].astimezone(NY).date() >= since]
@@ -2062,7 +1974,7 @@ def discipline(*, now: datetime, since: date | None = None, account_id=REAL_ACCO
 
 def trade_review(*, now: datetime) -> dict[str, Any]:
     session = bars.latest_closed_session(now)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         spy = repository.read_bars(conn, BENCHMARK, session, cutoff_at=now, limit=400)
         closed, open_ = [], []
         for ticker in sorted({t['ticker'] for t in repository.list_trades(conn)}):
@@ -2309,7 +2221,7 @@ def tracks(*, now: datetime, since: date | None = None, until: date | None = Non
     session = bars.latest_closed_session(now)
     since = since if since is not None else session - timedelta(days=90)
     until = until if until is not None else session
-    with read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         rows = _track_rows(conn, since, until, session=session, now=now, account_id=ledger._uuid(account_id, 'account_id'))
     return {'session': session.isoformat(), 'since': since.isoformat(), 'until': until.isoformat(),
             'calc_version': _tracks_module.TRACKS_VERSION, 'units': rows,
@@ -2400,7 +2312,7 @@ def generate_weekly(week_start: date, *, notes: str = '', supersedes_id=None, no
         raise ledger.LedgerError('week_start must be a Monday')
     week_end = week_start + timedelta(days=6)
     session = bars.latest_closed_session(now)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         week = _week_units(conn, week_start, week_end, now=now)
         units = week['units']
         outcomes = _outcomes(conn, units, session, now)
@@ -2468,7 +2380,7 @@ def generate_monthly(month: date, *, notes: str = '', supersedes_id=None, now: d
     month_end = month.replace(day=[31, 29 if month.year % 4 == 0 and (month.year % 100 != 0 or month.year % 400 == 0)
                                    else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month.month - 1])
     params = load_config().workbench
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         repository.lock(conn, f'monthly:{month}')
         head = repository.monthly_head(conn, month)
         if (head['id'] if head else None) != supersedes_id:
@@ -2551,22 +2463,16 @@ def generate_monthly(month: date, *, notes: str = '', supersedes_id=None, now: d
 
 
 def list_monthly(limit: int = 12) -> list[dict[str, Any]]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return repository.monthly_heads(conn, limit)
 
 
 def list_weekly(limit: int = 20) -> list[dict[str, Any]]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         return review.list_weekly(conn, limit)
 
 
 # ---------------------------------------------------------------- agent track (P3 §8)
-
-def _read_only(fn):
-    """Run fn(conn) inside a pass-through transaction; agent tool reads only."""
-    with _tx() as conn:
-        return fn(conn)
-
 
 def _session_units(conn, session: date, *, now: datetime) -> dict[str, list[dict[str, Any]]]:
     """This session's undecided units in three groups (P4 §7.3): main-list
@@ -2657,7 +2563,7 @@ def _skip(unit: dict, reason: str, *, now: datetime, settings, attempt: int, mod
     a reason. A skipped main-list unit also gets its rule-only brief (§7.3)."""
     run_row = _agent_run_row(unit, settings=settings, attempt=attempt, now=now,
                              status='skipped', reason=reason, mode=mode)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         record = repository.insert_agent_run(conn, run_row, [])
         if unit['pool'] == 'main':
             repository.store_brief(conn, briefs.for_run(run_row, [], unit=unit,
@@ -2761,7 +2667,7 @@ def _run_agent_unit(unit: dict, *, now: datetime, deps: Deps, settings, attempt:
                               run_id=agent_run_id, **kwargs)
 
     def write(run_row: dict, calls: list[dict] | None = None) -> dict:
-        with _tx() as conn:
+        with core_tx._tx() as conn:
             record = repository.insert_agent_run(conn, run_row, calls or [])
             if unit['pool'] == 'main':   # §7.1: main-list brief in the run's transaction
                 repository.store_brief(conn, briefs.for_run(_brief_run(run_row), calls or [], unit=unit,
@@ -2769,7 +2675,7 @@ def _run_agent_unit(unit: dict, *, now: datetime, deps: Deps, settings, attempt:
             return record
 
     try:
-        with _tx() as conn:
+        with core_tx._tx() as conn:
             bars_ = repository.read_bars(conn, ticker, signal_date, cutoff_at=now)
             block = timeline.previous_chain_block(_previous_chain_facts(conn, ticker, signal_date, now=now), now=now)
         digest = {'input_digest': {'previous_chain': timeline.previous_chain_digest(block)}}
@@ -2798,7 +2704,7 @@ def _run_agent_unit(unit: dict, *, now: datetime, deps: Deps, settings, attempt:
                     reason = 'checkpoint_unavailable'
                 return write(row('error', reason=reason, detail=detail))
         if result['status'] == 'ok':
-            with _tx() as conn:   # v2.5 §5.1: plan → run → calls → version 0 → brief, one transaction
+            with core_tx._tx() as conn:   # v2.5 §5.1: plan → run → calls → version 0 → brief, one transaction
                 repository.lock(conn, f'chain-open:{ticker}')
                 guard = _first_version_guard(conn, unit, now=now) if repository.executable_ready(conn) else None
                 if guard is not None:       # §4.7: a chain opened (or the unit merged) since the plan node ran
@@ -2874,7 +2780,7 @@ def _run_interpret_unit(unit: dict, *, now: datetime, deps: Deps, settings, atte
                               run_id=run_id, mode='interpret', **kwargs)
 
     def write(run_row: dict, calls: list[dict] | None = None) -> dict:
-        with _tx() as conn:
+        with core_tx._tx() as conn:
             record = repository.insert_agent_run(conn, run_row, calls or [])
             repository.store_brief(conn, briefs.for_run(run_row, calls or [], unit=unit,
                                                         candidates=unit['candidates']))
@@ -2986,7 +2892,7 @@ def _agent_stage(session: date, *, now: datetime, deps: Deps, summary: dict[str,
         """The three shared gates (§7.3: deadline, provider, quota, token budget);
         completion and attempts are counted per mode."""
         try:
-            with _tx() as conn:
+            with core_tx._tx() as conn:
                 history = repository.agent_runs_for(conn, unit['ticker'], unit['signal_date'], mode=mode)
                 # D26: only the runs after the unit's latest reset count towards ``max_attempts``; the history
                 # still counts for the ``attempt`` number, which keeps counting.
@@ -3018,7 +2924,7 @@ def _agent_stage(session: date, *, now: datetime, deps: Deps, summary: dict[str,
             elif len(prior) >= AGENT_MAX_ATTEMPTS:
                 run = _skip(unit, 'max_attempts', now=now, settings=settings, attempt=attempt, mode=mode)
             elif settings.daily_tokens is not None:
-                with _tx() as conn:
+                with core_tx._tx() as conn:
                     used = repository.agent_tokens_on(conn, ny_date)
                 if used >= settings.daily_tokens:
                     run = _skip(unit, 'token_budget', now=now, settings=settings, attempt=attempt, mode=mode)
@@ -3035,7 +2941,7 @@ def _agent_stage(session: date, *, now: datetime, deps: Deps, summary: dict[str,
                 acc.fail(unit['ticker'], exc)
 
     merged: dict[str, str] = {}
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         groups = _session_units(conn, session, now=now)
         ready = repository.timeline_ready(conn) if timeline_ready is None else timeline_ready
         resets_ready = repository.daily_ready(conn)     # migration 028: the attempt-reset table exists
@@ -3056,7 +2962,7 @@ def _agent_stage(session: date, *, now: datetime, deps: Deps, summary: dict[str,
         """§4.3: a merged unit is not proposed; everything else goes through the shared gates."""
         if merges_ready:
             try:
-                with _tx() as conn:
+                with core_tx._tx() as conn:
                     row = repository.retrigger_for_unit(conn, unit['ticker'], unit['signal_date'])
                     if row is not None and unit['pool'] == 'main' and repository.latest_brief(
                             conn, unit['ticker'], unit['signal_date']) is None:
@@ -3132,7 +3038,7 @@ def run_agent(ticker: str, signal_date: date, *, now: datetime, deps: Deps | Non
     come from reviews. Without migration 026 the run is recorded as ``skipped / migration_026_missing``."""
     deps = deps or Deps()
     settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         group = repository.unit_candidates(conn, ticker, signal_date)
         if not group:
             raise ValueError(f'{ticker} {signal_date} 没有候选，不是决策单元')
@@ -3195,7 +3101,7 @@ def rerun_agent(ticker: str, signal_date: date, mode: str, *, request_id: str, o
             busy = False
         if busy:               # the node being re-run may be working on this very unit
             raise daily.DailyBusy()
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         group = repository.unit_candidates(conn, ticker, signal_date)
         if not group:
             raise LookupError(f'{ticker} {signal_date} 没有候选，不是决策单元')
@@ -3419,7 +3325,7 @@ def agent_runs(*, now: datetime, since: date | None = None) -> dict[str, Any]:
     """Run rows without result payloads, plus coverage: every buy unit in range has a run, is merged into an active
     chain (``coverage.merged``, counted as covered, v2.9 §4.3) or is missing."""
     session = bars.latest_closed_session(now)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         start = since if since is not None else session - timedelta(days=14)
         runs = repository.list_agent_runs(conn, start)
         total = covered = 0
@@ -3450,7 +3356,7 @@ def agent_runs(*, now: datetime, since: date | None = None) -> dict[str, Any]:
 
 def agent_run_detail(run_id: str) -> dict[str, Any]:
     """One run with every tool call, arguments, results and hashes (§10.3 traceability)."""
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         run = repository.agent_run_by_id(conn, run_id)
         if run is None:
             raise LookupError(f'运行 {run_id} 不存在')
@@ -3473,7 +3379,7 @@ def _record_push(kind, period, *, review_id, trigger_source, result, notify_cfg,
     row = {'kind': kind, 'period': period, 'review_id': review_id, 'trigger_source': trigger_source,
            'sent': bool(result.get('sent')), 'messages': result.get('messages') or 0,
            'reason': _redact_reason(result['reason'], notify_cfg) if result.get('reason') else None}
-    with _tx() as conn2:
+    with core_tx._tx() as conn2:
         repository.insert_review_push(conn2, row)
     return {'kind': kind, 'period': period, 'review_id': review_id, 'sent': row['sent'],
             'messages': row['messages'], 'reason': row['reason']}
@@ -3493,7 +3399,7 @@ def push_review(kind: str, period: date, *, now: datetime, notify_cfg, trigger_s
     if kind == 'monthly' and period.day != 1:
         raise ledger.LedgerError('period 必须是当月 1 日')
     public_url = load_config().workbench.public_url
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         head = (repository.weekly_head(conn, period) if kind == 'weekly'
                 else repository.monthly_head(conn, period))
     if head is None:
@@ -3511,7 +3417,7 @@ def _tick_weekly(*, now: datetime, notify_cfg, trigger_source: str, client, push
     generate one (superseding whatever is there), then push."""
     week = review_digest.due_week(now)
     week_end = week + timedelta(days=6)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         if repository.review_push_sent(conn, 'weekly', week):
             return {'period': week, 'action': 'already_sent'}
         head = repository.weekly_head(conn, week)
@@ -3538,7 +3444,7 @@ def _tick_monthly(*, now: datetime, notify_cfg, trigger_source: str, client, pus
 
     month = review_digest.due_month(now)
     month_end = (month.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         if repository.review_push_sent(conn, 'monthly', month):
             return {'period': month, 'action': 'already_sent'}
         reminded_before = repository.review_push_sent(conn, 'monthly_reminder', month)
@@ -3600,7 +3506,7 @@ def review_tick(*, now: datetime, notify_cfg, trigger_source: str, client=None) 
 
 
 def list_review_pushes(limit: int = 20) -> list[dict[str, Any]]:
-    with _tx() as conn:
+    with core_tx._tx() as conn:
         rows = repository.list_review_pushes(conn, limit)
     return [{**row, 'id': str(row['id']), 'review_id': str(row['review_id']) if row['review_id'] else None,
              'period': row['period'].isoformat(), 'created_at': row['created_at'].isoformat()}

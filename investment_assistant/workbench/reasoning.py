@@ -21,6 +21,7 @@ from typing import Any
 from investment_assistant.workbench import labels, retro
 from investment_assistant.workbench.agent import REASON_TEXT
 from investment_assistant.workbench.agent import conditions as condition_registry
+from investment_assistant.core import tx as core_tx
 
 AGENT_V1 = 'agent-1'
 CUTOFF_EXEMPT_TOOLS = frozenset({'get_concept'})
@@ -567,7 +568,7 @@ def reasoning(run_id: str) -> dict:
     from investment_assistant.workbench import service
 
     key = _uuid(run_id)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         inputs = _inputs(conn, key)
         extra = _growth_context(conn, inputs['run']) if inputs['run']['mode'] in ('retro', 'discuss') else {}
     return build(**inputs, **extra)

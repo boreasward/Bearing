@@ -5,6 +5,8 @@ import legacy_decisions
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.workbench import derivation_view, ledger, service
 
 
@@ -192,7 +194,7 @@ def test_bad_own_levels_400_and_nothing_written(client, workbench_db, monkeypatc
     def connection():
         yield workbench_db
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     now = datetime(2026, 10, 23, 1, 0, tzinfo=UTC)
     unit_day = date(2026, 10, 22)
     repository.store_candidate(workbench_db, 'NVDA', unit_day,

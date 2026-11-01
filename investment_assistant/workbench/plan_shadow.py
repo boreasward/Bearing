@@ -16,11 +16,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from investment_assistant.core.versions import SHADOW_V1 as SHADOW_V1, SHADOW_V2 as SHADOW_V2
 from investment_assistant.workbench import entry_rules
 from investment_assistant.workbench.plans import MAX_HOLD_DEFAULT
 
-SHADOW_V1 = 'plan-shadow-1'
-SHADOW_V2 = 'plan-shadow-2'
 # The current shadow version (spec §2). The read views run `simulate_both` and label each outcome with the version
 # that produced it (`service.shadow_outcomes`); `plan-shadow-1` stays for plans without execution fields.
 SHADOW_VERSION = SHADOW_V2

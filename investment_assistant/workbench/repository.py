@@ -18,6 +18,8 @@ _FLOAT_FIELDS = ('open', 'high', 'low', 'close', 'adj_close', 'split_factor')
 # every pre-030 row landed in it through the column defaults. All ledger readers below default to it, so the
 # existing call sites keep seeing exactly the real account's view (spec D4). A later task replaces the literal
 # with the constant of `workbench.accounts`.
+from investment_assistant.core import locks as core_locks
+from investment_assistant.core import schema as core_schema
 from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
 
 
@@ -722,11 +724,7 @@ def read_filings(conn, ticker: str, *, since: date, cutoff_at: datetime) -> list
                       'ORDER BY filing_date, id', (ticker.upper(), since, cutoff_at))
 
 
-WORKBENCH_TABLES = ('price_bars', 'news_items', 'news_item_tickers', 'signal_candidates', 'signal_briefs',
-                    'signal_decisions', 'trades', 'weekly_reviews', 'filings', 'trade_plans', 'earnings_dates',
-                    'account_snapshots', 'cash_flows', 'monthly_reviews', 'watchlist_items', 'pool_tiers',
-                    'macro_observations', 'market_regimes', 'rule_backchecks', 'agent_runs', 'agent_tool_calls',
-                    'review_pushes', 'screen_runs', 'screen_results')
+WORKBENCH_TABLES = core_schema.WORKBENCH_TABLES
 
 
 def store_macro(conn, series_id: str, rows: list[dict[str, Any]], *, now: datetime) -> dict[str, int]:
@@ -1098,19 +1096,7 @@ _STAGE_ORDER = {
 _ATTEMPT_RESET_COLUMNS = 'id, ticker, signal_date, mode, request_id, origin, created_at'
 
 
-def daily_ready(conn) -> bool:
-    """True when migration 028 has run: `stage_runs.attempt`, the attempt-reset table and the `daily` job row.
-
-    028 creates the credential tables in the same transaction, so the attempt-reset table stands in for them (this
-    module never touches the connection tables, spec §10.2). A pure existence check (no row is written); `daily` refuses to run without it (D36)."""
-    present = conn.execute("SELECT to_regclass('stage_runs'), to_regclass('agent_attempt_resets'), "
-                           "to_regclass('scheduled_jobs')").fetchone()
-    if any(item is None for item in present):
-        return False
-    has_attempt = conn.execute("SELECT 1 FROM pg_attribute WHERE attrelid = 'stage_runs'::regclass "
-                               "AND attname = 'attempt' AND NOT attisdropped").fetchone()
-    has_job = conn.execute("SELECT 1 FROM scheduled_jobs WHERE name = 'daily'").fetchone()
-    return bool(has_attempt and has_job)
+daily_ready = core_schema.daily_ready
 
 
 def stage_rows_for_run(conn, run_id: str) -> list[dict[str, Any]]:
@@ -1284,13 +1270,7 @@ def last_successful_push_at(conn, *, before_session: date) -> datetime | None:
 
 
 def missing_tables(conn) -> list[str]:
-    row = conn.execute('SELECT ' + ', '.join(f"to_regclass('{t}')" for t in WORKBENCH_TABLES)).fetchone()
-    missing = [t for t, found in zip(WORKBENCH_TABLES, row) if found is None]
-    if 'filings' not in missing and conn.execute(
-            "SELECT 1 FROM information_schema.columns WHERE table_name = 'filings' AND column_name = 'accepted_at' "
-            "AND table_schema = ANY(current_schemas(false))").fetchone() is None:
-        missing.append('filings.accepted_at')
-    return missing
+    return core_schema.missing_tables(conn, WORKBENCH_TABLES)
 
 
 def fill_filing_acceptance(conn, metas: list[dict[str, Any]]) -> int:
@@ -1753,9 +1733,7 @@ def growth_ready(conn) -> bool:
     return bool(conn.execute(f'SELECT {checks}').fetchone()[0])
 
 
-def try_advisory_lock(conn, key: str) -> bool:
-    """Transaction-scoped, non-blocking advisory lock on ``key``; False when another transaction holds it."""
-    return bool(conn.execute('SELECT pg_try_advisory_xact_lock(hashtext(%s))', (key,)).fetchone()[0])
+try_advisory_lock = core_locks.try_advisory_lock
 
 
 _NY = ZoneInfo('America/New_York')
@@ -2099,19 +2077,7 @@ def _holding_status_columns(accounts_enabled: bool) -> str:
     return _HOLDING_STATUS_COLUMNS if accounts_enabled else _HOLDING_STATUS_COLUMNS.replace('id, account_id,', 'id,')
 
 
-def executable_ready(conn) -> bool:
-    """True when migration 029 has run: the three new tables, `trades.plan_id` and the two execution columns of
-    `trade_plans` all exist (spec §8). A pure existence check; never raises on a missing table."""
-    tables = conn.execute("SELECT to_regclass('chain_retriggers'), to_regclass('holding_status'), "
-                          "to_regclass('plan_notes'), to_regclass('trades'), to_regclass('trade_plans')").fetchone()
-    if any(item is None for item in tables):
-        return False
-    wanted = {('trades', 'plan_id'), ('trade_plans', 'entry_type'), ('trade_plans', 'max_hold_sessions')}
-    found = conn.execute(
-        'SELECT attrelid::regclass::text, attname FROM pg_attribute '
-        "WHERE attrelid IN (to_regclass('trades'), to_regclass('trade_plans')) "
-        "AND attname IN ('plan_id', 'entry_type', 'max_hold_sessions') AND NOT attisdropped").fetchall()
-    return wanted <= {(table.rsplit('.', 1)[-1], name) for table, name in found}
+executable_ready = core_schema.executable_ready
 
 
 def insert_chain_retrigger(conn, row: dict[str, Any]) -> dict[str, Any]:
@@ -2369,17 +2335,7 @@ _ACCOUNT_COLUMNS = ('id, kind, strategy, name, opening_cash, opened_on, params, 
                     'settled_through, created_at')
 
 
-def accounts_ready(conn) -> bool:
-    """True when migration 030 has run: the six new tables and `trades.account_id` all exist (spec §7).
-    A pure existence check; never raises on a missing table."""
-    tables = conn.execute(
-        "SELECT to_regclass('accounts'), to_regclass('account_param_changes'), to_regclass('account_equity_days'), "
-        "to_regclass('paper_orders'), to_regclass('paper_decisions'), to_regclass('paper_chain_done')").fetchone()
-    if any(item is None for item in tables):
-        return False
-    has_account = conn.execute("SELECT 1 FROM pg_attribute WHERE attrelid = 'trades'::regclass "
-                               "AND attname = 'account_id' AND NOT attisdropped").fetchone()
-    return bool(has_account)
+accounts_ready = core_schema.accounts_ready
 
 
 def list_accounts(conn, *, include_closed: bool = False) -> list[dict[str, Any]]:

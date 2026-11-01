@@ -34,9 +34,10 @@ from operator import ge, gt, le, lt, ne
 from typing import Any, Callable, NamedTuple
 from zoneinfo import ZoneInfo
 
+from investment_assistant.core.versions import DERIVATION_VERSION as DERIVATION_VERSION
 from investment_assistant.data.calendar import add_trading_days
+from investment_assistant.core import tx as core_tx
 
-DERIVATION_VERSION = 'derivation-1'
 REGISTERED_VERSIONS = ('plan-1', 'plan-2', 'agent-1', 'agent-2', 'agent-3')
 
 ENTRY_ATR = Decimal('0.5')
@@ -1039,7 +1040,7 @@ def derive_unit(candidates: list[dict[str, Any]]) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- command line (v2.4 §8 第 3 点)
 #
-# Read-only: every command runs inside ``service.read_only_tx()`` and writes nothing. The pure part above
+# Read-only: every command runs inside ``core_tx.read_only_tx()`` and writes nothing. The pure part above
 # stays importable without a database, so the view layer (which imports this module) is imported lazily.
 
 NY = ZoneInfo('America/New_York')
@@ -1083,7 +1084,7 @@ def _check(args: argparse.Namespace, out: Callable[[str], None]) -> int:
     from investment_assistant.workbench import derivation_view, repository, service
 
     results: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         for plan in repository.plans_since(conn, args.since):
             if (args.until is not None and plan['signal_date'] > args.until) \
                     or (args.kind is not None and plan['kind'] != args.kind):
@@ -1141,7 +1142,7 @@ def _stages(args: argparse.Namespace, out: Callable[[str], None]) -> int:
     from investment_assistant.workbench import workflow
 
     start, end = session_window(args.session)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         ready = repository.stage_runs_ready(conn)
         reports = repository.workbench_reports_between(conn, start, end)
         runs: dict[str, list[dict[str, Any]]] = {}

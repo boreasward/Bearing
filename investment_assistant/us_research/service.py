@@ -11,7 +11,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from investment_assistant.config import load_config
-from investment_assistant.db import connect, list_filings, list_watchlist_items
+from investment_assistant.core import tx as core_tx
+from investment_assistant.db import list_filings, list_watchlist_items
 from . import repository as repo
 from .domain import stock_id
 from .metrics import financial_series, performance_view, valuation_view
@@ -23,11 +24,17 @@ RAW_ROOT = Path(__file__).resolve().parents[2] / '.local/us-research/raw'
 _ACCESSION = re.compile(r'\d{10}-\d{2}-\d{6}')
 
 
-def connection():
-    url = os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL')
-    if not url:
-        raise ValueError('未配置数据库，尚未采集美股研究数据')
-    return connect(url)
+def _connection():
+    """core.tx's connection with this subsystem's legacy error contract: an unconfigured
+    database stays a ``ValueError`` (HTTP 400), not the workbench's ``Unavailable``.
+    Tests patch the ``connection`` alias below; Task 1 dissolves this module."""
+    try:
+        return core_tx.connection()
+    except core_tx.Unavailable:
+        raise ValueError('未配置数据库，尚未采集美股研究数据') from None
+
+
+connection = _connection   # guidance imports this name; sync/view call _connection() through core.tx
 
 
 def validate_request(symbols=None, datasets=None, retry_failed=False):
@@ -224,7 +231,7 @@ def _local_filing_rows(conn, ticker, *, config=None):
 def sync(symbols=None, *, datasets=None, retry_failed=False, source=None, config=None):
     symbols, selected = validate_request(symbols, datasets, retry_failed)
     results = []
-    with connection() as conn:
+    with _connection() as conn:
         if symbols is None:
             symbols = []
             for row in list_watchlist_items(conn):
@@ -301,7 +308,7 @@ def view(ticker, *, as_of=None):
     sid = stock_id(ticker)
     ticker = sid.rsplit(':', 1)[-1]
     cutoff = _cutoff(as_of)
-    with connection() as conn:
+    with _connection() as conn:
         rows = {ds: repo.read_rows(conn, sid, ds, as_of=cutoff) for ds in DATASETS}
         states = repo.states(conn, sid)
         guidance_records = repo.read_history(conn, sid, 'guidance', as_of=cutoff)

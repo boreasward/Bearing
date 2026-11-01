@@ -49,6 +49,7 @@ from investment_assistant.workbench.agent import graph as agent_graph
 from investment_assistant.workbench.agent import growth_check
 from investment_assistant.workbench.agent import model as agent_model
 from investment_assistant.workbench.agent import tools as agent_tools
+from investment_assistant.core import tx as core_tx
 
 REVIEW_MAX_OBJECTS = 20
 REVIEW_MAX_ATTEMPTS = 3
@@ -626,7 +627,7 @@ def _review_chain(obj: dict, *, session: date, now: datetime, trigger: str, run_
     isolates them per chain)."""
     ticker, signal_date = obj['ticker'], obj['signal_date']
     recheck = trigger == 'recheck'
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         if not repository.try_review_lock(conn, ticker, signal_date):
             return {'skipped_without_row': 'review_in_progress'}
         seen = _read(conn, ticker, signal_date, session=session, now=now, trigger=trigger,
@@ -821,7 +822,7 @@ def _gate(settings, *, started: float, clock: Callable[[], float], quota: dict, 
     if quota.get('lost'):
         return quota['lost']
     if settings.daily_tokens is not None:
-        with service._tx() as conn:
+        with core_tx._tx() as conn:
             used = repository.agent_tokens_on(conn, now.astimezone(service.NY).date())
         if used >= settings.daily_tokens:
             return 'token_budget'
@@ -909,7 +910,7 @@ def _record_lost_runs(spent: dict, *, reason: str, run_row: Callable, attempt: i
     """The chain moved while the model ran (a decision, or a review written without the run lock), so the
     review writes no row; its model runs are still recorded — ``skipped`` with the reason and their tokens —
     so the daily token cap counts them."""
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         for run_id, (mode, tokens_in, tokens_out) in spent.items():
             repository.insert_agent_run(conn, run_row(run_id, mode, 'skipped', attempt, reason=reason,
                                                       input_tokens=tokens_in, output_tokens=tokens_out), [])
@@ -938,7 +939,7 @@ def _commit(seen: dict, *, ticker: str, signal_date: date, session: date, now: d
     (a recheck or a decision may have landed while the model ran; otherwise ``review_in_progress``, no row) —
     and (batch) not yet reviewed on S; then ``build(conn, attempt)`` inserts its runs / plan / version and
     returns the review row, inserted last."""
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         if not repository.try_review_lock(conn, ticker, signal_date):
             return {'skipped_without_row': 'review_in_progress'}
         status = service.chain_status(conn, ticker, signal_date, session=session, now=now)
@@ -1164,7 +1165,7 @@ def _write_statuses(session: date, run_id: str | None, *, now: datetime, exclude
     be written is a ``failures`` entry of the stage (and ``plan_review check`` reports its missing row)."""
     skipped = {(item['ticker'], item['signal_date']): item['reason'] for item in detail['excluded']}
     try:
-        with service._tx() as conn:
+        with core_tx._tx() as conn:
             if not repository.executable_ready(conn):
                 written = {'rows': [], 'failures': [('*', 'migration_029_missing')]}
             else:
@@ -1204,7 +1205,7 @@ def run_stage(session: date, *, now: datetime, deps, summary: dict[str, Any], st
     t_stage = clock()
     review = summary['review'] = _empty_review()
     settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         ready = repository.timeline_ready(conn) if timeline_ready is None else timeline_ready
         objects, excluded = review_objects(conn, session, now=now) if ready else ([], None)
     if not ready:
@@ -1336,7 +1337,7 @@ def _precheck(ticker: str, signal_date: date, *, session: date, now: datetime, s
     run. The transaction-level write lock is never probed here: the run lock already excludes a concurrent
     review, and a probe landing during the batch's write transaction would make the batch drop its row after its
     model calls."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         status = service.chain_status(conn, ticker, signal_date, session=session, now=now)
         if status is None:
@@ -1456,7 +1457,7 @@ def chain_view(ticker: str, signal_date: date, *, now: datetime) -> dict:
     ValueError for a bad ticker, LookupError without an agent chain, Unavailable without migration 026."""
     ticker = _ticker(ticker)
     session = bars_module.latest_closed_session(now)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         status = service.chain_status(conn, ticker, signal_date, session=session, now=now)
         if status is None:
@@ -1507,7 +1508,7 @@ def chain_view(ticker: str, signal_date: date, *, now: datetime) -> dict:
 def reviews_view(session: date) -> dict:
     """Every review row of review session S (batch and recheck, oldest first) with the version numbers
     it reviewed and produced. Read-only; Unavailable without migration 026."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         rows = repository.reviews_on(conn, session)
         numbers: dict[str, int] = {}
@@ -1528,7 +1529,7 @@ def ticker_chains(ticker: str, *, now: datetime) -> dict:
     ticker = _ticker(ticker)
     session = bars_module.latest_closed_session(now)
     rows = []
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         context = ticker_context(conn, ticker, now=now)
         for chain in repository.all_chains(conn):
@@ -1787,7 +1788,7 @@ def check(session: date, out: Callable[[str], None] = print, *, now: datetime | 
     now = now or datetime.now(UTC)
     cache: dict[str, dict[int, dict]] = {}
     contexts: dict[str, dict] = {}
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         if not repository.executable_ready(conn):
             raise service.Unavailable('迁移 029 未执行')

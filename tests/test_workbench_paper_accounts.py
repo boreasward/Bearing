@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.workbench import accounts, repository, service
 
 DAY = date(2026, 10, 21)
@@ -24,7 +26,7 @@ def conn(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     return workbench_db
 
 
@@ -71,7 +73,7 @@ def test_real_opening_checks_current_records_after_waiting_for_account_lock(monk
     def opening(conn, account_id, **values):
         writes.append(values)
         return {**real, **values}
-    monkeypatch.setattr(service, '_tx', tx)
+    monkeypatch.setattr(core_tx, '_tx', tx)
     monkeypatch.setattr(m, 'require_account', lambda *args: real)
     monkeypatch.setattr(repository, 'lock', lock)
     monkeypatch.setattr(repository, 'list_trades', trades)

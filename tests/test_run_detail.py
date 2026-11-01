@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from _daily_db import (NotifyCfg, clock, daily_config, daily_db, job_reports, notices, shared_saver)   # noqa: F401
 from test_daily_workflow import RUN_ID, effective, fake_sec, flaky, no_fetch_backoff, rows, world   # noqa: F401
 from test_workbench_service import NOW, SESSION, _agent_settings, _ok_responses, agent_deps, seed_watchlist
@@ -397,7 +399,7 @@ def test_without_migration_028_old_runs_still_show(workbench_db, monkeypatch):
     def connection():
         yield workbench_db
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     run_id = 'workbench-20261022223100-0a0a0a0a'
     book_old = [(i, s) for i, s in enumerate(stages_module.STAGE_IDS_V3)]
     for index, stage in book_old:
@@ -635,8 +637,8 @@ def test_run_detail_read_only(daily_db, clock, notices, job_reports, scripted_mo
             entered.append(conn.execute('SHOW transaction_read_only').fetchone()[0])
             yield conn
 
-    monkeypatch.setattr(service, 'read_only_tx', spy)
-    monkeypatch.setattr(service, '_tx', lambda: pytest.fail('a write transaction was opened'))
+    monkeypatch.setattr(core_tx, 'read_only_tx', spy)
+    monkeypatch.setattr(core_tx, '_tx', lambda: pytest.fail('a write transaction was opened'))
     reads = []
     for name in ('job_reports_for_run', 'stage_rows_for_run', 'fetch_runs_by_ids', 'candidate_refs_by_ids', 'plans_by_ids',
                  'agent_runs_by_ids', 'screen_results', 'regime_by_id', 'latest_agent_run', 'attempt_resets_for'):

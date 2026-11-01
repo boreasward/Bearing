@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.data.calendar import add_trading_days, trading_days_between
 from investment_assistant.workbench import repository, service
 from investment_assistant.workbench import universe as universe_module
@@ -125,7 +127,7 @@ def offline(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     return workbench_db
 
 
@@ -168,7 +170,7 @@ def test_valid_screen_plan_is_decidable(offline):
     assert ctx['source'] == 'screen' and ctx['screen']['rank'] == 1 and ctx['screen']['group'] == 'trigger'
     u05 = next(u for u in view['extended_units'] if u['ticker'] == 'U05')
     assert u05['plan'] is None and u05['proposed_action'] == 'watch'
-    with service.connection() as conn:
+    with core_tx.connection() as conn:
         groups = service._session_units(conn, S1, now=evening(S1))
     assert any(u['ticker'] == 'U00' for u in groups['main_buy'])
     assert not any(u['ticker'] == 'U05' for u in groups['main_buy'])
@@ -255,8 +257,8 @@ def test_collect_returns_failure_reasons(offline):
     collect.bars_one('QQQ', session=S1, now=evening(S1), deps=deps,
                      lookback_days=screening.COLLECT_LOOKBACK_DAYS)
     # v2.8 D4: the range is collected by the collect node (``collect_range``); run_stage only reads and carries the outcomes
-    fetched, failures, reasons = screening.collect_range(service.connection, session=S1, now=evening(S1),
-                                                         targets=['XXX', 'U00'], deps=deps)
+    fetched, failures, reasons = screening.collect_range(core_tx.connection, session=S1, now=evening(S1),
+                                                          targets=['XXX', 'U00'], deps=deps)
     assert (fetched, failures, reasons) == ({'U00'}, ['XXX'], {'XXX': 'rate limited'})
     stage = screening.run_stage(session=S1, now=evening(S1),
                                 manual=pool_module.Pool(core=('SYNTH',), extended=(), sectors={}),
@@ -472,7 +474,7 @@ def test_report_full_keeps_all_setups(offline):
     from investment_assistant.workbench import screening
     seed_watchlist(offline)
     service.run_batch(now=evening(S1), deps=make_deps())
-    with service.connection() as conn:
+    with core_tx.connection() as conn:
         brief = screening.report(conn, S1, now=evening(S1))
         full = screening.report(conn, S1, now=evening(S1), full=True)
     assert len(brief['setups']) == 10 and brief['setups_more'] == len(full['setups']) - 10

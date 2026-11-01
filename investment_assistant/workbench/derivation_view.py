@@ -3,7 +3,7 @@
 ``load_rows`` reads exactly the rows a plan's ``inputs`` name, by id; every table involved is
 append-only, so the row read back is the row the plan was generated from (a newer bar revision or a
 corrected snapshot is a new row with a new id and is never picked up). The three use cases and the
-batch check run inside ``service.read_only_tx()`` and never call an external data source: a row that
+batch check run inside ``core_tx.read_only_tx()`` and never call an external data source: a row that
 cannot be read back is reported as ``incomplete``, not fetched.
 
 The derivation arithmetic itself lives in ``derivation`` (pure); nothing is recomputed here.
@@ -18,6 +18,7 @@ from investment_assistant.data import identity
 from investment_assistant.workbench import derivation, repository, service
 from investment_assistant.workbench import stages as stages_module
 from investment_assistant.workbench.timeline import AGENT_V2, AGENT_V3
+from investment_assistant.core import tx as core_tx
 
 RUN_NOTE_PRE_V24 = 'v2.4 之前生成，无阶段证据'
 RUN_NOTE_NO_TABLE = '迁移 025 未执行，暂无阶段证据'
@@ -111,7 +112,7 @@ def plan_derivation(plan_id: str) -> dict[str, Any]:
 
     ValueError for a non-UUID id, LookupError for an unknown plan."""
     plan_id = _plan_id(plan_id)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         plan = repository.plan_by_id(conn, plan_id)
         if plan is None:
             raise LookupError(f'计划不存在：{plan_id}')
@@ -125,7 +126,7 @@ def unit_derivation(ticker: str, signal_date: date) -> dict[str, Any]:
     ValueError when ``ticker`` fails ``identity.stock_id``, LookupError when the unit has no candidates."""
     identity.stock_id(ticker)                       # ValueError for anything that is not a US ticker
     ticker = ticker.strip().upper()
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         candidates = repository.unit_candidates(conn, ticker, signal_date)
         if not candidates:
             raise LookupError(f'该单元没有候选：{ticker} {signal_date}')
@@ -139,7 +140,7 @@ def stage_runs_view(*, session: date | None = None, run_id: str | None = None) -
     Exactly one of ``session`` / ``run_id``; ValueError otherwise."""
     if (session is None) == (run_id is None):
         raise ValueError('session 与 run_id 必须给出且只能给出一个')
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         ready = repository.stage_runs_ready(conn)
         if not ready:
             stored: list[dict[str, Any]] = []
@@ -167,7 +168,7 @@ def check_plans(plan_ids: list[str]) -> dict[str, Any]:
     ids = [_plan_id(i) for i in plan_ids]
     items: list[dict[str, Any]] = []
     if ids:
-        with service.read_only_tx() as conn:
+        with core_tx.read_only_tx() as conn:
             for plan_id in ids:
                 plan = repository.plan_by_id(conn, plan_id)
                 if plan is None:

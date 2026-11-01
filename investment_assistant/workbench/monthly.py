@@ -10,7 +10,8 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
-MONTHLY_VERSION = 'monthly-5'
+from investment_assistant.core.versions import MONTHLY_VERSION as MONTHLY_VERSION
+
 MONTHLY_V4 = 'monthly-4'      # v2.9 D30: tracks-2, discipline-2, plans by shadow version (monthly-3: plans.agent = first versions)
 SENSITIVITY_PCTS = (0.005, 0.01, 0.015, 0.02)
 

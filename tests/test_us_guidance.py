@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 
 @pytest.fixture
 def card_db(monkeypatch):
@@ -27,7 +29,7 @@ def card_db(monkeypatch):
 
         from investment_assistant.us_research import guidance, service
         monkeypatch.setattr(guidance, 'connection', connection)
-        monkeypatch.setattr(service, 'connection', connection)
+        monkeypatch.setattr(core_tx, 'connection', connection)
         yield conn
         conn.rollback()
 

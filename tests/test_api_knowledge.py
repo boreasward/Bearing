@@ -2,6 +2,8 @@
 from pathlib import Path
 
 import pytest
+
+from investment_assistant.core import tx as core_tx
 import yaml
 
 from investment_assistant.workbench import knowledge
@@ -101,7 +103,7 @@ def test_knowledge_api_works_without_database(client, root, monkeypatch):
         attempts.append(1)
         raise service.Unavailable('数据库不可达')
 
-    monkeypatch.setattr(service, 'connection', no_database)
+    monkeypatch.setattr(core_tx, 'connection', no_database)
     for path in ('/api/knowledge/concepts', '/api/knowledge/concepts/plan.stop', '/api/knowledge/principles'):
         assert client.get(path).status_code == 200
     assert attempts == []

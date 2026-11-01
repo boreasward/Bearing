@@ -20,6 +20,7 @@ from investment_assistant.workbench import earnings as earnings_module
 from investment_assistant.workbench import pool as pool_module
 from investment_assistant.workbench import repository, screen
 from investment_assistant.workbench import universe as universe_module
+from investment_assistant.core import tx as core_tx
 
 NY = ZoneInfo('America/New_York')
 OVER_BUDGET_S = 600
@@ -110,9 +111,7 @@ def run_stage(*, session: date, now: datetime, manual: pool_module.Pool, held: l
     ``fetched`` / ``fetch_reasons`` are the collect node's outcomes for the range tickers; they ride along in the
     result (``fetched``, ``fetch_failures``, ``fetch_reasons``) so the caller can account every attempted ticker.
     Returns members, fetched tickers, the universe and summary['screen']."""
-    from investment_assistant.workbench import service as service_module
-
-    conn_factory = service_module.connection
+    conn_factory = core_tx.connection
     clock = deps.clock or time.monotonic
     summary: dict[str, Any] = {'_started': clock(), 'status': 'success', 'run_id': run_id,
                                'screen_run_id': None, 'selected': [], 'members': [],
@@ -224,7 +223,7 @@ def backfill_new_members(tickers: list[str], *, session: date, now: datetime, de
             problems.append(f'news: {exc}')
         try:
             row = earnings_module.fetch_next(ticker, fetcher=deps.earnings_fetcher, today=today)
-            with service_module._tx() as conn:
+            with core_tx._tx() as conn:
                 out['earnings'][ticker] = repository.store_earnings(conn, ticker, row, now=now)['status']
         except service_module.Unavailable:
             raise
@@ -321,10 +320,8 @@ def replay(*, sessions: int, now: datetime) -> list[dict[str, Any]]:
         raise ValueError(f'sessions must be 1..20, got {sessions}')
     from investment_assistant.db import list_watchlist_items
     from investment_assistant.workbench import bars as bars_module
-    from investment_assistant.workbench import service as service_module
-
     note = '财报日用当前已知值，非当时时点值'
-    with service_module.connection() as conn:
+    with core_tx.connection() as conn:
         latest = bars_module.latest_closed_session(now)
         days = [add_trading_days(latest, -i) for i in range(sessions)]   # newest first
         universe_ = universe_module.load()

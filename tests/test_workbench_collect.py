@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.data import fetch_policy as fp
 from investment_assistant.workbench import collect, repository, service
 
@@ -78,7 +80,7 @@ def test_write_runs_never_raises(monkeypatch):
     def connection():
         raise RuntimeError('boom')
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     out = collect.write_runs([_row(collect.Tally('bars', 'workbench', ('A',)))])
     assert out == {'written': 0, 'error': 'boom'}
 
@@ -208,7 +210,7 @@ def stored(monkeypatch):
     def tx():
         yield object()
 
-    monkeypatch.setattr(service, '_tx', tx)
+    monkeypatch.setattr(core_tx, '_tx', tx)
     monkeypatch.setattr(repository, 'store_bars', lambda conn, t, rows, *, now: {'inserted': len(rows) - 1,
                                                                                    'unchanged': 1})
     monkeypatch.setattr(repository, 'store_news', lambda conn, entries, *, now: {'inserted': len(entries),

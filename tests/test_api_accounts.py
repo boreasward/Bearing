@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from investment_assistant.workbench import accounts, repository, service
+from investment_assistant.core import tx as core_tx
 
 NOW=datetime(2026,10,23,23,tzinfo=UTC)
 REAL=str(accounts.REAL_ACCOUNT_ID)
@@ -14,7 +15,7 @@ REAL=str(accounts.REAL_ACCOUNT_ID)
 def api_db(workbench_db,monkeypatch):
     @contextmanager
     def connection(): yield workbench_db
-    monkeypatch.setattr(service,'connection',connection)
+    monkeypatch.setattr(core_tx,'connection',connection)
     from investment_assistant.api.routes import workbench
     monkeypatch.setattr(workbench,'_now',lambda:NOW)
     try:

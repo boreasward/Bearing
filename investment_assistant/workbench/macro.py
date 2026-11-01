@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from investment_assistant.core.redact import redact as redact
 from investment_assistant.data.fetch_policy import FetchError
 from investment_assistant.data.http import get_json
 
@@ -21,13 +22,6 @@ MACRO_CHANGE_OBS = 20
 
 class NotConfigured(RuntimeError):
     """FRED_API_KEY is absent; no request is made and nothing is stored."""
-
-
-def redact(text: str, secret: str | None) -> str:
-    """Replace every occurrence of the secret with ***; empty secrets redact nothing."""
-    if secret:
-        text = text.replace(secret, '***')
-    return text
 
 
 def _default_fetcher(url: str, *, params: dict, api_key: str | None) -> tuple[dict | None, dict]:

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 URL = os.environ.get('INVESTMENT_ASSISTANT_TEST_DATABASE_URL')
 
 
@@ -27,7 +29,7 @@ def research_db(monkeypatch):
         @contextmanager
         def connection():
             yield conn
-        monkeypatch.setattr(service, 'connection', connection)
+        monkeypatch.setattr(core_tx, 'connection', connection)
         yield conn
         conn.rollback()
 

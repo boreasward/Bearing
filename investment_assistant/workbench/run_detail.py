@@ -1,6 +1,6 @@
 """Run detail: one run of the daily workflow (or an older batch) node by node, read-only (v2.8 spec §7).
 
-``detail`` is the use case behind ``GET /api/runs/{run_id}/detail``. It runs entirely inside ``service.read_only_tx()``
+``detail`` is the use case behind ``GET /api/runs/{run_id}/detail``. It runs entirely inside ``core_tx.read_only_tx()``
 (the database itself refuses a write), reads only what earlier runs recorded — ``job_reports``, ``stage_runs``,
 ``data_fetch_runs``, the rows the stage evidence points at, ``agent_attempt_resets`` — and the checkpoint's
 ``get_state(config).next`` (a read). It never calls a fetcher, a model or ``settings_from_env`` and never asks the
@@ -19,6 +19,7 @@ from typing import Any
 from investment_assistant.workbench import families as families_module
 from investment_assistant.workbench import repository, run_overview, service, workflow
 from investment_assistant.workbench import stages as stages_module
+from investment_assistant.core import tx as core_tx
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +370,7 @@ def detail(run_id: str, *, now: datetime, checkpointer_factory=None) -> dict:
     external source."""
     if not isinstance(run_id, str) or not RUN_ID_RE.match(run_id):
         raise ValueError('run_id 格式不合法')
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         ready = repository.stage_runs_ready(conn)
         modern = ready and repository.daily_ready(conn)
         rows = ([] if not ready else repository.stage_rows_for_run(conn, run_id) if modern

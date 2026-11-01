@@ -32,19 +32,20 @@ from investment_assistant.workbench.agent.discuss_tools import DISCUSS_DESCRIPTI
 from investment_assistant.workbench import entry_rules
 from investment_assistant.workbench.agent import plan_check
 from investment_assistant.workbench.agent.plan_check import check_plan, check_review, filter_counter_v2
+from investment_assistant.core.versions import (DISCUSS_AGENT_VERSION as DISCUSS_AGENT_VERSION,
+                                                INTERPRET_VERSION as INTERPRET_VERSION,
+                                                RETRO_AGENT_V1 as RETRO_AGENT_V1,
+                                                RETRO_AGENT_V2 as RETRO_AGENT_V2,
+                                                REVIEW_VERSION as REVIEW_VERSION)
 from investment_assistant.workbench.agent.tools import TOOL_DESCRIPTIONS, TOOLS, Recorder, ToolContext, call
 from investment_assistant.workbench.plans import AGENT_VERSION   # re-exported here (plan §graph.py)
 # AGENT_V2 lives in timeline (plan_version of agent-2 plans); graph imports it from there and re-exports
 # it. timeline imports only agent.plan_check / conditions / tools, never this module, so there is no cycle.
 from investment_assistant.workbench.timeline import AGENT_V2, AGENT_V3
 
-REVIEW_VERSION = 'agent-review-2'        # v2.9: the evidence block gains 「再次触发」 and 「持仓状态」 (D32)
-RETRO_AGENT_V1 = 'agent-retro-1'
-RETRO_AGENT_V2 = 'agent-retro-2'         # v2.9 D29: 「你的决定」 -> 「你的执行」
 # The label retro runs carry follows the retro facts (retro-1 / retro-2) that `retro_cards` builds: new cards are
 # retro-2, drafted by agent-retro-2 (`run_retro(agent_version=RETRO_AGENT_V1)` keeps the retro-1 prompt).
 RETRO_AGENT_VERSION = RETRO_AGENT_V2
-DISCUSS_AGENT_VERSION = 'agent-discuss-1'
 
 MAX_TOOL_ROUNDS = 8
 
@@ -226,8 +227,6 @@ def run_unit(*, unit: dict, ctx: ToolContext, model: BaseChatModel, checkpointer
             'counter': final['counter'], 'calls': recorder.calls,
             'input_tokens': final['input_tokens'], 'output_tokens': final['output_tokens']}
 
-
-INTERPRET_VERSION = 'agent-brief-1'
 
 INTERPRET_PROMPT = """你是美股波段研究助手，为一个决策单元写解读，只解读、不给买卖动作。
 只能通过工具获取数据；工具只返回截止时间之前的数据，你不能指定日期。先调用 get_trigger 查看触发了哪些规则。

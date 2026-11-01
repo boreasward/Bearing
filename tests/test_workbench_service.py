@@ -9,6 +9,8 @@ from datetime import UTC, date, datetime, timedelta
 import pandas as pd
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.data.calendar import add_trading_days
 from decimal import Decimal
 
@@ -79,7 +81,7 @@ def db(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     # The plan review's run lock opens a dedicated non-pooled connection of its own, as in production;
     # here it points at the explicit test database (advisory locks only, no table access).
     import os
@@ -172,7 +174,7 @@ def test_missing_schema_is_unavailable_not_empty(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     with pytest.raises(service.Unavailable):
         service.unit_cards(now=NOW)
 

@@ -7,11 +7,11 @@ that touches the database; row reads live in repository.py.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+from investment_assistant.core.redact import REASON_MAX_CHARS as REASON_MAX_CHARS, sanitize_reason as sanitize_reason
 from investment_assistant.workbench import macro, plans, pool, repository, service, universe
 
 EVIDENCE = '这里只展示采集事实。所有规则都未经验证（Phase 0 Gate HOLD）：数据完整不代表信号有效。'
@@ -20,7 +20,6 @@ ATR_EVIDENCE = '`plan-1` 的计算输入，规则 `gate_hold`'
 RECORDED = ('bars', 'news', 'sec_filings', 'fred', 'universe')   # families that write data_fetch_runs
 SEC_FILINGS_LOOKBACK_DAYS = 120   # covered = filing (or sec_8k row) within this many days of session
 FRED_STALE_DAYS = 7               # latest observation older than session - 7 days is lagging
-REASON_MAX_CHARS = 300            # stored failure reasons are truncated after redaction
 
 # One sentence per family on what its coverage counts (spec §4 展示定义; shown on the
 # card so the six different denominators are not misread, M04/D13).
@@ -103,11 +102,6 @@ def classify(target_count: int, ok_count: int, skipped_reason: str | None = None
     if ok_count == 0:
         return 'failed'
     return 'partial'
-
-
-def sanitize_reason(text: object) -> str:
-    """Stringify, redact the FRED key, keep the first 300 chars."""
-    return macro.redact(str(text), os.environ.get('FRED_API_KEY'))[:REASON_MAX_CHARS]
 
 
 def _as_date(latest: date | datetime) -> date:

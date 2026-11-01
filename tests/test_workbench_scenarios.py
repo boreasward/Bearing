@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.workbench import ledger, service
 from investment_assistant.workbench.universe import Universe
@@ -78,7 +80,7 @@ def offline(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     return workbench_db
 
 

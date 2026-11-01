@@ -9,6 +9,8 @@ from decimal import Decimal
 import psycopg
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from test_workbench_service import (NOW, SESSION, Sources, _ok_responses, _task_run, agent_deps, db, deps,
                                     seed_watchlist)
 from test_workbench_stage_runs import _recorder, _rows, _sent, wired   # noqa: F401  (fixtures)
@@ -345,7 +347,7 @@ def test_check_plans_counts_in_one_read_only_transaction(db, monkeypatch):
         opened.append(1)
         return real()
 
-    monkeypatch.setattr(service, 'read_only_tx', counting)
+    monkeypatch.setattr(core_tx, 'read_only_tx', counting)
     out = view.check_plans(ids + [str(uuid.uuid4())])
     assert len(opened) == 1
     assert out['checked'] == 3 and out['consistent'] == 2 and out['mismatch'] == 0 and out['incomplete'] == 1

@@ -5,6 +5,8 @@ from decimal import Decimal as D
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.workbench import review
 
@@ -210,7 +212,7 @@ def test_generating_a_new_week_leaves_an_old_snapshot_alone(workbench_db, monkey
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     old_week = date(2026, 10, 5)
     frozen = {'calc_version': 'review-7', 'units': {'decided': 3, 'undecided': 1}, 'by_decision': {'accept': {}}}
     old = review.save_weekly(workbench_db, old_week, frozen, notes='旧', supersedes_id=None)
@@ -403,7 +405,7 @@ def test_generate_weekly_counts_first_and_latest(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     day = date(2026, 10, 21)
     previous = None
     for version_no in range(3):

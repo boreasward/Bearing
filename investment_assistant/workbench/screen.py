@@ -11,10 +11,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from investment_assistant.core.versions import SCREEN_VERSION as SCREEN_VERSION
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.workbench import plans, rules
 
-SCREEN_VERSION = 'screen-1'
 MIN_DOLLAR_VOLUME = Decimal('50000000')  # 20 日平均成交额下限（美元）
 ATR_PCT_MIN = Decimal('0.02')
 ATR_PCT_MAX = Decimal('0.06')

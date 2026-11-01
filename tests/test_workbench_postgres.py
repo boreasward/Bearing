@@ -4,6 +4,8 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)
 
 
@@ -255,7 +257,7 @@ def test_old_weekly_snapshot_unchanged(workbench_db, monkeypatch):
     def connection():
         yield workbench_db
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     old = repository.insert_weekly_review(workbench_db, date(2026, 10, 19), 'review-1', {'units': 3}, '',
                                           None)
     assert old['calc_version'] == 'review-1'
@@ -273,7 +275,7 @@ def test_monthly_frozen_and_supersede(workbench_db, monkeypatch):
     def connection():
         yield workbench_db
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     now = datetime(2026, 11, 1, 22, 30, tzinfo=UTC)
     first = service.generate_monthly(date(2026, 10, 1), notes='初版', now=now)
     assert first['stats']['calc_version'] == 'monthly-5'
@@ -300,7 +302,7 @@ def test_monthly_ignores_stop_events_outside_the_month(workbench_db, monkeypatch
     def connection():
         yield workbench_db
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     unit_day = date(2026, 10, 21)
     plan = repository.insert_plan(workbench_db, {
         'ticker': 'NVDA', 'signal_date': unit_day, 'kind': 'rule', 'based_on_id': None, 'plan_version': 'plan-1',
@@ -570,7 +572,7 @@ def test_weekly_review3_has_by_pool(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     _pool_week_seed(workbench_db,
                     tier_rows=[{'ticker': 'NVDA', 'tier': 'extended', 'sector_etf': None}],
                     candidate_days=[date(2026, 10, 20)], plan_days=[(date(2026, 10, 20), 'extended')])
@@ -589,7 +591,7 @@ def test_tier_change_midweek_uses_signal_date_tier(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     monday = date(2026, 10, 19)
     repository.insert_pool_tiers(workbench_db, [{'ticker': 'NVDA', 'tier': 'extended', 'sector_etf': None}],
                                  session=monday, now=NOW)
@@ -610,7 +612,7 @@ def test_old_review2_snapshot_unchanged(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     old = repository.insert_weekly_review(workbench_db, date(2026, 10, 12), 'review-2', {'units': 7}, '', None)
     _pool_week_seed(workbench_db,
                     tier_rows=[{'ticker': 'NVDA', 'tier': 'core', 'sector_etf': None}],
@@ -628,7 +630,7 @@ def test_backcheck_makes_no_network_calls(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
 
     def boom(*a, **kw):
         raise AssertionError('network call during backcheck')
@@ -891,7 +893,7 @@ def test_monthly_sensitivity_ordered_by_close_time(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     from decimal import Decimal as D
     # 平仓时间序：A(+2R) 10-05、B(−1R) 10-06、A(+2R) 10-07、B(−3R) 10-08。
     # 按时间 [2, −1, 2, −3] 累计回撤 3R；monthly-1 的拼接序 [2, 2, −1, −3] 会得到 4R（低估被消除）。
@@ -914,7 +916,7 @@ def test_monthly_snapshot_has_tracks_and_detail(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     from decimal import Decimal as D
     plan = _mt_plan(workbench_db, 'NVDA', date(2026, 10, 1), D('95'))
     _mt_round_trip(workbench_db, 'NVDA', date(2026, 10, 1), plan['id'],
@@ -933,7 +935,7 @@ def test_monthly_missing_start_snapshot_stays_missing(workbench_db, monkeypatch)
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     repository.insert_snapshot(workbench_db, {
         'request_id': uuid.uuid4(), 'as_of': date(2026, 10, 31).isoformat(), 'equity': '100000',
         'note': None, 'supersedes_id': None}, 'h', recorded_at=datetime(2026, 11, 1, tzinfo=UTC))

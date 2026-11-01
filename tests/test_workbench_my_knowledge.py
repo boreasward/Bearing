@@ -6,6 +6,8 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from test_workbench_retro_cards import (D, NOW, SESSION, at, draft_reply, evening, make_decision, make_plan,  # noqa: F401
                                         make_trade, put_bars, flat, run_stage, scenario, stage_deps)
 from test_workbench_service import db  # noqa: F401
@@ -163,7 +165,7 @@ def test_concurrent_revise_one_wins(db, monkeypatch):
         with psycopg.connect(url, options=f'-c search_path={schema}') as conn:
             yield conn
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     results: list = []
     barrier = threading.Barrier(2)
 

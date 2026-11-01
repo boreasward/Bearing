@@ -5,6 +5,8 @@ from uuid import uuid4
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.config import WorkbenchConfig
 from investment_assistant.workbench import monthly
 
@@ -134,7 +136,7 @@ def test_generate_monthly_counts_first_and_latest(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     now = datetime(2026, 11, 20, 22, 30, tzinfo=UTC)
     day = date(2026, 10, 21)
     previous = None
@@ -181,7 +183,7 @@ def test_monthly5_retains_tracks2_discipline2_two_shadows(workbench_db, monkeypa
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     now = datetime(2026, 11, 20, 22, 30, tzinfo=UTC)
     day = date(2026, 10, 21)
 
@@ -279,7 +281,7 @@ def test_generate_monthly_uses_ledger_and_checks_the_three_month_window(workbenc
     from investment_assistant.workbench import repository, service, accounts
     @contextmanager
     def connection(): yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     now=datetime(2026,11,2,23,tzinfo=UTC)
     repository.set_account_opening(workbench_db,accounts.REAL_ACCOUNT_ID,opening_cash=100000,opened_on=date(2026,9,1))
     for day,value in [(date(2026,9,30),100000),(date(2026,10,30),110000)]:
@@ -299,7 +301,7 @@ def test_automatic_monthly_can_generate_from_ledger_without_broker_snapshot(work
     from investment_assistant.workbench import repository,service,accounts
     @contextmanager
     def connection(): yield workbench_db
-    monkeypatch.setattr(service,'connection',connection)
+    monkeypatch.setattr(core_tx,'connection',connection)
     now=datetime(2026,11,2,23,tzinfo=UTC)
     repository.set_account_opening(workbench_db,accounts.REAL_ACCOUNT_ID,opening_cash=100000,opened_on=date(2026,9,1))
     for day,value in [(date(2026,9,30),100000),(date(2026,10,30),110000)]:

@@ -7,6 +7,8 @@ from datetime import date
 import psycopg.errors
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.tasks import daily, runner
 from investment_assistant.workbench import run_detail, service, workflow
 
@@ -118,7 +120,7 @@ def test_resume_409_daily_running_after_the_other_checks(client, resumable, monk
 
 def test_resume_pre_check_writes_nothing(client, resumable, monkeypatch):
     monkeypatch.setattr(daily, 'resume', lambda *a, **k: pytest.fail('only the background body resumes'))
-    monkeypatch.setattr(service, '_tx', lambda: pytest.fail('no write transaction'))
+    monkeypatch.setattr(core_tx, '_tx', lambda: pytest.fail('no write transaction'))
     assert client.post('/api/jobs/daily/resume', json={'run_id': RUN_ID, 'node': 'collect'}).status_code == 202
 
 
@@ -157,7 +159,7 @@ def test_manual_run_entries_are_503_without_migration_028(client, idle, monkeypa
     def tx():
         yield object()
 
-    monkeypatch.setattr(service, 'read_only_tx', tx)
+    monkeypatch.setattr(core_tx, 'read_only_tx', tx)
     monkeypatch.setattr(repository, 'daily_ready', lambda conn: False)
     resp = client.post(path, json={})
     assert resp.status_code == 503 and resp.json() == {'error': 'migration_028_missing'} and idle == []

@@ -13,6 +13,8 @@ from contextlib import contextmanager
 
 import psycopg
 import pytest
+
+from investment_assistant.core import tx as core_tx
 from psycopg_pool import ConnectionPool
 
 from investment_assistant.workbench import collect, service
@@ -46,7 +48,7 @@ def _pooled_service(pool, monkeypatch):
             conn.execute("SET LOCAL lock_timeout = '200ms'")
             yield conn
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     yield
 
 

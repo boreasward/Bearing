@@ -31,6 +31,7 @@ from investment_assistant.workbench.agent import graph as agent_graph
 from investment_assistant.workbench.agent import model as agent_model
 from investment_assistant.workbench.agent import tools as agent_tools
 from investment_assistant.workbench.agent.growth_check import FIELDS as CITED_FIELDS
+from investment_assistant.core import tx as core_tx
 
 NY = ZoneInfo('America/New_York')
 MIGRATION_MISSING = '迁移 027 未执行'
@@ -45,7 +46,7 @@ _EPOCH = date(2000, 1, 1)
 
 def _read_ro(fn: Callable[[Any], Any]) -> Any:
     """The tools' ``ctx.read``: a real read-only transaction (``service._read_only`` is a pass-through)."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         return fn(conn)
 
 
@@ -475,12 +476,12 @@ def detect_all(session: date, *, now: datetime, window_start: date | None = None
     """Scan (read-only transaction), then insert the new cards in one write transaction. Returns the scan
     ``stats`` plus ``new_ids`` (cards inserted by this call) and ``ticker_of`` (card id -> ticker)."""
     start = window_start if window_start is not None else retro.window_start(session)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         scanned = _scan(conn, session=session, now=now, window_start=start, with_facts=True)
     stats, new_ids, ticker_of = scanned['stats'], [], {}
     if scanned['items']:
-        with service._tx() as conn:
+        with core_tx._tx() as conn:
             for item in scanned['items']:
                 card_id = repository.insert_review_card(conn, _card_row(item, run_id=run_id))
                 if card_id is not None:
@@ -533,7 +534,7 @@ def _unit_of(conn, card: dict[str, Any]) -> dict[str, Any]:
 def _record_skip(card_id: int, reason: str, trigger: str) -> None:
     """Remember why a card was not drafted: one ``skipped`` draft row, but only when the card's latest row does not
     already say the same (the batch runs daily; the log records changes, not days)."""
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         repository.lock(conn, f'{CARD_LOCK}:{card_id}')            # the lock a verdict and every draft write take
         drafts = repository.card_drafts(conn, card_id)
         if drafts and drafts[-1]['status'] == 'skipped' and drafts[-1]['reason'] == reason:
@@ -554,7 +555,7 @@ def draft_card(card_id: int, *, now: datetime, deps: service.Deps | None = None,
     a failure while writing propagates to the caller."""
     deps = deps or service.Deps()
     settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         card = repository.review_card(conn, card_id)
         if card is None:
@@ -622,7 +623,7 @@ def draft_card(card_id: int, *, now: datetime, deps: service.Deps | None = None,
         agent_version=agent_graph.RETRO_AGENT_V2 if card['retro_version'] == retro.RETRO_V2
         else agent_graph.RETRO_AGENT_V1)
     try:
-        with service._tx() as conn:
+        with core_tx._tx() as conn:
             repository.lock(conn, f'{CARD_LOCK}:{card_id}')
             # the card may have moved while the model ran: recompute the attempt and look again (a verdict, or
             # another draft that got there first, must not leave lesson drafts nobody can decide)
@@ -655,7 +656,7 @@ def redraft_check(card_id: int, *, now: datetime | None = None) -> None:
     409 ``card_reviewed`` / ``draft_exists`` / ``agent_unavailable: <reason>`` / ``token_budget``. Nothing is
     written. A manual redraft is not capped at 3 attempts, but it respects the token limit."""
     settings = agent_model.settings_from_env()
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         if repository.review_card(conn, card_id) is None:
             raise LookupError(f'复盘卡 {card_id} 不存在')
@@ -705,7 +706,7 @@ def run_stage(session: date, *, now: datetime, deps: service.Deps, summary: dict
     quota_exhausted = any(bool((summary.get(stage) or {}).get('quota_exhausted')) for stage in ('agent', 'review'))
     started_drafts = 0
 
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         needing = _needing_draft(conn)
     if acc is not None:
         acc.input(len(needing))
@@ -768,7 +769,7 @@ def run_stage(session: date, *, now: datetime, deps: service.Deps, summary: dict
             if acc is not None:
                 acc.fail(card['ticker'], reason)
 
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         to_review = sum(1 for card in repository.review_cards(conn) if card_state(conn, card['id'])['status'] == 'to_review')
     retro_summary['to_review'] = to_review
     if acc is not None:
@@ -780,7 +781,7 @@ def run_stage(session: date, *, now: datetime, deps: service.Deps, summary: dict
 
 
 def _tokens_used(ny_date: date) -> int:
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         return repository.agent_tokens_on(conn, ny_date)
 
 
@@ -838,7 +839,7 @@ def verdict(card_id: int, payload: dict[str, Any], *, now: datetime) -> dict[str
     rec = _validate_verdict(payload)
     concept_versions = my_knowledge.concept_versions()
     request_id = rec['request_id']
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         require_ready(conn)
         repository.lock(conn, f'{CARD_LOCK}:{card_id}')
         card = repository.review_card(conn, card_id)
@@ -994,7 +995,7 @@ def list_view(*, status: str | None, ticker: str | None, since: date | None) -> 
     filter (the status filter only narrows ``cards``). ValueError for an unknown status."""
     if status not in (None, '', *retro.CARD_STATUSES):
         raise ValueError(f"status 必须是 {', '.join(retro.CARD_STATUSES)} 之一")
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         pairs = cards_with_state(conn, ticker=ticker, since=since)
     counts = {name: sum(1 for _, state in pairs if state['status'] == name) for name in retro.CARD_STATUSES}
@@ -1026,7 +1027,7 @@ def card_view(card_id: int, *, now: datetime) -> dict[str, Any]:
     drafts of the ok draft, the verdict (with the knowledge it created), ``discipline_now`` (the same buys judged
     as of today, never written) and the card's discussions. LookupError for an unknown card."""
     session = bars_module.latest_closed_session(now)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         card = repository.review_card(conn, card_id)
         if card is None:
@@ -1065,7 +1066,7 @@ def check(since: date, until: date | None = None, out: Callable[[str], None] = p
     end = until if until is not None else bars_module.latest_closed_session(now)
     if since > end:
         raise ValueError('since 不能晚于 until')
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         scanned = _scan(conn, session=end, now=now, window_start=since, with_facts=False)
         present = [c for c in repository.review_cards(conn, since=since) if c['end_session'] <= end]

@@ -8,16 +8,15 @@ from __future__ import annotations
 
 from datetime import date
 
+from investment_assistant.core.texts import REGIME_LABEL_TEXT as LABEL_TEXT
+from investment_assistant.core.versions import REGIME_VERSION as REGIME_VERSION
 from investment_assistant.workbench.macro import MACRO_CHANGE_OBS
 
-REGIME_VERSION = 'regime-2'
 MIN_ELIGIBLE_200 = 20
 MA_50_SAMPLES = 50
 MA_200_SAMPLES = 200
 NEW_EXTREME_WINDOW = 252
 RS_WINDOWS = (20, 60)
-
-LABEL_TEXT = {'risk_on': '进攻', 'neutral': '中性', 'risk_off': '防守', 'insufficient': '样本不足'}
 
 
 def _up_to_session(bars: list[dict], session: date) -> list[dict]:

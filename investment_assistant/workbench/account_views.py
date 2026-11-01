@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import Decimal
 
+from investment_assistant.core import tx as core_tx
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.workbench import (accounts, bars, monthly, paper_accounts, paper_fill, paper_strategies,
                                                repository, review, service)
@@ -25,7 +26,7 @@ def account_row(conn,account,*,session,now):
 
 def overview(*,now,session=None,include_closed=False):
     session=session or bars.latest_closed_session(now)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         paper_accounts.require_ready(conn)
         return service._jsonable({'accounts':[account_row(conn,a,session=session,now=now)
             for a in repository.list_accounts(conn,include_closed=include_closed)]})
@@ -83,7 +84,7 @@ def _order(conn,row):
 
 def detail(account_id,*,now):
     session=bars.latest_closed_session(now)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         account=paper_accounts.require_account(conn,account_id)
         public=account_row(conn,account,session=session,now=now)
         held,closed=_positions(conn,account,session=session,now=now)
@@ -98,7 +99,7 @@ def detail(account_id,*,now):
 
 def equity(account_id,*,now,from_session=None,to_session=None):
     end=min(to_session or bars.latest_closed_session(now),bars.latest_closed_session(now))
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         account=paper_accounts.require_account(conn,account_id)
         rows=repository.equity_days(conn,account['id'],from_session=from_session,to_session=end,cutoff_at=now)
         days={r['session'] for r in rows}
@@ -108,7 +109,7 @@ def equity(account_id,*,now,from_session=None,to_session=None):
 
 def trades(account_id,*,now):
     from investment_assistant.workbench import plan_views
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         account=paper_accounts.require_account(conn,account_id)
         rows=list(reversed(repository.list_trades(conn,account_id=account['id'],cutoff=now)))
         labels=plan_views.trade_plan_labels(conn,rows)
@@ -117,13 +118,13 @@ def trades(account_id,*,now):
 
 def orders(account_id,*,now,status=None):
     if status is not None and status not in accounts.ORDER_STATUS_TEXT: raise ValueError('unknown order status')
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         account=paper_accounts.require_account(conn,account_id)
         return service._jsonable({'orders':[_order(conn,o) for o in repository.orders_for(conn,account['id'],status=status)]})
 
 
 def decisions(account_id,*,now,session=None):
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         account=paper_accounts.require_account(conn,account_id)
         if session:
             return service._jsonable({'decision':_decision(conn,repository.decision_for(conn,account['id'],session),full=True)})
@@ -136,7 +137,7 @@ def session_detail(account_id, *, now, session):
     Trades are cut by execution session. An order settled after the selected day
     was still pending then; its later outcome remains visible in decision detail.
     """
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         account = paper_accounts.require_account(conn, account_id)
         _, _, books = paper_accounts.account_books(conn, account['id'], session=session, now=now)
         held = [{'ticker': ticker, **book['position']} for ticker, book in sorted(books.items()) if book['position']]
@@ -188,7 +189,7 @@ def compare(*,now,from_session=None):
     session=bars.latest_closed_session(now)
     keys=('inception_return','month_return','max_drawdown','closed_and_win_rate','mean_r','discipline','skipped_plans','positions_and_pending')
     labels=('累计收益','本月收益','最大回撤','平仓数 / 胜率','平均 R','纪律','未执行计划','持仓 / 待成交')
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         paper_accounts.require_ready(conn)
         columns=[]; values={key:[] for key in keys}
         for account in repository.list_accounts(conn):

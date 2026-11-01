@@ -20,6 +20,7 @@ from decimal import Decimal
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from investment_assistant.core import tx as core_tx
 from investment_assistant.data.calendar import add_trading_days, trading_days_between
 from investment_assistant.workbench import (bars as bars_module, entry_rules, execution, labels, plan_review,
                                             plans as plans_module, positions, repository, review, service, synthesis,
@@ -803,7 +804,7 @@ def plan_history(conn, ticker: str, *, include_reviews: bool = False, include_ba
 # ---------------------------------------------------------------- wrappers for the routes
 
 def _view(fn: Callable[[Any], Any]) -> Any:
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         return fn(conn)
 
 

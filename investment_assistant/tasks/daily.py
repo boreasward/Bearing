@@ -11,115 +11,31 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-import threading
 import time
 import uuid
-from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from investment_assistant.config import AssistantConfig, load_config
+from investment_assistant.core.locks import (LOCK_KEY as LOCK_KEY, DailyBusy as DailyBusy,
+                                             _active as _active, exclusive as exclusive,
+                                             executing as executing, is_running as is_running)
 from investment_assistant.tasks import _harness
 from investment_assistant.workbench import families, repository, service, workflow
 from investment_assistant.workbench import stages as stages_module
+from investment_assistant.core import tx as core_tx
 
 logger = logging.getLogger(__name__)
 
-LOCK_KEY = 'daily:run'
 SH = ZoneInfo('Asia/Shanghai')
 JOB_STATUS = {'success': 'success', 'degraded': 'degraded', 'failed': 'error'}      # run status → job_reports.status
-
-
-class DailyBusy(RuntimeError):
-    """Another ``daily`` execution (or a ``sec_backfill``) holds the ``daily:run`` lock (HTTP 409 ``daily_running``)."""
-
-    def __init__(self, message: str = 'daily_running'):
-        super().__init__(message)
-
-
-_ACTIVE: set[str] = set()                    # run ids this process is executing right now (run or resume)
-_ACTIVE_LOCK = threading.Lock()
-
-
-@contextmanager
-def _active(run_id: str):
-    """Mark ``run_id`` as executing in this process while the ``with`` block runs, so the run detail can call a run
-    that holds the lock *running* before its next node has written a row (the scheduler thread and the manual and
-    resume entries all execute inside the API process; a command-line run in another process is only seen by the
-    lock itself)."""
-    with _ACTIVE_LOCK:
-        _ACTIVE.add(run_id)
-    try:
-        yield
-    finally:
-        with _ACTIVE_LOCK:
-            _ACTIVE.discard(run_id)
-
-
-def executing(run_id: str) -> bool:
-    with _ACTIVE_LOCK:
-        return run_id in _ACTIVE
 
 
 def new_run_id() -> str:
     """``daily-<UTC yyyymmddHHMMSS>-<8 hex>``: the thread id, ``job_reports.run_id`` and the detail-page id."""
     return f"daily-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-
-
-def _lock_connection():
-    """A connection of its own, outside the pool and in autocommit: the lock is held for the whole execution (up to
-    hours) and must neither take a pool connection nor ride on one whose transactions commit underneath it."""
-    import psycopg
-
-    url = os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL')
-    if not url:
-        raise service.Unavailable('数据库未配置')
-    return psycopg.connect(url, autocommit=True)
-
-
-@contextmanager
-def exclusive():
-    """Hold the ``daily:run`` session advisory lock for the ``with`` block (``DailyBusy`` when taken). Always released
-    in ``finally`` and the connection always closed, which releases it too should the unlock fail (D18)."""
-    import psycopg
-
-    try:
-        conn = _lock_connection()
-    except psycopg.OperationalError:
-        raise service.Unavailable('数据库不可达') from None
-    try:
-        if not conn.execute('SELECT pg_try_advisory_lock(hashtext(%s))', (LOCK_KEY,)).fetchone()[0]:
-            raise DailyBusy()
-        try:
-            yield
-        finally:
-            try:
-                conn.execute('SELECT pg_advisory_unlock(hashtext(%s))', (LOCK_KEY,))
-            except Exception:      # noqa: BLE001 - closing the connection releases the lock anyway
-                pass
-    finally:
-        conn.close()
-
-
-def is_running() -> bool:
-    """True while some execution holds the lock (the pre-check of the run / resume entries). It only *looks* at the
-    lock — taking it to probe could make the 11:30 scheduled tick find it busy and skip the day."""
-    import psycopg
-
-    try:
-        conn = _lock_connection()
-    except psycopg.OperationalError:
-        raise service.Unavailable('数据库不可达') from None
-    try:
-        # pg_try_advisory_lock(bigint) stores the key as classid (high 32 bits) / objid (low 32 bits), objsubid 1
-        return bool(conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1 AND granted "
-            "AND ((classid::bigint << 32) | objid::bigint) = hashtext(%s)::bigint)", (LOCK_KEY,)).fetchone()[0])
-    finally:
-        conn.close()
 
 
 def ensure_ready() -> None:
@@ -128,14 +44,14 @@ def ensure_ready() -> None:
     records ``migration_028_missing``. Without a database to ask (not configured, unreachable, tables missing) it
     passes: the run itself reports what is wrong."""
     try:
-        with service.read_only_tx() as conn:
+        with core_tx.read_only_tx() as conn:
             ready = repository.daily_ready(conn)
     except Exception:   # noqa: BLE001 - nothing to ask
         return
     if not ready:
         raise service.Unavailable('migration_028_missing')
     try:
-        with service.read_only_tx() as conn:
+        with core_tx.read_only_tx() as conn:
             executable = repository.executable_ready(conn)
     except Exception:   # noqa: BLE001 - nothing to ask
         return
@@ -224,7 +140,7 @@ def _notify_connection(config: AssistantConfig, result: dict[str, Any], notify_c
         return None                                  # an execution that never started a graph has no Agent nodes
     checked_at = datetime.now(UTC)
     try:
-        with service.read_only_tx() as conn:
+        with core_tx.read_only_tx() as conn:
             rows = repository.stage_rows_for_run(conn, result['run_id'])
             base = repository.last_connection_notice_at(conn)
         if not _hit_not_connected(rows, int(attempt)):
@@ -290,7 +206,7 @@ def _abort_reason(exc: BaseException) -> str:
 
 def _ready() -> bool:
     try:
-        with service.read_only_tx() as conn:
+        with core_tx.read_only_tx() as conn:
             return repository.daily_ready(conn)
     except Exception:    # noqa: BLE001 - an unreadable database cannot run the workflow either
         return False
@@ -300,7 +216,7 @@ def _executable_ready() -> bool:
     """Migration 029 (v2.9 D36): the plan / trade reads of the new code need its columns and tables, so a database
     without it is refused before anything is read — no half-new, half-old run (no timeline-1 fallback)."""
     try:
-        with service.read_only_tx() as conn:
+        with core_tx.read_only_tx() as conn:
             return repository.executable_ready(conn)
     except Exception:    # noqa: BLE001 - an unreadable database cannot run the workflow either
         return False
@@ -308,7 +224,7 @@ def _executable_ready() -> bool:
 
 def _accounts_ready() -> bool:
     try:
-        with service.read_only_tx() as conn:
+        with core_tx.read_only_tx() as conn:
             return repository.accounts_ready(conn)
     except Exception:
         return False
@@ -388,7 +304,7 @@ def resume(run_id: str, node: str, *, now: datetime | None = None, deps: service
 
 def _show(run_id: str) -> int:
     """The node table of a run — status, duration, attempt, failures — and no raw summary."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         rows = repository.stage_rows_for_run(conn, run_id)
     if not rows:
         print(f'没有这次运行：{run_id}', file=sys.stderr)

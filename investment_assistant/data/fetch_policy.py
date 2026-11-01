@@ -24,7 +24,8 @@ from typing import Any, Generic, TypeVar
 import requests
 from requests.adapters import HTTPAdapter
 
-FETCH_POLICY_VERSION = 'fetch-1'
+from investment_assistant.core.versions import FETCH_POLICY_VERSION as FETCH_POLICY_VERSION
+
 CONNECT_TIMEOUT_S = 10
 TOTAL_TIMEOUT_S = 30
 RETRY_BACKOFF_S = (2, 8)            # two retries

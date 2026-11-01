@@ -11,6 +11,9 @@ from contextlib import nullcontext
 from datetime import UTC, datetime
 
 import pytest
+
+from investment_assistant.core import locks as core_locks
+from investment_assistant.core import tx as core_tx
 from langgraph.checkpoint.memory import InMemorySaver
 
 from investment_assistant.config import AssistantConfig
@@ -139,9 +142,9 @@ def _wire(workbench_db, monkeypatch, job_reports):
     def connection():
         yield workbench_db
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     monkeypatch.setattr(plan_review, '_lock_connection', lock_connection_factory())
-    monkeypatch.setattr(daily, '_lock_connection', lock_connection_factory())
+    monkeypatch.setattr(core_locks, '_lock_connection', lock_connection_factory())
     job_reports.conn = workbench_db
     return workbench_db
 

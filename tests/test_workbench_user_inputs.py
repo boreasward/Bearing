@@ -15,6 +15,8 @@ from datetime import timedelta
 
 import psycopg
 import pytest
+
+from investment_assistant.core import tx as core_tx
 from langgraph.checkpoint.memory import InMemorySaver
 
 from test_workbench_service import db   # noqa: F401  (fixture: service wired to the disposable schema)
@@ -296,7 +298,7 @@ def test_run_lock_connection_is_dedicated_and_closed(db, monkeypatch, unlock_fai
     out — also when the unlock fails, which then releases the lock by closing."""
     url = os.environ['INVESTMENT_ASSISTANT_TEST_DATABASE_URL']
     monkeypatch.setenv('INVESTMENT_ASSISTANT_DATABASE_URL', url)
-    monkeypatch.setattr(service, 'connection', lambda: pytest.fail('the run lock must not use the pool'))
+    monkeypatch.setattr(core_tx, 'connection', lambda: pytest.fail('the run lock must not use the pool'))
     opened = []
 
     class Conn:

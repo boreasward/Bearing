@@ -21,6 +21,7 @@ from investment_assistant.data.calendar import add_trading_days, is_trading_day
 from investment_assistant.workbench import bars, collect, families, pool as pool_module, repository, service
 from investment_assistant.workbench import stages as stages_module
 from investment_assistant.workbench.agent import model as agent_model
+from investment_assistant.core import tx as core_tx
 
 DAILY_GRAPH_VERSION = 'daily-2'
 NODE_RETRY_WAIT_S = 60
@@ -169,7 +170,7 @@ def _fault_pending(stage_id: str, state: dict) -> bool:
     """The one-shot drill (``INVESTMENT_ASSISTANT_FAULT_ONCE=<node>``): only while this run has no row of the node."""
     if os.environ.get(FAULT_ENV) != stage_id:
         return False
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         return not any(row['stage'] == stage_id for row in repository.stage_rows_for_run(conn, state['run_id']))
 
 
@@ -370,7 +371,7 @@ def _execute(state: dict, graph_input: dict | None, *, deps: service.Deps, attem
             ctx.recorder.skip(stage_id, 'upstream_failed')
     summary = dict(final.get('summary') or state.get('summary') or {})
     try:
-        with service.read_only_tx() as conn:
+        with core_tx.read_only_tx() as conn:
             rows = repository.stage_rows_for_run(conn, run_id)
     except Exception:  # noqa: BLE001 - the status falls back to this execution's own rows
         rows = seen
@@ -413,7 +414,7 @@ def run(*, run_id: str, trigger: str, now: datetime, deps: service.Deps | None =
 def _checked(run_id: str, node_id: str, *, now: datetime, checkpointer_factory) -> tuple[dict, int]:
     if node_id not in NODES:
         raise ValueError(f'unknown node: {node_id!r}')
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         if not repository.daily_ready(conn):
             raise service.Unavailable('migration_028_missing')
         rows = repository.stage_rows_for_run(conn, run_id)

@@ -4,6 +4,8 @@ from decimal import Decimal as D
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.workbench import plan_shadow
 
 D0, D1, D2, D3, D4 = date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 22), date(2026, 10, 23), date(2026, 10, 26)
@@ -255,7 +257,7 @@ def db(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     return workbench_db
 
 

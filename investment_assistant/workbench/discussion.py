@@ -30,6 +30,7 @@ from investment_assistant.workbench import (bars as bars_module, knowledge, know
 from investment_assistant.workbench.agent import graph as agent_graph
 from investment_assistant.workbench.agent import model as agent_model
 from investment_assistant.workbench.agent.discuss_tools import DiscussContext
+from investment_assistant.core import tx as core_tx
 
 NY = ZoneInfo('America/New_York')
 MIGRATION_MISSING = '迁移 027 未执行'
@@ -70,7 +71,7 @@ def _require_ready(conn) -> None:
 
 
 def _read_ro(fn):
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         return fn(conn)
 
 
@@ -153,7 +154,7 @@ def create(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
         if isinstance(card_id, bool) or not isinstance(card_id, int) or card_id < 1:
             raise ValueError('context.card_id 必须是卡 id')
     digest = ledger.request_hash({'context_kind': context['kind'], 'plan_id': plan_id, 'card_id': card_id})
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         _require_ready(conn)
         repository.lock(conn, f'discussion-new:{request_id}')
         existing = _discussion_by_request(conn, request_id)
@@ -248,7 +249,7 @@ def _ask_in_tx(discussion_id: int, rec: dict[str, Any], settings, ny_date, run_k
     """The body of ``ask_check`` under the discussion lock. Returns the new turn row, or the replay result dict.
     The ``pending`` marker for the new turn is registered here, before the turn is written and while the lock is
     held, so a request waiting on the same lock already sees the question as running (never as interrupted)."""
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         _require_ready(conn)
         repository.lock(conn, f'discussion:{discussion_id}')
         discussion = repository.discussion(conn, discussion_id)
@@ -376,7 +377,7 @@ def _fields_text(row: dict[str, Any], label: str) -> str:
 
 def _load(discussion_id: int, turn_id: int) -> dict[str, Any]:
     """Everything the run needs, read in one read-only transaction at the question's moment."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         discussion = repository.discussion(conn, discussion_id)
         turns = repository.turns(conn, discussion_id)
@@ -410,7 +411,7 @@ def _write_reply(discussion_id: int, turn_id: int, *, status: str, reason: str |
                  calls: list[dict[str, Any]], draft: dict[str, Any] | None) -> dict[str, Any] | None:
     """The answer in one write transaction: the run and its tool calls, the answer turn and the optional lesson
     draft. A turn that already has its reply is left alone (None)."""
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         repository.lock(conn, f'discussion:{discussion_id}')
         if any(t['reply_to'] == turn_id for t in repository.turns(conn, discussion_id)):
             return None
@@ -450,7 +451,7 @@ def answer(discussion_id: int, turn_id: int, *, now: datetime, deps: service.Dep
         try:
             loaded = _load(discussion_id, turn_id)
         except Exception as exc:                            # noqa: BLE001 - becomes an error answer below
-            with service.read_only_tx() as conn:
+            with core_tx.read_only_tx() as conn:
                 turn = next((t for t in repository.turns(conn, discussion_id) if t['id'] == turn_id), None)
             run_key, cutoff = (turn['run_id'], turn['created_at']) if turn else (None, now)
             track(run_key or '', run_id)
@@ -553,7 +554,7 @@ def list_for(*, plan_id=None, card_id: int | None = None) -> list[dict[str, Any]
         raise ValueError('plan_id 或 card_id 必须给一个')
     if plan_id is not None:
         plan_id = _uuid(plan_id, 'plan_id')
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         return list_in(conn, plan_id=plan_id, card_id=card_id)
 
@@ -575,7 +576,7 @@ def view(discussion_id: int) -> dict[str, Any]:
     after its question. A question without an answer carries ``state`` ``pending`` / ``interrupted``; ``user_input_id``
     is the user input saved from the question (found through the derived ``request_id``). Read-only;
     LookupError (404) for an unknown discussion, Unavailable (503) without migration 027."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         discussion = repository.discussion(conn, discussion_id)
         if discussion is None:

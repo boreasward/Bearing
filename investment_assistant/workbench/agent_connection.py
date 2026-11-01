@@ -24,6 +24,7 @@ from typing import Any, Iterator
 
 from investment_assistant.workbench.agent import chatgpt
 from investment_assistant.workbench.agent.chatgpt import REAUTH_CODES, ChatGPTError, error_for
+from investment_assistant.core import tx as core_tx
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _missing_migration() -> ChatGPTError:
 
 def _connect():
     from investment_assistant.workbench import service       # only for its connection factory
-    return service.connection()
+    return core_tx.connection()
 
 
 @contextmanager

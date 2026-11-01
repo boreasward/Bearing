@@ -12,6 +12,8 @@ import pandas as pd
 import psycopg
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.workbench import collect, data_view, families, service
 from investment_assistant.workbench.universe import Universe, UniverseError
@@ -55,7 +57,7 @@ def db(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     return workbench_db
 
 

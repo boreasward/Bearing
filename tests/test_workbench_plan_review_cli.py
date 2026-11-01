@@ -8,6 +8,8 @@ from contextlib import nullcontext
 from datetime import timedelta
 
 import pytest
+
+from investment_assistant.core import tx as core_tx
 from langgraph.checkpoint.memory import InMemorySaver
 
 from test_workbench_service import db   # noqa: F401  (fixture: service wired to the disposable schema)
@@ -49,7 +51,7 @@ def test_unavailable_database_exits_two_other_errors_propagate(capsys, monkeypat
     def down():
         raise service.Unavailable('数据库未配置')
 
-    monkeypatch.setattr(service, 'connection', down)
+    monkeypatch.setattr(core_tx, 'connection', down)
     for argv in (['check', '--session', '2026-09-02'], ['chain', '--ticker', 'SYNTH', '--date', '2026-09-01'],
                  ['recheck', '--ticker', 'SYNTH', '--date', '2026-09-01']):
         assert plan_review.main(argv) == 2

@@ -10,6 +10,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+
+from investment_assistant.core import tx as core_tx
 from langchain_core.messages import AIMessage
 
 from test_workbench_service import (NOW, SESSION, Sources, _agent_settings, agent_deps, db, deps,  # noqa: F401
@@ -994,7 +996,7 @@ def test_retro_read_paths_are_read_only(db, scripted_model, monkeypatch):
         opened.append(1)
         return real()
 
-    monkeypatch.setattr(service, 'read_only_tx', counting)
+    monkeypatch.setattr(core_tx, 'read_only_tx', counting)
     retro_cards.list_view(status=None, ticker=None, since=None)
     retro_cards.card_view(only_card(db)['id'], now=NOW)
     assert len(opened) == 2

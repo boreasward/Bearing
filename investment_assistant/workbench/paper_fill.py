@@ -14,20 +14,18 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_FLOOR
 from zoneinfo import ZoneInfo
 
+from investment_assistant.core.texts import (CANCEL_REASON_TEXT as CANCEL_REASON_TEXT,
+                                             CHAIN_DONE_TEXT as CHAIN_DONE_TEXT,
+                                             VOID_REASON_TEXT as VOID_REASON_TEXT)
+from investment_assistant.core.versions import PAPER_FILL_VERSION as PAPER_FILL_VERSION
 from investment_assistant.workbench import entry_rules, plan_shadow
 from investment_assistant.workbench.plan_shadow import PositionState, step_position
 from investment_assistant.workbench.plans import MAX_HOLD_DEFAULT
 
-PAPER_FILL_VERSION = 'paper-fill-1'
 FILL_CASES = ('in_zone', 'gap_up_limit', 'gap_down_stop_buy')
 EXIT_REASONS = ('stop', 'gap_stop', 'target1_half', 'time_stop', 'agent_sell', 'exit_instruction')
 EXIT_REASON_TEXT = {'stop': '止损触及', 'gap_stop': '跳空止损', 'target1_half': '到 T1 卖出一半',
                     'time_stop': '时间止损', 'agent_sell': 'Agent 卖出', 'exit_instruction': '执行退出指令'}
-CANCEL_REASON_TEXT = {'superseded_by_revision': '计划出了新版本，旧订单撤销', 'chain_ended': '计划链已结束，订单撤销',
-                      'agent_cancel': 'Agent 主动撤单', 'validity_expired': '计划有效期已过', 'account_closed': '账户已关闭，订单撤销'}
-VOID_REASON_TEXT = {'gap_below_stop': '开盘不高于止损，计划作废', 'gap_above_zone': '开盘高于入场区间，计划作废',
-                    'gap_below_zone': '开盘低于入场区间，计划作废'}
-CHAIN_DONE_TEXT = {'entry_voided': '入场作废，计划链结束', 'exited': '已全部卖出，计划链结束'}
 FILL_CASE_TEXT = {'in_zone': '区间内成交', 'gap_up_limit': '高开回落限价成交', 'gap_down_stop_buy': '低开回升触发成交'}
 NY = ZoneInfo('America/New_York')
 _DECIMAL_FIELDS = ('fill_price', 'stop', 'stop0', 'risk', 'highest_close')

@@ -12,13 +12,12 @@ import argparse
 import sys
 from datetime import UTC, date, datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
+from investment_assistant.core.constants import SH as SH
+from investment_assistant.core.texts import AGENT_REASON_TEXT as AGENT_REASON_TEXT, RUN_REASON_TEXT as REASON_TEXT
 from investment_assistant.workbench import labels
 from investment_assistant.workbench import stages as stages_module
-from investment_assistant.workbench.agent import REASON_TEXT as AGENT_REASON_TEXT
-
-SH = ZoneInfo('Asia/Shanghai')
+from investment_assistant.core import tx as core_tx
 
 STATUS_TEXT: dict[str, str] = {
     'success': '成功', 'partial': '部分失败', 'degraded': '降级', 'failed': '失败', 'skipped': '跳过',
@@ -27,41 +26,8 @@ STATUS_TEXT: dict[str, str] = {
 
 # Reason / degradation-kind texts that agent.REASON_TEXT does not have (spec §7.4, D28); a code found in
 # neither table is shown as is. The last block answers the per-rule skip reasons `<rule_id>:<reason>`:
-# every value `rules.precondition` returns, plus `earnings_time_unknown`.
-REASON_TEXT: dict[str, str] = {
-    'not_trading_day': '纽约休市',
-    'explicit_pool': '指定股票运行，不筛选',
-    'manual_run': '手动运行不推送',
-    'already_pushed': '今天已推送过',
-    'task_disabled': '推送任务已关闭',
-    'not_reached': '运行提前结束，未执行到',
-    'already_completed': '已有结果',
-    'already_reviewed': '今天已复查',
-    'fresh_version': '当天刚生成，不复查',
-    'object_cap': '超出复查对象上限 20',
-    'atr_unavailable': 'ATR 无法计算',
-    'draft_cap': '超出每次起草上限 5 张',
-    'upstream_failed': '上游节点失败，未执行',
-    'not_due': '今天没有到期的复盘',
-    'daily_running': '另一次运行正在进行',
-    # degradation kinds
-    'fred_not_configured': 'FRED 未配置',
-    'label_insufficient': '广度样本不足',
-    'macro_not_ok': '宏观序列不完整',
-    'conflict': '与已存记录不一致（未覆盖）',
-    'universe_load_failed': '范围文件加载失败',
-    'benchmark_missing': 'QQQ 缺当日数据',
-    'derivation_mismatch': '推导核对不一致',
-    'derivation_check_error': '推导核对出错',
-    'revision_failed': '修订未通过校验',
-    'agent_unavailable': 'Agent 不可用',
-    'draft_rejected': '草稿未通过校验',
-    # rule skip reasons
-    'missing_signal_bar': '缺信号日日线',
-    'insufficient_history': '日线不足 200 根',
-    'adjustment_anomaly': '复权因子异常',
-    'earnings_time_unknown': '财报时点未知',
-}
+# every value `rules.precondition` returns, plus `earnings_time_unknown`. The table lives in
+# core/texts.py (RUN_REASON_TEXT); imported above as REASON_TEXT until Task 1.
 
 TRIGGER_TEXT: dict[str, str] = {'scheduled': '定时', 'manual_batch': '手动'}
 CLOSED_TEXT = '休市'
@@ -575,7 +541,7 @@ def overview(*, session: date | None, run_id: str | None, now: datetime) -> dict
     from investment_assistant.workbench import bars, repository, service
 
     day = session if session is not None else bars.latest_closed_session(now)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         ready = repository.stage_runs_ready(conn)
         rows = repository.stage_runs_for_session(conn, day) if ready else []
     return build(rows, session=day, run_id=run_id, ready=ready)

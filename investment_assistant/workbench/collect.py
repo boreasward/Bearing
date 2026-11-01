@@ -24,6 +24,7 @@ from investment_assistant.workbench import macro as macro_module
 from investment_assistant.workbench import news as news_module
 from investment_assistant.workbench import repository
 from investment_assistant.workbench import universe as universe_module
+from investment_assistant.core import tx as core_tx
 
 
 # fetch-1 hooks (spec §6): every external request of this module runs under FETCH_POLICY; tests shorten it and
@@ -61,14 +62,12 @@ def bars_one(ticker: str, *, session: date, now: datetime, deps: Any, lookback_d
     Returns ``{'counts': store_bars result, 'skipped': list[date]}``. The request runs under the fetch-1 policy;
     a failure raises ``FetchError``. With ``tally`` the outcome is booked there (target = ticker, ``rows`` = bars
     newly written, ``latest`` = newest ``trade_date`` fetched) and the caller must not book it again."""
-    from investment_assistant.workbench import service as service_module
-
     outcome: Fetched | None = None
     try:
         outcome = _fetch(ticker, lambda: bars_module.fetch_history(
             ticker, session - timedelta(days=lookback_days), session, fetcher=deps.bar_fetcher))
         rows, skipped = bars_module.normalize_history(outcome.value)
-        with service_module._tx() as conn:
+        with core_tx._tx() as conn:
             counts = repository.store_bars(conn, ticker, rows, now=now)
     except Exception as exc:
         _fail(tally, ticker, exc, outcome)
@@ -86,8 +85,6 @@ def news_one(ticker: str, *, now: datetime, deps: Any, drop_after: datetime | No
     ``drop_after`` (a resumed run's ``cutoff_at``, spec §5.5) drops items published after it; the count is
     returned as ``after_cutoff_dropped`` (the key only exists when ``drop_after`` is given). Items without a
     publication time cannot be judged and are kept."""
-    from investment_assistant.workbench import service as service_module
-
     outcome: Fetched | None = None
     try:
         outcome = _fetch(ticker, lambda: news_module.fetch_yfinance(ticker, fetcher=deps.news_fetcher))
@@ -97,7 +94,7 @@ def news_one(ticker: str, *, now: datetime, deps: Any, drop_after: datetime | No
         if drop_after is not None:
             kept = [i for i in items if i['published_at'] is None or i['published_at'] <= drop_after]
             dropped, items = len(items) - len(kept), kept
-        with service_module._tx() as conn:
+        with core_tx._tx() as conn:
             counts = repository.store_news(conn, [(i, [ticker]) for i in items], now=now)
     except Exception as exc:
         _fail(tally, ticker, exc, outcome)
@@ -138,8 +135,8 @@ def sec_listing(tickers: list[str], *, session: date, now: datetime, deps: Any, 
     failure (nothing can be resolved) is booked as the whole-call ``'*'`` and listing stops. Without ``tally``
     (older callers) any failure raises and nothing is stored, as the single-call version did."""
     from investment_assistant.filings import monitor_source
-    from investment_assistant.workbench import service as service_module
 
+    from investment_assistant.workbench import service as service_module
     source = deps.filing_source
     if source is None:
         source = monitor_source.EdgarSource(service_module.SEC_EVIDENCE_DIR)
@@ -171,7 +168,7 @@ def sec_listing(tickers: list[str], *, session: date, now: datetime, deps: Any, 
         by_ticker[ticker] = {'rows': len(found), 'latest': latest}
         if tally is not None:
             tally.record(ticker, outcome, rows=len(found), latest=latest)
-    with service_module._tx() as conn:
+    with core_tx._tx() as conn:
         result = {**repository.store_news(conn, news_module.filing_news(metas), now=now),
                   'acceptance_filled': repository.fill_filing_acceptance(conn, metas),
                   'by_ticker': by_ticker, 'errors': errors}
@@ -185,8 +182,6 @@ def fred_series(series_id: str, *, session: date, now: datetime, deps: Any,
     """One FRED series: ``'not_configured'`` without a key (no request, no rows),
     otherwise the stored observations. The request runs under the fetch-1 policy (``FetchError`` on failure;
     the key never appears in its text); with ``tally`` the outcome is booked under the series id."""
-    from investment_assistant.workbench import service as service_module
-
     if not api_key:
         return 'not_configured'
     outcome: Fetched | None = None
@@ -195,7 +190,7 @@ def fred_series(series_id: str, *, session: date, now: datetime, deps: Any,
             series_id, start=session - timedelta(days=macro_module.MACRO_LOOKBACK_DAYS), end=session,
             api_key=api_key, fetcher=deps.macro_fetcher))
         rows = outcome.value
-        with service_module._tx() as conn:
+        with core_tx._tx() as conn:
             counts = repository.store_macro(conn, series_id, rows, now=now)
     except Exception as exc:
         _fail(tally, series_id, exc, outcome)
@@ -335,10 +330,8 @@ def write_runs_with_ids(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], lis
     The first element is exactly ``write_runs``' return value, the second the
     inserted rows' ids in order (``[]`` when nothing was written). A failure
     (including migration 024 not run) is reported, never raised (design §6.2)."""
-    from investment_assistant.workbench import service as service_module
-
     try:
-        with service_module._tx() as conn:
+        with core_tx._tx() as conn:
             ids = [repository.insert_fetch_run(conn, row)['id'] for row in rows]
         return {'written': len(rows), 'error': None}, ids
     except Exception as exc:
@@ -351,7 +344,9 @@ def write_runs(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _lock_key(family_id: str) -> str:
-    return f'data_family:{family_id}'
+    from investment_assistant.core.locks import family_lock_key
+
+    return family_lock_key(family_id)
 
 
 def try_family_lock(conn, family_id: str) -> bool:
@@ -412,9 +407,7 @@ def family_locks(family_ids: Sequence[str]):
     releasing one never stops the next, an aborted transaction is rolled back
     first, and a session that cannot be proved clean is physically closed so its
     locks die with it — never returned to the pool still holding one (I01)."""
-    from investment_assistant.workbench import service as service_module
-
-    with service_module.connection() as conn:
+    with core_tx.connection() as conn:
         acquired: list[str] = []
         clean = True
         try:

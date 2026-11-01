@@ -17,16 +17,15 @@ from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
 from typing import Any
 
 from investment_assistant.config import WorkbenchConfig
+from investment_assistant.core.versions import (AGENT_VERSION as AGENT_VERSION, PLAN_V1 as PLAN_V1,
+                                                PLAN_V2 as PLAN_V2)
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.workbench.entry_rules import DEFAULT_ENTRY_TYPE, ENTRY_RULES_VERSION
 
-PLAN_V1 = 'plan-1'
-PLAN_V2 = 'plan-2'
 PLAN_VERSION = PLAN_V2               # v2.9: `stage_rules` writes plan-2 rule baselines, `derivation` checks them
 RULE_MAX_HOLD_SESSIONS = 10          # plan-2 rule baseline: exit when still below +1R after this many sessions
 MAX_HOLD_DEFAULT = 10                # what a plan without the field (agent-2, plan-1) is read as
 MAX_HOLD_RANGE = (3, 30)             # trade_plans.max_hold_sessions CHECK
-AGENT_VERSION = 'agent-1'   # the agent track's plan version; graph.py re-exports it
 CONTEXT_VERSION = 'context-2'
 ENTRY_ATR = Decimal('0.5')
 STOP_ATR = Decimal('2')

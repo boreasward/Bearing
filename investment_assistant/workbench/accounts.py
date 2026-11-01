@@ -11,11 +11,11 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from investment_assistant.config import WorkbenchConfig
+from investment_assistant.core.constants import REAL_ACCOUNT_ID as REAL_ACCOUNT_ID
+from investment_assistant.core.versions import ACCOUNT_VERSION as ACCOUNT_VERSION
 from investment_assistant.data.calendar import add_trading_days, is_trading_day
 from investment_assistant.workbench import positions
 
-ACCOUNT_VERSION = 'account-1'
-REAL_ACCOUNT_ID = UUID('00000000-0000-0000-0000-000000000001')
 DEFAULT_PAPER_CASH = Decimal('100000')
 STRATEGIES = ('manual', 'agent_managed', 'follow_plans')
 STRATEGY_TEXT = {'manual': '手动', 'agent_managed': 'Agent 自管', 'follow_plans': '照计划执行'}

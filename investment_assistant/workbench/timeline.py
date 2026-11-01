@@ -32,19 +32,17 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from investment_assistant.config import WorkbenchConfig
+from investment_assistant.core.versions import (AGENT_V2 as AGENT_V2, AGENT_V3 as AGENT_V3,
+                                                TIMELINE_V1 as TIMELINE_V1, TIMELINE_V2 as TIMELINE_V2)
 from investment_assistant.data.calendar import add_trading_days, is_trading_day, trading_days_between
 from investment_assistant.workbench import entry_rules, exits, plan_shadow, plans
 from investment_assistant.workbench.agent import conditions as condition_registry
 from investment_assistant.workbench.agent import plan_check
 from investment_assistant.workbench.agent.tools import _PLAN_LEVEL_KEYS
 
-TIMELINE_V1 = 'timeline-1'
-TIMELINE_V2 = 'timeline-2'
 # v2.9: plan_review judges chains with `chain_state_v2` and stamps its rows `timeline-2` (a holding-mode
 # invalidation of that version is the exit phase, D17).
 TIMELINE_VERSION = TIMELINE_V2
-AGENT_V2 = 'agent-2'                 # plan_version of agent-2 plans and agent_version of their runs
-AGENT_V3 = 'agent-3'                 # v2.9: agent-2 plus entry_type / max_hold_sessions and the host fields
 CHAIN_ENTRY_SESSIONS = 10
 ENDED_WINDOW_SESSIONS = 5            # the 「今日」 ended group lists chains / plans that ended within 5 sessions
 PREVIOUS_CHAIN_BLOCK_MAX_CHARS = 2000

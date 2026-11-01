@@ -21,6 +21,7 @@ import psycopg
 from investment_assistant.workbench import (bars as bars_module, knowledge, knowledge_items, knowledge_perf, ledger,
                                             plan_shadow, repository, service)
 from investment_assistant.workbench.agent.growth_check import FIELDS as CITED_FIELDS
+from investment_assistant.core import tx as core_tx
 
 MIGRATION_MISSING = '迁移 027 未执行'
 REASON_MAX = 300
@@ -92,7 +93,7 @@ def create(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
     request_id = _request_id(payload)
     fields = _validated(payload)
     digest = ledger.request_hash({'op': 'create', **fields})
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         require_ready(conn)
         repository.lock(conn, f'knowledge-request:{request_id}')
         existing = _find_version_by_request(conn, request_id)
@@ -151,7 +152,7 @@ def revise(knowledge_id: int, payload: dict[str, Any], *, now: datetime) -> dict
     base = _base_version(payload)
     fields = _validated(payload)
     digest = ledger.request_hash({'op': 'revise', 'knowledge_id': knowledge_id, 'base_version': base, **fields})
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         require_ready(conn)
         repository.lock(conn, f'knowledge-request:{request_id}')
         existing = _find_version_by_request(conn, request_id)
@@ -176,7 +177,7 @@ def set_status(knowledge_id: int, payload: dict[str, Any], *, now: datetime) -> 
         raise ValueError(f'reason 最多 {REASON_MAX} 字')
     reason = reason.strip()
     digest = ledger.request_hash({'op': 'status', 'knowledge_id': knowledge_id, 'status': status, 'reason': reason})
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         require_ready(conn)
         repository.lock(conn, f'knowledge:{knowledge_id}')
         versions, statuses = repository.knowledge_rows(conn, cutoff=None, knowledge_id=knowledge_id)
@@ -247,7 +248,7 @@ def _entries(conn, *, ticker: str | None = None, concept: str | None = None,
 def list_view(*, ticker: str | None = None, concept: str | None = None, status: str = 'active') -> dict[str, Any]:
     """``GET /my-knowledge`` (spec §5.5): ``{items: [...]}`` newest write first; each item's latest version, state,
     citation count and sample count (distinct units among the plan citations)."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         items = _entries(conn, ticker=ticker, concept=concept, status=status)
     return {'items': sorted(items, key=lambda e: (e['updated_at'], e['id']), reverse=True)}
@@ -282,7 +283,7 @@ def item_view(knowledge_id: int, *, version: int | None = None) -> dict[str, Any
     """``GET /my-knowledge/{id}[?version=]`` (spec §5.5, §12): ``{item, versions (every version, full text),
     status_history, citations, current}`` where ``current`` is the requested version, else the newest.
     LookupError (404) for an unknown item or version."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         item = repository.knowledge_item(conn, knowledge_id)
         versions, statuses = repository.knowledge_rows(conn, cutoff=None, knowledge_id=knowledge_id)
@@ -337,7 +338,7 @@ def perf_summary(conn, knowledge_id: int, *, session: date, now: datetime) -> di
 def performance(knowledge_id: int, *, now: datetime) -> dict[str, Any]:
     """``GET /my-knowledge/{id}/performance`` (spec §7). Read-only; LookupError (404) for an unknown item."""
     session = bars_module.latest_closed_session(now)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         if repository.knowledge_item(conn, knowledge_id) is None:
             raise LookupError(f'知识 {knowledge_id} 不存在')
@@ -442,7 +443,7 @@ def _draft_views(conn, drafts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def drafts_view(*, open_only: bool) -> dict[str, Any]:
     """``GET /my-knowledge-drafts`` (spec §5.4): both sources, open ones only or all with their decision."""
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         return {'drafts': _draft_views(conn, _draft_rows(conn, open_only=open_only))}
 
@@ -469,7 +470,7 @@ def draft_verdict(draft_id: int, payload: dict[str, Any], *, now: datetime) -> d
     action = payload.get('action')
     if action not in ('approve', 'dismiss'):
         raise ValueError('action 必须是 approve 或 dismiss')
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         require_ready(conn)
         repository.lock(conn, f'knowledge-draft:{draft_id}')
         found = _draft_rows(conn, open_only=False, ids=[draft_id])
@@ -536,7 +537,7 @@ def check_cutoff(since: date, out: Callable[[str], None] = print) -> int:
     otherwise. Read-only; Unavailable (exit 2 in ``main``) without a database or migration 027."""
     start = datetime.combine(since, time.min, tzinfo=UTC)
     problems = 0
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         require_ready(conn)
         calls = conn.execute(
             "SELECT c.run_id, c.seq, c.args, c.result, r.cutoff_at FROM agent_tool_calls c "

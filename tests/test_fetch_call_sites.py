@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+
+from investment_assistant.core import tx as core_tx
 import requests
 
 from investment_assistant.data import fetch_policy as fp
@@ -49,7 +51,7 @@ def fake_db(monkeypatch):
     def tx():
         yield object()
 
-    monkeypatch.setattr(service, '_tx', tx)
+    monkeypatch.setattr(core_tx, '_tx', tx)
     monkeypatch.setattr(repository, 'store_bars', lambda conn, ticker, rows, *, now: (
         stored.bars.append((ticker, rows)) or {'inserted': len(rows), 'unchanged': 0}))
     monkeypatch.setattr(repository, 'store_news', lambda conn, entries, *, now: (

@@ -8,6 +8,8 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from investment_assistant.config import NotifyConfig
 from investment_assistant.workbench import repository, service
 
@@ -20,7 +22,7 @@ def db(workbench_db, monkeypatch):
     @contextmanager
     def connection():
         yield workbench_db
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     return workbench_db
 
 

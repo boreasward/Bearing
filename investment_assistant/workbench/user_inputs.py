@@ -16,6 +16,7 @@ import psycopg
 
 from investment_assistant.data import identity
 from investment_assistant.workbench import ledger, repository, service
+from investment_assistant.core import tx as core_tx
 
 KINDS = ('research', 'news', 'judgment', 'other', 'retract')     # 研报要点、新闻、你的判断、其他、撤回
 BODY_MAX = 4000
@@ -135,7 +136,7 @@ def add(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
     beyond the signature shared with the other write use cases."""
     rec = validate(payload)
     digest = ledger.request_hash(rec)
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         _require_ready(conn)
         repository.lock(conn, f"user_inputs:{rec['ticker']}")
         existing = repository.user_input_by_request(conn, rec['request_id'])
@@ -161,6 +162,6 @@ def list_for(ticker: str, signal_date: date | None) -> list[dict[str, Any]]:
     """The inputs of a ticker (every one, ticker-level and per chain) or, with ``signal_date``, those that
     apply to that chain (ticker-level plus the chain's), with the corrected / retracted marks. Read-only."""
     ticker = _ticker(ticker)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         _require_ready(conn)
         return view(ticker_rows(conn, ticker), signal_date)

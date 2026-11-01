@@ -17,6 +17,8 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import openai
 import pytest
+
+from investment_assistant.core import tx as core_tx
 import requests
 from langchain_core.messages import HumanMessage
 
@@ -47,7 +49,7 @@ def db(workbench_db, monkeypatch):
         with psycopg.connect(url, options=f'-c search_path={schema}') as conn:
             yield conn
 
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     monkeypatch.setattr(agent_connection, 'read_for_settings', REAL_READ)
     monkeypatch.setattr(agent_connection, '_PENDING', None)
     monkeypatch.setattr(agent_connection, '_utcnow', lambda: NOW)         # the seeded expiry times are relative to NOW
@@ -905,7 +907,7 @@ def test_migration_028_missing_is_reported(workbench_db, monkeypatch):
     def connection():
         with psycopg.connect(url, options=f'-c search_path={schema}') as conn:
             yield conn
-    monkeypatch.setattr(service, 'connection', connection)
+    monkeypatch.setattr(core_tx, 'connection', connection)
     monkeypatch.setattr(agent_connection, 'read_for_settings', REAL_READ)
     with pytest.raises(ChatGPTError) as caught:
         agent_connection.status_view(now=NOW)

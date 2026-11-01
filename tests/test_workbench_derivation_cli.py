@@ -9,6 +9,8 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from investment_assistant.core import tx as core_tx
+
 from test_workbench_service import NOW, SESSION, _ok_responses, _task_run, agent_deps, db, seed_watchlist   # noqa: F401
 from test_workbench_stage_runs import _recorder, _sent, wired   # noqa: F401  (fixtures)
 from investment_assistant.workbench import derivation, service
@@ -250,7 +252,7 @@ def test_commands_run_in_read_only_transactions(wired, monkeypatch, capsys):
         opened.append(1)
         return real()
 
-    monkeypatch.setattr(service, 'read_only_tx', counting)
+    monkeypatch.setattr(core_tx, 'read_only_tx', counting)
     _run(capsys, 'check', '--since', SESSION.isoformat())
     _run(capsys, 'stages', '--session', SESSION.isoformat())
     assert len(opened) == 2                                        # 每个子命令一个只读事务

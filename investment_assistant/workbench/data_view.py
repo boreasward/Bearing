@@ -28,6 +28,7 @@ from investment_assistant.workbench import bars as bars_module
 from investment_assistant.workbench import collect, families, plans, repository, service
 from investment_assistant.workbench import macro as macro_module
 from investment_assistant.workbench import universe as universe_module
+from investment_assistant.core import tx as core_tx
 
 
 class FetchBusy(RuntimeError):
@@ -82,7 +83,7 @@ def start_fetch(family_id: str, ticker: str | None, *, now_fn: Callable[[], date
     family_id, ticker = validate_fetch(family_id, ticker)
     now_fn = now_fn or _now
     try:
-        with service.connection() as conn:
+        with core_tx.connection() as conn:
             missing = repository.missing_tables(conn)
             if missing:
                 raise service.Unavailable(
@@ -128,7 +129,7 @@ def run_fetch(family_id: str, ticker: str | None, *, run_id: str | None, now: da
     started_at = wall()
     with ExitStack() as stack:
         if family_id != 'universe':
-            lock_conn = stack.enter_context(service.connection())
+            lock_conn = stack.enter_context(core_tx.connection())
             if not collect.try_family_lock(lock_conn, family_id):
                 return {'status': 'busy'}
             stack.callback(collect.release_family, lock_conn, family_id)
@@ -225,8 +226,10 @@ BAR_NOTE = '拆股调整、未分红调整；adj_close 全调整'
 ATR_NOTE = '现算，与 `plan-1` 同一函数；不入库'
 
 
-# The read-only transaction lives in service now; the old private name stays for existing callers.
-_read_tx = service.read_only_tx
+# The read-only transaction lives in core.tx now; the old private name stays for existing callers
+# (resolved through the module so test patches on core.tx reach it).
+def _read_tx():
+    return core_tx.read_only_tx()
 
 
 def _ny_midnight(day: date) -> datetime:
@@ -332,7 +335,7 @@ def _card(conn, family: families.Family, *, session: date, now: datetime, jobs, 
 def overview(*, now: datetime) -> dict[str, Any]:
     """The Data menu's overview: six family cards, everything computed at read time."""
     session = bars_module.latest_closed_session(now)
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         jobs = {job['name']: job for job in db.list_scheduled_jobs(conn)}
         ready = repository.fetch_runs_ready(conn)
         run_facts = _run_facts(conn, ready)
@@ -398,7 +401,7 @@ def family_detail(family_id: str, *, now: datetime) -> dict[str, Any]:
     family = families.get(family_id)   # 未知族 LookupError
     session = bars_module.latest_closed_session(now)
     recorded = 'bars' if family.id == 'atr' else family.id
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         jobs = {job['name']: job for job in db.list_scheduled_jobs(conn)}
         ready = repository.fetch_runs_ready(conn)
         run_facts = _run_facts(conn, ready)
@@ -429,7 +432,7 @@ def browse(family_id: str, *, now: datetime, ticker: str | None = None,
         key = ticker.strip().upper()
     else:
         key = None
-    with service.read_only_tx() as conn:
+    with core_tx.read_only_tx() as conn:
         if family.id == 'bars':
             return _browse_bars(conn, key, session=session, now=now)
         if family.id == 'atr':

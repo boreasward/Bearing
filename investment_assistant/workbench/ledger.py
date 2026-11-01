@@ -8,14 +8,13 @@ Plan notes (``plan_notes``) are a log for the user: they never reach an Agent pr
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from investment_assistant.core.idempotency import Conflict as Conflict, request_hash as request_hash
 from investment_assistant.workbench import positions, repository
 from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
 
@@ -34,29 +33,8 @@ class LedgerError(ValueError):
 BadRequest = LedgerError
 
 
-class Conflict(Exception):
-    """Request clashes with stored state (HTTP 409)."""
-
-
 class NotFound(LookupError):
     """Unknown record (HTTP 404)."""
-
-
-def _plain(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        return format(value.normalize(), 'f')
-    if isinstance(value, (uuid.UUID, date, datetime)):
-        return value.isoformat() if not isinstance(value, uuid.UUID) else str(value)
-    if isinstance(value, list):
-        return [_plain(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _plain(v) for k, v in value.items()}
-    return value
-
-
-def request_hash(record: dict[str, Any]) -> str:
-    body = {k: _plain(v) for k, v in record.items() if k != 'request_id'}
-    return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 def _uuid(value: Any, field: str, *, optional: bool = False) -> uuid.UUID | None:
