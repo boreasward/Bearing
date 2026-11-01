@@ -243,7 +243,7 @@ Unix socket 路径太长时启动会失败，所以用 `-k ''` 关掉 socket、�
 
 **测试库**：`tests/conftest.WORKBENCH_MIGRATIONS` 已含 029。
 
-### 030 的真实库执行（待授权，尚未执行）
+### 030 的真实库执行（逐步手动，每一步单独授权；2026-11-01 已执行）
 
 030 建六张新表、给四张账本表加 `account_id`（默认真实账户）并换掉 `holding_status` 的唯一键，还带本项目的第一行种子（默认真实账户）；v2.11 代码在 030 之前拒绝运行 `daily`、`/api/accounts/*` 返回 503，所以**先迁移、后重启，两步之间只差一次重启**（spec D22），排在 v2.10 的手动验收完成之后：
 
@@ -254,5 +254,9 @@ Unix socket 路径太长时启动会失败，所以用 `-k ''` 关掉 socket、�
 5. **重启服务**到 v2.11 代码，并核对 `web/dist` 是收尾 Task 之后构建的（[本机服务](local-service.md)）。
 
 回滚：`pg_restore --clean -d "$INVESTMENT_ASSISTANT_DATABASE_URL" <上面的 dump>`，再重启到 v2.10 代码（回滚会丢掉 030 之后的所有写入）。执行记录写进 `docs/roadmap/v2.11-acceptance.md`（验收开始时新建）。
+
+#### 执行记录（2026-11-01，手动 psql 执行）
+
+10:06:51 +0800 全库备份 `.local/us-workbench/backups/investment_assistant-before-030-20261101-100649.dump`（7,882,416 字节，sha256 `2b19b706…2b01`，`pg_restore --list` 可读，56 张表）；10:06:57 单事务执行，退出码 0，七条 `NOTICE` 属预期；核对全部通过（`accounts` 一行、四列默认值、`holding_status` 新唯一键、三处放宽、`paper_orders` 约束与索引，`public` 表数 56 → 62，旧表行数不变）；10:07 在 `main@d32a9a3` 重建 `web/dist`，10:08:06 重启到 v2.11 代码。逐项结果见 [v2.11 验收记录](../roadmap/v2.11-acceptance.md) 第 2、3 节。
 
 **测试库**：`tests/conftest.WORKBENCH_MIGRATIONS` 已含 030（v2.11 Task 1 加入）。
