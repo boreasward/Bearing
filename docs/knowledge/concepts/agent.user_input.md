@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2, agent-review-1]
 summary: "你可以贴入研报要点、新闻、自己的判断作为证据参与复查；只追加、可更正或撤回，对模型只是证据而不是指令。"
 related: [agent.citation, agent.signals, agent.review_outcome, system.append_only]
-sources: [investment_assistant/workbench/user_inputs.py, investment_assistant/workbench/timeline.py]
+sources: [investment_assistant/execution/user_inputs.py, investment_assistant/analysis/agent/evidence.py]
 ---
 
 ## 是什么

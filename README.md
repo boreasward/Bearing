@@ -23,6 +23,7 @@ v2.4 状态：`engineering_done`、`user_acceptance_pending`（迁移 025 已于
 ## 组成
 
 - **后端**：FastAPI + uvicorn 单进程，内置调度线程；PostgreSQL 是唯一的状态存储。
+- **代码布局**：`core → data → derivation → execution → analysis → review → optimize`，由 `workflow` 编排、`views` 组装跨层视图，API / tasks 显式注入通知端口。数据库核对入口为 `python -m investment_assistant.workflow check`，概念校验为 `python -m investment_assistant.core.knowledge check`。
 - **前端**：Svelte 5，主线入口是「今日」「标的」「复盘」「数据」。
 - **外部数据**：yfinance、SEC EDGAR、FRED；Agent 用 LangGraph + 你的 ChatGPT 订阅（设置里一次性登录）；通知走 Discord。
 - **运行**：本机 macOS LaunchAgent，只监听 `127.0.0.1:8787`。

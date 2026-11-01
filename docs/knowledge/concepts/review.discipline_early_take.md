@@ -6,7 +6,7 @@ version: 1
 applies_to: [review-6, discipline-2]
 summary: "持有期内没到 T1 就卖出，而卖出之后 20 个交易日内价格到了 T1，记为过早止盈；20 个交易日走完前显示未成熟。"
 related: [review.discipline_chase, review.discipline_held_loser, plan.target1, rule.plan_stop, review.retro_card]
-sources: [investment_assistant/workbench/discipline.py]
+sources: [investment_assistant/review/discipline.py]
 ---
 
 ## 是什么

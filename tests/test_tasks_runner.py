@@ -1,5 +1,5 @@
 import time
-from investment_assistant.tasks import runner
+from investment_assistant.core import runner
 
 
 def test_submit_runs_in_background_and_completes():

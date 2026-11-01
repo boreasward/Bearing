@@ -1,4 +1,5 @@
 """Plan-1 rule plan derivation: independent recomputation from substituted values (offline, pure)."""
+import investment_assistant.core.dbutil as core_dbutil
 import copy
 import json
 import uuid
@@ -9,7 +10,9 @@ import pytest
 
 from investment_assistant.config import WorkbenchConfig
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import derivation, plans, repository
+from investment_assistant.execution import plan_levels as plans
+from investment_assistant.derivation import chain as derivation
+from investment_assistant.derivation.indicators import price
 
 SIGNAL = date(2026, 10, 21)
 
@@ -65,11 +68,12 @@ def _keys(result):
 def test_constants_match_plans():
     for name in ('ENTRY_ATR', 'STOP_ATR', 'TARGET_ATR', 'TRAIL_ATR_MULTIPLE', 'VALID_SESSIONS',
                  'EARNINGS_WARN_SESSIONS', 'ATR_PERIOD', 'MIN_BARS'):
-        assert getattr(derivation, name) == getattr(plans, name), name
+        owner = price if name in ('ATR_PERIOD', 'MIN_BARS') else plans
+        assert getattr(derivation, name) == getattr(owner, name), name
     assert derivation.DERIVATION_VERSION == 'derivation-1'
     assert plans.PLAN_VERSION in derivation.REGISTERED_VERSIONS
     assert plans.AGENT_VERSION in derivation.REGISTERED_VERSIONS
-    from investment_assistant.workbench import timeline
+    from investment_assistant.execution import timeline
     assert timeline.AGENT_V2 in derivation.REGISTERED_VERSIONS and timeline.AGENT_V3 in derivation.REGISTERED_VERSIONS
     assert plans.PLAN_V1 in derivation.REGISTERED_VERSIONS and plans.PLAN_V2 in derivation.REGISTERED_VERSIONS
     assert derivation.CHAIN_ENTRY_SESSIONS == timeline.CHAIN_ENTRY_SESSIONS
@@ -191,8 +195,8 @@ def test_json_roundtripped_plan_is_consistent():
     plan, rows = _make(earnings=_earnings(date(2026, 10, 23)),
                        context={**CONTEXT_BASE, 'next_earnings': date(2026, 10, 23)})
     stored = copy.deepcopy(plan)
-    stored['sizing'] = json.loads(repository._plan_json(plan['sizing']))
-    stored['inputs'] = json.loads(repository._plan_json(plan['inputs']))
+    stored['sizing'] = json.loads(core_dbutil._plan_json(plan['sizing']))
+    stored['inputs'] = json.loads(core_dbutil._plan_json(plan['inputs']))
     result = derivation.derive_plan(stored, rows)
     assert result['consistency']['status'] == 'consistent', result['consistency']
 
@@ -619,8 +623,8 @@ def test_variant_plan_json_roundtrip_and_purity(maker, monkeypatch):
     plan, rows = maker(earnings=_earnings(date(2026, 10, 23)),
                        context={**CONTEXT_BASE, 'next_earnings': date(2026, 10, 23)})
     stored = copy.deepcopy(plan)
-    stored['sizing'] = json.loads(repository._plan_json(plan['sizing']))
-    stored['inputs'] = json.loads(repository._plan_json(plan['inputs']))
+    stored['sizing'] = json.loads(core_dbutil._plan_json(plan['sizing']))
+    stored['inputs'] = json.loads(core_dbutil._plan_json(plan['inputs']))
 
     def boom(*a, **k):
         raise AssertionError('derivation must not call plans math')
@@ -639,7 +643,7 @@ def test_variant_plan_json_roundtrip_and_purity(maker, monkeypatch):
 
 def _make_agent2(*, as_of=SIGNAL, version_no=0, mode='entry', earnings=None, snapshot='default', exposure=None,
                  bars=None, run_id='run-2'):
-    from investment_assistant.workbench import timeline
+    from investment_assistant.execution import timeline
     bars = bars or _bars()
     snapshot = _snapshot() if snapshot == 'default' else snapshot
     output = {'action': 'buy', 'summary': 's',
@@ -717,12 +721,12 @@ def test_agent2_missing_version_row_incomplete():
 
 
 def test_agent2_json_roundtrip_and_purity(monkeypatch):
-    from investment_assistant.workbench import timeline
+    from investment_assistant.execution import timeline
     plan, rows = _make_agent2(as_of=add_trading_days(SIGNAL, 8), version_no=1,
                               earnings=_earnings(add_trading_days(SIGNAL, 20)))
     stored = copy.deepcopy(plan)
-    stored['sizing'] = json.loads(repository._plan_json(plan['sizing']))
-    stored['inputs'] = json.loads(repository._plan_json(plan['inputs']))
+    stored['sizing'] = json.loads(core_dbutil._plan_json(plan['sizing']))
+    stored['inputs'] = json.loads(core_dbutil._plan_json(plan['inputs']))
 
     def boom(*a, **k):
         raise AssertionError('derivation must not call plans / timeline math')
@@ -808,7 +812,7 @@ def test_trigger_clauses_three_states(rule_id, values, thresholds, expected):
 
 
 def test_every_rule_in_rules_py_has_conditions():
-    from investment_assistant.workbench import rules
+    from investment_assistant.analysis import rules
     assert set(derivation.CONDITIONS) == {*rules.PRICE_RULES, 'new_filing'}
     assert set(derivation.CONDITIONS) == {c[0] for c in TRIGGER_CASES}
     assert rules.RULE_VERSION == '1' and derivation.CONDITION_VERSIONS == ('1',)
@@ -913,7 +917,7 @@ def _real_scenarios():
 
 def test_real_candidates_from_rules_are_never_violated():
     """Every clause mirrors rules.py: a candidate rules.evaluate emitted holds (or is not frozen) on each clause."""
-    from investment_assistant.workbench import rules
+    from investment_assistant.analysis import rules
     seen: set[str] = set()
     for bars, filings, position, state in _real_scenarios():
         result = rules.evaluate('AAA', SIGNAL, bars, filings, position, plan_state=state)
@@ -1047,7 +1051,7 @@ def _make_agent3(*, as_of=SIGNAL, version_no=0, mode='entry', entry_type='zone_l
                  cutoff=None, run_id='run-3'):
     from datetime import UTC, datetime
 
-    from investment_assistant.workbench import timeline
+    from investment_assistant.execution import timeline
     bars = _bars()
     cutoff = cutoff or datetime(2026, 10, 30, 22, 0, tzinfo=UTC)
     entry_cap = timeline.entry_cap({'signal_date': SIGNAL}, list(retriggers)) if mode == 'entry' else None

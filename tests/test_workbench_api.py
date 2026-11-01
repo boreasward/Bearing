@@ -1,3 +1,12 @@
+import investment_assistant.optimize.backcheck as optimize_backcheck
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.review.shadow as review_shadow
+import investment_assistant.analysis.agent.runner as analysis_agent_runner
+from investment_assistant.execution import chains as execution_chains
+from investment_assistant.execution import trades as execution_trades
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.review.repo as review_repo
 import re
 from datetime import UTC, date, datetime
 
@@ -7,7 +16,16 @@ import pytest
 
 from investment_assistant.core import tx as core_tx
 
-from investment_assistant.workbench import derivation_view, ledger, service
+import investment_assistant.views.derivation as derivation_view
+import investment_assistant.core.tx as service
+import investment_assistant.views.agent_runs as d_views_agent_runs
+import investment_assistant.views.screen as d_views_screen
+import investment_assistant.views.today as d_views_today
+from investment_assistant.views import account as account_views, instrument as instrument_view
+import investment_assistant.workflow.batch as d_workflow_batch
+import investment_assistant.workflow.nodes.push as d_workflow_nodes_push
+import investment_assistant.workflow.nodes.retro as d_workflow_nodes_retro
+from investment_assistant.execution import ledger
 
 
 def raiser(exc):
@@ -24,7 +42,9 @@ def raiser(exc):
     ('get', '/api/workbench/weekly-reviews', 'list_weekly'),
 ])
 def test_unavailable_database_is_503_not_empty(client, monkeypatch, method, path, target):
-    monkeypatch.setattr(service, target, raiser(service.Unavailable('工作台数据表未就绪')))
+    owner = {'today': d_views_today, 'instrument': instrument_view, 'shadow': review_shadow,
+             'trade_review': review_weekly, 'list_weekly': review_weekly}[target]
+    monkeypatch.setattr(owner, target, raiser(service.Unavailable('工作台数据表未就绪')))
     resp = getattr(client, method)(path)
     assert resp.status_code == 503 and '未就绪' in resp.json()['error']
 
@@ -35,7 +55,7 @@ def test_unavailable_database_is_503_not_empty(client, monkeypatch, method, path
     (service.Unavailable('down'), 503),
 ])
 def test_trade_errors_map_to_status(client, monkeypatch, exc, code):
-    monkeypatch.setattr(service, 'add_trade', raiser(exc))
+    monkeypatch.setattr(execution_trades, 'add_trade', raiser(exc))
     assert client.post('/api/workbench/trades', json={}).status_code == code
 
 
@@ -53,8 +73,8 @@ def test_trade_with_decision_id_is_400_decision_link_retired(client, monkeypatch
     def add_trade(payload, *, now):
         seen['payload'] = payload
         return ledger_module.record_trade(None, payload, now=now)
-    from investment_assistant.workbench import ledger as ledger_module
-    monkeypatch.setattr(service, 'add_trade', add_trade)
+    from investment_assistant.execution import ledger as ledger_module
+    monkeypatch.setattr(execution_trades, 'add_trade', add_trade)
     resp = client.post('/api/workbench/trades', json={
         'request_id': '6f1d1c1e-6666-4444-8888-000000000001', 'ticker': 'NVDA', 'side': 'buy', 'quantity': '1',
         'price': '1', 'executed_at': '2026-10-23T14:00:00+00:00', 'decision_id': '6f1d1c1e-6666-4444-8888-000000000002'})
@@ -63,7 +83,7 @@ def test_trade_with_decision_id_is_400_decision_link_retired(client, monkeypatch
 
 
 def test_void_unknown_trade_is_404(client, monkeypatch):
-    monkeypatch.setattr(service, 'void_trade', raiser(ledger.NotFound('trade not found')))
+    monkeypatch.setattr(execution_trades, 'void_trade', raiser(ledger.NotFound('trade not found')))
     assert client.post('/api/workbench/trades/abc/void', json={'reason': 'x'}).status_code == 404
 
 
@@ -73,7 +93,7 @@ def test_trade_passes_payload_and_server_time(client, monkeypatch):
     def add_trade(payload, *, now):
         seen.update(payload=payload, now=now)
         return {'status': 'created', 'record': {'id': 't1'}}
-    monkeypatch.setattr(service, 'add_trade', add_trade)
+    monkeypatch.setattr(execution_trades, 'add_trade', add_trade)
     resp = client.post('/api/workbench/trades', json={'ticker': 'MU', 'plan_id': 'p1', 'executed_at': '2000-01-01T00:00:00Z'})
     assert resp.status_code == 200 and resp.json()['status'] == 'created'
     assert seen['payload'] == {'ticker': 'MU', 'plan_id': 'p1', 'executed_at': '2000-01-01T00:00:00Z'}
@@ -86,23 +106,24 @@ def test_weekly_review_post_parses_week(client, monkeypatch):
     def generate(week_start, *, notes, supersedes_id, now):
         calls.update(week_start=week_start, notes=notes, supersedes_id=supersedes_id)
         return {'id': 'w1'}
-    monkeypatch.setattr(service, 'generate_weekly', generate)
+    monkeypatch.setattr(review_weekly, 'generate_weekly', generate)
     resp = client.post('/api/workbench/weekly-reviews', json={'week_start': '2026-10-19', 'notes': '笔记'})
     assert resp.status_code == 200 and calls == {'week_start': date(2026, 10, 19), 'notes': '笔记', 'supersedes_id': None}
     assert client.post('/api/workbench/weekly-reviews', json={'week_start': 'bad'}).status_code == 400
 
 
 def test_shadow_since_is_validated(client, monkeypatch):
-    monkeypatch.setattr(service, 'shadow', lambda *, now, since: {'since': since})
+    monkeypatch.setattr(review_shadow, 'shadow', lambda *, now, since: {'since': since})
     assert client.get('/api/workbench/review/shadow?since=2026-09-01').json() == {'since': '2026-09-01'}
     assert client.get('/api/workbench/review/shadow?since=nope').status_code == 400
 
 
 def test_manual_run_is_submitted_in_background(client, monkeypatch):
     """v2.8 §4.8: the manual run is the daily workflow, with its run id known up front for the detail page."""
-    from investment_assistant.tasks import daily, runner
+    from investment_assistant.tasks import daily
+    from investment_assistant.core import locks, runner
     submitted = []
-    monkeypatch.setattr(daily, 'is_running', lambda: False)
+    monkeypatch.setattr(locks, 'is_running', lambda: False)
     monkeypatch.setattr(runner, 'submit', lambda kind, fn: submitted.append((kind, fn)) or 'daily-20261029030000-aaaaaaaa')
     resp = client.post('/api/workbench/run')
     body = resp.json()
@@ -115,8 +136,9 @@ def test_manual_run_is_submitted_in_background(client, monkeypatch):
 
 
 def test_manual_run_while_daily_is_running_is_409(client, monkeypatch):
-    from investment_assistant.tasks import daily, runner
-    monkeypatch.setattr(daily, 'is_running', lambda: True)
+    from investment_assistant.tasks import daily
+    from investment_assistant.core import locks, runner
+    monkeypatch.setattr(locks, 'is_running', lambda: True)
     monkeypatch.setattr(runner, 'submit', lambda *a, **k: pytest.fail('must not submit'))
     resp = client.post('/api/workbench/run')
     assert resp.status_code == 409 and resp.json() == {'error': 'daily_running'}
@@ -127,9 +149,10 @@ def test_existing_keys_unchanged(client, monkeypatch):
     and any other job's run answer is still the v2.7 pair (``daily_run_id`` belongs to ``daily`` alone)."""
     from investment_assistant import db
     from investment_assistant.services import jobs
-    from investment_assistant.tasks import daily, runner
+    from investment_assistant.tasks import daily
+    from investment_assistant.core import locks, runner
 
-    monkeypatch.setattr(daily, 'is_running', lambda: False)
+    monkeypatch.setattr(locks, 'is_running', lambda: False)
     monkeypatch.setattr(runner, 'submit', lambda kind, fn: f'{kind}-20261029030000-aaaaaaaa')
     run = client.post('/api/workbench/run').json()
     assert {'run_id', 'status'} <= set(run) and set(run) - {'run_id', 'status'} == {'daily_run_id'}
@@ -158,9 +181,9 @@ def test_task_is_registered_with_scheduler():
 
 
 def test_trade_list_endpoint(client, monkeypatch):
-    monkeypatch.setattr(service, 'list_trades', lambda: [{'id': 't1'}])
+    monkeypatch.setattr(execution_trades, 'list_trades', lambda: [{'id': 't1'}])
     assert client.get('/api/workbench/trades').json() == {'trades': [{'id': 't1'}]}
-    monkeypatch.setattr(service, 'list_trades', raiser(service.Unavailable('down')))
+    monkeypatch.setattr(execution_trades, 'list_trades', raiser(service.Unavailable('down')))
     assert client.get('/api/workbench/trades').status_code == 503
 
 
@@ -172,13 +195,14 @@ def test_trade_list_endpoint(client, monkeypatch):
     ('post', '/api/workbench/account/flows/x/void', 'void_flow', {'json': {'reason': 'r'}}),
 ])
 def test_account_routes_503_without_db(client, monkeypatch, method, path, target, kwargs):
-    monkeypatch.setattr(service, target, raiser(service.Unavailable('工作台数据表未就绪')))
+    owner = account_views if target == 'account_view' else execution_trades
+    monkeypatch.setattr(owner, target, raiser(service.Unavailable('工作台数据表未就绪')))
     resp = getattr(client, method)(path, **kwargs)
     assert resp.status_code == 503 and '未就绪' in resp.json()['error']
 
 
 def test_post_flow_400_on_zero(client, monkeypatch):
-    monkeypatch.setattr(service, 'add_flow', raiser(ledger.LedgerError('amount must be non-zero')))
+    monkeypatch.setattr(execution_trades, 'add_flow', raiser(ledger.LedgerError('amount must be non-zero')))
     assert client.post('/api/workbench/account/flows', json={'amount': 0}).status_code == 400
 
 
@@ -187,8 +211,8 @@ def test_bad_own_levels_400_and_nothing_written(client, workbench_db, monkeypatc
     from datetime import UTC, date, datetime
     from decimal import Decimal
 
-    from investment_assistant.workbench import repository
-    from investment_assistant.workbench.rules import Candidate
+    # Repository consumers use their owning layers below.
+    from investment_assistant.analysis.rules import Candidate
 
     @contextmanager
     def connection():
@@ -197,9 +221,9 @@ def test_bad_own_levels_400_and_nothing_written(client, workbench_db, monkeypatc
     monkeypatch.setattr(core_tx, 'connection', connection)
     now = datetime(2026, 10, 23, 1, 0, tzinfo=UTC)
     unit_day = date(2026, 10, 22)
-    repository.store_candidate(workbench_db, 'NVDA', unit_day,
+    analysis_repo.store_candidate(workbench_db, 'NVDA', unit_day,
                                Candidate('trend_reclaim', 'buy', {'signal_date': unit_day.isoformat()}), run_id='r')
-    repository.insert_plan(workbench_db, {
+    execution_repo.insert_plan(workbench_db, {
         'ticker': 'NVDA', 'signal_date': unit_day, 'kind': 'rule', 'based_on_id': None, 'plan_version': 'plan-1',
         'ref_price': Decimal('100'), 'atr': Decimal('2'), 'entry_low': Decimal('99'), 'entry_high': Decimal('101'),
         'stop': Decimal('94'), 'target1': Decimal('108'), 'trail_atr_multiple': Decimal('3'),
@@ -216,7 +240,7 @@ def test_bad_own_levels_400_and_nothing_written(client, workbench_db, monkeypatc
 
 
 def test_plan_shadow_503_without_db(client, monkeypatch):
-    monkeypatch.setattr(service, 'plan_shadow', raiser(service.Unavailable('工作台数据表未就绪')))
+    monkeypatch.setattr(review_shadow, 'plan_shadow', raiser(service.Unavailable('工作台数据表未就绪')))
     resp = client.get('/api/workbench/plans/shadow')
     assert resp.status_code == 503 and '未就绪' in resp.json()['error']
 
@@ -226,14 +250,14 @@ def test_plan_shadow_since_is_validated(client):
 
 
 def test_discipline_503_without_db(client, monkeypatch):
-    monkeypatch.setattr(service, 'discipline', raiser(service.Unavailable('工作台数据表未就绪')))
+    monkeypatch.setattr(review_weekly, 'discipline', raiser(service.Unavailable('工作台数据表未就绪')))
     assert client.get('/api/workbench/discipline').status_code == 503
 
 
 def test_monthly_reviews_routes(client, monkeypatch):
-    monkeypatch.setattr(service, 'list_monthly', raiser(service.Unavailable('工作台数据表未就绪')))
+    monkeypatch.setattr(review_weekly, 'list_monthly', raiser(service.Unavailable('工作台数据表未就绪')))
     assert client.get('/api/workbench/monthly-reviews').status_code == 503
-    monkeypatch.setattr(service, 'generate_monthly', raiser(service.Unavailable('工作台数据表未就绪')))
+    monkeypatch.setattr(review_weekly, 'generate_monthly', raiser(service.Unavailable('工作台数据表未就绪')))
     assert client.post('/api/workbench/monthly-reviews', json={'month': '2026-10-01'}).status_code == 503
     assert client.post('/api/workbench/monthly-reviews', json={}).status_code == 400
     assert client.post('/api/workbench/monthly-reviews', json={'month': '2026-10-15'}).status_code == 400
@@ -242,24 +266,24 @@ def test_monthly_reviews_routes(client, monkeypatch):
 def test_push_route_forces(client, monkeypatch):
     seen = {}
 
-    def push(*, now, force, notify_cfg=None, client=None):
+    def push(*, now, force, notify_cfg=None, client=None, send):
         seen['force'] = force
         return {'session': '2026-10-22', 'sent': True, 'messages': 4}
 
-    monkeypatch.setattr(service, 'push', push)
+    monkeypatch.setattr(d_workflow_nodes_push, 'push', push)
     resp = client.post('/api/workbench/push')
     assert resp.status_code == 200 and seen['force'] is True and resp.json()['sent'] is True
 
 
 def test_backcheck_route_runs_and_lists(client, monkeypatch):
-    from investment_assistant.workbench import service
+    import investment_assistant.core.tx as service
     seen = {}
 
     def run_backcheck(*, now, tickers=None):
         seen['tickers'] = tickers
         return {'id': 'b1', 'calc_version': 'backcheck-1', 'stats': {'all': {'triggers': 0}}}
-    monkeypatch.setattr(service, 'run_backcheck', run_backcheck)
-    monkeypatch.setattr(service, 'list_backchecks', lambda limit=10: [{'id': 'b1', 'calc_version': 'backcheck-1'}])
+    monkeypatch.setattr(optimize_backcheck, 'run_backcheck', run_backcheck)
+    monkeypatch.setattr(optimize_backcheck, 'list_backchecks', lambda limit=10: [{'id': 'b1', 'calc_version': 'backcheck-1'}])
     resp = client.post('/api/workbench/backchecks', json={'tickers': ['NVDA', 'MU']})
     assert resp.status_code == 200 and resp.json()['id'] == 'b1'
     assert seen['tickers'] == ['NVDA', 'MU']
@@ -270,7 +294,7 @@ def test_backcheck_route_runs_and_lists(client, monkeypatch):
 
 def test_agent_run_routes(client, monkeypatch):
     # GET 列表与覆盖率
-    monkeypatch.setattr(service, 'agent_runs', lambda *, now, since=None: {
+    monkeypatch.setattr(d_views_agent_runs, 'agent_runs', lambda *, now, since=None: {
         'since': '2026-10-08', 'runs': [{'id': 'r1', 'ticker': 'NVDA'}],
         'coverage': {'units': 1, 'covered': 1, 'missing': []}})
     resp = client.get('/api/workbench/agent-runs')
@@ -278,20 +302,20 @@ def test_agent_run_routes(client, monkeypatch):
     assert client.get('/api/workbench/agent-runs?since=2026-10-01').status_code == 200
 
     # GET 详情：404 与正常
-    monkeypatch.setattr(service, 'agent_run_detail', raiser(LookupError('no such run')))
+    monkeypatch.setattr(d_views_agent_runs, 'agent_run_detail', raiser(LookupError('no such run')))
     assert client.get('/api/workbench/agent-runs/abc').status_code == 404
-    monkeypatch.setattr(service, 'agent_run_detail', lambda run_id: {'id': run_id, 'tool_calls': []})
+    monkeypatch.setattr(d_views_agent_runs, 'agent_run_detail', lambda run_id: {'id': run_id, 'tool_calls': []})
     assert client.get('/api/workbench/agent-runs/abc').status_code == 200
 
     # POST：400（非买入）、409（已有建议）、503（库未就绪）、200（成功）
     body = {'ticker': 'AMD', 'signal_date': '2026-10-21'}
-    monkeypatch.setattr(service, 'run_agent', raiser(ValueError('not a buy unit')))
+    monkeypatch.setattr(analysis_agent_runner, 'run_agent', raiser(ValueError('not a buy unit')))
     assert client.post('/api/workbench/agent-runs', json=body).status_code == 400
-    monkeypatch.setattr(service, 'run_agent', raiser(service.AgentConflict('already ok')))
+    monkeypatch.setattr(analysis_agent_runner, 'run_agent', raiser(analysis_agent_runner.AgentConflict('already ok')))
     assert client.post('/api/workbench/agent-runs', json=body).status_code == 409
-    monkeypatch.setattr(service, 'run_agent', raiser(service.Unavailable('数据库不可达')))
+    monkeypatch.setattr(analysis_agent_runner, 'run_agent', raiser(service.Unavailable('数据库不可达')))
     assert client.post('/api/workbench/agent-runs', json=body).status_code == 503
-    monkeypatch.setattr(service, 'run_agent',
+    monkeypatch.setattr(analysis_agent_runner, 'run_agent',
                         lambda ticker, signal_date, *, now, deps=None: {'id': 'r9', 'status': 'ok',
                                                                          'reason': None})
     resp = client.post('/api/workbench/agent-runs', json=body)
@@ -315,7 +339,7 @@ def test_tracks_route_passes_dates(client, monkeypatch):
     def tracks(*, now, since=None, until=None):
         calls.update(since=since, until=until)
         return {'units': [], 'summary': {}}
-    monkeypatch.setattr(service, 'tracks', tracks)
+    monkeypatch.setattr(review_weekly, 'tracks', tracks)
     resp = client.get('/api/workbench/review/tracks',
                       params={'since': '2026-10-01', 'until': '2026-10-22'})
     assert resp.status_code == 200
@@ -323,13 +347,14 @@ def test_tracks_route_passes_dates(client, monkeypatch):
 
 
 def test_review_push_route_validation(client, monkeypatch):
-    from investment_assistant.workbench import ledger, service
+    import investment_assistant.core.tx as service
+    from investment_assistant.execution import ledger
 
-    monkeypatch.setattr(service, 'push_review',
+    monkeypatch.setattr(d_workflow_nodes_retro, 'push_review',
                         raiser(ledger.NotFound('没有快照')))
     resp = client.post('/api/workbench/review-pushes', json={'kind': 'weekly', 'period': '2026-10-19'})
     assert resp.status_code == 404
-    monkeypatch.setattr(service, 'push_review', raiser(ledger.LedgerError('period 必须是周一')))
+    monkeypatch.setattr(d_workflow_nodes_retro, 'push_review', raiser(ledger.LedgerError('period 必须是周一')))
     assert client.post('/api/workbench/review-pushes',
                        json={'kind': 'weekly', 'period': '2026-10-21'}).status_code == 400
     calls = {}
@@ -337,14 +362,14 @@ def test_review_push_route_validation(client, monkeypatch):
     def push_review(kind, period, **kwargs):
         calls.update(kind=kind, period=period)
         return {'kind': kind, 'period': period, 'sent': True}
-    monkeypatch.setattr(service, 'push_review', push_review)
+    monkeypatch.setattr(d_workflow_nodes_retro, 'push_review', push_review)
     resp = client.post('/api/workbench/review-pushes', json={'kind': 'weekly', 'period': '2026-10-19'})
     assert resp.status_code == 200
     assert calls == {'kind': 'weekly', 'period': date(2026, 10, 19)}
 
 
 def test_review_pushes_list_route(client, monkeypatch):
-    monkeypatch.setattr(service, 'list_review_pushes', lambda limit=20: [{'id': 1}])
+    monkeypatch.setattr(d_workflow_nodes_retro, 'list_review_pushes', lambda limit=20: [{'id': 1}])
     assert client.get('/api/workbench/review-pushes').json() == {'pushes': [{'id': 1}]}
     assert client.get('/api/workbench/review-pushes', params={'limit': 5}).status_code == 200
     assert client.get('/api/workbench/review-pushes', params={'limit': 0}).status_code == 400
@@ -352,7 +377,7 @@ def test_review_pushes_list_route(client, monkeypatch):
 
 
 def test_screen_view_passthrough(client, monkeypatch):
-    monkeypatch.setattr(service, 'screen_view',
+    monkeypatch.setattr(d_views_screen, 'screen_view',
                         lambda *, now, session=None, full=False: {'report': {'full': full, 'session': session}})
     resp = client.get('/api/workbench/screen')
     assert resp.status_code == 200
@@ -369,7 +394,7 @@ def test_screen_replay_route(client, monkeypatch):
         seen['sessions'] = sessions
         return {'reports': [{'session': '2026-10-22'}]}
 
-    monkeypatch.setattr(service, 'replay_screen', replay_screen)
+    monkeypatch.setattr(d_views_screen, 'replay_screen', replay_screen)
     resp = client.post('/api/workbench/screen/replay', json={'sessions': 21})
     assert resp.status_code == 400
     resp = client.post('/api/workbench/screen/replay', json={})
@@ -416,7 +441,7 @@ def test_unit_derivation_route_delegates(client, monkeypatch):
 
 
 def test_stage_runs_route_delegates_and_serializes_stages(client, monkeypatch):
-    from investment_assistant.workbench import stages as stages_module
+    import investment_assistant.core.stages as stages_module
     seen = {}
 
     def stage_runs_view(*, session=None, run_id=None):
@@ -480,7 +505,7 @@ def test_derivation_routes_503_without_db(client, monkeypatch, path, target, kwa
 # ---------------------------------------------------------------- v2.5 plan timeline (spec §12)
 
 def test_chain_view_route_delegates(client, monkeypatch):
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
     seen = {}
 
     def chain_view(ticker, signal_date, *, now):
@@ -495,7 +520,7 @@ def test_chain_view_route_delegates(client, monkeypatch):
 
 
 def test_plan_reviews_route_delegates(client, monkeypatch):
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
     monkeypatch.setattr(plan_review, 'reviews_view', lambda session: {'session': session, 'reviews': []})
     assert client.get('/api/workbench/plan-reviews', params={'session': '2026-09-02'}).json() == \
         {'session': '2026-09-02', 'reviews': []}
@@ -505,8 +530,8 @@ def test_plan_reviews_route_delegates(client, monkeypatch):
 
 def test_recheck_route_checks_then_submits_with_request_time(client, monkeypatch):
     from investment_assistant.api.routes import workbench as routes
-    from investment_assistant.tasks import runner
-    from investment_assistant.workbench import plan_review
+    from investment_assistant.core import runner
+    import investment_assistant.workflow.nodes.review as plan_review
     t0 = datetime(2026, 9, 2, 22, 30, tzinfo=UTC)
     clock = iter([t0, t0.replace(minute=35)])
     monkeypatch.setattr(routes, '_now', lambda: next(clock))
@@ -542,8 +567,8 @@ def test_recheck_route_checks_then_submits_with_request_time(client, monkeypatch
     ('unavailable', 503, '迁移 026 未执行'),
 ])
 def test_recheck_route_errors_do_not_submit(client, monkeypatch, exc, code, message):
-    from investment_assistant.tasks import runner
-    from investment_assistant.workbench import plan_review
+    from investment_assistant.core import runner
+    import investment_assistant.workflow.nodes.review as plan_review
     error = {'conflict': plan_review.RecheckConflict('review_in_progress'),
              'not_active': plan_review.RecheckConflict('chain_not_active'),
              'agent': plan_review.RecheckConflict('agent_unavailable: not_configured'),
@@ -560,7 +585,7 @@ def test_recheck_route_errors_do_not_submit(client, monkeypatch, exc, code, mess
 
 
 def test_user_inputs_routes_delegate(client, monkeypatch):
-    from investment_assistant.workbench import user_inputs
+    from investment_assistant.execution import user_inputs
     seen = {}
 
     def list_for(ticker, signal_date):
@@ -593,20 +618,20 @@ def test_user_inputs_routes_delegate(client, monkeypatch):
     (service.Unavailable('迁移 026 未执行'), 503),
 ])
 def test_user_inputs_post_errors(client, monkeypatch, exc, code):
-    from investment_assistant.workbench import user_inputs
+    from investment_assistant.execution import user_inputs
     monkeypatch.setattr(user_inputs, 'add', raiser(exc))
     resp = client.post('/api/workbench/user-inputs', json={})
     assert resp.status_code == code and resp.json()['error'] == str(exc)
 
 
 @pytest.mark.parametrize('path, module, target', [
-    ('/api/workbench/chains/SYNTH/2026-09-01', 'plan_review', 'chain_view'),
-    ('/api/workbench/plan-reviews?session=2026-09-02', 'plan_review', 'reviews_view'),
-    ('/api/workbench/user-inputs?ticker=SYNTH', 'user_inputs', 'list_for'),
+    ('/api/workbench/chains/SYNTH/2026-09-01', 'workflow.nodes.review', 'chain_view'),
+    ('/api/workbench/plan-reviews?session=2026-09-02', 'workflow.nodes.review', 'reviews_view'),
+    ('/api/workbench/user-inputs?ticker=SYNTH', 'execution.user_inputs', 'list_for'),
 ])
 def test_timeline_reads_map_errors(client, monkeypatch, path, module, target):
     import importlib
-    mod = importlib.import_module(f'investment_assistant.workbench.{module}')
+    mod = importlib.import_module(f'investment_assistant.{module}')
     for exc, code in ((service.Unavailable('迁移 026 未执行'), 503), (LookupError('没有'), 404),
                       (ValueError('Invalid US stock ticker'), 400)):
         monkeypatch.setattr(mod, target, raiser(exc))
@@ -615,7 +640,7 @@ def test_timeline_reads_map_errors(client, monkeypatch, path, module, target):
 
 
 def test_ticker_chains_route_delegates_and_maps_errors(client, monkeypatch):
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
     seen = {}
 
     def ticker_chains(ticker, *, now):
@@ -637,7 +662,7 @@ def test_ticker_chains_route_delegates_and_maps_errors(client, monkeypatch):
 # --- v2.6 run overview, reasoning view, instrument page additions ---
 
 def test_run_overview_endpoint(client, monkeypatch):
-    from investment_assistant.workbench import run_overview
+    import investment_assistant.views.runs.overview as run_overview
     seen = {}
 
     def overview(*, session, run_id, now):
@@ -657,7 +682,7 @@ def test_run_overview_endpoint(client, monkeypatch):
 
 
 def test_reasoning_endpoint(client, monkeypatch):
-    from investment_assistant.workbench import reasoning
+    import investment_assistant.views.reasoning as reasoning
     monkeypatch.setattr(reasoning, 'reasoning', lambda run_id: {'run': {'id': run_id}, 'steps': []})
     resp = client.get('/api/workbench/agent-runs/6f1d1c1e-6666-4444-8888-000000000001/reasoning')
     assert resp.status_code == 200 and resp.json()['run']['id'] == '6f1d1c1e-6666-4444-8888-000000000001'
@@ -670,7 +695,7 @@ def test_reasoning_endpoint(client, monkeypatch):
 
 
 def test_agent_run_detail_route_still_wins_for_plain_ids(client, monkeypatch):
-    monkeypatch.setattr(service, 'agent_run_detail', lambda run_id: {'id': run_id})
+    monkeypatch.setattr(d_views_agent_runs, 'agent_run_detail', lambda run_id: {'id': run_id})
     assert client.get('/api/workbench/agent-runs/abc').json() == {'id': 'abc'}
 
 
@@ -685,8 +710,8 @@ NEW_KEYS = {'focus', 'key_data', 'context', 'plans', 'holding', 'errors'}   # v2
 
 @pytest.fixture
 def seeded(db, client, monkeypatch, scripted_model):
-    from investment_assistant.workbench import service as service_module
-    service_module.run_batch(tickers=['AAA'], now=BATCH_NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
+    import investment_assistant.core.tx as service_module
+    d_workflow_batch.run_batch(tickers=['AAA'], now=BATCH_NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
     monkeypatch.setattr(workbench_routes, '_now', lambda: BATCH_NOW)
     return db
@@ -746,7 +771,7 @@ def test_instrument_without_timeline_version_no_null(seeded, client):
 
 
 def test_instrument_new_key_failure_is_isolated(seeded, client, monkeypatch):
-    from investment_assistant.workbench import instrument_view
+    import investment_assistant.views.instrument as instrument_view
 
     def broken(*args, **kwargs):
         raise RuntimeError('指标算坏了')
@@ -767,15 +792,15 @@ def test_instrument_unknown_ticker_still_returns_empty_view(seeded, client):
 
 def test_instrument_holding_key(seeded, client):
     from test_workbench_service import _decide
-    from investment_assistant.workbench import service as service_module
-    from investment_assistant.workbench import repository as repo
+    import investment_assistant.core.tx as service_module
+    # Repository consumers use their owning layers below.
 
     # not held -> null; the existing `position` key is unchanged (also null)
     body = client.get('/api/workbench/instruments/AAA').json()
     assert body['holding'] is None and body['position'] is None
 
-    unit = next(u for u in service_module.unit_cards(now=BATCH_NOW)['units'] if u['ticker'] == 'AAA')
-    head = repo.chain_head(seeded, 'AAA', BATCH_SESSION)
+    unit = next(u for u in d_views_today.unit_cards(now=BATCH_NOW)['units'] if u['ticker'] == 'AAA')
+    head = execution_repo.chain_head(seeded, 'AAA', BATCH_SESSION)
     decision = _decide(unit, 'buy', plan_id=head['plan']['id'], now=BATCH_NOW)
     legacy_decisions.add_trade({'request_id': '6f1d1c1e-9999-4444-8888-000000000001', 'ticker': 'AAA', 'side': 'buy',
                               'quantity': '10', 'price': '100.00', 'executed_at': '2026-10-22T15:00:00+00:00',
@@ -784,7 +809,7 @@ def test_instrument_holding_key(seeded, client):
 
     body = client.get('/api/workbench/instruments/AAA').json()
     holding = body['holding']
-    today_row = next(h for h in client_json(service.unit_cards(now=BATCH_NOW))['holdings'] if h['ticker'] == 'AAA')
+    today_row = next(h for h in client_json(d_views_today.unit_cards(now=BATCH_NOW))['holdings'] if h['ticker'] == 'AAA')
     assert set(holding) == {'quantity', 'avg_cost', 'plan_id', 'stop', 'mode', 't1_reached', 'target1', 'last_close',
                             'to_stop_pct', 'to_target_pct'}
     assert holding == {k: today_row[k] for k in holding}            # same row as 「今日」, field by field
@@ -805,11 +830,11 @@ def client_json(value):
 
 def test_instrument_holding_failure_is_isolated(seeded, client, monkeypatch):
     from test_workbench_service import _decide
-    from investment_assistant.workbench import service as service_module
-    from investment_assistant.workbench import repository as repo
+    import investment_assistant.core.tx as service_module
+    # Repository consumers use their owning layers below.
 
-    unit = next(u for u in service_module.unit_cards(now=BATCH_NOW)['units'] if u['ticker'] == 'AAA')
-    decision = _decide(unit, 'buy', plan_id=repo.chain_head(seeded, 'AAA', BATCH_SESSION)['plan']['id'], now=BATCH_NOW)
+    unit = next(u for u in d_views_today.unit_cards(now=BATCH_NOW)['units'] if u['ticker'] == 'AAA')
+    decision = _decide(unit, 'buy', plan_id=execution_repo.chain_head(seeded, 'AAA', BATCH_SESSION)['plan']['id'], now=BATCH_NOW)
     legacy_decisions.add_trade({'request_id': '6f1d1c1e-9999-4444-8888-000000000002', 'ticker': 'AAA', 'side': 'buy',
                               'quantity': '10', 'price': '100.00', 'executed_at': '2026-10-22T15:00:00+00:00',
                               'decision_id': str(decision['id'])}, now=BATCH_NOW)
@@ -817,7 +842,7 @@ def test_instrument_holding_failure_is_isolated(seeded, client, monkeypatch):
 
     def broken(*args, **kwargs):
         raise RuntimeError('止损算坏了')
-    monkeypatch.setattr(service_module, '_position_plan_state', broken)
+    monkeypatch.setattr(execution_chains, '_position_plan_state', broken)
     body = client.get('/api/workbench/instruments/AAA').json()
     assert body['holding'] is None and body['errors']['holding'] == '止损算坏了'
     assert body['focus'] is None and 'holding' in body['errors']['focus']       # no silent "无计划" line
@@ -826,7 +851,11 @@ def test_instrument_holding_failure_is_isolated(seeded, client, monkeypatch):
 
 # ---------------------------------------------------------------- v2.7 growth loop (spec §12), use cases mocked
 
-from investment_assistant.workbench import discussion, my_knowledge, retro_cards  # noqa: E402
+from investment_assistant.review import discussion
+
+from investment_assistant.review.knowledge import my_knowledge
+
+from investment_assistant.review import retro_cards  # noqa: E402
 
 CARD_BODY = {'request_id': 'r1', 'note': '', 'lessons': []}
 GROWTH_CALLS = [
@@ -885,7 +914,7 @@ def test_review_card_routes_delegate(client, monkeypatch):
 
 
 def test_redraft_route_checks_then_submits_with_request_time(client, monkeypatch):
-    from investment_assistant.tasks import runner
+    from investment_assistant.core import runner
     t0 = datetime(2026, 10, 29, 10, 0, tzinfo=UTC)
     monkeypatch.setattr(workbench_routes, '_now', lambda: t0)
     checked, ran, submitted = [], [], []
@@ -912,7 +941,7 @@ def test_redraft_route_checks_then_submits_with_request_time(client, monkeypatch
     (service.Unavailable('迁移 027 未执行'), 503, '迁移 027 未执行'),
 ])
 def test_redraft_route_errors_do_not_submit(client, monkeypatch, exc, code, message):
-    from investment_assistant.tasks import runner
+    from investment_assistant.core import runner
     monkeypatch.setattr(retro_cards, 'redraft_check', raiser(exc))
     submitted = []
     monkeypatch.setattr(runner, 'submit', lambda *a, **k: submitted.append(a) or 'x')
@@ -958,13 +987,14 @@ def test_discussion_routes_delegate(client, monkeypatch):
 
 
 def test_discussion_turn_route_checks_submits_and_tracks(client, monkeypatch):
-    from investment_assistant.tasks import runner
+    from investment_assistant.core import runner
     t0 = datetime(2026, 10, 29, 10, 0, tzinfo=UTC)
     monkeypatch.setattr(workbench_routes, '_now', lambda: t0)
     asked, ran, submitted, tracked = [], [], [], []
     monkeypatch.setattr(discussion, 'ask_check', lambda discussion_id, payload, *, now: asked.append(
         (discussion_id, payload, now)) or {'turn_id': 11, 'run_id': 'uuid-1', 'replayed': False})
-    monkeypatch.setattr(discussion, 'answer', lambda discussion_id, turn_id, *, now, deps=None, run_id:
+    monkeypatch.setattr(discussion, 'answer', lambda discussion_id, turn_id, *, now, deps=None, run_id,
+                        read_derivation, read_agent_run:
                         ran.append((discussion_id, turn_id, now, run_id)) or {'status': 'ok'})
     monkeypatch.setattr(discussion, 'track', lambda key, runner_id: tracked.append((key, runner_id)))
     monkeypatch.setattr(runner, 'submit', lambda kind, fn, *, with_run_id=False:
@@ -980,7 +1010,7 @@ def test_discussion_turn_route_checks_submits_and_tracks(client, monkeypatch):
 
 
 def test_discussion_turn_replay_and_failed_submit(client, monkeypatch):
-    from investment_assistant.tasks import runner
+    from investment_assistant.core import runner
     monkeypatch.setattr(discussion, 'ask_check', lambda *a, **k: {'turn_id': 11, 'run_id': 'uuid-1', 'replayed': True})
     monkeypatch.setattr(runner, 'submit', lambda *a, **k: pytest.fail('a replay does not start another run'))
     resp = client.post('/api/workbench/discussions/5/turns', json={'request_id': 'r', 'body': 'x'})
@@ -1011,10 +1041,10 @@ def test_growth_http_flow(seeded, client, monkeypatch, scripted_model):
     import json
     import uuid
     from langchain_core.messages import AIMessage
-    from investment_assistant.tasks import runner
+    from investment_assistant.core import runner
     from test_workbench_retro_cards import stage_deps
 
-    from investment_assistant.workbench import agent_connection
+    from investment_assistant.core.llm import connection as agent_connection
 
     # v2.8: the agent is available when the ChatGPT connection is (the API-key variable is gone)
     monkeypatch.setattr(agent_connection, 'read_for_settings', lambda: {
@@ -1046,8 +1076,8 @@ def test_growth_http_flow(seeded, client, monkeypatch, scripted_model):
     bad = _grow(client, '/api/workbench/my-knowledge', {'request_id': str(uuid.uuid4()), 'title': ''})
     assert bad.status_code == 400 and 'title' in bad.json()['error']
 
-    from investment_assistant.workbench import repository as repo
-    plan_id = str(repo.chain_head(seeded, 'AAA', BATCH_SESSION)['plan']['id'])
+    # Repository consumers use their owning layers below.
+    plan_id = str(execution_repo.chain_head(seeded, 'AAA', BATCH_SESSION)['plan']['id'])
     created = _grow(client, '/api/workbench/discussions', {'request_id': str(uuid.uuid4()),
                                                             'context': {'kind': 'plan', 'plan_id': plan_id}})
     discussion_id = created.json()['record']['id']
@@ -1088,19 +1118,19 @@ def test_growth_routes_503_without_migration_027(seeded, client):
     body = client.get('/api/workbench/instruments/AAA').json()
     assert body['knowledge'] is None and body['errors'] == {'knowledge': '迁移 027 未执行'}
     assert client.get('/api/workbench/today').status_code == 200
-    unit = next(u for u in client_json(service.unit_cards(now=BATCH_NOW))['units'] if u['ticker'] == 'AAA')
+    unit = next(u for u in client_json(d_views_today.unit_cards(now=BATCH_NOW))['units'] if u['ticker'] == 'AAA')
     assert unit['agent']['knowledge_refs'] == []
     chain = client.get(f'/api/workbench/chains/AAA/{BATCH_SESSION.isoformat()}').json()
     assert [v['knowledge_refs'] for v in chain['versions']] == [[]]
 
 
 def _cite_head_plan(seeded, title='引用过的经验'):
-    from investment_assistant.workbench import repository as repo
+    # Repository consumers use their owning layers below.
     kid = my_knowledge.create({'request_id': '6f1d1c1e-6666-4444-8888-000000000009', 'title': title, 'body': '正文',
                                'scope': '范围', 'counter_examples': '', 'concepts': [], 'tickers': ['AAA']},
                               now=BATCH_NOW)['record']['knowledge_id']
-    head = repo.chain_head(seeded, 'AAA', BATCH_SESSION)
-    repo.insert_knowledge_citations(seeded, [
+    head = execution_repo.chain_head(seeded, 'AAA', BATCH_SESSION)
+    analysis_repo.insert_knowledge_citations(seeded, [
         {'agent_run_id': head['version']['agent_run_id'], 'plan_id': head['plan']['id'], 'knowledge_id': kid,
          'version': 1, 'field': 'thesis', 'call_seq': 1},
         {'agent_run_id': head['version']['agent_run_id'], 'plan_id': head['plan']['id'], 'knowledge_id': kid,
@@ -1110,7 +1140,7 @@ def _cite_head_plan(seeded, title='引用过的经验'):
 
 
 def test_today_and_chain_knowledge_refs(seeded, client):
-    body = client_json(service.unit_cards(now=BATCH_NOW))        # 「今日」 itself no longer carries unit cards (D34)
+    body = client_json(d_views_today.unit_cards(now=BATCH_NOW))        # 「今日」 itself no longer carries unit cards (D34)
     unit = next(u for u in body['units'] if u['ticker'] == 'AAA')
     assert unit['agent']['knowledge_refs'] == []                       # a plan that cited nothing
     kid, plan_id = _cite_head_plan(seeded)
@@ -1118,7 +1148,7 @@ def test_today_and_chain_knowledge_refs(seeded, client):
                               'title': '第二版标题', 'body': '正文', 'scope': '范围', 'tickers': ['AAA']},
                         now=BATCH_NOW)
     expected = [{'ref': f'know:{kid}@1', 'title': '引用过的经验', 'fields': ['thesis', 'counter'], 'current_version': 2}]
-    unit = next(u for u in client_json(service.unit_cards(now=BATCH_NOW))['units'] if u['ticker'] == 'AAA')
+    unit = next(u for u in client_json(d_views_today.unit_cards(now=BATCH_NOW))['units'] if u['ticker'] == 'AAA')
     assert unit['agent']['knowledge_refs'] == expected
     chain = client.get(f'/api/workbench/chains/AAA/{BATCH_SESSION.isoformat()}').json()
     assert [v['knowledge_refs'] for v in chain['versions']] == [expected]
@@ -1127,7 +1157,7 @@ def test_today_and_chain_knowledge_refs(seeded, client):
             'shadow_version', 'versions', 'reviews', 'inputs', 'retriggers', 'holding_status', 'notes'} == set(chain)
     # every block that shows a plan carries the key; status-only blocks (error, skipped, rejected) keep their shape
     assert all(('knowledge_refs' in u['agent']) == ('plan' in u['agent'])
-               for u in client_json(service.unit_cards(now=BATCH_NOW))['units'] if u.get('agent'))
+               for u in client_json(d_views_today.unit_cards(now=BATCH_NOW))['units'] if u.get('agent'))
 
 
 def test_instrument_knowledge_key(seeded, client):
@@ -1162,7 +1192,7 @@ def test_existing_keys_unchanged(seeded, client):
     assert {'session', 'units', 'extended_units', 'holdings', 'market', 'screen', 'chains', 'timeline_ready',
             'retired'} == set(today)
     assert today['units'] == [] and today['extended_units'] == [] and today['retired'] is True      # D34
-    unit = next(u for u in client_json(service.unit_cards(now=BATCH_NOW))['units'] if u['ticker'] == 'AAA')
+    unit = next(u for u in client_json(d_views_today.unit_cards(now=BATCH_NOW))['units'] if u['ticker'] == 'AAA')
     assert {'id', 'status', 'model', 'agent_version', 'output', 'counter', 'plan', 'input_tokens', 'output_tokens',
             'created_at', 'chain'} <= set(unit['agent'])
     assert set(unit['agent']) - {'id', 'status', 'model', 'agent_version', 'output', 'counter', 'plan', 'input_tokens',
@@ -1211,9 +1241,9 @@ def test_trade_link_errors_and_the_note_endpoint(seeded, client):
 
 def test_notes_on_a_plan_need_no_ticker(seeded, client):
     """I1: the page writes and reads a non-chain plan's notes with the plan id alone; the ticker is the plan's."""
-    from investment_assistant.workbench import repository as repo
+    # Repository consumers use their owning layers below.
 
-    rule = repo.rule_plan(seeded, 'AAA', BATCH_SESSION)
+    rule = execution_repo.rule_plan(seeded, 'AAA', BATCH_SESSION)
     body = {'request_id': '6f1d1c1e-6666-4444-8888-0000000000c1', 'body': '规则基线上的备注', 'plan_id': str(rule['id'])}
     created = client.post('/api/workbench/plan-notes', json=body)
     assert created.status_code == 200 and created.json()['record']['ticker'] == 'AAA'

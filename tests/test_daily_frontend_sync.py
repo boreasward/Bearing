@@ -5,14 +5,20 @@ and the run-id pattern (`web/src/lib/runs.ts`). Offline: reads source files, no 
 import re
 from pathlib import Path
 
-from investment_assistant.workbench import agent, derivation, run_detail, stages
+from investment_assistant.analysis import agent
+
+import investment_assistant.workflow.check as derivation
+
+import investment_assistant.views.runs.detail as run_detail
+
+import investment_assistant.core.stages as stages
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKBENCH_TS = ROOT / 'web' / 'src' / 'lib' / 'workbench.ts'
 RUNS_TS = ROOT / 'web' / 'src' / 'lib' / 'runs.ts'
 RUN_DETAIL_TEST_TS = ROOT / 'web' / 'src' / 'lib' / 'components' / 'RunDetail.test.ts'
-WORKFLOW_PY = ROOT / 'investment_assistant' / 'workbench' / 'workflow.py'
-RUN_DETAIL_PY = ROOT / 'investment_assistant' / 'workbench' / 'run_detail.py'
+WORKFLOW_PY = ROOT / 'investment_assistant' / 'workflow' / 'graph.py'
+RUN_DETAIL_PY = ROOT / 'investment_assistant' / 'views' / 'runs' / 'detail.py'
 
 # The two reasons v2.8 adds (spec §8.8, verbatim).
 NEW_REASONS = {'not_connected': 'ChatGPT 未连接', 'model_unavailable': '所选模型不可用'}

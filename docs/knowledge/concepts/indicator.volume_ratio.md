@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "规则用「当日成交量 ≥ 前 50 日均量 × 1.5」判断放量；工具另给 20 日均量和量比，两者口径不同。"
 related: [rule.volume_breakout, indicator.high_low, family.bars]
-sources: [investment_assistant/workbench/rules.py, investment_assistant/workbench/agent/tools.py]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/analysis/agent/tools.py]
 ---
 
 ## 是什么

@@ -3,7 +3,7 @@ from decimal import Decimal as D
 
 import pytest
 
-from investment_assistant.workbench import positions
+from investment_assistant.execution import positions
 
 
 def trade(tid, side, qty, price, day, fee='0', hour=15, voided=False):

@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "同一天既有买入又有卖出候选标记为冲突并默认观察；没有持仓却出现卖出候选标记为回避。"
 related: [system.decision_unit, rule.trend_break, rule.earnings_gap_down, agent.brief]
-sources: [investment_assistant/workbench/synthesis.py]
+sources: [investment_assistant/analysis/synthesis.py]
 ---
 
 ## 是什么

@@ -6,7 +6,7 @@ version: 1
 applies_to: [monthly-3, monthly-4]
 summary: "连续 3 个月的复合收益为负，且低于同期 SPY 的复合收益，才标记需要复查流程；缺任一个月的数据则不判定。"
 related: [review.monthly_return, review.sensitivity, review.tracks]
-sources: [investment_assistant/workbench/monthly.py]
+sources: [investment_assistant/review/monthly.py]
 ---
 
 ## 是什么

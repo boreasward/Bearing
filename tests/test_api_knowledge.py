@@ -6,7 +6,7 @@ import pytest
 from investment_assistant.core import tx as core_tx
 import yaml
 
-from investment_assistant.workbench import knowledge
+from investment_assistant.core import knowledge
 
 
 def write_card(root: Path, card_id: str, *, title: str = '止损', version: int = 1, summary: str = '一句话摘要。',
@@ -95,7 +95,7 @@ def test_api_knowledge_503_lists_problems(client, root, path):
 
 
 def test_knowledge_api_works_without_database(client, root, monkeypatch):
-    from investment_assistant.workbench import service
+    import investment_assistant.core.tx as service
 
     attempts = []
 

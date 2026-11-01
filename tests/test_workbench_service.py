@@ -1,4 +1,15 @@
 """Batch + read model against a disposable schema; all market data below is synthetic."""
+from investment_assistant.data import families as data_families
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.review.shadow as review_shadow
+import investment_assistant.analysis.agent.runner as analysis_agent_runner
+import investment_assistant.analysis.units as analysis_units
+from investment_assistant.execution import plan_context as execution_plan_context
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.core.schema as core_schema
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.workflow.repo as workflow_repo
 import json
 import uuid
 
@@ -14,19 +25,26 @@ from investment_assistant.core import tx as core_tx
 from investment_assistant.data.calendar import add_trading_days
 from decimal import Decimal
 
-from investment_assistant.workbench import account, plans, repository, service
+import investment_assistant.workflow.batch as service
+from investment_assistant.views.today import unit_cards, _agent_view
+from investment_assistant.views.agent_runs import agent_runs, agent_run_detail
+import investment_assistant.workflow.nodes.push as push_node
+from investment_assistant.core.constants import AGENT_DEADLINE_S
+from investment_assistant.tasks import ports
+from investment_assistant.execution import account_records as account
+from investment_assistant.execution import plan_levels as plans
 
 SESSION = date(2026, 10, 22)                         # Thursday
 NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)     # 18:30 New York
 
 
 def test_breadth_tickers_union_and_fallback():
-    from investment_assistant.workbench import pool as pool_module
-    from investment_assistant.workbench import universe as universe_module
+    from investment_assistant.analysis import pool as pool_module
+    from investment_assistant.data.adapters import universe as universe_module
     manual = pool_module.Pool(core=('A', 'B'), extended=(), sectors={})
     combined = universe_module.Universe('test', SESSION, 'test', ('B', 'C'))
-    assert service._breadth_tickers(manual, combined) == (['A', 'B', 'C'], [])
-    assert service._breadth_tickers(manual, None) == (['A', 'B'], ['regime_universe_missing'])
+    assert analysis_units._breadth_tickers(manual, combined) == (['A', 'B', 'C'], [])
+    assert analysis_units._breadth_tickers(manual, None) == (['A', 'B'], ['regime_universe_missing'])
 
 
 def closes_for(ticker):
@@ -88,9 +106,9 @@ def db(workbench_db, monkeypatch):
 
     import psycopg
 
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
     url = os.environ['INVESTMENT_ASSISTANT_TEST_DATABASE_URL']
-    monkeypatch.setattr(plan_review, '_lock_connection', lambda: psycopg.connect(url, autocommit=True))
+    monkeypatch.setattr(analysis_agent_runner, '_lock_connection', lambda: psycopg.connect(url, autocommit=True))
     return workbench_db
 
 
@@ -141,7 +159,7 @@ def test_scheduled_run_skips_when_new_york_day_was_not_a_session(db):
 
 def test_today_lists_open_units_with_brief_and_context(db):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     unit = view['units'][0]
     assert unit['ticker'] == 'NVDA' and unit['signal_date'] == SESSION
     assert unit['proposed_action'] == 'buy' and unit['entry_passed'] is False
@@ -152,20 +170,20 @@ def test_today_lists_open_units_with_brief_and_context(db):
 
 def test_decide_then_unit_leaves_today(db):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
-    unit = service.unit_cards(now=NOW)['units'][0]
+    unit = unit_cards(now=NOW)['units'][0]
     out = legacy_decisions.decide({'request_id': '6f1d1c1e-1111-4444-8888-000000000001', 'ticker': 'NVDA',
                           'signal_date': SESSION.isoformat(), 'candidate_ids': [str(c['id']) for c in unit['candidates']],
                           'brief_id': str(unit['brief']['id']), 'proposed_action': 'buy', 'final_action': 'buy',
                           'decision': 'accept', 'reason': '合成样例：趋势修复',
                           'plan_id': str(unit['plan']['id'])}, now=NOW)
     assert out['status'] == 'created'
-    assert service.unit_cards(now=NOW)['units'] == []
+    assert unit_cards(now=NOW)['units'] == []
 
 
 def test_unavailable_database_is_reported(monkeypatch):
     monkeypatch.delenv('INVESTMENT_ASSISTANT_DATABASE_URL', raising=False)
     with pytest.raises(service.Unavailable):
-        service.unit_cards(now=NOW)
+        unit_cards(now=NOW)
 
 
 def test_missing_schema_is_unavailable_not_empty(workbench_db, monkeypatch):
@@ -176,7 +194,7 @@ def test_missing_schema_is_unavailable_not_empty(workbench_db, monkeypatch):
         yield workbench_db
     monkeypatch.setattr(core_tx, 'connection', connection)
     with pytest.raises(service.Unavailable):
-        service.unit_cards(now=NOW)
+        unit_cards(now=NOW)
 
 
 def test_sec_listing_fills_unknown_filing_acceptance_without_overwriting(db):
@@ -222,12 +240,12 @@ class BreakdownSources(Sources):
 def test_batch_writes_rule_plan_for_buy_unit(db):
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
     assert summary['plans']['NVDA'] == 'inserted'
-    unit = service.unit_cards(now=NOW)['units'][0]
+    unit = unit_cards(now=NOW)['units'][0]
     plan = unit['plan']
     assert plan['kind'] == 'rule' and plan['plan_version'] == 'plan-2' and plan['status'] == 'ok'
     assert plan['sizing']['status'] == 'no_equity'
     assert plan['sizing']['equity_source'] == 'snapshot'
-    bars = repository.read_bars(db, 'NVDA', SESSION, cutoff_at=NOW)
+    bars = data_repo.read_bars(db, 'NVDA', SESSION, cutoff_at=NOW)
     levels = plans.rule_levels(Decimal(str(bars[-1]['close'])), plans.atr14(bars))
     for key, value in levels.items():
         assert plan[key] == value
@@ -256,7 +274,7 @@ def test_rerun_returns_existing_plan(db):
 
 def test_changed_inputs_record_conflict_without_overwrite(db):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
-    original = service.unit_cards(now=NOW)['units'][0]['plan']
+    original = unit_cards(now=NOW)['units'][0]['plan']
 
     class Shifted(Sources):
         def bars(self, ticker, start, end_exclusive):
@@ -269,12 +287,12 @@ def test_changed_inputs_record_conflict_without_overwrite(db):
     assert again['plans']['NVDA'] == 'conflict'
     assert any(c.get('rule_id') == 'rule_plan' for c in again['conflicts'])
     assert db.execute('SELECT count(*) FROM trade_plans').fetchone()[0] == 1
-    assert service.unit_cards(now=NOW)['units'][0]['plan']['ref_price'] == original['ref_price']
+    assert unit_cards(now=NOW)['units'][0]['plan']['ref_price'] == original['ref_price']
 
 
 def test_backdated_snapshot_recorded_after_cutoff_ignored(db):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
-    plan = service.unit_cards(now=NOW)['units'][0]['plan']
+    plan = unit_cards(now=NOW)['units'][0]['plan']
     assert plan['sizing']['status'] == 'no_equity'
     # 补录一笔 as_of 在信号日之前、recorded_at 晚于本次运行截止时间的快照
     account.record_snapshot(db, {'request_id': '6f1d1c1e-3333-4444-8888-000000000001',
@@ -291,7 +309,7 @@ def test_earnings_fetch_failure_not_stored(db):
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources(), earnings=boom))
     assert summary['earnings']['NVDA'].startswith('error:')
     assert db.execute('SELECT count(*) FROM earnings_dates').fetchone()[0] == 0
-    plan = service.unit_cards(now=NOW)['units'][0]['plan']
+    plan = unit_cards(now=NOW)['units'][0]['plan']
     assert 'earnings_unknown' in plan['warnings']
 
 
@@ -308,7 +326,7 @@ def test_today_includes_holdings(db):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
     legacy_decisions.add_trade({'request_id': '6f1d1c1e-5555-4444-8888-000000000001', 'ticker': 'NVDA', 'side': 'buy',
                        'quantity': '10', 'price': '110.00', 'executed_at': '2026-10-22T20:00:00+00:00'}, now=NOW)
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     holding = view['holdings'][0]
     assert holding['ticker'] == 'NVDA'
     assert holding['plan_id'] is None and holding['stop'] is None and holding['t1_reached'] is False
@@ -317,9 +335,9 @@ def test_today_includes_holdings(db):
 
 
 def test_plan_shadow_view(db):
-    from investment_assistant.workbench import plan_shadow as shadow_module
+    from investment_assistant.execution import simulation as shadow_module
     service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
-    view = service.plan_shadow(now=NOW)
+    view = review_shadow.plan_shadow(now=NOW)
     assert view['calc_version'] == shadow_module.SHADOW_VERSION
     assert len(view['plans']) == 1
     plan = view['plans'][0]
@@ -333,7 +351,7 @@ def test_discipline_since_filters_trades(db):
     legacy_decisions.add_trade({'request_id': '6f1d1c1e-9999-4444-8888-000000000002', 'ticker': 'AMD', 'side': 'buy',
                        'quantity': '10', 'price': '100.00',
                        'executed_at': '2026-10-20T15:00:00+00:00'}, now=NOW)
-    view = service.discipline(now=NOW, since=date(2026, 10, 1))
+    view = review_weekly.discipline(now=NOW, since=date(2026, 10, 1))
     assert [t['ticker'] for t in view['trades']] == ['AMD']
 
 
@@ -349,14 +367,14 @@ def test_push_once_per_session_and_force(db):
     from investment_assistant.config import NotifyConfig
 
     cfg = NotifyConfig()
-    out = service.push(now=NOW, force=False, notify_cfg=cfg, client=PushClient())
+    out = push_node.push(now=NOW, force=False, notify_cfg=cfg, send=ports.send, client=PushClient())
     assert out['sent'] is True and out['messages'] >= 1 and out['session'] == SESSION.isoformat()
     db.execute("INSERT INTO job_reports (task, run_id, status, started_at, finished_at, summary) "
                "VALUES ('workbench', 'r1', 'success', %s, %s, %s::jsonb)",
                [NOW, NOW, json.dumps({'push': out})])
-    again = service.push(now=NOW, force=False, notify_cfg=cfg, client=PushClient())
+    again = push_node.push(now=NOW, force=False, notify_cfg=cfg, send=ports.send, client=PushClient())
     assert again['sent'] is False and again['reason'] == 'already_pushed'
-    forced = service.push(now=NOW, force=True, notify_cfg=cfg, client=PushClient())
+    forced = push_node.push(now=NOW, force=True, notify_cfg=cfg, send=ports.send, client=PushClient())
     assert forced['sent'] is True
 
 
@@ -367,7 +385,7 @@ def test_push_failure_recorded_not_raised(db):
         def send(self, channel, payload):
             raise RuntimeError('discord down')
 
-    out = service.push(now=NOW, force=True, notify_cfg=NotifyConfig(), client=Boom())
+    out = push_node.push(now=NOW, force=True, notify_cfg=NotifyConfig(), send=ports.send, client=Boom())
     assert out['sent'] is False and out['reason'].startswith('send_failed')
 
 
@@ -388,11 +406,11 @@ def test_scheduled_run_pushes_once_per_session(db, monkeypatch):
     seed_watchlist(db, [('NVDA', ['core'])])
     calls = []
 
-    def fake_push(*, now, force, summary=None, notify_cfg=None, client=None):
+    def fake_push(*, now, force, summary=None, notify_cfg=None, client=None, send):
         calls.append(force)
         return {'session': SESSION.isoformat(), 'sent': True, 'messages': 4}
 
-    monkeypatch.setattr(service, 'push', fake_push)
+    monkeypatch.setattr(push_node, 'push', fake_push)
     result = _task_run('scheduled')
     assert calls == [False]
     assert result['summary']['push'] == {'session': SESSION.isoformat(), 'sent': True, 'messages': 4}
@@ -404,7 +422,7 @@ def test_manual_run_does_not_push(db, monkeypatch):
     def boom(**_):
         raise AssertionError('manual run must not push')
 
-    monkeypatch.setattr(service, 'push', boom)
+    monkeypatch.setattr(push_node, 'push', boom)
     result = _task_run('manual')
     assert 'push' not in result['summary']
 
@@ -412,11 +430,11 @@ def test_manual_run_does_not_push(db, monkeypatch):
 def test_closed_day_pushes_closed_message(db, monkeypatch):
     closed = []
 
-    def fake_closed(*, now, notify_cfg=None, client=None):
+    def fake_closed(*, now, notify_cfg=None, client=None, send):
         closed.append(now)
         return {'session': '2026-10-24', 'sent': True, 'messages': 1}
 
-    monkeypatch.setattr(service, 'push_closed', fake_closed)
+    monkeypatch.setattr(push_node, 'push_closed', fake_closed)
     result = _task_run('scheduled', moment=datetime(2026, 10, 24, 22, 30, tzinfo=UTC))
     assert closed and result['summary']['status'] == 'skipped'
     assert result['summary']['push']['sent'] is True
@@ -449,12 +467,12 @@ def test_task_run_ids_reach_four_tables(db, monkeypatch):
 def recording_deps(sources, monkeypatch):
     """Deps plus a recorder of every brief write (which tickers get a brief)."""
     calls = []
-    real = repository.store_brief
+    real = analysis_repo.store_brief
 
     def recording(conn, brief):
         calls.append(brief['ticker'])
         return real(conn, brief)
-    monkeypatch.setattr(repository, 'store_brief', recording)
+    monkeypatch.setattr(analysis_repo, 'store_brief', recording)
     return deps(sources), calls
 
 
@@ -557,7 +575,7 @@ def test_extended_unit_has_plan_but_no_brief(db, monkeypatch):
 
 
 def test_held_extended_ticker_gets_brief(db, monkeypatch):
-    from investment_assistant.workbench import ledger
+    from investment_assistant.execution import ledger
     seed_watchlist(db, [('AAA', ['core']), ('NVDA', [])])
     ledger.record_trade(db, {'request_id': str(uuid.uuid4()), 'ticker': 'NVDA', 'side': 'buy', 'quantity': '10',
                              'price': '101.5', 'fee': '1', 'executed_at': '2026-10-10T14:00:00+00:00'},
@@ -598,14 +616,14 @@ def test_rerun_with_context_returns_existing_p1_plan(db, with_snapshot):
     service.run_batch(now=NOW, deps=deps(Sources()))  # stores bars and candidates
     plan_id = db.execute("SELECT id FROM trade_plans WHERE kind = 'rule' AND ticker = 'NVDA'").fetchone()[0]
     db.execute('DELETE FROM trade_plans WHERE id = %s', [plan_id])
-    with service._tx() as conn:
+    with core_tx._tx() as conn:
         p1 = plans.build_rule_plan(
-            ticker='NVDA', signal_date=SESSION, bars=repository.read_bars(conn, 'NVDA', SESSION, cutoff_at=NOW),
-            earnings_row=repository.latest_earnings(conn, 'NVDA', cutoff_at=NOW),
-            snapshot=repository.snapshot_at(conn, SESSION, cutoff_at=NOW),
-            exposure=service.exposure(conn, SESSION, cutoff_at=NOW, ticker='NVDA'),
+            ticker='NVDA', signal_date=SESSION, bars=data_repo.read_bars(conn, 'NVDA', SESSION, cutoff_at=NOW),
+            earnings_row=data_repo.latest_earnings(conn, 'NVDA', cutoff_at=NOW),
+            snapshot=execution_repo.snapshot_at(conn, SESSION, cutoff_at=NOW),
+            exposure=execution_plan_context.exposure(conn, SESSION, cutoff_at=NOW, ticker='NVDA'),
             params=load_config().workbench, version=plans.PLAN_V2)       # v2.9: the baseline is plan-2
-        saved = repository.store_plan(conn, p1)
+        saved = execution_repo.store_plan(conn, p1)
         assert saved['status'] == 'inserted'
         frozen = saved['record']
         assert 'context' not in p1['inputs']
@@ -613,7 +631,7 @@ def test_rerun_with_context_returns_existing_p1_plan(db, with_snapshot):
     again = service.run_batch(now=NOW + timedelta(minutes=5), deps=deps(Sources()))
     assert again['plans']['NVDA'] == 'existing'
     assert again['conflicts'] == []
-    assert repository.plan_by_id(db, frozen['id']) == frozen
+    assert execution_repo.plan_by_id(db, frozen['id']) == frozen
 
 
 @pytest.mark.parametrize('change, expected', [
@@ -634,9 +652,9 @@ def test_legacy_plan_source_default_preserves_real_sizing_conflicts(monkeypatch,
     frozen = deepcopy(stored)
     rebuilt = {**deepcopy(stored), 'sizing': {**stored['sizing'], **change}}
     intended = deepcopy(rebuilt)
-    monkeypatch.setattr(repository, 'rule_plan', lambda *args, **kwargs: stored)
-    monkeypatch.setattr(repository, 'insert_plan', lambda *args, **kwargs: pytest.fail('existing plan rewritten'))
-    result = repository.store_plan(None, rebuilt)
+    monkeypatch.setattr(execution_repo, 'rule_plan', lambda *args, **kwargs: stored)
+    monkeypatch.setattr(execution_repo, 'insert_plan', lambda *args, **kwargs: pytest.fail('existing plan rewritten'))
+    result = execution_repo.store_plan(None, rebuilt)
     assert result == {'status': expected, 'record': frozen}
     assert stored == frozen and rebuilt == intended
 
@@ -646,7 +664,7 @@ def test_legacy_plan_source_default_preserves_real_sizing_conflicts(monkeypatch,
 def test_today_splits_extended_units(db):
     seed_watchlist(db, [('AAA', ['core']), ('NVDA', [])])
     service.run_batch(now=NOW, deps=deps(Sources()))
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     assert [u['ticker'] for u in view['units']] == ['AAA']
     assert [u['ticker'] for u in view['extended_units']] == ['NVDA']
     ext = view['extended_units'][0]
@@ -655,13 +673,13 @@ def test_today_splits_extended_units(db):
 
 
 def test_held_extended_stays_in_main_list(db):
-    from investment_assistant.workbench import ledger
+    from investment_assistant.execution import ledger
     seed_watchlist(db, [('AAA', ['core']), ('NVDA', [])])
     ledger.record_trade(db, {'request_id': str(uuid.uuid4()), 'ticker': 'NVDA', 'side': 'buy', 'quantity': '10',
                              'price': '101.5', 'fee': '1', 'executed_at': '2026-10-10T14:00:00+00:00'},
                         now=datetime(2026, 10, 10, 15, tzinfo=UTC))
     service.run_batch(now=NOW, deps=deps(Sources()))
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     assert 'NVDA' in [u['ticker'] for u in view['units']]
     assert 'NVDA' not in [u['ticker'] for u in view['extended_units']]
 
@@ -669,19 +687,19 @@ def test_held_extended_stays_in_main_list(db):
 def test_today_market_block(db):
     seed_watchlist(db, [(f'T{i:02d}', []) for i in range(25)])
     service.run_batch(now=NOW, deps=deps(Sources()))
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     assert view['market']['session'] == SESSION
     assert view['market']['calc_version'] == 'regime-2'
     assert view['market']['label'] in ('risk_on', 'neutral', 'risk_off', 'insufficient')
 
 
 def test_manual_tickers_override_does_not_rewrite_tiers(db):
-    from investment_assistant.workbench import repository
+    # Repository consumers use their owning layers below.
     seed_watchlist(db, [('AAA', ['core']), ('BBB', [])])
     service.run_batch(now=NOW, deps=deps(Sources()))
     service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=5), deps=deps(Sources()))
     assert db.execute("SELECT count(*) FROM pool_tiers WHERE tier = 'removed'").fetchone()[0] == 0
-    assert repository.pool_latest(db) == {'AAA': {'tier': 'core', 'sector_etf': None,
+    assert analysis_repo.pool_latest(db) == {'AAA': {'tier': 'core', 'sector_etf': None,
                                                     'source': 'watchlist'},
                                           'BBB': {'tier': 'extended', 'sector_etf': None,
                                                   'source': 'watchlist'}}
@@ -696,7 +714,7 @@ from langgraph.checkpoint.memory import InMemorySaver                           
 
 
 def _agent_settings(**overrides):
-    from investment_assistant.workbench.agent import model as agent_model_module
+    from investment_assistant.core.llm import model as agent_model_module
     values = {'provider': 'chatgpt', 'model': 'gpt-test',
               'api_key': 'sk-test', 'daily_tokens': None, 'config_error': None}
     values.update(overrides)
@@ -740,13 +758,13 @@ def _ok_responses(ticker='NVDA', ref='call:1'):
 def test_agent_stage_after_rule_plans(db, scripted_model):
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, []))
     assert summary['plans']['NVDA'] == 'inserted'          # 规则计划先入库，不受 Agent 影响
-    runs = repository.agent_runs_for(db, 'NVDA', SESSION)
+    runs = analysis_repo.agent_runs_for(db, 'NVDA', SESSION)
     assert [(r['status'], r['reason']) for r in runs] == [('error', 'model_error')]
     assert summary['agent']['runs'] == {'NVDA': 'error: model_error'}
 
 
 def test_agent_order_main_before_extended(db, scripted_model):
-    from investment_assistant.workbench import pool as pool_module
+    from investment_assistant.analysis import pool as pool_module
     for ticker in ('CCC', 'DDD'):   # 分层记录：扩展池；DDD 另有持仓 → 主列表
         db.execute("INSERT INTO pool_tiers (ticker, tier, effective_session, recorded_at) "
                    "VALUES (%s, 'extended', %s, %s)", [ticker, SESSION - timedelta(days=1), NOW])
@@ -764,14 +782,14 @@ def test_agent_order_main_before_extended(db, scripted_model):
 
 def test_agent_ok_writes_plan_run_calls(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    plan = repository.agent_plan(db, 'NVDA', SESSION)
+    plan = execution_repo.agent_plan(db, 'NVDA', SESSION)
     assert plan['kind'] == 'agent' and plan['plan_version'] == 'agent-3'
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert run['status'] == 'ok' and str(run['plan_id']) == str(plan['id'])
     assert run['agent_version'] == 'agent-3'
-    [version] = repository.chain_versions(db, 'NVDA', SESSION)
+    [version] = execution_repo.chain_versions(db, 'NVDA', SESSION)
     assert version['version_no'] == 0 and str(version['agent_run_id']) == str(run['id'])
-    calls = repository.agent_tool_calls(db, run['id'])
+    calls = analysis_repo.agent_tool_calls(db, run['id'])
     assert [(c['seq'], c['phase'], c['tool']) for c in calls] == \
         [(1, 'propose', 'get_indicators'), (2, 'counter', 'get_news')]
 
@@ -780,7 +798,7 @@ def test_existing_ok_or_pass_not_rerun(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
     again = service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=5),
                               deps=agent_deps(scripted_model, []))     # 无回复可用：重跑即抛错
-    assert len(repository.agent_runs_for(db, 'NVDA', SESSION)) == 1
+    assert len(analysis_repo.agent_runs_for(db, 'NVDA', SESSION)) == 1
     assert again['agent']['runs'] == {}
     assert again['plans']['NVDA'] == 'existing'
 
@@ -796,14 +814,14 @@ def test_failed_unit_retried_until_max_attempts(db, scripted_model):
     for i in range(3):   # 三次批处理均失败
         service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=10 * i),
                           deps=agent_deps(scripted_model, []))
-    assert [r['status'] for r in repository.agent_runs_for(db, 'NVDA', SESSION)] == ['error'] * 3
+    assert [r['status'] for r in analysis_repo.agent_runs_for(db, 'NVDA', SESSION)] == ['error'] * 3
     service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=40),
                       deps=agent_deps(scripted_model, []))
-    runs = repository.agent_runs_for(db, 'NVDA', SESSION)
+    runs = analysis_repo.agent_runs_for(db, 'NVDA', SESSION)
     assert (runs[3]['status'], runs[3]['reason']) == ('skipped', 'max_attempts')   # 第四次只记一次
     service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=50),
                       deps=agent_deps(scripted_model, []))
-    assert len(repository.agent_runs_for(db, 'NVDA', SESSION)) == 4               # 第五次不再写
+    assert len(analysis_repo.agent_runs_for(db, 'NVDA', SESSION)) == 4               # 第五次不再写
 
 
 class LateClock:
@@ -816,13 +834,13 @@ class LateClock:
         if self.first:
             self.first = False
             return 0.0
-        return float(service.AGENT_DEADLINE_S)
+        return float(AGENT_DEADLINE_S)
 
 
 def test_stage_budget_skips_remaining(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW,
                       deps=agent_deps(scripted_model, [], clock=LateClock()))
-    runs = repository.agent_runs_for(db, 'NVDA', SESSION)
+    runs = analysis_repo.agent_runs_for(db, 'NVDA', SESSION)
     assert [(r['status'], r['reason']) for r in runs] == [('skipped', 'stage_budget')]
 
 
@@ -885,7 +903,7 @@ def test_connection_lost_mid_node_skips_the_rest(db, scripted_model, status, cod
     summary = service.run_batch(tickers=['MU', 'NVDA'], now=NOW, deps=d)
     assert summary['agent']['runs'] == {'MU': f'error: {reason}', 'NVDA': f'skipped: {reason}'}
     assert summary['agent']['connection_lost'] == reason and summary['agent']['quota_exhausted'] is False
-    assert [(r['status'], r['reason']) for r in repository.agent_runs_for(db, 'NVDA', SESSION)] == [('skipped', reason)]
+    assert [(r['status'], r['reason']) for r in analysis_repo.agent_runs_for(db, 'NVDA', SESSION)] == [('skipped', reason)]
     assert summary['plans'] == {'MU': 'inserted', 'NVDA': 'inserted'}
 
 
@@ -898,7 +916,7 @@ def test_not_configured_makes_no_model_call(db, scripted_model):
     d = agent_deps(scripted_model, [])                     # 若被调用即抛错
     d.agent_settings = _agent_settings(connection='no_sharing')     # signed in, but the account shares no plan usage
     service.run_batch(tickers=['NVDA'], now=NOW, deps=d)
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert (run['status'], run['reason']) == ('skipped', 'not_configured')
 
 
@@ -906,7 +924,7 @@ def test_disabled_provider(db, scripted_model):
     d = agent_deps(scripted_model, [])
     d.agent_settings = _agent_settings(provider='off')
     service.run_batch(tickers=['NVDA'], now=NOW, deps=d)
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert (run['status'], run['reason']) == ('skipped', 'disabled')
 
 
@@ -914,7 +932,7 @@ def test_config_error_reported(db, scripted_model):
     d = agent_deps(scripted_model, [])
     d.agent_settings = _agent_settings(config_error='WORKBENCH_AGENT_DAILY_TOKENS 必须是正整数')
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=d)
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert (run['status'], run['reason']) == ('skipped', 'not_configured')
     assert any(str(e).startswith('agent_config:') for e in summary['errors'])
 
@@ -923,8 +941,8 @@ def test_token_budget_skips(db, scripted_model):
     d = agent_deps(scripted_model, _ok_responses('MU'))
     d.agent_settings = _agent_settings(daily_tokens=10)    # 首个运行耗 60 token
     summary = service.run_batch(tickers=['MU', 'NVDA'], now=NOW, deps=d)
-    assert repository.latest_agent_run(db, 'MU', SESSION)['status'] == 'ok'
-    nvda = repository.latest_agent_run(db, 'NVDA', SESSION)
+    assert analysis_repo.latest_agent_run(db, 'MU', SESSION)['status'] == 'ok'
+    nvda = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert (nvda['status'], nvda['reason']) == ('skipped', 'token_budget')
 
 
@@ -950,7 +968,7 @@ def test_atr_skipped_unit_still_gets_agent(db, scripted_model):
          FlatSources().earnings)
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=d)
     assert summary['plans']['NVDA'].startswith('skip: atr')   # 规则计划因 ATR 跳过
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert run['status'] == 'ok'                              # Agent 照跑
 
 
@@ -963,7 +981,7 @@ def test_checkpoint_unavailable(db, scripted_model):
     d = agent_deps(scripted_model, [])
     d.agent_checkpointer = boom
     service.run_batch(tickers=['NVDA'], now=NOW, deps=d)
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert (run['status'], run['reason']) == ('error', 'checkpoint_unavailable')
 
 
@@ -984,11 +1002,11 @@ def test_error_detail_stored_redacted(db, scripted_model):
     d = agent_deps(scripted_model, [])
     d.agent_model = LeakyErrorModel()
     service.run_batch(tickers=['NVDA'], now=NOW, deps=d)
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert (run['status'], run['reason']) == ('error', 'model_error')
     assert run['detail'] == 'RuntimeError: upstream 502 for key ***'
-    assert service.agent_run_detail(str(run['id']))['detail'] == run['detail']
-    assert service.agent_runs(now=NOW)['runs'][0]['detail'] == run['detail']
+    assert agent_run_detail(str(run['id']))['detail'] == run['detail']
+    assert agent_runs(now=NOW)['runs'][0]['detail'] == run['detail']
 
 
 def test_checkpoint_unavailable_detail_stored(db, scripted_model):
@@ -1000,7 +1018,7 @@ def test_checkpoint_unavailable_detail_stored(db, scripted_model):
     d = agent_deps(scripted_model, [])
     d.agent_checkpointer = boom
     service.run_batch(tickers=['NVDA'], now=NOW, deps=d)
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert run['detail'] == 'OperationalError: checkpoint db down'
 
 
@@ -1008,8 +1026,8 @@ def test_ok_and_skipped_runs_have_no_detail(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
     service.run_batch(tickers=['MU'], now=NOW,
                       deps=agent_deps(scripted_model, [], settings=_agent_settings(provider='off')))
-    assert repository.latest_agent_run(db, 'NVDA', SESSION)['detail'] is None
-    assert repository.latest_agent_run(db, 'MU', SESSION)['detail'] is None
+    assert analysis_repo.latest_agent_run(db, 'NVDA', SESSION)['detail'] is None
+    assert analysis_repo.latest_agent_run(db, 'MU', SESSION)['detail'] is None
 
 
 def test_summary_agent_keys(db, scripted_model):
@@ -1028,25 +1046,25 @@ def test_manual_run_conflict_and_not_buy(db, scripted_model):
         earnings_fetcher=breakdown.earnings,
         agent_settings=_agent_settings(provider='off')))
     with pytest.raises(ValueError):
-        service.run_agent('AMD', SESSION, now=NOW)              # sell 单元
+        analysis_agent_runner.run_agent('AMD', SESSION, now=NOW)              # sell 单元
     with pytest.raises(ValueError):
-        service.run_agent('MU', SESSION, now=NOW)               # 不存在
-    run = service.run_agent('NVDA', SESSION, now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
+        analysis_agent_runner.run_agent('MU', SESSION, now=NOW)               # 不存在
+    run = analysis_agent_runner.run_agent('NVDA', SESSION, now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
     assert run['status'] == 'ok' and run['plan_id'] is not None
     assert run['agent_version'] == 'agent-3'
-    [version] = repository.chain_versions(db, 'NVDA', SESSION)       # 手动重跑也只生成首版
+    [version] = execution_repo.chain_versions(db, 'NVDA', SESSION)       # 手动重跑也只生成首版
     assert (version['version_no'], version['origin']) == (0, 'signal')
     assert str(version['plan_id']) == str(run['plan_id'])
-    with pytest.raises(service.AgentConflict):                         # 已有首版：不再生成
-        service.run_agent('NVDA', SESSION, now=NOW, deps=agent_deps(scripted_model, []))
-    assert len(repository.chain_versions(db, 'NVDA', SESSION)) == 1
+    with pytest.raises(analysis_agent_runner.AgentConflict):                         # 已有首版：不再生成
+        analysis_agent_runner.run_agent('NVDA', SESSION, now=NOW, deps=agent_deps(scripted_model, []))
+    assert len(execution_repo.chain_versions(db, 'NVDA', SESSION)) == 1
 
 
 # ---------------------------------------------------------------- agent views (P3 §10.1/10.3)
 
 def test_today_unit_has_agent_ok_view(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    unit = service.unit_cards(now=NOW)['units'][0]
+    unit = unit_cards(now=NOW)['units'][0]
     assert set(unit['agent']) == {'id', 'status', 'model', 'agent_version', 'output', 'counter', 'plan',
                                   'input_tokens', 'output_tokens', 'created_at', 'chain', 'knowledge_refs'}
     assert unit['agent']['knowledge_refs'] == []                       # v2.7 §6.2: nothing cited by this plan
@@ -1057,7 +1075,7 @@ def test_today_unit_has_agent_ok_view(db, scripted_model):
     assert set(chain) == {'version_no', 'head_plan_id', 'cutoff_at', 'diff', 'state', 'mode', 'basis',
                           'latest_review'}
     assert (chain['version_no'], chain['state'], chain['mode'], chain['latest_review']) == (0, 'entry', 'entry', None)
-    assert chain['diff'] is None and chain['cutoff_at'] == repository.chain_head(db, 'NVDA', SESSION)['version']['cutoff_at']
+    assert chain['diff'] is None and chain['cutoff_at'] == execution_repo.chain_head(db, 'NVDA', SESSION)['version']['cutoff_at']
     assert chain['head_plan_id'] == str(unit['agent']['plan']['id'])
 
 
@@ -1068,13 +1086,13 @@ def test_today_hides_rejected_output(db, scripted_model):
                       'thesis': [{'text': 't', 'refs': ['call:99']}]})
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, [
         _tool_msg('get_indicators', {'ticker': 'NVDA'}), AIMessage(content=bad)]))
-    unit = service.unit_cards(now=NOW)['units'][0]
+    unit = unit_cards(now=NOW)['units'][0]
     assert set(unit['agent']) == {'id', 'status', 'reason', 'created_at'}
     assert unit['agent']['reason'] == 'invalid_citation'
 
 
 def test_extended_unit_agent_status(db):
-    from investment_assistant.workbench import pool as pool_module
+    from investment_assistant.analysis import pool as pool_module
     db.execute("INSERT INTO pool_tiers (ticker, tier, effective_session, recorded_at) "
                "VALUES ('CCC', 'extended', %s, %s)", [SESSION - timedelta(days=1), NOW])
     off = deps(Sources())
@@ -1084,7 +1102,7 @@ def test_extended_unit_agent_status(db):
                "VALUES ('XNO', 'extended', %s, %s)", [SESSION - timedelta(days=1), NOW])
     db.execute("INSERT INTO signal_candidates (ticker, signal_date, action, rule_id, rule_version, inputs) "
                "VALUES ('XNO', %s, 'buy', 'trend_reclaim', '1', '{}')", [SESSION])
-    ext = {e['ticker']: e for e in service.unit_cards(now=NOW)['extended_units']}
+    ext = {e['ticker']: e for e in unit_cards(now=NOW)['extended_units']}
     assert ext['CCC']['agent_status'] == 'skipped: disabled'
     assert ext['XNO']['agent_status'] is None      # 从未运行
 
@@ -1094,7 +1112,7 @@ def test_agent_runs_coverage_lists_missing(db, scripted_model):
                       deps=agent_deps(scripted_model, [], settings=_agent_settings(provider='off')))
     db.execute("INSERT INTO signal_candidates (ticker, signal_date, action, rule_id, rule_version, inputs) "
                "VALUES ('XNO', %s, 'buy', 'trend_reclaim', '1', '{}')", [SESSION])
-    out = service.agent_runs(now=NOW)
+    out = agent_runs(now=NOW)
     assert out['coverage'] == {'units': 2, 'covered': 1, 'merged': 0, 'merged_units': [],
                                'missing': [{'ticker': 'XNO', 'signal_date': SESSION}]}
     assert [r['ticker'] for r in out['runs']] == ['NVDA']
@@ -1103,12 +1121,12 @@ def test_agent_runs_coverage_lists_missing(db, scripted_model):
 
 def test_agent_run_detail_has_calls_and_hashes(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
-    detail = service.agent_run_detail(str(run['id']))
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
+    detail = agent_run_detail(str(run['id']))
     assert [c['seq'] for c in detail['tool_calls']] == [1, 2]
     assert all(len(c['result_sha256']) == 64 for c in detail['tool_calls'])
     with pytest.raises(LookupError):
-        service.agent_run_detail(str(uuid.uuid4()))
+        agent_run_detail(str(uuid.uuid4()))
 
 
 import psycopg                                                                    # noqa: E402
@@ -1133,7 +1151,7 @@ def test_checkpoint_table_missing_is_checkpoint_unavailable(db, scripted_model):
     d = agent_deps(scripted_model, [])
     d.agent_model = MissingCheckpointModel()
     service.run_batch(tickers=['NVDA'], now=NOW, deps=d)
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert (run['status'], run['reason']) == ('error', 'checkpoint_unavailable')
 
 
@@ -1169,7 +1187,7 @@ def _mixed_deps(make, responses, *, flat=(), **overrides):
 
 
 def test_rules_loop_writes_no_brief(db, monkeypatch):
-    monkeypatch.setattr(service, '_agent_stage', lambda *a, **k: None)
+    monkeypatch.setattr(analysis_agent_runner, 'agent_stage', lambda *a, **k: None)
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
     assert db.execute('SELECT count(*) FROM signal_briefs').fetchone()[0] == 0
     assert summary['briefs'] == {}
@@ -1177,14 +1195,14 @@ def test_rules_loop_writes_no_brief(db, monkeypatch):
 
 def test_buy_unit_brief_derived_from_proposal(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    run = repository.latest_agent_run(db, 'NVDA', SESSION)
-    brief = repository.latest_brief(db, 'NVDA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
+    brief = analysis_repo.latest_brief(db, 'NVDA', SESSION)
     assert brief['prompt_version'] == 'agent-3' and brief['status'] == 'ok'
     assert brief['agent_run_id'] == run['id']
     assert brief['output']['summary'] == '回踩修复放量'
     # agent-2 (v2.5 Task 6): the brief carries the summary and the first per-thesis counter
     assert brief['output']['contra'] == [{'thesis': 1, 'text': '财报临近', 'refs': ['call:1']}]
-    assert [r['mode'] for r in repository.agent_runs_for(db, 'NVDA', SESSION)] == ['propose']
+    assert [r['mode'] for r in analysis_repo.agent_runs_for(db, 'NVDA', SESSION)] == ['propose']
 
 
 def test_sell_and_watch_units_get_interpretations(db, scripted_model):
@@ -1196,9 +1214,9 @@ def test_sell_and_watch_units_get_interpretations(db, scripted_model):
                                                 if ticker == 'AMD' else original(ticker, start, end))
     summary = service.run_batch(tickers=['AMD', 'WTCH'], now=NOW, deps=d)
     for ticker in ('AMD', 'WTCH'):
-        runs = repository.agent_runs_for(db, ticker, SESSION, mode='interpret')
+        runs = analysis_repo.agent_runs_for(db, ticker, SESSION, mode='interpret')
         assert [r['status'] for r in runs] == ['ok']
-        brief = repository.latest_brief(db, ticker, SESSION)
+        brief = analysis_repo.latest_brief(db, ticker, SESSION)
         assert brief['status'] == 'ok' and brief['prompt_version'] == 'agent-brief-1'
     assert db.execute("SELECT count(*) FROM agent_runs WHERE mode = 'propose'").fetchone()[0] == 0
 
@@ -1207,10 +1225,10 @@ def test_conflict_buy_unit_is_interpreted_not_proposed(db, scripted_model):
     legacy_decisions.add_trade({'request_id': '6f1d1c1e-2222-4444-8888-000000000042', 'ticker': 'NVDA', 'side': 'buy',
                        'quantity': '10', 'price': '137.00', 'executed_at': '2026-10-10T15:00:00+00:00'}, now=NOW)
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _interpret_reply()))
-    runs = repository.agent_runs_for(db, 'NVDA', SESSION, mode='interpret')
+    runs = analysis_repo.agent_runs_for(db, 'NVDA', SESSION, mode='interpret')
     assert [r['status'] for r in runs] == ['ok']
     assert db.execute("SELECT count(*) FROM agent_runs WHERE mode = 'propose'").fetchone()[0] == 0
-    assert repository.latest_brief(db, 'NVDA', SESSION)['prompt_version'] == 'agent-brief-1'
+    assert analysis_repo.latest_brief(db, 'NVDA', SESSION)['prompt_version'] == 'agent-brief-1'
 
 
 def test_agent_off_writes_rule_only_briefs(db, scripted_model):
@@ -1227,7 +1245,7 @@ def test_agent_off_writes_rule_only_briefs(db, scripted_model):
 
 
 def test_stage_order_main_propose_interpret_extended(db, scripted_model):
-    from investment_assistant.workbench import pool as pool_module
+    from investment_assistant.analysis import pool as pool_module
     _watch_candidate(db)
     db.execute('INSERT INTO pool_tiers (ticker, tier, effective_session, recorded_at) '
                "VALUES ('CCC', 'extended', %s, %s)", [SESSION - timedelta(days=1), NOW])
@@ -1245,7 +1263,7 @@ def test_stage_order_main_propose_interpret_extended(db, scripted_model):
 
 
 def test_quota_exhausted_skips_interpret_and_extended(db, scripted_model):
-    from investment_assistant.workbench import pool as pool_module
+    from investment_assistant.analysis import pool as pool_module
     _watch_candidate(db)
     db.execute('INSERT INTO pool_tiers (ticker, tier, effective_session, recorded_at) '
                "VALUES ('CCC', 'extended', %s, %s)", [SESSION - timedelta(days=1), NOW])
@@ -1265,14 +1283,14 @@ def test_interpret_ok_does_not_skip_propose(db, scripted_model):
     _watch_candidate(db)
     d = _mixed_deps(scripted_model, _interpret_reply(), flat=('WTCH',))
     service.run_batch(tickers=['WTCH'], now=NOW, deps=d)
-    assert repository.latest_agent_run(db, 'WTCH', SESSION, mode='interpret')['mode'] == 'interpret'
+    assert analysis_repo.latest_agent_run(db, 'WTCH', SESSION, mode='interpret')['mode'] == 'interpret'
     _buy_candidate(db)
     later = NOW + timedelta(minutes=10)
     again = _mixed_deps(scripted_model, _ok_responses('WTCH'), flat=('WTCH',))
     service.run_batch(tickers=['WTCH'], now=later, deps=again)
-    propose = repository.agent_runs_for(db, 'WTCH', SESSION)          # 默认只看 propose
+    propose = analysis_repo.agent_runs_for(db, 'WTCH', SESSION)          # 默认只看 propose
     assert [r['status'] for r in propose] == ['ok']
-    unit = next(u for u in service.unit_cards(now=later)['units'] if u['ticker'] == 'WTCH')
+    unit = next(u for u in unit_cards(now=later)['units'] if u['ticker'] == 'WTCH')
     assert unit['agent']['status'] == 'ok'
 
 
@@ -1280,13 +1298,13 @@ def test_attempts_counted_per_mode(db, scripted_model):
     for i in range(3):   # propose 三次失败
         service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=10 * i),
                           deps=agent_deps(scripted_model, []))
-    assert [r['status'] for r in repository.agent_runs_for(db, 'NVDA', SESSION)] == ['error'] * 3
+    assert [r['status'] for r in analysis_repo.agent_runs_for(db, 'NVDA', SESSION)] == ['error'] * 3
     _watch_candidate(db)
     d = _mixed_deps(scripted_model, _interpret_reply(), flat=('WTCH',))
     summary = service.run_batch(tickers=['NVDA', 'WTCH'], now=NOW + timedelta(minutes=40), deps=d)
-    nvda = repository.agent_runs_for(db, 'NVDA', SESSION)
+    nvda = analysis_repo.agent_runs_for(db, 'NVDA', SESSION)
     assert (nvda[3]['status'], nvda[3]['reason']) == ('skipped', 'max_attempts')   # propose 达上限
-    assert [r['status'] for r in repository.agent_runs_for(db, 'WTCH', SESSION, mode='interpret')] == ['ok']
+    assert [r['status'] for r in analysis_repo.agent_runs_for(db, 'WTCH', SESSION, mode='interpret')] == ['ok']
 
 
 def test_agent_runs_coverage_ignores_interpret(db, scripted_model):
@@ -1294,7 +1312,7 @@ def test_agent_runs_coverage_ignores_interpret(db, scripted_model):
     d = _mixed_deps(scripted_model, _interpret_reply(), flat=('WTCH',))
     service.run_batch(tickers=['WTCH'], now=NOW, deps=d)
     _buy_candidate(db)
-    view = service.agent_runs(now=NOW)
+    view = agent_runs(now=NOW)
     assert view['coverage']['missing'] == [{'ticker': 'WTCH', 'signal_date': SESSION}]
     assert any(r['mode'] == 'interpret' for r in view['runs'])
 
@@ -1315,20 +1333,20 @@ def test_track_rows_trace_ids(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
     off = agent_deps(scripted_model, [], settings=_agent_settings(provider='off'))
     service.run_batch(tickers=['MU'], now=NOW, deps=off)
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     nvda_unit = next(u for u in view['units'] if u['ticker'] == 'NVDA')
     mu_unit = next(u for u in view['units'] if u['ticker'] == 'MU')
-    agent_plan = repository.agent_plan(db, 'NVDA', SESSION)
+    agent_plan = execution_repo.agent_plan(db, 'NVDA', SESSION)
     nvda_decision = _decide(nvda_unit, 'buy', plan_id=agent_plan['id'])
     _decide(mu_unit, 'ignore')
     trade = legacy_decisions.add_trade({'request_id': str(uuid.uuid4()), 'ticker': 'NVDA', 'side': 'buy',
                                'quantity': '10', 'price': '100.00', 'fee': '1',
                                'executed_at': '2026-10-22T15:00:00+00:00',
                                'decision_id': str(nvda_decision['id'])}, now=NOW)['record']
-    rows = {row['ticker']: row for row in service.tracks(now=NOW)['units']}
+    rows = {row['ticker']: row for row in review_weekly.tracks(now=NOW)['units']}
     nvda = rows['NVDA']
-    assert nvda['rule']['plan_id'] == str(repository.rule_plan(db, 'NVDA', SESSION)['id'])
-    assert nvda['agent']['run_id'] == str(repository.latest_agent_run(db, 'NVDA', SESSION)['id'])
+    assert nvda['rule']['plan_id'] == str(execution_repo.rule_plan(db, 'NVDA', SESSION)['id'])
+    assert nvda['agent']['run_id'] == str(analysis_repo.latest_agent_run(db, 'NVDA', SESSION)['id'])
     assert nvda['agent']['plan_id'] == str(agent_plan['id'])
     assert nvda['actual']['decision_id'] == str(nvda_decision['id'])
     assert nvda['actual']['buy_trade_ids'] == [str(trade['id'])]
@@ -1340,8 +1358,8 @@ def test_track_rows_trace_ids(db, scripted_model):
 def test_track_rows_keep_buys_after_decision_correction(db, scripted_model):
     """A buy linked to an earlier decision in the chain still belongs to the unit."""
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    nvda_unit = next(u for u in service.unit_cards(now=NOW)['units'] if u['ticker'] == 'NVDA')
-    agent_plan = repository.agent_plan(db, 'NVDA', SESSION)
+    nvda_unit = next(u for u in unit_cards(now=NOW)['units'] if u['ticker'] == 'NVDA')
+    agent_plan = execution_repo.agent_plan(db, 'NVDA', SESSION)
     first = _decide(nvda_unit, 'buy', plan_id=agent_plan['id'])
     trade = legacy_decisions.add_trade({'request_id': str(uuid.uuid4()), 'ticker': 'NVDA', 'side': 'buy',
                                'quantity': '10', 'price': '100.00', 'fee': '1',
@@ -1353,7 +1371,7 @@ def test_track_rows_keep_buys_after_decision_correction(db, scripted_model):
         'proposed_action': nvda_unit['proposed_action'], 'final_action': 'buy', 'decision': 'accept',
         'reason': '更正理由', 'plan_id': str(agent_plan['id']), 'supersedes_id': str(first['id'])},
         now=NOW + timedelta(minutes=5))['record']
-    actual = next(r for r in service.tracks(now=NOW)['units'] if r['ticker'] == 'NVDA')['actual']
+    actual = next(r for r in review_weekly.tracks(now=NOW)['units'] if r['ticker'] == 'NVDA')['actual']
     assert actual['decision_id'] == str(corrected['id'])
     assert actual['buy_trade_ids'] == [str(trade['id'])]
     assert actual['status'] == 'open' and actual['r'] is not None
@@ -1366,7 +1384,7 @@ def test_track_units_include_agent_only_unit(db, scripted_model):
     flat = FlatSources()
     d.bar_fetcher, d.news_fetcher, d.filing_source, d.earnings_fetcher =         flat.bars, flat.news, flat, flat.earnings
     service.run_batch(tickers=['NVDA'], now=NOW, deps=d)      # ATR 跳过规则计划，Agent 照跑
-    units = repository.track_units(db, SESSION - timedelta(days=7), SESSION)
+    units = analysis_repo.track_units(db, SESSION - timedelta(days=7), SESSION)
     assert units == [{'ticker': 'NVDA', 'signal_date': SESSION}]
 
 
@@ -1374,13 +1392,13 @@ def test_track_units_ignore_interpret_runs(db, scripted_model):
     _watch_candidate(db)
     d = _mixed_deps(scripted_model, _interpret_reply(), flat=('WTCH',))
     service.run_batch(tickers=['WTCH'], now=NOW, deps=d)
-    assert repository.track_units(db, SESSION - timedelta(days=7), SESSION) == []
+    assert analysis_repo.track_units(db, SESSION - timedelta(days=7), SESSION) == []
 
 
 def test_weekly_snapshot_has_tracks(db, scripted_model):
     off = agent_deps(scripted_model, [], settings=_agent_settings(provider='off'))
     service.run_batch(tickers=['NVDA', 'MU'], now=NOW, deps=off)
-    record = service.generate_weekly(SESSION - timedelta(days=SESSION.weekday()), now=NOW)
+    record = review_weekly.generate_weekly(SESSION - timedelta(days=SESSION.weekday()), now=NOW)
     assert record['calc_version'] == 'review-8'
     stats = record['stats']
     assert stats['tracks']['summary']['all']['actual']['units'] == 2
@@ -1392,14 +1410,14 @@ def test_weekly_snapshot_has_tracks(db, scripted_model):
 
 def _universe_deps(sources, members):
     """Deps over Sources plus a synthetic range, so the screen stage fetches the members."""
-    from investment_assistant.workbench import universe as universe_module
+    from investment_assistant.data.adapters import universe as universe_module
     d = deps(sources)
     d.universe = universe_module.Universe('test', SESSION, 'test', tuple(members))
     return d
 
 
 def test_batch_records_five_families(db):
-    from investment_assistant.workbench import families
+    import investment_assistant.workflow.targets as families
     seed_watchlist(db, [('NVDA', ['core'])])
     summary = service.run_batch(now=NOW, deps=_universe_deps(Sources(fail={'MU'}), ['MU']),
                                 record_trigger='scheduled')
@@ -1407,7 +1425,7 @@ def test_batch_records_five_families(db):
                       'FROM data_fetch_runs ORDER BY family').fetchall()
     assert len(rows) == 5
     by_family = {row[0]: row for row in rows}
-    assert set(by_family) == set(families.RECORDED)
+    assert set(by_family) == set(data_families.RECORDED)
     for row in rows:
         assert row[1:6] == ('workbench', 'scheduled', None, 'family', SESSION)
     assert by_family['bars'][6] == 'partial'
@@ -1467,12 +1485,12 @@ def test_explicit_tickers_write_four_families_only(db):
 
 
 def test_task_run_passes_trigger(db):
-    from investment_assistant.workbench import families
+    import investment_assistant.workflow.targets as families
     seed_watchlist(db, [('NVDA', ['core'])])
     _task_run('manual')
     rows = db.execute('SELECT family, trigger FROM data_fetch_runs').fetchall()
     assert rows and {row[1] for row in rows} == {'manual_batch'}
-    assert {row[0] for row in rows} == set(families.RECORDED)
+    assert {row[0] for row in rows} == set(data_families.RECORDED)
 
 
 def test_batch_waits_for_family_lock(db):
@@ -1532,7 +1550,7 @@ def test_batch_sec_listing_is_per_ticker(db):
 def test_batch_sec_company_tickers_failure_is_the_call_sentinel(db):
     """Only when company_tickers.json is unreachable nothing can be resolved: ``'*'`` with the real denominator (I04)."""
     from investment_assistant.data.fetch_policy import FetchError
-    from investment_assistant.filings import monitor_source
+    from investment_assistant.data.sources import edgar as monitor_source
 
     seed_watchlist(db, [('NVDA', ['core'])])
 
@@ -1585,7 +1603,7 @@ def test_screen_degradation_keeps_fetch_reasons_and_denominator(db):
 def test_manual_targets_exclude_closed_positions_but_batch_keeps_them(db):
     """已知兼容偏差（M01）：手动目标=观察池∪未平仓持仓；旧批处理循环仍采集已清仓
     历史持仓。此测试钉住该偏差，防止被误称为与批处理完全一致。"""
-    from investment_assistant.workbench import families
+    import investment_assistant.workflow.targets as families
     seed_watchlist(db, [('AMD', ['core'])])
     for offset, side in ((10, 'buy'), (9, 'sell')):
         db.execute('INSERT INTO trades (request_id, request_hash, ticker, side, quantity, price, '
@@ -1610,10 +1628,10 @@ def _drop_timeline_tables(db):
 
 
 def test_agent_stage_without_migration_026(db, scripted_model):
-    from investment_assistant.workbench import pool as pool_module
-    from investment_assistant.workbench import stages as stages_module
+    from investment_assistant.analysis import pool as pool_module
+    import investment_assistant.workflow.recorder as stages_module
     _drop_timeline_tables(db)
-    assert repository.timeline_ready(db) is False
+    assert core_schema.timeline_ready(db) is False
     _watch_candidate(db)
     db.execute('INSERT INTO pool_tiers (ticker, tier, effective_session, recorded_at) '
                "VALUES ('CCC', 'extended', %s, %s)", [SESSION - timedelta(days=1), NOW])
@@ -1625,20 +1643,20 @@ def test_agent_stage_without_migration_026(db, scripted_model):
     assert rows == [('AAA', 'propose', 'skipped', 'migration_026_missing'),
                     ('WTCH', 'interpret', 'ok', None),
                     ('CCC', 'propose', 'skipped', 'migration_026_missing')]
-    aaa_brief = repository.latest_brief(db, 'AAA', SESSION)                   # 主列表照旧得到规则版简报
+    aaa_brief = analysis_repo.latest_brief(db, 'AAA', SESSION)                   # 主列表照旧得到规则版简报
     assert (aaa_brief['status'], aaa_brief['error']) == ('fallback', '迁移 026 未执行')
-    assert repository.latest_brief(db, 'CCC', SESSION) is None                # 扩展池不写简报
+    assert analysis_repo.latest_brief(db, 'CCC', SESSION) is None                # 扩展池不写简报
     assert summary['plans']['AAA'] == 'inserted' and summary['plans']['CCC'] == 'inserted'   # 规则计划照常
     assert db.execute("SELECT count(*) FROM trade_plans WHERE kind = 'agent'").fetchone()[0] == 0
     assert summary['errors'].count('timeline: migration_026_missing') == 1
-    [agent_row] = [r for r in repository.stage_runs_for_run(db, 'run-no026') if r['stage'] == 'agent']
+    [agent_row] = [r for r in workflow_repo.stage_runs_for_run(db, 'run-no026') if r['stage'] == 'agent']
     assert agent_row['status'] == 'degraded'
     assert [g['kind'] for g in agent_row['degradations']] == ['migration_026_missing']
     assert [(g['reason'], g['samples']) for g in agent_row['skips']] == \
         [('migration_026_missing', ['AAA', 'CCC'])]
 
     # 「今日」不崩：按 agent-1 的方式读，没有链
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     assert view['timeline_ready'] is False and view['chains'] == []
     aaa = next(u for u in view['units'] if u['ticker'] == 'AAA')
     assert aaa['agent']['status'] == 'skipped' and aaa['agent']['reason'] == 'migration_026_missing'
@@ -1647,7 +1665,7 @@ def test_agent_stage_without_migration_026(db, scripted_model):
 
 def _insert_run(db, *, ticker='NVDA', mode, status, at, agent_version='agent-2', plan_id=None, reason=None,
                 output=None, counter=None):
-    return repository.insert_agent_run(db, {
+    return analysis_repo.insert_agent_run(db, {
         'id': str(uuid.uuid4()), 'ticker': ticker, 'signal_date': SESSION, 'pool': 'main', 'attempt': 1,
         'mode': mode, 'agent_version': agent_version, 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': at,
         'status': status, 'reason': reason, 'detail': None, 'output': output, 'counter': counter,
@@ -1656,13 +1674,13 @@ def _insert_run(db, *, ticker='NVDA', mode, status, at, agent_version='agent-2',
 
 def test_today_agent_view_uses_head_not_latest_run(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    v0 = repository.latest_agent_run(db, 'NVDA', SESSION)
-    head = repository.chain_head(db, 'NVDA', SESSION)
+    v0 = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
+    head = execution_repo.chain_head(db, 'NVDA', SESSION)
     later = NOW + timedelta(minutes=30)
     _insert_run(db, mode='revise', status='rejected', reason='changes_mismatch', at=later)
     _insert_run(db, mode='propose', status='error', reason='model_error', at=later)   # 比首版更晚的运行
     db.commit()
-    unit = service.unit_cards(now=later)['units'][0]
+    unit = unit_cards(now=later)['units'][0]
     agent = unit['agent']
     assert agent['id'] == str(v0['id']) and agent['status'] == 'ok'            # 内容取最新版的运行
     assert agent['output'] == v0['output'] and agent['counter'] == v0['counter']
@@ -1680,21 +1698,21 @@ def test_today_marks_agent1_legacy(db, scripted_model):
     levels = {'entry_low': Decimal('98.50'), 'entry_high': Decimal('101.50'), 'stop': Decimal('96.00'),
               'target1': Decimal('108.00')}
     old = plans.build_agent_plan(levels=levels, agent_run_id=run_id, model='gpt-test', ticker='NVDA',
-                                 signal_date=SESSION, bars=repository.read_bars(db, 'NVDA', SESSION, cutoff_at=NOW),
+                                 signal_date=SESSION, bars=data_repo.read_bars(db, 'NVDA', SESSION, cutoff_at=NOW),
                                  earnings_row=None, snapshot=None,
                                  exposure={'ticker_value': Decimal(0), 'total_value': Decimal(0)},
                                  params=WorkbenchConfig())
-    plan = repository.insert_plan(db, old)
+    plan = execution_repo.insert_plan(db, old)
     output = {'action': 'buy', 'summary': '旧版建议',
               'levels': {k: {'value': str(v), 'refs': ['call:1']} for k, v in levels.items()},
               'thesis': [{'text': '旧论点', 'refs': ['call:1']}]}
-    repository.insert_agent_run(db, {
+    analysis_repo.insert_agent_run(db, {
         'id': run_id, 'ticker': 'NVDA', 'signal_date': SESSION, 'pool': 'main', 'attempt': 2, 'mode': 'propose',
         'agent_version': 'agent-1', 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': later, 'status': 'ok',
         'reason': None, 'detail': None, 'output': output, 'counter': {'status': 'ok', 'risks': [], 'dropped': 0},
         'plan_id': plan['id'], 'input_tokens': 1, 'output_tokens': 1, 'started_at': later, 'finished_at': later}, [])
     db.commit()
-    view = service.unit_cards(now=later)
+    view = unit_cards(now=later)
     agent = view['units'][0]['agent']
     assert agent['legacy'] is True and agent['chain'] is None
     assert agent['agent_version'] == 'agent-1' and agent['plan']['id'] == plan['id']
@@ -1704,8 +1722,8 @@ def test_today_marks_agent1_legacy(db, scripted_model):
 def test_today_chains_and_has_chain(db, scripted_model):
     service.run_batch(tickers=['MU', 'NVDA'], now=NOW,
                       deps=agent_deps(scripted_model, _ok_responses('MU') + _ok_responses('NVDA')))
-    units = {u['ticker']: u for u in service.unit_cards(now=NOW)['units']}
-    heads = {t: repository.chain_head(db, t, SESSION) for t in ('MU', 'NVDA')}
+    units = {u['ticker']: u for u in unit_cards(now=NOW)['units']}
+    heads = {t: execution_repo.chain_head(db, t, SESSION) for t in ('MU', 'NVDA')}
     _decide(units['MU'], 'buy', plan_id=heads['MU']['plan']['id'])            # 决定买入、未成交 → 入场期
     nvda_decision = _decide(units['NVDA'], 'buy', plan_id=heads['NVDA']['plan']['id'])
     legacy_decisions.add_trade({'request_id': str(uuid.uuid4()), 'ticker': 'NVDA', 'side': 'buy', 'quantity': '10',
@@ -1714,7 +1732,7 @@ def test_today_chains_and_has_chain(db, scripted_model):
     legacy_decisions.add_trade({'request_id': str(uuid.uuid4()), 'ticker': 'AMD', 'side': 'buy', 'quantity': '5',
                        'price': '90.00', 'executed_at': '2026-10-20T15:00:00+00:00'}, now=NOW)   # 无链的持仓
     reason = '无新信号，复查条件未满足（下一交易日）；' + '补充说明' * 10
-    repository.insert_plan_review(db, {
+    execution_repo.insert_plan_review(db, {
         'ticker': 'MU', 'signal_date': SESSION, 'head_plan_id': heads['MU']['plan']['id'], 'session': SESSION,
         'trigger': 'batch', 'mode': 'entry', 'timeline_version': 'timeline-1',
         'signals': [{'kind': 't1_touched', 'fired': True, 'detail': 'x', 'evidence': []},
@@ -1722,7 +1740,7 @@ def test_today_chains_and_has_chain(db, scripted_model):
         'outcome': 'maintain', 'decided_by': 'host', 'reason': reason, 'attempt': 1, 'cutoff_at': NOW})
     db.commit()
 
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     assert view['units'] == []                                     # 两个单元都已决定
     chains = {c['ticker']: c for c in view['chains']}
     assert set(chains) == {'MU', 'NVDA'}
@@ -1740,12 +1758,12 @@ def test_today_chains_and_has_chain(db, scripted_model):
     assert holdings['NVDA']['has_chain'] is True and holdings['AMD']['has_chain'] is False
     assert holdings['NVDA']['chain_state'] == 'holding' and holdings['AMD']['chain_state'] is None
 
-    repository.insert_plan_review(db, {                            # 持仓期的链被复查作废
+    execution_repo.insert_plan_review(db, {                            # 持仓期的链被复查作废
         'ticker': 'NVDA', 'signal_date': SESSION, 'head_plan_id': heads['NVDA']['plan']['id'], 'session': SESSION,
         'trigger': 'batch', 'mode': 'holding', 'timeline_version': 'timeline-1', 'outcome': 'invalidate',
         'decided_by': 'host', 'reason': '失效条件成立', 'attempt': 1, 'cutoff_at': NOW})
     db.commit()
-    view = service.unit_cards(now=NOW)
+    view = unit_cards(now=NOW)
     assert {c['ticker'] for c in view['chains']} == {'MU'}
     holdings = {h['ticker']: h for h in view['holdings']}
     assert (holdings['NVDA']['has_chain'], holdings['NVDA']['chain_state']) == (True, 'invalidated')
@@ -1759,29 +1777,29 @@ def test_agent_view_legacy_only_for_agent1_plans():
         return {'id': uuid.uuid4(), 'status': status, 'reason': None if status in ('ok', 'pass') else 'model_error',
                 'model': 'gpt-test', 'agent_version': version, 'output': {}, 'counter': None, 'input_tokens': 0,
                 'output_tokens': 0, 'created_at': NOW}
-    assert service._agent_view(run('ok'), None)['legacy'] is True
-    assert service._agent_view(run('pass'), None)['legacy'] is True
+    assert _agent_view(run('ok'), None)['legacy'] is True
+    assert _agent_view(run('pass'), None)['legacy'] is True
     for status in ('skipped', 'error', 'rejected'):
-        assert 'legacy' not in service._agent_view(run(status), None), status
-    assert 'legacy' not in service._agent_view(run('ok', 'agent-2'), None)
+        assert 'legacy' not in _agent_view(run(status), None), status
+    assert 'legacy' not in _agent_view(run('ok', 'agent-2'), None)
 
 
 # ---------------------------------------------------------------- v2.5 Task 10: plan updates in the push (D25)
 
 def _revision(db, prev, version_no, *, stop, session, text, trigger='recheck'):
     """Version n of the NVDA chain the way a review writes it: plan, revise run, version row, review row."""
-    plan = repository.insert_plan(db, {**prev, 'stop': Decimal(stop)})
+    plan = execution_repo.insert_plan(db, {**prev, 'stop': Decimal(stop)})
     at = datetime.now(UTC)
     review_run = _insert_run(db, mode='review', status='ok', at=at, agent_version='agent-review-1')
     run = _insert_run(db, mode='revise', status='ok', at=at, plan_id=plan['id'],
                       output={'action': 'buy', 'summary': '修订',
                               'changes': [{'field': 'stop', 'text': text, 'refs': ['call:1']}]})
-    repository.insert_plan_version(db, {
+    execution_repo.insert_plan_version(db, {
         'plan_id': plan['id'], 'ticker': 'NVDA', 'signal_date': SESSION, 'version_no': version_no,
         'supersedes_plan_id': prev['id'], 'origin': 'recheck' if trigger == 'recheck' else 'review',
         'agent_run_id': run['id'], 'cutoff_at': at, 'as_of_session': session,
         'diff': [{'field': 'stop', 'before': str(prev['stop']), 'after': stop}], 'schema_version': 'agent-2'})
-    repository.insert_plan_review(db, {
+    execution_repo.insert_plan_review(db, {
         'ticker': 'NVDA', 'signal_date': SESSION, 'head_plan_id': prev['id'], 'session': session,
         'trigger': trigger, 'mode': 'entry', 'timeline_version': 'timeline-1', 'outcome': 'revise',
         'decided_by': 'agent', 'reason': '新 8-K', 'review_agent_run_id': review_run['id'],
@@ -1803,10 +1821,10 @@ def test_push_window_includes_recheck_after_last_push(db, scripted_model):
     from investment_assistant.config import NotifyConfig
 
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    v0 = repository.chain_head(db, 'NVDA', SESSION)['plan']
+    v0 = execution_repo.chain_head(db, 'NVDA', SESSION)['plan']
     v1 = _revision(db, v0, 1, stop='95.5', session=SESSION, text='止损上移到 95.5')     # S 日推送之前
     client = PushClient()
-    first = service.push(now=NOW, force=False, notify_cfg=NotifyConfig(), client=client)
+    first = push_node.push(now=NOW, force=False, notify_cfg=NotifyConfig(), send=ports.send, client=client)
     assert first['sent'] is True and first['messages'] == 6                 # 从未推送过 → 只取 S 当日
     text = json.dumps(client.sent, ensure_ascii=False)
     assert '🔁 计划更新 · 2026-10-22' in text and 'NVDA 第 0 → 1 版：止损上移到 95.5' in text
@@ -1815,7 +1833,7 @@ def test_push_window_includes_recheck_after_last_push(db, scripted_model):
     _revision(db, v1, 2, stop='96', session=SESSION, text='止损上移到 96')            # S 日推送之后的重新复查
     client = PushClient()
     nxt = NOW + timedelta(days=1)                                           # 周五 S+1
-    second = service.push(now=nxt, force=False, notify_cfg=NotifyConfig(), client=client)
+    second = push_node.push(now=nxt, force=False, notify_cfg=NotifyConfig(), send=ports.send, client=client)
     assert second['sent'] is True and second['messages'] == 6
     text = json.dumps(client.sent, ensure_ascii=False)
     assert '🔁 计划更新 · 2026-10-23' in text
@@ -1828,7 +1846,7 @@ def test_push_without_updates_sends_five(db):
     from investment_assistant.config import NotifyConfig
 
     client = PushClient()
-    out = service.push(now=NOW, force=False, notify_cfg=NotifyConfig(), client=client)
+    out = push_node.push(now=NOW, force=False, notify_cfg=NotifyConfig(), send=ports.send, client=client)
     assert out['sent'] is True and out['messages'] == 5
     assert '计划更新 修订 0 · 作废 0' in json.dumps(client.sent, ensure_ascii=False)
 
@@ -1842,15 +1860,15 @@ def test_last_successful_push_at_skips_failed_closed_and_later(db):
                  created_at="'2026-10-22T23:30:00Z'::timestamptz")
     _report_push(db, {'session': '2026-10-23', 'sent': True, 'messages': 5},
                  created_at="'2026-10-23T23:00:00Z'::timestamptz")
-    assert repository.last_successful_push_at(db, before_session=date(2026, 10, 23)) == \
+    assert workflow_repo.last_successful_push_at(db, before_session=date(2026, 10, 23)) == \
         datetime(2026, 10, 21, 23, 0, tzinfo=UTC)
-    assert repository.last_successful_push_at(db, before_session=date(2026, 10, 26)) == \
+    assert workflow_repo.last_successful_push_at(db, before_session=date(2026, 10, 26)) == \
         datetime(2026, 10, 23, 23, 0, tzinfo=UTC)
-    assert repository.last_successful_push_at(db, before_session=date(2026, 10, 21)) is None
+    assert workflow_repo.last_successful_push_at(db, before_session=date(2026, 10, 21)) is None
     _report_push(db, {'session': '2026-10-26', 'sent': True, 'messages': 5,
                       'reviews_until': '2026-10-26T22:59:00+00:00'},
                  created_at="'2026-10-26T23:05:00Z'::timestamptz")
-    assert repository.last_successful_push_at(db, before_session=date(2026, 10, 27)) == \
+    assert workflow_repo.last_successful_push_at(db, before_session=date(2026, 10, 27)) == \
         datetime(2026, 10, 26, 22, 59, tzinfo=UTC)                       # 读取时刻优先于报告时间
 
 
@@ -1861,7 +1879,7 @@ def test_push_window_catches_review_written_while_sending(db, scripted_model, mo
     from investment_assistant.notify import notifier
 
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    v0 = repository.chain_head(db, 'NVDA', SESSION)['plan']
+    v0 = execution_repo.chain_head(db, 'NVDA', SESSION)['plan']
     real_send = notifier.send_notifications
 
     def send_then_recheck(*args, **kwargs):
@@ -1871,14 +1889,14 @@ def test_push_window_catches_review_written_while_sending(db, scripted_model, mo
 
     monkeypatch.setattr(notifier, 'send_notifications', send_then_recheck)
     client = PushClient()
-    first = service.push(now=NOW, force=False, notify_cfg=NotifyConfig(), client=client)
+    first = push_node.push(now=NOW, force=False, notify_cfg=NotifyConfig(), send=ports.send, client=client)
     assert first['sent'] is True and first['messages'] == 5 and first['reviews_until']
     assert '发送期间的重新复查' not in json.dumps(client.sent, ensure_ascii=False)
     _report_push(db, first)                                                 # 报告晚于这次重新复查落库
 
     monkeypatch.setattr(notifier, 'send_notifications', real_send)
     client = PushClient()
-    second = service.push(now=NOW + timedelta(days=1), force=False, notify_cfg=NotifyConfig(), client=client)
+    second = push_node.push(now=NOW + timedelta(days=1), force=False, notify_cfg=NotifyConfig(), send=ports.send, client=client)
     text = json.dumps(client.sent, ensure_ascii=False)
     assert second['messages'] == 6 and 'NVDA 第 0 → 1 版：发送期间的重新复查' in text
 
@@ -1886,21 +1904,21 @@ def test_push_window_catches_review_written_while_sending(db, scripted_model, mo
 def test_today_chain_carries_head_cutoff_diff_and_review_conditions(db, scripted_model):
     """§10.1 on Today: the head's generation time and diff, and the latest review's condition verdicts."""
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
-    v0 = repository.chain_head(db, 'NVDA', SESSION)['plan']
+    v0 = execution_repo.chain_head(db, 'NVDA', SESSION)['plan']
     v1 = _revision(db, v0, 1, stop='95.5', session=SESSION, text='止损上移到 95.5')
     conditions = [{'list': 'invalidation', 'index': 0, 'kind': 'close_below', 'params': {'price': 90},
                    'result': 'not_met', 'detail': '收盘 101 > 90'},
                   {'list': 'review_when', 'index': 0, 'kind': 'next_session', 'params': {},
                    'result': 'met', 'detail': '下一交易日'}]
     review_run = _insert_run(db, mode='review', status='ok', at=datetime.now(UTC), agent_version='agent-review-1')
-    repository.insert_plan_review(db, {
+    execution_repo.insert_plan_review(db, {
         'ticker': 'NVDA', 'signal_date': SESSION, 'head_plan_id': v1['id'], 'session': SESSION,
         'trigger': 'recheck', 'mode': 'entry', 'timeline_version': 'timeline-1', 'conditions': conditions,
         'outcome': 'maintain', 'decided_by': 'agent', 'reason': '论点仍成立', 'review_agent_run_id': review_run['id'],
         'attempt': 1, 'cutoff_at': datetime.now(UTC)})
     db.commit()
-    head = repository.chain_head(db, 'NVDA', SESSION)['version']
-    chain = service.unit_cards(now=NOW)['units'][0]['agent']['chain']
+    head = execution_repo.chain_head(db, 'NVDA', SESSION)['version']
+    chain = unit_cards(now=NOW)['units'][0]['agent']['chain']
     assert chain['version_no'] == 1 and chain['head_plan_id'] == str(v1['id'])
     assert chain['cutoff_at'] == head['cutoff_at']
     assert chain['diff'] == [{'field': 'stop', 'before': str(v0['stop']), 'after': '95.5'}]
@@ -1918,12 +1936,12 @@ def db28(db):          # ``conftest.WORKBENCH_MIGRATIONS`` ends with 029 since v
 def _exhaust_attempts(db, scripted_model):
     for i in range(4):          # three failed batches, the fourth records max_attempts
         service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=10 * i), deps=agent_deps(scripted_model, []))
-    runs = repository.agent_runs_for(db, 'NVDA', SESSION)
+    runs = analysis_repo.agent_runs_for(db, 'NVDA', SESSION)
     assert [(r['status'], r['reason']) for r in runs][-1] == ('skipped', 'max_attempts') and len(runs) == 4
 
 
 def _reset(db, request_id=None):
-    return repository.insert_attempt_reset(db, {'ticker': 'NVDA', 'signal_date': SESSION, 'mode': 'propose',
+    return analysis_repo.insert_attempt_reset(db, {'ticker': 'NVDA', 'signal_date': SESSION, 'mode': 'propose',
                                                 'request_id': request_id or str(uuid.uuid4()), 'origin': 'api'})
 
 
@@ -1932,7 +1950,7 @@ def test_reset_clears_attempt_gate(db28, scripted_model):
     _reset(db28)
     summary = service.run_batch(tickers=['NVDA'], now=NOW + timedelta(hours=1),
                                 deps=agent_deps(scripted_model, _ok_responses()))
-    last = repository.agent_runs_for(db28, 'NVDA', SESSION)[-1]
+    last = analysis_repo.agent_runs_for(db28, 'NVDA', SESSION)[-1]
     assert last['status'] in ('ok', 'pass') and summary['agent']['runs']['NVDA'] in ('ok', 'pass')   # no longer blocked
 
 
@@ -1941,7 +1959,7 @@ def test_attempt_number_keeps_counting(db28, scripted_model):
     _reset(db28)
     for i in range(4):          # after the reset three more failures are allowed, then max_attempts again
         service.run_batch(tickers=['NVDA'], now=NOW + timedelta(hours=1, minutes=i), deps=agent_deps(scripted_model, []))
-    runs = repository.agent_runs_for(db28, 'NVDA', SESSION)
+    runs = analysis_repo.agent_runs_for(db28, 'NVDA', SESSION)
     assert [r['attempt'] for r in runs] == [1, 2, 3, 4, 5, 6, 7, 8]                  # the history is never reset
     assert [(r['status'], r['reason']) for r in runs[4:]][-1] == ('skipped', 'max_attempts')
     assert [r['status'] for r in runs[4:7]] == ['error'] * 3
@@ -1949,68 +1967,68 @@ def test_attempt_number_keeps_counting(db28, scripted_model):
 
 def test_old_max_attempts_row_does_not_block_after_reset(db28, scripted_model):
     _exhaust_attempts(db28, scripted_model)
-    before = len(repository.agent_runs_for(db28, 'NVDA', SESSION))
+    before = len(analysis_repo.agent_runs_for(db28, 'NVDA', SESSION))
     service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=50), deps=agent_deps(scripted_model, []))
-    assert len(repository.agent_runs_for(db28, 'NVDA', SESSION)) == before            # still blocked without a reset
+    assert len(analysis_repo.agent_runs_for(db28, 'NVDA', SESSION)) == before            # still blocked without a reset
     _reset(db28)
     service.run_batch(tickers=['NVDA'], now=NOW + timedelta(minutes=60), deps=agent_deps(scripted_model, []))
-    assert len(repository.agent_runs_for(db28, 'NVDA', SESSION)) == before + 1
+    assert len(analysis_repo.agent_runs_for(db28, 'NVDA', SESSION)) == before + 1
 
 
 def test_reset_request_id_idempotent(db28, scripted_model):
     _exhaust_attempts(db28, scripted_model)
     request_id = str(uuid.uuid4())
     d = agent_deps(scripted_model, _ok_responses())
-    first = service.rerun_agent('nvda', SESSION, 'propose', request_id=request_id, origin='run_detail',
+    first = analysis_agent_runner.rerun_agent('nvda', SESSION, 'propose', request_id=request_id, origin='run_detail',
                                 now=NOW + timedelta(hours=1), deps=d)
     assert first['replayed'] is False and first['run_id'] is not None
-    runs = repository.agent_runs_for(db28, 'NVDA', SESSION)
+    runs = analysis_repo.agent_runs_for(db28, 'NVDA', SESSION)
     assert str(runs[-1]['id']) == first['run_id'] and runs[-1]['status'] in ('ok', 'pass')
-    again = service.rerun_agent('NVDA', SESSION, 'propose', request_id=request_id, origin='run_detail',
+    again = analysis_agent_runner.rerun_agent('NVDA', SESSION, 'propose', request_id=request_id, origin='run_detail',
                                 now=NOW + timedelta(hours=2), deps=d)
     assert again == {'reset_id': first['reset_id'], 'run_id': None, 'replayed': True}
     assert db28.execute('SELECT count(*) FROM agent_attempt_resets').fetchone()[0] == 1
-    assert len(repository.agent_runs_for(db28, 'NVDA', SESSION)) == len(runs)         # nothing ran twice
+    assert len(analysis_repo.agent_runs_for(db28, 'NVDA', SESSION)) == len(runs)         # nothing ran twice
 
 
 def test_a_request_id_already_used_by_another_unit_runs_nothing(db28, scripted_model):
     """``insert_attempt_reset`` answers with the stored row (another unit's) as ``replayed``: no ``run_agent``."""
     _exhaust_attempts(db28, scripted_model)
     request_id = str(uuid.uuid4())
-    other = repository.insert_attempt_reset(db28, {'ticker': 'MU', 'signal_date': SESSION, 'mode': 'propose',
+    other = analysis_repo.insert_attempt_reset(db28, {'ticker': 'MU', 'signal_date': SESSION, 'mode': 'propose',
                                                    'request_id': request_id, 'origin': 'api'})
     db28.commit()
-    runs = len(repository.agent_runs_for(db28, 'NVDA', SESSION))
-    out = service.rerun_agent('NVDA', SESSION, 'propose', request_id=request_id, origin='api',
+    runs = len(analysis_repo.agent_runs_for(db28, 'NVDA', SESSION))
+    out = analysis_agent_runner.rerun_agent('NVDA', SESSION, 'propose', request_id=request_id, origin='api',
                               now=NOW + timedelta(hours=1), deps=agent_deps(scripted_model, _ok_responses()))
     assert out == {'reset_id': other['id'], 'run_id': None, 'replayed': True}
-    assert len(repository.agent_runs_for(db28, 'NVDA', SESSION)) == runs
+    assert len(analysis_repo.agent_runs_for(db28, 'NVDA', SESSION)) == runs
 
 
 def test_rerun_propose_is_refused_while_a_daily_execution_runs(db28, scripted_model, monkeypatch):
-    from investment_assistant.tasks import daily
+    from investment_assistant.core import locks as daily
 
     _exhaust_attempts(db28, scripted_model)
     monkeypatch.setattr(daily, 'is_running', lambda: True)
     kwargs = dict(origin='api', now=NOW + timedelta(hours=1), deps=agent_deps(scripted_model, _ok_responses()))
     with pytest.raises(daily.DailyBusy):
-        service.rerun_agent('NVDA', SESSION, 'propose', request_id=str(uuid.uuid4()), **kwargs)
+        analysis_agent_runner.rerun_agent('NVDA', SESSION, 'propose', request_id=str(uuid.uuid4()), **kwargs)
     assert db28.execute('SELECT count(*) FROM agent_attempt_resets').fetchone()[0] == 0        # nothing was written
     monkeypatch.setattr(daily, 'is_running', lambda: False)
-    assert service.rerun_agent('NVDA', SESSION, 'propose', request_id=str(uuid.uuid4()), **kwargs)['run_id']
+    assert analysis_agent_runner.rerun_agent('NVDA', SESSION, 'propose', request_id=str(uuid.uuid4()), **kwargs)['run_id']
 
 
 def test_rerun_not_needed_409(db28, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))   # an ok run
     kwargs = dict(origin='api', now=NOW + timedelta(hours=1), deps=agent_deps(scripted_model, []))
-    with pytest.raises(service.AgentConflict, match='not_needed'):
-        service.rerun_agent('NVDA', SESSION, 'propose', request_id=str(uuid.uuid4()), **kwargs)
+    with pytest.raises(analysis_agent_runner.AgentConflict, match='not_needed'):
+        analysis_agent_runner.rerun_agent('NVDA', SESSION, 'propose', request_id=str(uuid.uuid4()), **kwargs)
     assert db28.execute('SELECT count(*) FROM agent_attempt_resets').fetchone()[0] == 0       # no reset for a unit that did not need it
     with pytest.raises(LookupError):
-        service.rerun_agent('MU', SESSION, 'propose', request_id=str(uuid.uuid4()), **kwargs)
+        analysis_agent_runner.rerun_agent('MU', SESSION, 'propose', request_id=str(uuid.uuid4()), **kwargs)
     with pytest.raises(ValueError):
-        service.rerun_agent('NVDA', SESSION, 'review', request_id=str(uuid.uuid4()), **kwargs)
+        analysis_agent_runner.rerun_agent('NVDA', SESSION, 'review', request_id=str(uuid.uuid4()), **kwargs)
     with pytest.raises(ValueError):
-        service.rerun_agent('NVDA', SESSION, 'propose', request_id='not-a-uuid', **kwargs)
+        analysis_agent_runner.rerun_agent('NVDA', SESSION, 'propose', request_id='not-a-uuid', **kwargs)
     with pytest.raises(ValueError):
-        service.rerun_agent('NVDA', SESSION, 'propose', request_id=str(uuid.uuid4()), **{**kwargs, 'origin': 'plan'})
+        analysis_agent_runner.rerun_agent('NVDA', SESSION, 'propose', request_id=str(uuid.uuid4()), **{**kwargs, 'origin': 'plan'})

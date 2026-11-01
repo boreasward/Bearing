@@ -10,7 +10,10 @@ from pathlib import Path
 import pytest
 
 from investment_assistant.tasks import daily
-from investment_assistant.workbench import agent, execution, retro, timeline
+from investment_assistant.analysis import agent
+from investment_assistant.review import retro
+from investment_assistant.execution import timeline
+from investment_assistant.execution import adoption as execution
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'web' / 'src'

@@ -6,7 +6,7 @@ from importlib import import_module, util
 import pytest
 
 from investment_assistant.config import WorkbenchConfig
-from investment_assistant.workbench.accounts import default_params
+from investment_assistant.execution.accounts import default_params
 
 S = date(2026, 10, 20)
 NEXT = date(2026, 10, 21)
@@ -14,8 +14,8 @@ PARAMS = default_params(WorkbenchConfig())
 
 
 def strategies():
-    assert util.find_spec('investment_assistant.workbench.paper_strategies') is not None
-    return import_module('investment_assistant.workbench.paper_strategies')
+    assert util.find_spec('investment_assistant.execution.paper.strategies') is not None
+    return import_module('investment_assistant.execution.paper.strategies')
 
 
 def plan(id='p', ticker='NVDA', **kw):
@@ -245,8 +245,8 @@ def test_latest_review_same_day_keeps_repository_order_when_timestamp_is_strippe
 
 
 def test_accepted_sell_ticker_is_canonical_copy_and_settles_to_terminal():
-    from investment_assistant.workbench.paper_fill import settle_day
-    from investment_assistant.workbench.plan_shadow import PositionState
+    from investment_assistant.execution.paper.fill import settle_day
+    from investment_assistant.execution.simulation import PositionState
 
     raw = {'action': 'sell', 'ticker': ' nvda ', 'portion': 'all', 'reason': '提前离场'}
     result = validate(output([raw]), positions=[{'ticker': 'NVDA', 'quantity': 10}])

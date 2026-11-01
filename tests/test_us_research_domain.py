@@ -7,9 +7,12 @@ import pytest
 
 
 def module(name):
-    path = Path(__file__).parents[1] / 'investment_assistant/us_research' / f'{name}.py'
-    assert path.exists(), f'Missing production feature: us_research/{name}.py'
-    return importlib.import_module(f'investment_assistant.us_research.{name}')
+    target = {'domain': 'data.fundamentals', 'metrics': 'derivation.indicators.fiscal',
+              'sources': 'data.sources.fundamentals', 'repository': 'data.repo',
+              'templates': 'analysis.fundamental_templates'}[name]
+    path = Path(__file__).parents[1] / 'investment_assistant' / (target.replace('.', '/') + '.py')
+    assert path.exists(), f'Missing production feature: {target}'
+    return importlib.import_module(f'investment_assistant.{target}')
 
 
 def obs(metric, value, start, end, **overrides):

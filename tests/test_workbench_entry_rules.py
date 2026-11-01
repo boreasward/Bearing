@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from investment_assistant.workbench import entry_rules
+from investment_assistant.execution import entry_rules
 
 D = Decimal
 F = date(2026, 11, 2)            # first valid day (Monday)

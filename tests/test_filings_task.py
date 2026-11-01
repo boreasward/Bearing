@@ -4,6 +4,7 @@ import pytest
 
 from investment_assistant.config import AssistantConfig, FilingsConfig, SecMonitorConfig
 from investment_assistant.tasks import filings
+from investment_assistant.workflow.nodes import sec_monitor
 
 
 def test_core_summarizes_downloads(monkeypatch, tmp_path):
@@ -32,7 +33,7 @@ def test_core_passes_date_range(monkeypatch, tmp_path):
 
 
 def _collecting_write_runs(monkeypatch, rows):
-    from investment_assistant.workbench import collect
+    import investment_assistant.data.collect as collect
 
     def fake_write_runs(new_rows):
         rows.extend(new_rows)
@@ -54,7 +55,7 @@ def _monitor_watchlist_file(tmp_path, tickers):
 def _record(monkeypatch, summary, cfg, *, trigger_source="scheduled", run_id="daily-r1", **kwargs):
     rows = []
     _collecting_write_runs(monkeypatch, rows)
-    status = filings._record_fetch_run({"run_id": run_id, "summary": summary}, config=cfg,
+    status = sec_monitor._record_fetch_run({"run_id": run_id, "summary": summary}, config=cfg,
                                        trigger_source=trigger_source, started_at=datetime(2026, 10, 22, tzinfo=UTC),
                                        **kwargs)
     return rows, status
@@ -159,11 +160,11 @@ def test_trigger_maps_to_the_fetch_row(monkeypatch):
 
 
 def test_record_failure_does_not_change_result(monkeypatch):
-    from investment_assistant.workbench import collect
+    import investment_assistant.data.collect as collect
 
     monkeypatch.setattr(collect, "write_runs_with_ids",
                         lambda new_rows: ({"written": 0, "error": "migration 024 未执行"}, []))
-    status = filings._record_fetch_run({"summary": {"downloaded_count": 1, "filings": [], "errors": {}}},
+    status = sec_monitor._record_fetch_run({"summary": {"downloaded_count": 1, "filings": [], "errors": {}}},
                                        config=AssistantConfig(watchlist=["NVDA"]), trigger_source="scheduled",
                                        started_at=datetime(2026, 10, 22, tzinfo=UTC))
     assert status == {"written": 0, "error": "migration 024 未执行", "ids": []}
@@ -171,11 +172,11 @@ def test_record_failure_does_not_change_result(monkeypatch):
 
 def test_record_failure_prints_searchable_stderr_line(monkeypatch, capsys):
     """The write failure needs a searchable trail on stderr (I08); the node's result is unchanged."""
-    from investment_assistant.workbench import collect
+    import investment_assistant.data.collect as collect
 
     monkeypatch.setattr(collect, "write_runs_with_ids",
                         lambda new_rows: ({"written": 0, "error": "permission denied"}, []))
-    filings._record_fetch_run({"summary": {"downloaded_count": 0, "filings": [], "errors": {}}},
+    sec_monitor._record_fetch_run({"summary": {"downloaded_count": 0, "filings": [], "errors": {}}},
                               config=AssistantConfig(watchlist=["NVDA"]), trigger_source="scheduled",
                               started_at=datetime(2026, 10, 22, tzinfo=UTC))
     assert "family=sec_filings job=daily trigger=scheduled error=permission denied" in capsys.readouterr().err
@@ -195,7 +196,8 @@ STATE = {"run_id": "daily-20261022223000-0a1b2c3d", "trigger": "scheduled", "ny_
 def _node(monkeypatch, scan_result, mode, cfg, *, ctx=None, locks=None):
     from contextlib import contextmanager
 
-    from investment_assistant.workbench import collect, stages
+    import investment_assistant.data.collect as collect
+    import investment_assistant.core.stages as stages
 
     seen = {}
     rows = []
@@ -212,10 +214,11 @@ def _node(monkeypatch, scan_result, mode, cfg, *, ctx=None, locks=None):
         yield
         (locks if locks is not None else []).append(("closed", list(ids)))
 
-    monkeypatch.setattr(filings, "_scan", scan)
     monkeypatch.setattr(collect, "family_locks", family_locks)
     acc = stages.StageAcc()
-    out = filings.stage_sec_monitor(dict(STATE), ctx or _Ctx(config=cfg), acc)
+    ctx = ctx or _Ctx(config=cfg)
+    ctx.sec_scan = scan
+    out = sec_monitor.run(dict(STATE), ctx, acc)
     return out, acc, seen, rows
 
 

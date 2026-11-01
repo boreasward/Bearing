@@ -3,19 +3,36 @@
 Offline: imports the constants only. A bump or a rename shows up here before it reaches stored rows.
 Since Task 0 the version constants live in ``investment_assistant/core/versions.py``; the assertions
 below pin the current (pre-stages-6) values — the v2.12–v2.15 upgrades change them only in Task 4."""
+import investment_assistant.review.agent_runs as review_agent_runs
 from investment_assistant.core import versions
 from investment_assistant.data import fetch_policy
-from investment_assistant.workbench import (backcheck, derivation, discipline, entry_rules, execution, monthly,
-                                            plan_shadow, plans, regime, retro, review, screen, stages, timeline,
-                                            tracks, workflow)
-from investment_assistant.workbench.agent import chatgpt, conditions, graph
+from investment_assistant.optimize import backcheck
+from investment_assistant.review import discipline
+from investment_assistant.review import monthly
+from investment_assistant.analysis import regime
+from investment_assistant.review import retro
+from investment_assistant.review import outcomes as review
+from investment_assistant.analysis import screen_rules as screen
+import investment_assistant.core.stages as stages
+from investment_assistant.review import tracks
+import investment_assistant.workflow.graph as workflow
+from investment_assistant.execution import simulation as plan_shadow
+from investment_assistant.execution import timeline
+from investment_assistant.execution import entry_rules
+from investment_assistant.execution import adoption as execution
+from investment_assistant.execution import plan_levels as plans
+from investment_assistant.analysis.agent import graph
+from investment_assistant.execution import conditions
+from investment_assistant.execution.paper import accounts as paper_accounts
+from investment_assistant.core.llm import chatgpt
+from investment_assistant.derivation import chain as derivation
 
 
 def test_v29_versions_are_final():
     assert plans.PLAN_VERSION == 'plan-2'
     assert versions.PLAN_V1 == 'plan-1'                   # kept: old rule baselines are never recomputed
     assert versions.PLAN_V2 == plans.PLAN_VERSION
-    assert versions.TIMELINE_V2 == 'timeline-2' and timeline.TIMELINE_VERSION == versions.TIMELINE_V2
+    assert versions.TIMELINE_VERSION == versions.TIMELINE_V2 == 'timeline-2' == timeline.TIMELINE_VERSION
     assert versions.CONDITIONS_VERSION == 'condition-2' and conditions.CONDITIONS_VERSION == versions.CONDITIONS_VERSION
     assert entry_rules.ENTRY_RULES_VERSION == 'entry-1'
     assert versions.SHADOW_V2 == 'plan-shadow-2' and plan_shadow.SHADOW_VERSION == versions.SHADOW_V2
@@ -24,7 +41,7 @@ def test_v29_versions_are_final():
     assert discipline.DISCIPLINE_VERSION == 'discipline-2'
     assert tracks.TRACKS_VERSION == 'tracks-2'
     assert retro.RETRO_VERSION == 'retro-2'
-    assert versions.RETRO_AGENT_V2 == 'agent-retro-2' and graph.RETRO_AGENT_VERSION == versions.RETRO_AGENT_V2
+    assert versions.RETRO_AGENT_V2 == 'agent-retro-2' and review_agent_runs.RETRO_AGENT_VERSION == versions.RETRO_AGENT_V2
     assert versions.REVIEW_VERSION == 'agent-review-2'
     assert review.CALC_VERSION == 'review-8'
     assert monthly.MONTHLY_V4 == 'monthly-4'              # kept: historical monthly-4 reports stay readable
@@ -44,7 +61,7 @@ def test_account_release_versions_are_current_and_keep_the_previous_stage_regist
     assert versions.FOLLOW_PLANS_VERSION == 'follow-plans-1'
     assert stages.STAGES_VERSION == 'stages-5'           # the registry default flips to stages-6 only in Task 4
     assert workflow.DAILY_GRAPH_VERSION == 'daily-2'     # likewise daily-3 (core.versions carries the future value)
-    assert graph.PORTFOLIO_AGENT_VERSION == 'agent-portfolio-1'
+    assert graph.PORTFOLIO_AGENT_VERSION == paper_accounts.PORTFOLIO_AGENT_VERSION == versions.PORTFOLIO_AGENT_V1 == 'agent-portfolio-1'
     assert versions.STAGES_VERSION_V4 == 'stages-4'
     assert stages.STAGE_IDS_BY_VERSION['stages-4'] == (
         'sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'push', 'retro')

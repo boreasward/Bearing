@@ -12,8 +12,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from investment_assistant.workbench.agent import chatgpt, model
-from investment_assistant.workbench.agent.chatgpt import ChatGPTError
+from investment_assistant.core.llm import chatgpt, model
+from investment_assistant.core.llm.chatgpt import ChatGPTError
 
 TOKEN = 'test-access-1111111111'
 SETTINGS = model.AgentSettings(provider='chatgpt', model='gpt-test', api_key=None, daily_tokens=None,

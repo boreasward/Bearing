@@ -22,6 +22,7 @@ AGENT_V3 = 'agent-3'                # v2.9: agent-2 plus entry_type / max_hold_s
 # --- timeline (timeline.py) ---
 TIMELINE_V1 = 'timeline-1'
 TIMELINE_V2 = 'timeline-2'
+TIMELINE_VERSION = TIMELINE_V2
 
 # --- conditions (agent/conditions.py) ---
 CONDITIONS_V1 = 'condition-1'
@@ -55,6 +56,7 @@ INTERPRET_VERSION = 'agent-brief-1'
 ACCOUNT_VERSION = 'account-1'
 PAPER_FILL_VERSION = 'paper-fill-1'
 FOLLOW_PLANS_VERSION = 'follow-plans-1'
+PORTFOLIO_AGENT_V1 = 'agent-portfolio-1'
 
 # --- review-side versions (monthly.py) ---
 MONTHLY_VERSION = 'monthly-5'

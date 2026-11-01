@@ -5,6 +5,7 @@
 the clocks, the notifier and ``job_reports`` — is a fake: nothing touches the network or a real database.
 """
 from __future__ import annotations
+import investment_assistant.analysis.agent.runner as analysis_agent_runner
 
 import os
 from contextlib import nullcontext
@@ -17,7 +18,7 @@ from investment_assistant.core import tx as core_tx
 from langgraph.checkpoint.memory import InMemorySaver
 
 from investment_assistant.config import AssistantConfig
-from investment_assistant.workbench import collect
+import investment_assistant.data.collect as collect
 
 
 class FakeClock:
@@ -134,7 +135,8 @@ def job_reports(monkeypatch):
 
 def _wire(workbench_db, monkeypatch, job_reports):
     from investment_assistant.tasks import daily
-    from investment_assistant.workbench import plan_review, service
+    import investment_assistant.workflow.nodes.review as plan_review
+    import investment_assistant.core.tx as service
 
     from contextlib import contextmanager
 
@@ -143,7 +145,7 @@ def _wire(workbench_db, monkeypatch, job_reports):
         yield workbench_db
 
     monkeypatch.setattr(core_tx, 'connection', connection)
-    monkeypatch.setattr(plan_review, '_lock_connection', lock_connection_factory())
+    monkeypatch.setattr(analysis_agent_runner, '_lock_connection', lock_connection_factory())
     monkeypatch.setattr(core_locks, '_lock_connection', lock_connection_factory())
     job_reports.conn = workbench_db
     return workbench_db

@@ -119,8 +119,8 @@
 命令行核对（只读，两个子命令都在只读事务里执行，时间按北京时间显示）：
 
 ```bash
-.venv/bin/python -m investment_assistant.workbench.derivation check --since 2026-10-28 [--until 2026-10-31] [--kind rule|own|agent]
-.venv/bin/python -m investment_assistant.workbench.derivation stages --session 2026-10-28
+.venv/bin/python -m investment_assistant.workflow check --since 2026-10-28 [--until 2026-10-31] [--kind rule|own|agent]
+.venv/bin/python -m investment_assistant.workflow stages --session 2026-10-28
 ```
 
 - `check`：逐份列出 `plan_id`、标的、信号日、种类、`status`、一致性结论（`consistent` / `mismatch` / `incomplete`）与差异明细，末行汇总；`--until` 按信号日截止（含当日），`--kind` 只看一种计划。任何 `status = ok` 的计划不是 `consistent` 时退出码 1（作废计划照常列出，不影响退出码）。
@@ -150,7 +150,7 @@
 - **入场期 `retrigger`**：该信号（第八项）触发时，复查跳过单阶段复查，直接走修订流程（提议 + 反方 + 校验）：复查行 `decided_by = agent`、`review_agent_run_id` 为空、`detail.via = 'retrigger'`，新版有效期 `S+1…min(S+3, 入场期上限)`，入场期上限取最近一次触发后第 10 个交易日（D6）。模型字段全无变化时允许「续期」版（`changes = []`，宿主差异只有 `valid_until` / `entry_cap`，标 `host_only`）；修订输出 `pass` 仍作废。失效条件成立仍先由宿主作废。持仓期的 `retrigger` 只是证据，进单阶段复查的证据块（不加仓）；退出期的记进持仓状态的 `detail.signals`。
 - **持仓期的宿主步骤**（D18，顺序固定）：① 止损触及（当天最低价 ≤ 有效止损，含 T1 之后的移动止损）→ 作废，原因「止损触及（<价>）：应已按止损卖出；仍持有则次一交易日开盘卖出」；② 时间止损（宿主把计划的 `max_hold_sessions` 注入为 `source = max_hold` 的失效条件）成立 → 作废，原因「时间止损：持有 n 个交易日仍未到 1R，次一交易日开盘卖出」；③ 其余失效条件成立 → 作废。三者都不调用模型。持仓期的作废**不再结束链**，而是进入退出期（复查行 `mode = holding`、`timeline_version = timeline-2`，`detail.exit_reason` 为 `stop_touched` / `time_stop` / `invalidation` / `agent_invalidate`），直到这些买入全部平仓 → `position_closed`。其余照旧：无事可看由宿主维持、预算闸门、单阶段复查（`agent-review-2`，证据块加「再次触发」与「持仓状态」）、修订；持仓期修订的止损只能上移、必须低于复查日收盘，入场区间照抄上一版（止损可以高于入场区间下沿，计划行 `inputs.chain_mode = holding`）。退出期点「重新复查」→ 409 `chain_exiting`。
 - **持仓状态 `holding_status`**（D19）：`review` 节点在全部复查之后，对**每个持仓标的**写一行——复查成功、跳过、出错、Agent 不可用、无链持仓、退出期的链都有；有链的取链最新版的止损 / T1，1R 的风险取第一笔关联买入所关联版本的止损（D20），无链的取成交关联的计划；字段、指令（`hold` / `sell_half` / `exit` / `no_plan`）与维持理由模板见[持仓状态](../knowledge/concepts/review.holding_status.md)。同一 session 重跑不写新行（先写的为准）；持仓事实只用截止时间之前的成交（`list_trades(cutoff=now)`，R11）。阶段 `detail.holding_status = {rows, by_instruction}`。
-- **核对**：`python -m investment_assistant.workbench.plan_review check --session D` 另有三项（任一不过退出码 1）：① 首版为 `agent-3` 的链所在标的至多一条活跃链；② 当天每个 `chain_retriggers` 行指向的链有一条带 `retrigger` 信号的复查记录（被 `object_cap` 等排除、或已进退出期的除外）；③ 每个当天有未平批次的标的恰有一行 `holding_status`。`chain` 命令另打印并入的单元、持仓状态行与备注。
+- **核对**：`python -m investment_assistant.workflow.nodes.review check --session D` 另有三项（任一不过退出码 1）：① 首版为 `agent-3` 的链所在标的至多一条活跃链；② 当天每个 `chain_retriggers` 行指向的链有一条带 `retrigger` 信号的复查记录（被 `object_cap` 等排除、或已进退出期的除外）；③ 每个当天有未平批次的标的恰有一行 `holding_status`。`chain` 命令另打印并入的单元、持仓状态行与备注。
 - **迁移 029 门**：`daily` 在 029 未执行时拒绝运行（`job_reports` 记 `error / migration_029_missing`，失败通知一次，不跑图），手动运行入口返回 503；在读取任何计划或成交之前检查。
 - **迁移 030 门**：当前十一节点图的首次运行与续跑都要求账户迁移。首次运行缺失时记 `error / migration_030_missing`；`daily.resume`（包括 CLI 入口）在持有运行锁后、调用图或写运行记录前抛同名不可用错误。HTTP 入口同样先检查就绪状态；这不改变历史 `stages-4` 记录的只读展示。
 
@@ -162,7 +162,7 @@
 - **阶段证据**：`input_count` = 本次需要起草的卡数（新卡加之前没起草成功、且失败不足 3 次的），`output_count` = 本次成功的草稿数，`outputs` 有 `card_ids` / `draft_ids` / `agent_run_ids`，`skips` 逐卡记原因（`stage_budget`、`quota_exhausted`、`token_budget`、`max_attempts`、`draft_cap`、`agent_unavailable: <原因>`），草稿作废进降级 `draft_rejected`、出错进 `failures`，`detail` = `{events, new_cards, by_end_kind, no_plan, drafts: {ok, rejected, error, skipped}, to_review, tokens}`；运行报告 `summary.retro = {new_cards, drafts, to_review}`。Agent 不可用时照常检测与建卡，起草全部跳过，阶段 `degraded`（`agent_unavailable`）；没有需要起草的卡时阶段 `success`。
 - **迁移 027 未执行**：`daily` 要求迁移 028，028 之后 027 一定已执行；v2.7 的 `run_batch` 外壳（命令行与测试用）遇到缺 027 时仍按 `stages-2` 记 8 行。
 - **每日推送**：概览字段末尾的「复盘卡 上次推送后新增 a · 待审定 b」（a 是上一次每日推送之后新建的卡数，b 是推送时的待审定数；a、b 都为 0 时不加），不新增消息。
-- **验证一次**：手动运行后 `stage_runs` 该 `run_id` 有 10 条有效行，`retro` 行计数与 `review_cards` / `review_card_drafts` 一致；`python -m investment_assistant.workbench.retro_cards check --since <首次批处理交易日 S 之前的第 4 个交易日（= S−4，检测窗口起点）>` 通过；「运行一览」最后一行读作「新结束 n 笔（平仓 a · 止损 b …），新建复盘卡 n 张；起草 x/y 张；待审定 z 张」。
+- **验证一次**：手动运行后 `stage_runs` 该 `run_id` 有 10 条有效行，`retro` 行计数与 `review_cards` / `review_card_drafts` 一致；`python -m investment_assistant.review.retro_cards check --since <首次批处理交易日 S 之前的第 4 个交易日（= S−4，检测窗口起点）>` 通过；「运行一览」最后一行读作「新结束 n 笔（平仓 a · 止损 b …），新建复盘卡 n 张；起草 x/y 张；待审定 z 张」。
 
 ## 「今日」：计划表与 Agent 计划卡
 
@@ -176,7 +176,7 @@ v2.9 起「今日」不再有单元卡区、决定表单和「进行中的 Agent
 - **已结束组**：最近 5 个交易日内（`ENDED_WINDOW_SESSIONS`）结束的链与规则基线，`status.label` 为「已过期（未执行）」「已作废：<理由>」「已平仓（+1.2R）」「被取代」「旧决定不买」，带 `ended_at`；更早的去「标的」页计划历史。默认收起、整组置灰。
 - **其他触发**：`other_units` 只带标的、信号日、建议动作、标签、规则与简报，不再有单元卡。
 - **排序**：入场期按池（核心 → 筛选 → 扩展）再按标的；已结束按结束日倒序。
-- **命令行**：`python -m investment_assistant.workbench.plan_table show [--session D]`（薄壳，转到 `plan_views.main`；只读）打印三组各一行与读取失败；退出码 0，数据库不可用或 029 未执行为 2。
+- **命令行**：`python -m investment_assistant.views.plan_table show [--session D]`（只读）打印三组各一行与读取失败；退出码 0，数据库不可用或 029 未执行为 2。
 - **持仓状态接口**：`GET /api/workbench/holding-status?session=` → `{session, rows}`（当天全部持仓状态行，缺行的现算并标 `stale`）。
 - **`GET /api/workbench/today`**：`units` 与 `extended_units` 退役为空列表并带 `retired: true`；`holdings`、`chains`（按 `timeline-2` 判定，含退出期）、`market`、`screen`、`timeline_ready` 照旧。单元卡数据只剩推送在用（`service.unit_cards`）。
 

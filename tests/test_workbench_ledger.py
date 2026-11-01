@@ -1,5 +1,10 @@
 """Trades and plan notes (v2.9 spec §6, R6, R12). There is no decision button any more: a fill follows a plan version,
 brings its own levels or follows nothing; ``legacy_decisions`` keeps the old flow for the tests that need old data."""
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.core.dbutil as core_dbutil
+import investment_assistant.core.schema as core_schema
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -7,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from investment_assistant.workbench import ledger, repository
-from investment_assistant.workbench.rules import Candidate
+from investment_assistant.execution import ledger
+from investment_assistant.analysis.rules import Candidate
 
 T = date(2026, 10, 22)
 NOW = datetime(2026, 10, 23, 1, 0, tzinfo=UTC)
@@ -84,7 +89,7 @@ def plan_row(conn, **overrides):
             'inputs': {'bar_ids': [1]}, 'request_id': None, 'request_hash': None,
             'entry_type': 'zone_limit', 'max_hold_sessions': 10}
     plan.update(overrides)
-    return repository.insert_plan(conn, plan)
+    return execution_repo.insert_plan(conn, plan)
 
 
 def own_levels(**overrides):
@@ -99,7 +104,7 @@ def unit_bar(conn, day=T):
 
 
 def candidate(conn, day=T, ticker='NVDA'):
-    repository.store_candidate(conn, ticker, day, Candidate('trend_reclaim', 'buy', {'signal_date': day.isoformat()}),
+    analysis_repo.store_candidate(conn, ticker, day, Candidate('trend_reclaim', 'buy', {'signal_date': day.isoformat()}),
                                run_id='r')
 
 
@@ -108,13 +113,13 @@ def agent3_version(conn, version_no, supersedes, created_at, *, day=T, ticker='N
     schema), because R6 compares it with the moment of the fill."""
     plan = plan_row(conn, ticker=ticker, signal_date=day, kind='agent', plan_version='agent-3', **levels)
     run_id = uuid.uuid4()
-    repository.insert_agent_run(conn, {
+    analysis_repo.insert_agent_run(conn, {
         'id': run_id, 'ticker': ticker, 'signal_date': day, 'pool': 'main', 'attempt': 1,
         'mode': 'propose' if version_no == 0 else 'revise', 'agent_version': 'agent-3', 'provider': 'chatgpt',
         'model': 'gpt-test', 'cutoff_at': created_at, 'status': 'ok', 'reason': None, 'output': {'action': 'buy'},
         'counter': None, 'plan_id': plan['id'], 'input_tokens': 0, 'output_tokens': 0,
         'started_at': created_at, 'finished_at': created_at}, [])
-    repository.insert_plan_version(conn, {
+    execution_repo.insert_plan_version(conn, {
         'plan_id': plan['id'], 'ticker': ticker, 'signal_date': day, 'version_no': version_no,
         'supersedes_plan_id': supersedes, 'origin': 'signal' if version_no == 0 else 'review',
         'agent_run_id': run_id, 'cutoff_at': created_at, 'as_of_session': day,
@@ -188,9 +193,9 @@ def test_plan_after_fill_409(workbench_db):
 
 
 def test_trades_without_029_refuse_a_plan_link(workbench_db, monkeypatch):
-    from investment_assistant.workbench import service
+    import investment_assistant.core.tx as service
 
-    monkeypatch.setattr(repository, 'executable_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'executable_ready', lambda conn: False)
     with pytest.raises(service.Unavailable) as caught:
         ledger.record_trade(workbench_db, trade_payload(plan_id=str(uuid.uuid4())), now=NOW + timedelta(days=1))
     assert str(caught.value) == 'migration_029_missing'
@@ -203,7 +208,7 @@ def test_trades_own_plan_same_tx(workbench_db):
     payload = trade_payload(own_plan=own_levels())
     out = ledger.record_trade(workbench_db, payload, now=NOW + timedelta(days=1))
     record = out['record']
-    plan = repository.plan_by_id(workbench_db, record['plan_id'])
+    plan = execution_repo.plan_by_id(workbench_db, record['plan_id'])
     assert plan['kind'] == 'own' and plan['plan_version'] == 'plan-2' and plan['signal_date'] == T
     assert (plan['entry_type'], plan['max_hold_sessions']) == ('zone_limit', 10)
     assert plan['valid_from'] == plan['valid_until'] == date(2026, 10, 23)        # the fill day
@@ -219,7 +224,7 @@ def test_trades_own_plan_rolls_back_with_the_fill(workbench_db, monkeypatch):
 
     def broken(*args, **kwargs):
         raise RuntimeError('insert failed')
-    monkeypatch.setattr(repository, 'insert_trade', broken)
+    monkeypatch.setattr(execution_repo, 'insert_trade', broken)
     with pytest.raises(RuntimeError):
         with workbench_db.transaction():
             ledger.record_trade(workbench_db, trade_payload(own_plan=own_levels()), now=NOW + timedelta(days=1))
@@ -329,12 +334,12 @@ def test_note_idempotent_correct_retract(workbench_db):
     # a correction is a new note pointing at the old one; a retraction a new row of kind 'retract'
     fix = ledger.record_note(workbench_db, note_payload(chain_signal_date=T.isoformat(), body='改成：突破再买',
                                                         supersedes_id=first['record']['id']), now=NOW)
-    shown = repository.plan_notes_for(workbench_db, 'NVDA', chain_signal_date=T)
+    shown = execution_repo.plan_notes_for(workbench_db, 'NVDA', chain_signal_date=T)
     assert {n['id']: n['status'] for n in shown} == {first['record']['id']: 'corrected', fix['record']['id']: 'active'}
     gone = ledger.record_note(workbench_db, note_payload(kind='retract', chain_signal_date=T.isoformat(),
                                                          supersedes_id=fix['record']['id'], body=''), now=NOW)
     assert gone['record']['kind'] == 'retract'
-    shown = repository.plan_notes_for(workbench_db, 'NVDA', chain_signal_date=T)
+    shown = execution_repo.plan_notes_for(workbench_db, 'NVDA', chain_signal_date=T)
     assert {n['status'] for n in shown} == {'corrected', 'retracted'}
     assert workbench_db.execute('SELECT count(*) FROM plan_notes').fetchone() == (3,)
     assert v0['id'] is not None
@@ -373,9 +378,9 @@ def test_note_body_limits_and_correction_scope(workbench_db):
 
 
 def test_note_without_029_is_unavailable(workbench_db, monkeypatch):
-    from investment_assistant.workbench import service
+    import investment_assistant.core.tx as service
 
-    monkeypatch.setattr(repository, 'executable_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'executable_ready', lambda conn: False)
     with pytest.raises(service.Unavailable):
         ledger.record_note(workbench_db, note_payload(chain_signal_date=T.isoformat()), now=NOW)
 
@@ -388,15 +393,15 @@ def test_no_insert_decision_outside_tests():
     root = Path(__file__).resolve().parents[1] / 'investment_assistant'
     users = [str(path.relative_to(root)) for path in root.rglob('*.py')
              if '_insert_decision_for_tests' in path.read_text(encoding='utf-8')]
-    assert users == ['workbench/repository.py']
+    assert users == ['execution/repo_legacy.py']
     assert not hasattr(ledger, 'record_decision') and not hasattr(ledger, 'validate_decision')
     for path in root.rglob('*.py'):
         text = path.read_text(encoding='utf-8')
-        assert 'INSERT INTO signal_decisions' not in text or path.name == 'repository.py', path
+        assert 'INSERT INTO signal_decisions' not in text or path == root / 'execution' / 'repo_legacy.py', path
 
 
 def test_explicit_real_account_preserves_old_request_hash():
-    from investment_assistant.workbench.accounts import REAL_ACCOUNT_ID
+    from investment_assistant.execution.accounts import REAL_ACCOUNT_ID
     payload=trade_payload()
     old=ledger.validate_trade(payload,now=NOW+timedelta(days=1))
     explicit=ledger.validate_trade({**payload,'account_id':str(REAL_ACCOUNT_ID)},now=NOW+timedelta(days=1))
@@ -406,7 +411,7 @@ def test_explicit_real_account_preserves_old_request_hash():
 
 
 def test_snapshot_and_flow_reject_paper_account_before_writing():
-    from investment_assistant.workbench import account
+    from investment_assistant.execution import account_records as account
     for fn in (account.record_snapshot,account.record_flow):
         with pytest.raises(ledger.LedgerError,match='flows_only_for_real_account'):
             fn(None,{'account_id':str(uuid.uuid4())},now=NOW)
@@ -414,7 +419,7 @@ def test_snapshot_and_flow_reject_paper_account_before_writing():
 
 def _fake_real_record_write(monkeypatch, kind, *, opened_on=T, ready=True, existing=None):
     """Exercise command validation and lock order without opening any database connection."""
-    from investment_assistant.workbench import account
+    from investment_assistant.execution import account_records as account
     events = []
     def lock(conn, key):
         events.append(('lock', key))
@@ -428,14 +433,14 @@ def _fake_real_record_write(monkeypatch, kind, *, opened_on=T, ready=True, exist
     def insert(conn, record, digest, *, recorded_at):
         events.append(('insert', record))
         return {**record, 'id': uuid.uuid4(), 'request_hash': digest}
-    monkeypatch.setattr(repository, 'lock', lock)
-    monkeypatch.setattr(repository, 'accounts_ready', lambda conn: ready)
-    monkeypatch.setattr(repository, 'account_by_id', read_account)
-    monkeypatch.setattr(repository, f'{kind}_by_request', replay)
-    monkeypatch.setattr(repository, f'insert_{kind}', insert)
+    monkeypatch.setattr(core_dbutil, 'lock', lock)
+    monkeypatch.setattr(core_schema, 'accounts_ready', lambda conn: ready)
+    monkeypatch.setattr(execution_repo, 'account_by_id', read_account)
+    monkeypatch.setattr(execution_repo, f'{kind}_by_request', replay)
+    monkeypatch.setattr(execution_repo, f'insert_{kind}', insert)
     if kind == 'trade':
-        monkeypatch.setattr(repository, 'list_trades', lambda *args, **kwargs: [])
-        monkeypatch.setattr(repository, 'split_events', lambda *args, **kwargs: [])
+        monkeypatch.setattr(execution_repo, 'list_trades', lambda *args, **kwargs: [])
+        monkeypatch.setattr(data_repo, 'split_events', lambda *args, **kwargs: [])
     return ledger.record_trade if kind == 'trade' else account.record_flow, events
 
 
@@ -455,14 +460,14 @@ def test_new_real_record_respects_opening_date_after_account_lock(monkeypatch, k
         with pytest.raises(ledger.LedgerError, match='^record_before_opened_on$'):
             fn(None, payload, now=NOW+timedelta(days=1))
         assert not any(event[0] == 'insert' for event in events)
-    assert events[:2] == [('lock', f'account:{repository.REAL_ACCOUNT_ID}'),
+    assert events[:2] == [('lock', f'account:{execution_repo.REAL_ACCOUNT_ID}'),
                           ('lock', 'trades:NVDA' if kind == 'trade' else 'account:flows')]
-    assert events[2][0] == 'replay' and events[3] == ('account', repository.REAL_ACCOUNT_ID)
+    assert events[2][0] == 'replay' and events[3] == ('account', execution_repo.REAL_ACCOUNT_ID)
 
 
 @pytest.mark.parametrize('kind', ['trade', 'flow'])
 def test_real_record_exact_replay_precedes_new_opening_date_check(monkeypatch, kind):
-    from investment_assistant.workbench import account
+    from investment_assistant.execution import account_records as account
     payload = trade_payload(executed_at='2026-10-21T14:00:00+00:00') if kind == 'trade' else {
         'request_id': str(uuid.uuid4()), 'flow_date': '2026-10-21', 'amount': '500'}
     record = ledger.validate_trade(payload, now=NOW) if kind == 'trade' else account._validate_flow(payload)

@@ -6,7 +6,7 @@ version: 1
 applies_to: [review-6, discipline-2]
 summary: "持仓触及计划止损后，下一交易日仍未卖出，记为死扛亏损；还没到判定期限时显示未成熟。"
 related: [review.discipline_early_take, review.discipline_chase, rule.plan_stop, plan.stop, review.retro_card]
-sources: [investment_assistant/workbench/discipline.py, investment_assistant/workbench/exits.py]
+sources: [investment_assistant/review/discipline.py, investment_assistant/execution/exits.py]
 ---
 
 ## 是什么

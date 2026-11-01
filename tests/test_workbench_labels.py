@@ -1,4 +1,5 @@
-from investment_assistant.workbench import labels, rules
+import investment_assistant.core.texts as labels
+from investment_assistant.analysis import rules
 
 
 def test_rule_text_covers_all_rules():

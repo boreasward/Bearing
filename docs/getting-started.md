@@ -51,7 +51,7 @@ cd web && npm install && npm run build && cd ..
 按 [operations/migrations-and-backup.md](operations/migrations-and-backup.md) 执行迁移 `001`–`021`，再建 Agent 检查点表：
 
 ```bash
-.venv/bin/python -m investment_assistant.workbench.agent setup
+.venv/bin/python -m investment_assistant.analysis.agent setup
 ```
 
 然后在「设置 → 关注列表」添加美股并勾选核心池（≤ 15 只）。

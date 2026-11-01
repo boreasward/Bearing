@@ -6,7 +6,7 @@ version: 1
 applies_to: [account-1, monthly-5]
 summary: "账户按同一截止时间与公式并列，曲线以开账当日或之后首个交易日的完整权益归一到 100；起点、资金和现金流不同，不排名。"
 related: [account.ledger, account.paper, account.agent_portfolio, account.follow_plans, review.monthly_return, review.r_multiple]
-sources: [investment_assistant/workbench/accounts.py, investment_assistant/workbench/account_views.py, investment_assistant/workbench/monthly.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
+sources: [investment_assistant/execution/accounts.py, investment_assistant/views/account.py, investment_assistant/review/monthly.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
 ---
 
 ## 是什么

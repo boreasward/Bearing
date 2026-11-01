@@ -3,7 +3,7 @@ working when the database is down. A broken card directory answers 503 with the 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from investment_assistant.workbench import knowledge
+from investment_assistant.core import knowledge
 
 router = APIRouter()
 

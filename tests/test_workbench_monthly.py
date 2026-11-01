@@ -1,4 +1,8 @@
 """Monthly return, tier, review flag and sensitivity table (design §8.2)."""
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.review.repo as review_repo
 from datetime import UTC, date, datetime
 from decimal import Decimal as D
 from uuid import uuid4
@@ -8,7 +12,7 @@ import pytest
 from investment_assistant.core import tx as core_tx
 
 from investment_assistant.config import WorkbenchConfig
-from investment_assistant.workbench import monthly
+from investment_assistant.review import monthly
 
 TIERS = WorkbenchConfig().return_tiers
 
@@ -131,7 +135,7 @@ def test_generate_monthly_counts_first_and_latest(workbench_db, monkeypatch):
     from contextlib import contextmanager
     from datetime import timedelta
 
-    from investment_assistant.workbench import repository, service
+    import investment_assistant.core.tx as service
 
     @contextmanager
     def connection():
@@ -141,7 +145,7 @@ def test_generate_monthly_counts_first_and_latest(workbench_db, monkeypatch):
     day = date(2026, 10, 21)
     previous = None
     for version_no in range(3):
-        plan = repository.insert_plan(workbench_db, {
+        plan = execution_repo.insert_plan(workbench_db, {
             'ticker': 'NVDA', 'signal_date': day, 'kind': 'agent', 'based_on_id': None, 'plan_version': 'agent-2',
             'ref_price': D('100'), 'atr': D('2'), 'entry_low': D('99'), 'entry_high': D('101'), 'stop': D('94'),
             'target1': D('108'), 'trail_atr_multiple': D('3'), 'valid_from': date(2026, 10, 22),
@@ -149,20 +153,20 @@ def test_generate_monthly_counts_first_and_latest(workbench_db, monkeypatch):
             'invalid_reasons': [], 'warnings': [], 'inputs': {'bar_ids': [1]}, 'request_id': None,
             'request_hash': None})
         run_id, at = uuid4(), datetime(2026, 10, 22, 1, tzinfo=UTC) + timedelta(days=version_no)
-        repository.insert_agent_run(workbench_db, {
+        analysis_repo.insert_agent_run(workbench_db, {
             'id': run_id, 'ticker': 'NVDA', 'signal_date': day, 'pool': 'main', 'attempt': 1,
             'mode': 'propose' if version_no == 0 else 'revise', 'agent_version': 'agent-2', 'provider': 'chatgpt',
             'model': 'gpt-test', 'cutoff_at': at, 'status': 'ok', 'reason': None, 'output': {'action': 'buy'},
             'counter': None, 'plan_id': plan['id'], 'input_tokens': 0, 'output_tokens': 0,
             'started_at': at, 'finished_at': at}, [])
-        repository.insert_plan_version(workbench_db, {
+        execution_repo.insert_plan_version(workbench_db, {
             'plan_id': plan['id'], 'ticker': 'NVDA', 'signal_date': day, 'version_no': version_no,
             'supersedes_plan_id': previous, 'origin': 'signal' if version_no == 0 else 'review',
             'agent_run_id': run_id, 'cutoff_at': at, 'as_of_session': day,
             'diff': None if version_no == 0 else [{'field': 'stop', 'before': '94', 'after': '95'}],
             'schema_version': 'agent-2'})
         previous = plan['id']
-    stats = service.generate_monthly(date(2026, 10, 1), now=now)['stats']
+    stats = review_weekly.generate_monthly(date(2026, 10, 1), now=now)['stats']
     assert stats['calc_version'] == 'monthly-5'
     # agent-2 versions have no execution fields: summarised under plan-shadow-1, apart from plan-shadow-2 plans
     assert set(stats['plans']) == {'Agent 首版（旧计划 · plan-shadow-1）', 'Agent 最新版（旧计划 · plan-shadow-1）'}
@@ -178,7 +182,7 @@ def test_monthly5_retains_tracks2_discipline2_two_shadows(workbench_db, monkeypa
     plan-shadow-1; an older plan only under plan-shadow-1."""
     from contextlib import contextmanager
 
-    from investment_assistant.workbench import repository, service
+    import investment_assistant.core.tx as service
 
     @contextmanager
     def connection():
@@ -188,7 +192,7 @@ def test_monthly5_retains_tracks2_discipline2_two_shadows(workbench_db, monkeypa
     day = date(2026, 10, 21)
 
     def plan(version, **extra):
-        return repository.insert_plan(workbench_db, {
+        return execution_repo.insert_plan(workbench_db, {
             'ticker': 'NVDA', 'signal_date': day, 'kind': 'rule', 'based_on_id': None, 'plan_version': version,
             'ref_price': D('100'), 'atr': D('2'), 'entry_low': D('99'), 'entry_high': D('101'), 'stop': D('94'),
             'target1': D('108'), 'trail_atr_multiple': D('3'), 'valid_from': date(2026, 10, 22),
@@ -198,7 +202,7 @@ def test_monthly5_retains_tracks2_discipline2_two_shadows(workbench_db, monkeypa
 
     plan('plan-1')
     plan('plan-2', entry_type='zone_limit', max_hold_sessions=10)
-    stats = service.generate_monthly(date(2026, 10, 1), now=now)['stats']
+    stats = review_weekly.generate_monthly(date(2026, 10, 1), now=now)['stats']
     assert stats['calc_version'] == 'monthly-5'
     assert stats['shadow_versions'] == {'plans': 'plan-shadow-2', 'plans_v1': 'plan-shadow-1',
                                         'plans_counterfactual': 'plan-shadow-1'}
@@ -278,37 +282,40 @@ def test_monthly_v5_complete_or_absent_quality_metadata_keeps_ledger_return(deta
 
 def test_generate_monthly_uses_ledger_and_checks_the_three_month_window(workbench_db, monkeypatch):
     from contextlib import contextmanager
-    from investment_assistant.workbench import repository, service, accounts
+    import investment_assistant.core.tx as service
+    from investment_assistant.execution import accounts
     @contextmanager
     def connection(): yield workbench_db
     monkeypatch.setattr(core_tx, 'connection', connection)
     now=datetime(2026,11,2,23,tzinfo=UTC)
-    repository.set_account_opening(workbench_db,accounts.REAL_ACCOUNT_ID,opening_cash=100000,opened_on=date(2026,9,1))
+    execution_repo.set_account_opening(workbench_db,accounts.REAL_ACCOUNT_ID,opening_cash=100000,opened_on=date(2026,9,1))
     for day,value in [(date(2026,9,30),100000),(date(2026,10,30),110000)]:
-        repository.insert_equity_day(workbench_db,{'account_id':accounts.REAL_ACCOUNT_ID,'session':day,'cash':D(value),
+        execution_repo.insert_equity_day(workbench_db,{'account_id':accounts.REAL_ACCOUNT_ID,'session':day,'cash':D(value),
             'positions_value':D(0),'equity':D(value),'realized_pnl_cum':D(0),'unrealized_pnl':D(0),
             'net_flows_cum':D(0),'positions_count':0,'account_version':'account-1','run_id':'t','computed_at':now})
     seen=[]; original=monthly.month_return_v2
     def capture(month,**kwargs): seen.append(month); return original(month,**kwargs)
     monkeypatch.setattr(monthly,'month_return_v2',capture)
-    stats=service.generate_monthly(date(2026,10,1),now=now)['stats']
+    stats=review_weekly.generate_monthly(date(2026,10,1),now=now)['stats']
     assert stats['return']['source']=='ledger' and stats['return']['return']==.1
     assert set(seen)=={date(2026,m,1) for m in (8,9,10)}
 
 
 def test_automatic_monthly_can_generate_from_ledger_without_broker_snapshot(workbench_db,monkeypatch):
     from contextlib import contextmanager
-    from investment_assistant.workbench import repository,service,accounts
+    import investment_assistant.core.tx as service
+    import investment_assistant.workflow.nodes.retro as d_workflow_nodes_retro
+    from investment_assistant.execution import accounts
     @contextmanager
     def connection(): yield workbench_db
     monkeypatch.setattr(core_tx,'connection',connection)
     now=datetime(2026,11,2,23,tzinfo=UTC)
-    repository.set_account_opening(workbench_db,accounts.REAL_ACCOUNT_ID,opening_cash=100000,opened_on=date(2026,9,1))
+    execution_repo.set_account_opening(workbench_db,accounts.REAL_ACCOUNT_ID,opening_cash=100000,opened_on=date(2026,9,1))
     for day,value in [(date(2026,9,30),100000),(date(2026,10,30),110000)]:
-        repository.insert_equity_day(workbench_db,{'account_id':accounts.REAL_ACCOUNT_ID,'session':day,'cash':D(value),
+        execution_repo.insert_equity_day(workbench_db,{'account_id':accounts.REAL_ACCOUNT_ID,'session':day,'cash':D(value),
             'positions_value':D(0),'equity':D(value),'realized_pnl_cum':D(0),'unrealized_pnl':D(0),
             'net_flows_cum':D(0),'positions_count':0,'account_version':'account-1','run_id':'t','computed_at':now})
     workbench_db.commit()
-    out=service._tick_monthly(now=now,notify_cfg=None,trigger_source='manual',client=None,push=False)
+    out=d_workflow_nodes_retro._tick_monthly(now=now,notify_cfg=None,send=None,trigger_source='manual',client=None,push=False)
     assert out['action']=='generated' and out['push']=='manual_run'
-    assert repository.monthly_head(workbench_db,date(2026,10,1))['stats']['return']['source']=='ledger'
+    assert review_repo.monthly_head(workbench_db,date(2026,10,1))['stats']['return']['source']=='ledger'

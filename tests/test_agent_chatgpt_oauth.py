@@ -13,8 +13,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from investment_assistant.workbench.agent import chatgpt
-from investment_assistant.workbench.agent.chatgpt import ChatGPTError
+from investment_assistant.core.llm import chatgpt
+from investment_assistant.core.llm.chatgpt import ChatGPTError
 
 NOW = datetime(2026, 10, 29, 3, 30, tzinfo=UTC)
 

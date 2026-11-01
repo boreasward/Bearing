@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-shadow-1, tracks-1]
 summary: "以计划的止损距离为一个单位（1R）衡量盈亏：赚了多少倍止损距离；0R 表示没交易，空值表示还没算出来，两者不能混。"
 related: [review.plan_shadow, review.tracks, review.track_status, plan.stop]
-sources: [investment_assistant/workbench/plan_shadow.py, investment_assistant/workbench/tracks.py, investment_assistant/workbench/discipline.py]
+sources: [investment_assistant/execution/simulation.py, investment_assistant/review/tracks.py, investment_assistant/review/discipline.py]
 ---
 
 ## 是什么

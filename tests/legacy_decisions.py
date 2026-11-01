@@ -3,15 +3,22 @@
 ``ledger.record_decision`` is gone from production code: ``POST /decisions`` answers 410 and nothing writes
 ``signal_decisions`` any more. The v2.5-v2.8 tests still need *old data* (a decision with its plan link,
 an agent_plan_id, an own plan), so this module keeps the old recording logic, verbatim, and writes through
-``repository._insert_decision_for_tests``. Import it from tests only.
+``execution_repo_legacy._insert_decision_for_tests``. Import it from tests only.
 """
 from __future__ import annotations
+from investment_assistant.execution import plan_context as execution_plan_context
+from investment_assistant.execution import trades as execution_trades
+import investment_assistant.core.dbutil as core_dbutil
+import investment_assistant.core.schema as core_schema
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.execution.repo_legacy as execution_repo_legacy
 
 from datetime import date, datetime
 from typing import Any
 
-from investment_assistant.workbench import repository
-from investment_assistant.workbench.ledger import (Conflict, LedgerError, _choice, _replay, _text, _ticker, _uuid,
+# Repository consumers use their owning layers below.
+from investment_assistant.execution.ledger import (Conflict, LedgerError, _choice, _replay, _text, _ticker, _uuid,
                                                    request_hash)
 
 ACTIONS = ('buy', 'sell', 'watch')
@@ -40,7 +47,7 @@ def _own_plan(value: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(value, dict):
         raise LedgerError('own_plan must be an object')
-    from investment_assistant.workbench import plans as _plans
+    from investment_assistant.execution import plan_levels as _plans
 
     try:
         levels = _plans.validate_levels(value)
@@ -115,31 +122,31 @@ def record_decision(conn, payload: dict[str, Any], *, now: datetime) -> dict[str
     or ``review_view`` is Unavailable (503「迁移 026 未执行」); a plain rule / agent-1 decision still works."""
     rec = validate_decision(payload)
     digest = decision_hash(rec)
-    repository.lock(conn, f"decision:{rec['ticker']}:{rec['signal_date']}")
-    ready = repository.timeline_ready(conn)
+    core_dbutil.lock(conn, f"decision:{rec['ticker']}:{rec['signal_date']}")
+    ready = core_schema.timeline_ready(conn)
     if not ready and any(rec[k] is not None for k in DECISION_V25_KEYS):
-        from investment_assistant.workbench import service as _service
+        import investment_assistant.core.tx as _service
 
         raise _service.Unavailable(MIGRATION_MISSING)
-    if replay := _replay(repository.decision_by_request(conn, rec['request_id'], timeline=ready), digest):
+    if replay := _replay(execution_repo_legacy.decision_by_request(conn, rec['request_id'], timeline=ready), digest):
         return replay
-    if repository.count_unit_candidates(conn, rec['ticker'], rec['signal_date'], rec['candidate_ids']) != len(rec['candidate_ids']):
+    if execution_repo_legacy.count_unit_candidates(conn, rec['ticker'], rec['signal_date'], rec['candidate_ids']) != len(rec['candidate_ids']):
         raise LedgerError('candidate_ids must all belong to this ticker and signal_date')
-    if rec['brief_id'] and not repository.brief_in_unit(conn, rec['brief_id'], rec['ticker'], rec['signal_date']):
+    if rec['brief_id'] and not execution_repo_legacy.brief_in_unit(conn, rec['brief_id'], rec['ticker'], rec['signal_date']):
         raise LedgerError('brief_id does not belong to this unit')
-    head = repository.decision_head(conn, rec['ticker'], rec['signal_date'])
+    head = execution_repo_legacy.decision_head(conn, rec['ticker'], rec['signal_date'])
     if head is None and rec['supersedes_id'] is not None:
         raise LedgerError('nothing to supersede in this unit')
     if head is not None and rec['supersedes_id'] != head['id']:
         raise Conflict('this unit already has a newer decision; supersede the latest one')
-    chain_head = repository.chain_head(conn, rec['ticker'], rec['signal_date']) if ready else None
+    chain_head = execution_repo.chain_head(conn, rec['ticker'], rec['signal_date']) if ready else None
     rec = {**rec, 'agent_plan_id': _checked_agent_plan_id(conn, rec, chain_head)}
-    rule = repository.rule_plan(conn, rec['ticker'], rec['signal_date'])
+    rule = execution_repo.rule_plan(conn, rec['ticker'], rec['signal_date'])
     plan_id = _checked_plan_id(conn, rec, rule, chain_head)
     if rec['own_plan'] is not None:
         plan_id = _record_own_plan(conn, rec, rule, now=now)['id']
     rec = {**rec, 'plan_id': plan_id}
-    record = repository._insert_decision_for_tests(conn, rec, digest, decided_at=now)
+    record = execution_repo_legacy._insert_decision_for_tests(conn, rec, digest, decided_at=now)
     if ready:      # same keys whichever INSERT ran
         record = {**record, 'agent_plan_id': record.get('agent_plan_id'), 'review_view': record.get('review_view')}
     return {'status': 'created', 'record': record}
@@ -149,7 +156,7 @@ def _stale_version(conn, rec: dict[str, Any], plan_id, chain_head: dict[str, Any
     """True when ``plan_id`` is a non-head version of this unit's chain."""
     if plan_id == chain_head['plan']['id']:
         return False
-    version = repository.version_by_plan(conn, plan_id)
+    version = execution_repo.version_by_plan(conn, plan_id)
     return version is not None and version['ticker'] == rec['ticker'] and version['signal_date'] == rec['signal_date']
 
 
@@ -166,7 +173,7 @@ def _checked_agent_plan_id(conn, rec: dict[str, Any], chain_head: dict[str, Any]
         raise LedgerError('agent_plan_id 不属于该决策单元的 Agent 计划')
     if given is None:
         return None
-    plan = repository.plan_by_id(conn, given)
+    plan = execution_repo.plan_by_id(conn, given)
     if plan is None or plan['kind'] != 'agent' or plan['ticker'] != rec['ticker'] \
             or plan['signal_date'] != rec['signal_date']:
         raise LedgerError('agent_plan_id 不属于该决策单元的 Agent 计划')
@@ -186,7 +193,7 @@ def _checked_plan_id(conn, rec: dict[str, Any], rule: dict[str, Any] | None,
         if rule is not None and rule['status'] == 'ok':
             allowed.append(rule['id'])
         agent = (chain_head['plan'] if chain_head is not None
-                 else repository.agent_plan(conn, rec['ticker'], rec['signal_date']))
+                 else execution_repo.agent_plan(conn, rec['ticker'], rec['signal_date']))
         if agent is not None and agent['status'] == 'ok':
             allowed.append(agent['id'])
         has_any_plan = rule is not None or agent is not None
@@ -197,7 +204,7 @@ def _checked_plan_id(conn, rec: dict[str, Any], rule: dict[str, Any] | None,
                 raise AgentPlanStale(chain_head['version']['version_no'])
             raise LedgerError('plan_id 必须指向该单元可用的规则计划或 Agent 计划，或改用自定价位')
     if rec['plan_id'] is not None:
-        linked = repository.plan_by_id(conn, rec['plan_id'])
+        linked = execution_repo.plan_by_id(conn, rec['plan_id'])
         if linked is None or linked['ticker'] != rec['ticker'] or linked['signal_date'] != rec['signal_date']:
             raise LedgerError('plan_id 不属于该决策单元')
     return rec['plan_id']
@@ -206,33 +213,34 @@ def _checked_plan_id(conn, rec: dict[str, Any], rule: dict[str, Any] | None,
 def _record_own_plan(conn, rec: dict[str, Any], rule: dict[str, Any] | None, *, now: datetime) -> dict[str, Any]:
     """Build and store the own plan in this decision's transaction; replay by request_id is idempotent."""
     from investment_assistant.config import load_config
-    from investment_assistant.workbench import plans as _plans, service as _service
+    import investment_assistant.core.tx as _service
+    from investment_assistant.execution import plan_levels as _plans
 
-    bars = repository.read_bars(conn, rec['ticker'], rec['signal_date'], cutoff_at=now)
+    bars = data_repo.read_bars(conn, rec['ticker'], rec['signal_date'], cutoff_at=now)
     if not bars:
         raise LedgerError('该单元缺少 K 线，无法生成自定计划')
     plan = _plans.build_own_plan(
         rule_plan=rule, levels={k: rec['own_plan'][k] for k in ('entry_low', 'entry_high', 'stop', 'target1')},
         ticker=rec['ticker'], signal_date=rec['signal_date'], bars=bars,
-        earnings_row=repository.latest_earnings(conn, rec['ticker'], cutoff_at=now),
-        snapshot=repository.snapshot_at(conn, rec['signal_date'], cutoff_at=now),
-        exposure=_service.exposure(conn, rec['signal_date'], cutoff_at=now, ticker=rec['ticker']),
+        earnings_row=data_repo.latest_earnings(conn, rec['ticker'], cutoff_at=now),
+        snapshot=execution_repo.snapshot_at(conn, rec['signal_date'], cutoff_at=now),
+        exposure=execution_plan_context.exposure(conn, rec['signal_date'], cutoff_at=now, ticker=rec['ticker']),
         params=load_config().workbench,
-        context=_service.plan_context(conn, rec['ticker'], rec['signal_date'], now=now))
+        context=execution_plan_context.plan_context(conn, rec['ticker'], rec['signal_date'], now=now))
     plan = {**plan, 'request_id': rec['own_plan']['request_id'], 'request_hash': request_hash(plan)}
-    existing = repository.plan_by_request(conn, plan['request_id'])
+    existing = execution_repo.plan_by_request(conn, plan['request_id'])
     if existing is not None:
         if existing['request_hash'] != plan['request_hash']:
             raise Conflict('own_plan.request_id 已用于不同内容')
         return existing
-    return repository.insert_plan(conn, plan)
+    return execution_repo.insert_plan(conn, plan)
 
 
 
 
 def decide(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
-    """What ``service.decide`` was before v2.9: record a decision in a transaction of its own (old data for the tests)."""
-    from investment_assistant.workbench import service
+    """What ``execution_trades.decide`` was before v2.9: record a decision in a transaction of its own (old data for the tests)."""
+    import investment_assistant.core.tx as service
 
     with service._tx() as conn:
         return record_decision(conn, payload, now=now)
@@ -241,7 +249,8 @@ def decide(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
 def add_trade(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
     """A fill the way it was recorded before v2.9, optionally linked to a decision (``decision_id``): the new
     ``ledger.record_trade`` refuses that link, old data still has it. Everything else is validated as today."""
-    from investment_assistant.workbench import ledger, service
+    import investment_assistant.core.tx as service
+    from investment_assistant.execution import ledger
 
     payload = dict(payload)
     decision_id = _uuid(payload.pop('decision_id', None), 'decision_id', optional=True)
@@ -249,10 +258,10 @@ def add_trade(payload: dict[str, Any], *, now: datetime) -> dict[str, Any]:
     digest = request_hash({**{k: v for k, v in rec.items() if k not in ('plan_id', 'own_plan')},
                            'decision_id': decision_id})
     with service._tx() as conn:
-        repository.lock(conn, f"trades:{rec['ticker']}")
-        if replay := ledger._replay(repository.trade_by_request(conn, rec['request_id']), digest):
+        core_dbutil.lock(conn, f"trades:{rec['ticker']}")
+        if replay := ledger._replay(execution_repo.trade_by_request(conn, rec['request_id']), digest):
             return replay
         stored = {**{k: v for k, v in rec.items() if k != 'own_plan'}, 'decision_id': decision_id}
-        ledger._check_book(conn, rec['ticker'], [*repository.list_trades(conn, rec['ticker']),
+        ledger._check_book(conn, rec['ticker'], [*execution_repo.list_trades(conn, rec['ticker']),
                                                   {**stored, 'id': 'new', 'voided_at': None}])
-        return {'status': 'created', 'record': repository.insert_trade(conn, stored, digest, recorded_at=now)}
+        return {'status': 'created', 'record': execution_repo.insert_trade(conn, stored, digest, recorded_at=now)}

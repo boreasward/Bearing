@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2, agent-1, agent-review-1]
 summary: "Agent 的每个价位和每条理由都要标明依据：call:N 指本次运行的第 N 次工具调用，user:<id> 指你贴入的某条用户输入；引用不存在整条作废。"
 related: [agent.tool_calls, agent.user_input, agent.action_levels, agent.reject_reasons]
-sources: [investment_assistant/workbench/agent/citations.py, investment_assistant/workbench/agent/plan_check.py, investment_assistant/workbench/agent/tools.py]
+sources: [investment_assistant/execution/citations.py, investment_assistant/execution/plan_check.py, investment_assistant/analysis/agent/tools.py]
 ---
 
 ## 是什么

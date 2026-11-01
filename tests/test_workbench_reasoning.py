@@ -2,14 +2,19 @@
 
 The offline part drives the pure `build` with hand-made rows shaped like the stored ones; the SQL part
 builds a first version through the real batch and reads it back through `reasoning.reasoning`."""
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.review.repo as review_repo
 import json
 import uuid
 from datetime import UTC, date, datetime
 
 import pytest
 
-from investment_assistant.workbench import reasoning
-from investment_assistant.workbench.agent import REASON_TEXT, tools
+import investment_assistant.views.reasoning as reasoning
+from investment_assistant.derivation.indicators.price import indicators
+from investment_assistant.analysis.agent import REASON_TEXT
+from investment_assistant.analysis.agent import tools
 
 RUN_ID = '11111111-1111-4111-8111-111111111111'
 PLAN_ID = '22222222-2222-4222-8222-222222222222'
@@ -92,7 +97,7 @@ def step(view, kind, nth=0):
 # ---------------------------------------------------------------- tables
 
 def test_tool_concepts_cover_all_tools():
-    from investment_assistant.workbench.agent.discuss_tools import DISCUSS_TOOLS
+    from investment_assistant.review.discuss_tools import DISCUSS_TOOLS
     assert set(reasoning.TOOL_CONCEPTS) == set(tools.TOOLS) | set(DISCUSS_TOOLS)
     assert len(reasoning.TOOL_CONCEPTS) == 13
     assert {name: reasoning.TOOL_CONCEPTS[name]['concept'] for name in
@@ -106,7 +111,7 @@ def test_tool_concepts_cover_all_tools():
     assert fields['atr14'] == 'indicator.atr14' and fields['ma200'] == 'indicator.moving_average'
     assert fields['low_252'] == 'indicator.high_low' and fields['rs60'] == 'indicator.relative_strength'
     assert fields['last_close'] == 'family.bars' and fields['volume_ratio'] == 'indicator.volume_ratio'
-    assert set(fields) == set(tools.indicators([], []))        # every indicator key is mapped
+    assert set(fields) == set(indicators([], []))        # every indicator key is mapped
     market = reasoning.TOOL_CONCEPTS['get_market_context']['fields']
     assert market['macro.BAMLH0A0HYM2'] == 'indicator.hy_oas' and market['macro.T10Y2Y'] == 'indicator.t10y2y'
     assert market['label'] == 'indicator.regime' and market['sectors'] == 'indicator.sector_strength'
@@ -427,7 +432,7 @@ def test_build_retro_steps():
 
 
 def test_build_retro_without_a_card_names_all_ten_fact_keys():
-    from investment_assistant.workbench.retro import FACT_KEYS
+    from investment_assistant.review.retro import FACT_KEYS
     view = build(run=retro_run(), calls=[], version=None, plan_state=None)
     assert step(view, 'evidence')['fact_keys'] == list(FACT_KEYS) and step(view, 'read')['note'] == '没有记录到工具调用'
 
@@ -516,34 +521,34 @@ def test_get_knowledge_call_note():
 # ---------------------------------------------------------------- SQL
 
 from test_workbench_service import NOW, SESSION, _ok_responses, agent_deps, db   # noqa: E402,F401
-from investment_assistant.workbench import repository, service                  # noqa: E402
+import investment_assistant.workflow.batch as service  # noqa: E402
 
 
 def _insert_revision_chain(db, scripted_model):
     """First version through the real batch, then by hand: a review run, a revise run, plan B, version 1, the review."""
     service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
-    first = repository.latest_agent_run(db, 'AAA', SESSION)
-    plan_a = repository.plan_by_id(db, first['plan_id'])
-    plan_b = repository.insert_plan(db, {k: v for k, v in plan_a.items() if k not in ('id', 'created_at')})
+    first = analysis_repo.latest_agent_run(db, 'AAA', SESSION)
+    plan_a = execution_repo.plan_by_id(db, first['plan_id'])
+    plan_b = execution_repo.insert_plan(db, {k: v for k, v in plan_a.items() if k not in ('id', 'created_at')})
     review_run, revise_run = str(uuid.uuid4()), str(uuid.uuid4())
     base = {'ticker': 'AAA', 'signal_date': SESSION, 'pool': 'main', 'attempt': 1, 'provider': 'chatgpt', 'model': 'm',
             'cutoff_at': NOW, 'reason': None, 'detail': None, 'counter': None, 'input_tokens': 0, 'output_tokens': 0,
             'started_at': NOW, 'finished_at': NOW}
     call = {'seq': 1, 'tool': 'get_news', 'args': {}, 'result': {'ref': 'call:1', 'data': []},
             'result_sha256': 'c' * 64, 'called_at': NOW}
-    repository.insert_agent_run(db, {**base, 'id': review_run, 'mode': 'review', 'agent_version': 'agent-review-1',
+    analysis_repo.insert_agent_run(db, {**base, 'id': review_run, 'mode': 'review', 'agent_version': 'agent-review-1',
                                      'status': 'ok', 'plan_id': None, 'output': VERDICT},
                                 [{**call, 'phase': 'review'}])
-    repository.insert_agent_run(db, {**base, 'id': revise_run, 'mode': 'revise', 'agent_version': 'agent-2',
+    analysis_repo.insert_agent_run(db, {**base, 'id': revise_run, 'mode': 'revise', 'agent_version': 'agent-2',
                                      'status': 'ok', 'plan_id': plan_b['id'], 'output': first['output'],
                                      'counter': first['counter']}, [{**call, 'phase': 'propose'}])
-    repository.insert_plan_version(db, {
+    execution_repo.insert_plan_version(db, {
         'plan_id': plan_b['id'], 'ticker': 'AAA', 'signal_date': SESSION, 'version_no': 1,
         'supersedes_plan_id': plan_a['id'], 'origin': 'review', 'agent_run_id': revise_run, 'cutoff_at': NOW,
         'as_of_session': SESSION, 'diff': [{'field': 'stop', 'before': '95.00', 'after': '96.00'}],
         'schema_version': 'agent-2'})
-    review = repository.insert_plan_review(db, {
+    review = execution_repo.insert_plan_review(db, {
         'ticker': 'AAA', 'signal_date': SESSION, 'head_plan_id': plan_a['id'], 'session': SESSION, 'trigger': 'batch',
         'run_id': 'run-x', 'mode': 'entry', 'timeline_version': 'timeline-1',
         'signals': [{'kind': 'new_8k', 'fired': True, 'detail': 'x'}], 'conditions': [], 'user_input_ids': [],
@@ -597,7 +602,7 @@ def test_reasoning_shows_the_knowledge_a_run_cited(db, scripted_model):
     old = NOW - timedelta(days=30)
     item_id = item_with_versions(db, [(old, ['AAA'], []), (old, ['AAA'], [])])          # two versions, titles t1 / t2
     plain_id = item_with_versions(db, [(old, ['AAA'], [])])
-    repository.insert_knowledge_citations(db, [
+    analysis_repo.insert_knowledge_citations(db, [
         {'agent_run_id': first['id'], 'plan_id': plan_a['id'], 'knowledge_id': item_id, 'version': 1, 'field': 'thesis',
          'call_seq': 1},
         {'agent_run_id': first['id'], 'plan_id': plan_a['id'], 'knowledge_id': item_id, 'version': 1, 'field': 'risks',
@@ -621,7 +626,7 @@ def test_reasoning_shows_the_knowledge_a_run_cited(db, scripted_model):
 def test_reasoning_without_timeline_tables(db, scripted_model):
     service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
-    run = repository.latest_agent_run(db, 'AAA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'AAA', SESSION)
     db.execute('DROP TABLE plan_reviews, user_inputs, agent_plan_versions CASCADE')
     db.commit()
     view = reasoning.reasoning(str(run['id']))
@@ -637,10 +642,10 @@ def test_reasoning_400_404(db):
 
 
 def test_reasoning_derivation_failure_reports_reason(db, scripted_model, monkeypatch):
-    from investment_assistant.workbench import derivation
+    from investment_assistant.derivation import chain as derivation
     service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
-    run = repository.latest_agent_run(db, 'AAA', SESSION)
+    run = analysis_repo.latest_agent_run(db, 'AAA', SESSION)
 
     def broken(plan, rows):
         raise RuntimeError('derive exploded\nsecond line')
@@ -656,29 +661,29 @@ def test_reasoning_reads_retro_and_discuss_context(db, scripted_model):
     from test_workbench_repository_growth import card as make_card
     service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
-    first = repository.latest_agent_run(db, 'AAA', SESSION)
-    plan = repository.plan_by_id(db, first['plan_id'])
+    first = analysis_repo.latest_agent_run(db, 'AAA', SESSION)
+    plan = execution_repo.plan_by_id(db, first['plan_id'])
     base = {'ticker': 'AAA', 'signal_date': SESSION, 'pool': 'main', 'attempt': 1, 'provider': 'chatgpt', 'model': 'm',
             'cutoff_at': NOW, 'reason': None, 'detail': None, 'counter': None, 'input_tokens': 0, 'output_tokens': 0,
             'started_at': NOW, 'finished_at': NOW, 'plan_id': None, 'status': 'ok'}
     know_call = {'seq': 1, 'tool': 'get_knowledge', 'args': {}, 'result': {'ref': 'call:1', 'data': KNOW_DATA},
                  'result_sha256': 'c' * 64, 'called_at': NOW}
     retro_id, discuss_id = str(uuid.uuid4()), str(uuid.uuid4())
-    repository.insert_agent_run(db, {**base, 'id': retro_id, 'mode': 'retro', 'agent_version': 'agent-retro-1',
+    analysis_repo.insert_agent_run(db, {**base, 'id': retro_id, 'mode': 'retro', 'agent_version': 'agent-retro-1',
                                      'output': RETRO_OUTPUT}, [{**know_call, 'phase': 'retro'}])
-    repository.insert_agent_run(db, {**base, 'id': discuss_id, 'mode': 'discuss', 'agent_version': 'agent-discuss-1',
+    analysis_repo.insert_agent_run(db, {**base, 'id': discuss_id, 'mode': 'discuss', 'agent_version': 'agent-discuss-1',
                                      'output': ANSWER_OUTPUT}, [{**know_call, 'phase': 'discuss'}])
     cid = make_card(db, key='unit:AAA:ended', ticker='AAA', signal_date=SESSION, end_kind='stop',
                     end_session=SESSION, facts={'subject': {'kind': 'unit', 'exit_basis': None}, 'plans': []})
-    repository.insert_card_draft(db, {'card_id': cid, 'attempt': 1, 'trigger': 'batch', 'agent_run_id': retro_id,
+    review_repo.insert_card_draft(db, {'card_id': cid, 'attempt': 1, 'trigger': 'batch', 'agent_run_id': retro_id,
                                       'status': 'ok', 'reason': None, 'output': RETRO_OUTPUT})
-    discussion = repository.insert_discussion(db, {'request_id': uuid.uuid4(), 'request_hash': 'h',
+    discussion = review_repo.insert_discussion(db, {'request_id': uuid.uuid4(), 'request_hash': 'h',
                                                    'context_kind': 'plan', 'ticker': 'AAA', 'signal_date': SESSION,
                                                    'plan_id': plan['id'], 'card_id': None})
-    user = repository.insert_turn(db, {'discussion_id': discussion['id'], 'seq': 1, 'role': 'user',
+    user = review_repo.insert_turn(db, {'discussion_id': discussion['id'], 'seq': 1, 'role': 'user',
                                        'request_id': uuid.uuid4(), 'request_hash': 'h', 'body': '为什么？',
                                        'run_id': discuss_id, 'attachment': {'kind': 'draft', 'id': 5}})
-    repository.insert_turn(db, {'discussion_id': discussion['id'], 'seq': 2, 'role': 'assistant', 'body': '因为…',
+    review_repo.insert_turn(db, {'discussion_id': discussion['id'], 'seq': 2, 'role': 'assistant', 'body': '因为…',
                                 'reply_to': user['id'], 'status': 'ok', 'cutoff_at': NOW, 'agent_run_id': discuss_id,
                                 'detail': {'draft_dropped': 'invalid_citation'}})
     db.commit()

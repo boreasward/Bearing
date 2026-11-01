@@ -1,6 +1,10 @@
 """The run detail read model (v2.8 §7): ``workbench.run_detail.detail`` over real runs of the ``daily`` graph (fake
 fetchers, scripted model, in-memory checkpoints) and over hand-booked ``stage_runs`` rows for the shapes a run can only
 rarely produce (a clean success, a stages-2 / stages-3 run, a run still going). SQL tests on the disposable database."""
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.workflow.repo as workflow_repo
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -15,8 +19,12 @@ from test_workbench_service import NOW, SESSION, _agent_settings, _ok_responses,
 
 from investment_assistant import db as app_db
 from investment_assistant.tasks import daily
-from investment_assistant.workbench import repository, run_detail, run_overview, service, workflow
-from investment_assistant.workbench import stages as stages_module
+from investment_assistant.core import locks
+import investment_assistant.views.runs.detail as run_detail
+import investment_assistant.views.runs.overview as run_overview
+import investment_assistant.core.tx as service
+import investment_assistant.workflow.graph as workflow
+import investment_assistant.core.stages as stages_module
 
 LATER = NOW + timedelta(hours=2)
 DEADLINE = workflow.resume_deadline(SESSION)             # 2026-10-23 17:00 New York
@@ -59,7 +67,7 @@ def book(conn, run_id, *, version='stages-4', job='daily', trigger='manual_batch
             continue
         spec = (rows_by_stage or {}).get(stage, {})
         started = base + timedelta(minutes=index + 10 * (attempt - 1))
-        repository.insert_stage_run(conn, {
+        workflow_repo.insert_stage_run(conn, {
             'run_id': run_id, 'job': job, 'trigger': trigger, 'session': session, 'stage': stage,
             'stages_version': version, 'status': 'success', 'reason': None, 'input_count': 1, 'output_count': 1,
             'skips': [], 'failures': [], 'degradations': [], 'outputs': {}, 'detail': {}, 'started_at': started,
@@ -219,7 +227,7 @@ def test_resume_is_not_offered_while_the_lock_is_held_or_without_checkpoints(dai
     flaky('regime', monkeypatch, fail_times=2)
     run(clock, factory=factory)
     daily_db.commit()
-    with daily.exclusive():
+    with locks.exclusive():
         block = view(factory=factory)['resume']
         assert (block['allowed'], block['node'], block['reason']) == (False, 'regime', 'daily_running')
         assert block['deadline_at'] is not None
@@ -253,7 +261,7 @@ def test_resume_is_not_offered_for_a_node_that_never_wrote_a_row(daily_db):
 def test_running_status_when_locked(daily_db):
     book(daily_db, RUN_ID, only=('sec_monitor', 'collect'))
     assert view()['status'] == 'failed'                           # rows stop at collect and nobody is running: interrupted
-    with daily.exclusive():
+    with locks.exclusive():
         detail = view()
     assert detail['status'] == 'running' and [n['status'] for n in detail['nodes']] == ['success'] * 2 + ['pending'] * 8
     assert detail['resume'] == {'allowed': False, 'node': None, 'deadline_at': None, 'reason': 'daily_running'}
@@ -268,7 +276,7 @@ def test_resume_in_progress_is_running(daily_db):
     report(daily_db, run_id, status='error')
     book(daily_db, run_id, only=('screen',), attempt=2)
     assert view(run_id)['status'] == 'failed'                      # nobody holds the lock: the resume died
-    with daily.exclusive():
+    with locks.exclusive():
         detail = view(run_id)
     assert detail['status'] == 'running' and detail['resume']['reason'] == 'daily_running'
     assert node(detail, 'screen')['attempt'] == 2 and node(detail, 'regime')['attempt'] == 1
@@ -289,21 +297,21 @@ def test_a_run_this_process_executes_is_running_before_its_next_row(daily_db, cl
     def resuming(*args, **kwargs):
         daily_db.commit()
         detail = view(factory=factory)
-        seen.append((daily.executing(RUN_ID), detail['status'], detail['resume']['reason'],
+        seen.append((locks.executing(RUN_ID), detail['status'], detail['resume']['reason'],
                      len(detail['executions'])))
         return real(*args, **kwargs)
 
     monkeypatch.setattr(workflow, 'resume', resuming)
     assert resume(clock, factory, 'regime')['run_status'] in ('success', 'degraded')
     assert seen == [(True, 'running', 'daily_running', 1)]
-    assert not daily.executing(RUN_ID)                              # released with the lock
+    assert not locks.executing(RUN_ID)                              # released with the lock
     daily_db.commit()
     assert view(factory=factory)['status'] in ('success', 'degraded')
 
 
 def test_executing_run_without_any_row_is_a_skeleton_whatever_its_age(daily_db):
     old = 'daily-20200101000000-0c0c0c0c'
-    with daily._active(old):
+    with locks._active(old):
         detail = view(old, now=NOW)
     assert detail['status'] == 'running' and [n['status'] for n in detail['nodes']] == ['pending'] * 11
 
@@ -312,7 +320,7 @@ def test_just_started_run_is_a_running_skeleton(daily_db):
     fresh = 'daily-' + NOW.strftime('%Y%m%d%H%M%S') + '-0c0c0c0c'
     with pytest.raises(LookupError):
         view(fresh, now=NOW)                                       # nothing recorded and nothing running
-    with daily.exclusive():
+    with locks.exclusive():
         detail = view(fresh, now=NOW)
         with pytest.raises(LookupError):
             view('daily-20200101000000-0c0c0c0c', now=NOW)         # a stale id is not "just started"
@@ -333,7 +341,7 @@ def test_refused_run_without_rows(daily_db):
 # ------------------------------------------------------------------------------------------------ old runs and others
 
 def old_fetch_row(conn, family='bars'):
-    return repository.insert_fetch_run(conn, {
+    return data_repo.insert_fetch_run(conn, {
         'family': family, 'job': 'workbench', 'trigger': 'manual_batch', 'run_id': None, 'scope': 'family',
         'session': SESSION, 'status': 'partial', 'target_count': 3, 'ok_count': 2,
         'failures': [{'target': 'MU', 'reason': 'provider down'}], 'detail': {}, 'started_at': NOW,
@@ -403,7 +411,7 @@ def test_without_migration_028_old_runs_still_show(workbench_db, monkeypatch):
     run_id = 'workbench-20261022223100-0a0a0a0a'
     book_old = [(i, s) for i, s in enumerate(stages_module.STAGE_IDS_V3)]
     for index, stage in book_old:
-        repository.insert_stage_run(workbench_db, {
+        workflow_repo.insert_stage_run(workbench_db, {
             'run_id': run_id, 'job': 'workbench', 'trigger': 'scheduled', 'session': SESSION, 'stage': stage,
             'stages_version': 'stages-3', 'status': 'success', 'input_count': 1, 'output_count': 1,
             'started_at': NOW + timedelta(minutes=index), 'finished_at': NOW + timedelta(minutes=index, seconds=9),
@@ -422,7 +430,7 @@ def test_without_migration_028_old_runs_still_show(workbench_db, monkeypatch):
 def booked_agent_run(conn, ticker, status, reason, *, mode='propose', attempt=1, minutes=0, plan_id=None):
     run_id = str(uuid.uuid4())
     started = NOW + timedelta(minutes=minutes)
-    repository.insert_agent_run(conn, {
+    analysis_repo.insert_agent_run(conn, {
         'id': run_id, 'ticker': ticker, 'signal_date': SESSION, 'pool': 'main', 'attempt': attempt, 'mode': mode,
         'agent_version': 'agent-2', 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': NOW, 'status': status,
         'reason': reason, 'detail': None, 'output': None, 'counter': None, 'plan_id': plan_id, 'input_tokens': 7,
@@ -455,7 +463,7 @@ def test_agent_results_can_rerun(daily_db):
     assert not any(i['can_rerun'] for i in off['items'])                      # a running / legacy run offers nothing
     # a reset after the latest run is the answer to that state: the button is gone for exactly that unit and mode
     daily_db.commit()
-    repository.insert_attempt_reset(daily_db, {'ticker': 'AAA', 'signal_date': SESSION, 'mode': 'propose',
+    analysis_repo.insert_attempt_reset(daily_db, {'ticker': 'AAA', 'signal_date': SESSION, 'mode': 'propose',
                                                'request_id': str(uuid.uuid4()), 'origin': 'run_detail'})
     daily_db.commit()
     with service.read_only_tx() as conn:
@@ -472,7 +480,7 @@ def test_agent_node_lists_rerunnable_units_in_actions(daily_db):
     assert node(detail, 'agent')['actions']['rerun_agent'] == [
         {'ticker': 'BBB', 'signal_date': '2026-10-22', 'mode': 'propose'}]
     assert node(detail, 'agent')['results']['items'][0]['can_rerun'] is True
-    with daily.exclusive():                                       # the same rows while the run is going: nothing to rerun
+    with locks.exclusive():                                       # the same rows while the run is going: nothing to rerun
         going = view()
     assert going['status'] == 'running' and node(going, 'agent')['results']['items'][0]['can_rerun'] is False
     assert node(going, 'agent')['actions']['rerun_agent'] == []
@@ -484,7 +492,7 @@ def test_no_rerun_while_any_daily_execution_holds_the_lock(daily_db):
     book(daily_db, RUN_ID, rows_by_stage={'agent': agent_row([failed])})
     report(daily_db, RUN_ID)
     assert node(view(), 'agent')['results']['items'][0]['can_rerun'] is True
-    with daily.exclusive():
+    with locks.exclusive():
         detail = view()
     assert detail['status'] == 'degraded'                      # finished, not running: only the lock is someone else's
     assert node(detail, 'agent')['results']['items'][0]['can_rerun'] is False
@@ -521,8 +529,8 @@ def test_results_are_capped_at_200_with_the_true_total(daily_db):
 def test_results_of_review_push_and_retro(daily_db, clock, notices, job_reports, scripted_model):
     seed_watchlist(daily_db, [('NVDA', ['core'])])
     run(clock, d=agent_world(scripted_model, clock))
-    plan = repository.agent_plan(daily_db, 'NVDA', SESSION)
-    reviewed = repository.insert_plan_review(daily_db, {
+    plan = execution_repo.agent_plan(daily_db, 'NVDA', SESSION)
+    reviewed = execution_repo.insert_plan_review(daily_db, {
         'ticker': 'NVDA', 'signal_date': SESSION, 'head_plan_id': plan['id'], 'session': SESSION, 'trigger': 'batch',
         'run_id': RUN_ID, 'mode': 'entry', 'timeline_version': 'timeline-1', 'outcome': 'maintain',
         'decided_by': 'host', 'reason': '维持', 'attempt': 1, 'cutoff_at': NOW})
@@ -571,7 +579,7 @@ def test_screen_results_mark_new_members(daily_db):
 
 
 def test_fetch_block_keeps_the_stored_target_rows(daily_db):
-    fetch_id = repository.insert_fetch_run(daily_db, {
+    fetch_id = data_repo.insert_fetch_run(daily_db, {
         'family': 'news', 'job': 'daily', 'trigger': 'manual_batch', 'run_id': RUN_ID, 'scope': 'family',
         'session': SESSION, 'status': 'partial', 'target_count': 2, 'ok_count': 1,
         'failures': [{'target': 'MU', 'reason': 'timeout'}], 'started_at': NOW, 'finished_at': NOW + timedelta(seconds=9),
@@ -640,8 +648,11 @@ def test_run_detail_read_only(daily_db, clock, notices, job_reports, scripted_mo
     monkeypatch.setattr(core_tx, 'read_only_tx', spy)
     monkeypatch.setattr(core_tx, '_tx', lambda: pytest.fail('a write transaction was opened'))
     reads = []
-    for name in ('job_reports_for_run', 'stage_rows_for_run', 'fetch_runs_by_ids', 'candidate_refs_by_ids', 'plans_by_ids',
-                 'agent_runs_by_ids', 'screen_results', 'regime_by_id', 'latest_agent_run', 'attempt_resets_for'):
+    for repository, name in ((workflow_repo, 'job_reports_for_run'), (workflow_repo, 'stage_rows_for_run'),
+                             (data_repo, 'fetch_runs_by_ids'), (analysis_repo, 'candidate_refs_by_ids'),
+                             (execution_repo, 'plans_by_ids'), (analysis_repo, 'agent_runs_by_ids'),
+                             (analysis_repo, 'screen_results'), (analysis_repo, 'regime_by_id'),
+                             (analysis_repo, 'latest_agent_run'), (analysis_repo, 'attempt_resets_for')):
         original = getattr(repository, name)
 
         def wrapped(conn, *args, _original=original, _name=name, **kwargs):
@@ -661,8 +672,8 @@ def test_run_detail_never_calls_fetchers(daily_db, clock, notices, job_reports, 
     import requests
 
     from investment_assistant.data import fetch_policy
-    from investment_assistant.workbench import agent_connection, collect
-    from investment_assistant.workbench.agent import model as agent_model
+    import investment_assistant.data.collect as collect
+    from investment_assistant.core.llm import connection as agent_connection, model as agent_model
 
     seed_watchlist(daily_db, [('NVDA', ['core'])])
     saver, factory = shared_saver()

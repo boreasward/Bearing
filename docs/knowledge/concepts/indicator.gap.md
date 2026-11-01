@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "开盘价相对前一日收盘价的涨跌幅；财报后第一个交易日的跳空达到 ±3% 才触发财报跳空规则。"
 related: [rule.earnings_gap_up, rule.earnings_gap_down, family.sec_filings]
-sources: [investment_assistant/workbench/rules.py]
+sources: [investment_assistant/analysis/rules.py]
 ---
 
 ## 是什么

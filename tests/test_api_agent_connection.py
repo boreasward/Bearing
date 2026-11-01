@@ -10,9 +10,10 @@ import psycopg
 import pytest
 
 from investment_assistant.api.routes import settings as settings_routes
-from investment_assistant.workbench import agent_connection, service
-from investment_assistant.workbench.agent import chatgpt
-from investment_assistant.workbench.agent.chatgpt import ChatGPTError, error_for
+from investment_assistant.core import tx as core_tx
+from investment_assistant.core.llm import connection as agent_connection
+from investment_assistant.core.llm import chatgpt
+from investment_assistant.core.llm.chatgpt import ChatGPTError, error_for
 
 VIEW_KEYS = {'status', 'email_masked', 'scopes_ok', 'access_expires_at', 'refresh_expires_at', 'last_refresh_at',
              'last_error', 'model', 'model_display_name', 'provider_setting', 'pending'}
@@ -147,7 +148,7 @@ def test_select_model(client, fake):
     assert client.put('/api/settings/agent-connection/model', json={'slug': 'gpt-x'}).status_code == 409
 
 
-@pytest.mark.parametrize('error', [service.Unavailable('数据库未配置'), psycopg.OperationalError('connection refused'),
+@pytest.mark.parametrize('error', [core_tx.Unavailable('数据库未配置'), psycopg.OperationalError('connection refused'),
                                    ChatGPTError('migration_028_missing', '迁移 028 未执行。')])
 @pytest.mark.parametrize('method, path, body', [
     ('get', '/api/settings/agent-connection', None),

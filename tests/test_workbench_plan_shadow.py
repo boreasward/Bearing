@@ -1,4 +1,7 @@
 """plan-shadow-1 simulation: entry, stop, T1 and trailing per spec §6.1 (hand-computed)."""
+import investment_assistant.review.shadow as review_shadow
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.execution.repo as execution_repo
 from datetime import date
 from decimal import Decimal as D
 
@@ -6,7 +9,7 @@ import pytest
 
 from investment_assistant.core import tx as core_tx
 
-from investment_assistant.workbench import plan_shadow
+from investment_assistant.execution import simulation as plan_shadow
 
 D0, D1, D2, D3, D4 = date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 22), date(2026, 10, 23), date(2026, 10, 26)
 
@@ -120,7 +123,7 @@ def test_pending_before_valid_from():
 
 # --- v2.9 spec §5.6: plan-shadow-2 ---
 
-from investment_assistant.workbench import entry_rules  # noqa: E402
+from investment_assistant.execution import entry_rules# noqa: E402
 
 D5 = date(2026, 10, 27)
 
@@ -247,7 +250,9 @@ import uuid  # noqa: E402
 from contextlib import contextmanager  # noqa: E402
 from datetime import UTC, datetime, timedelta  # noqa: E402
 
-from investment_assistant.workbench import repository, review, service  # noqa: E402
+from investment_assistant.review import outcomes as review
+
+import investment_assistant.core.tx as service  # noqa: E402
 
 NOW = datetime(2026, 10, 28, 1, 0, tzinfo=UTC)
 
@@ -268,19 +273,19 @@ def _plan_row(conn, ticker, *, kind='agent', version='agent-2', **levels):
            'sizing': {'status': 'no_equity'}, 'status': 'ok', 'invalid_reasons': [], 'warnings': [],
            'inputs': {'bar_ids': [1]}, 'request_id': None, 'request_hash': None}
     row.update(levels)
-    return repository.insert_plan(conn, row)
+    return execution_repo.insert_plan(conn, row)
 
 
 def _version(conn, ticker, version_no, supersedes=None):
     plan = _plan_row(conn, ticker)
     run_id = uuid.uuid4()
-    repository.insert_agent_run(conn, {
+    analysis_repo.insert_agent_run(conn, {
         'id': run_id, 'ticker': ticker, 'signal_date': D2, 'pool': 'main', 'attempt': 1,
         'mode': 'propose' if version_no == 0 else 'revise', 'agent_version': 'agent-2', 'provider': 'chatgpt',
         'model': 'gpt-test', 'cutoff_at': NOW, 'status': 'ok', 'reason': None, 'output': {'action': 'buy'},
         'counter': None, 'plan_id': plan['id'], 'input_tokens': 0, 'output_tokens': 0,
         'started_at': NOW, 'finished_at': NOW}, [])
-    repository.insert_plan_version(conn, {
+    execution_repo.insert_plan_version(conn, {
         'plan_id': plan['id'], 'ticker': ticker, 'signal_date': D2, 'version_no': version_no,
         'supersedes_plan_id': supersedes, 'origin': 'signal' if version_no == 0 else 'review',
         'agent_run_id': run_id, 'cutoff_at': NOW, 'as_of_session': D2,
@@ -293,7 +298,7 @@ def test_shadow_rows_per_version(db):
     v0 = _version(db, 'NVDA', 0)
     v1 = _version(db, 'NVDA', 1, v0['id'])
     rule = _plan_row(db, 'NVDA', kind='rule', version='plan-1')
-    view = service.plan_shadow(now=NOW, since=D0)
+    view = review_shadow.plan_shadow(now=NOW, since=D0)
     rows = {str(p['id']): p for p in view['plans']}
     assert len(rows) == 3
     assert rows[str(v0['id'])]['chain'] == {'version_no': 0, 'origin': 'signal', 'is_head': False,
@@ -309,7 +314,7 @@ def test_shadow_rows_per_version(db):
 
 def test_agent1_plan_counts_as_its_own_first_and_latest(db):
     _plan_row(db, 'MU', version='agent-1')
-    view = service.plan_shadow(now=NOW, since=D0)
+    view = review_shadow.plan_shadow(now=NOW, since=D0)
     assert view['plans'][0]['chain'] is None
     assert view['agent_summary']['first']['count'] == 1 and view['agent_summary']['latest']['count'] == 1
 

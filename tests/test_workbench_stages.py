@@ -5,14 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from investment_assistant.workbench import stages
+import investment_assistant.core.stages as stages
+from investment_assistant.workflow.recorder import StageRecorder
 
 SESSION = date(2026, 10, 27)
 WALL = datetime(2026, 10, 27, 12, 30, tzinfo=UTC)
 
 
 def _recorder(rows, *, run_id='run-1', clock=None):
-    return stages.StageRecorder(run_id, 'manual_batch', SESSION, writer=rows.append,
+    return StageRecorder(run_id, 'manual_batch', SESSION, writer=rows.append,
                                 wall_now=lambda: WALL, clock=clock or (lambda: 0.0))
 
 
@@ -64,7 +65,7 @@ def test_stages_registry_eleven():
 
 def test_stages_3_recorder_writes_nine_in_the_v27_order():
     rows = []
-    rec = stages.StageRecorder('run-v3', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
+    rec = StageRecorder('run-v3', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
                                clock=lambda: 0.0, version='stages-3')
     rec.skip('sec_monitor', 'x')                       # not a stages-3 stage: ignored
     assert rec.close(None) == {'written': 9, 'error': None}
@@ -75,7 +76,7 @@ def test_stages_3_recorder_writes_nine_in_the_v27_order():
 def test_restart_keeps_started_at_and_has_row():
     rows = []
     walls = iter([WALL, WALL.replace(minute=45), WALL.replace(minute=50)])
-    rec = stages.StageRecorder('run-r', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: next(walls),
+    rec = StageRecorder('run-r', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: next(walls),
                                clock=lambda: 0.0)
     first = rec.open('collect')
     first.input(9)
@@ -107,7 +108,7 @@ def test_acc_freeze_and_restore_roundtrip():
 def test_stages_2_recorder_writes_eight_and_ignores_retro():
     """D29: without migration 027 the run is booked as stages-2 — eight rows, retro never written."""
     rows = []
-    rec = stages.StageRecorder('run-v2', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
+    rec = StageRecorder('run-v2', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
                                clock=lambda: 0.0, version='stages-2')
     acc = rec.open('retro')
     acc.input(3)
@@ -122,7 +123,7 @@ def test_stages_2_recorder_writes_eight_and_ignores_retro():
 def test_stages_1_recorder_writes_seven_and_ignores_review():
     """D22: without migration 026 the run is booked as stages-1 — seven rows, review and retro never written."""
     rows = []
-    rec = stages.StageRecorder('run-v1', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
+    rec = StageRecorder('run-v1', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
                                clock=lambda: 0.0, version='stages-1')
     acc = rec.open('review')                 # 照常返回累加器，但不登记
     acc.input(3)
@@ -136,7 +137,7 @@ def test_stages_1_recorder_writes_seven_and_ignores_review():
     assert [row['stage'] for row in rows] == list(stages.STAGE_IDS_V1)
     assert {row['stages_version'] for row in rows} == {'stages-1'}
     with pytest.raises(ValueError):
-        stages.StageRecorder('run-x', 'scheduled', SESSION, writer=rows.append, version='stages-9')
+        StageRecorder('run-x', 'scheduled', SESSION, writer=rows.append, version='stages-9')
 
 
 def test_classify_precedence():
@@ -200,7 +201,7 @@ def test_recorder_writes_attempt_and_job():
     default = _recorder(rows)
     default.skip('collect', 'x')
     assert (rows[0]['attempt'], rows[0]['job']) == (1, 'workbench')
-    resumed = stages.StageRecorder('run-2', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
+    resumed = StageRecorder('run-2', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
                                    clock=lambda: 0.0, attempt=2, job='daily')
     with resumed.stage('collect'):
         pass
@@ -214,7 +215,7 @@ def test_duration_ms_is_wall_span():
     rows = []
     walls = iter([WALL, WALL.replace(minute=32, second=30)])        # open -> finish: 2 min 30 s of wall time
     ticks = iter((10.0, 10.35))                                     # the monotonic sub-timer saw only 350 ms
-    rec = stages.StageRecorder('run-w', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: next(walls),
+    rec = StageRecorder('run-w', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: next(walls),
                                clock=lambda: next(ticks))
     with rec.stage('collect') as acc:
         acc.detail['timings'] = {'in_signals_ms': 12}
@@ -223,10 +224,10 @@ def test_duration_ms_is_wall_span():
     assert row['started_at'] == WALL and row['finished_at'] == WALL.replace(minute=32, second=30)
     assert row['detail']['timings'] == {'in_signals_ms': 12, 'measured_ms': 350}
     # a skipped stage has no span; a clock that steps back never yields a negative duration
-    assert stages.StageRecorder('r', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
+    assert StageRecorder('r', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
                                 clock=lambda: 0.0)._row('plan', status='skipped', reason='x', acc=None,
                                                         started_at=WALL, finished_at=WALL)['duration_ms'] == 0
-    backwards = stages.StageRecorder('r', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
+    backwards = StageRecorder('r', 'scheduled', SESSION, writer=rows.append, wall_now=lambda: WALL,
                                      clock=lambda: 0.0)._row('plan', status='success', reason=None, acc=None,
                                                              started_at=WALL, finished_at=WALL.replace(second=0, minute=29))
     assert backwards['duration_ms'] == 0
@@ -294,7 +295,7 @@ def test_writer_failure_is_swallowed():
     def boom(row):
         raise RuntimeError('db down')
 
-    rec = stages.StageRecorder('run-1', 'scheduled', SESSION, writer=boom,
+    rec = StageRecorder('run-1', 'scheduled', SESSION, writer=boom,
                                wall_now=lambda: WALL, clock=lambda: 0.0)
     with rec.stage('collect'):
         pass
@@ -309,7 +310,7 @@ def test_stages_v4_remains_literal_ten_and_accounts_purpose():
     assert stage.title == '账户'
     assert stage.purpose == '结算模拟账户昨天的挂单与退出，给每个账户记一行当日权益，再由照计划执行账户机械挂单、Agent 自管账户决定明天买卖什么。'
     rows = []
-    rec = stages.StageRecorder('v4', 'scheduled', SESSION, writer=rows.append, version='stages-4')
+    rec = StageRecorder('v4', 'scheduled', SESSION, writer=rows.append, version='stages-4')
     rec.skip('accounts', 'not_in_v4')
     assert rec.close(None) == {'written': 10, 'error': None}
     assert [r['stage'] for r in rows] == list(stages.STAGE_IDS_V4)

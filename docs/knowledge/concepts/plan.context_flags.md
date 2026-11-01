@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1, context-2]
 summary: "计划冻结当天的区制与行业状态，只加提示 regime_risk_off / regime_unavailable / sector_weak，不改价位、仓位和有效性。"
 related: [indicator.regime, indicator.sector_strength, plan.status, plan.earnings]
-sources: [investment_assistant/workbench/plans.py, investment_assistant/workbench/regime.py, docs/features/pool-and-context.md]
+sources: [investment_assistant/execution/plan_levels.py, investment_assistant/analysis/regime.py, docs/features/pool-and-context.md]
 ---
 
 ## 是什么

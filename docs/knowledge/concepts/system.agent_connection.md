@@ -6,7 +6,7 @@ version: 1
 applies_to: [siwc-1]
 summary: "Agent 用你自己的 ChatGPT 订阅：在设置里登录一次，之后每次运行自动续期；额度用尽或连接失效时 Agent 整个跳过，规则计划与推送照常，数据只存在本机。"
 related: [system.daily_workflow, agent.reject_reasons, system.stage_status, system.push]
-sources: [investment_assistant/workbench/agent/chatgpt.py, investment_assistant/workbench/agent_connection.py]
+sources: [investment_assistant/core/llm/chatgpt.py, investment_assistant/core/llm/connection.py]
 ---
 
 ## 是什么
@@ -22,7 +22,7 @@ Agent 的模型调用不再用 API 密钥，而是用你自己的 ChatGPT 订阅
 - **断开**：设置页的"断开"会请 ChatGPT 撤销长期凭据并清掉本机凭据；远端没有确认撤销时页面提示去 ChatGPT 设置里断开这个应用。换 ChatGPT 账号 = 先断开、再连接。
 
 ## 在系统里哪里看到
-「设置 → Agent 连接」（状态、剩余有效期、上次续期、模型、连接与断开）；运行详情里 `agent` 节点的跳过原因；命令行 `python -m investment_assistant.workbench.agent_connection status`（不含凭据）。
+「设置 → Agent 连接」（状态、剩余有效期、上次续期、模型、连接与断开）；运行详情里 `agent` 节点的跳过原因；命令行 `python -m investment_assistant.core.llm.connection status`（不含凭据）。
 
 ## 注意
 - 数据只在本机：模型请求直接从你的电脑发往 ChatGPT，凭据不经过任何第三方服务；请求不开启 ChatGPT 端的对话存储。

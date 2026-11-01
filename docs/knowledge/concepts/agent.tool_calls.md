@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2, agent-1, agent-review-1, agent-brief-1, agent-retro-1, agent-discuss-1]
 summary: "Agent 只能通过十个只读工具取数：八个读市场与你的数据、get_knowledge 读你审定过的经验（都受截止时间约束），get_concept 读概念卡（唯一不受截止时间约束的例外）；讨论里另有三个专用的只读工具。"
 related: [agent.citation, system.cutoff, system.concept_card, agent.reject_reasons, agent.knowledge_citation, system.discussion, system.my_knowledge]
-sources: [investment_assistant/workbench/agent/tools.py, investment_assistant/workbench/agent/graph.py, investment_assistant/workbench/knowledge.py]
+sources: [investment_assistant/analysis/agent/tools.py, investment_assistant/analysis/agent/graph.py, investment_assistant/core/knowledge.py]
 ---
 
 ## 是什么

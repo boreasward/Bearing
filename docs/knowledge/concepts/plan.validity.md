@@ -6,7 +6,7 @@ version: 2
 applies_to: [plan-1, plan-2, agent-3, timeline-2]
 summary: "规则计划在信号日后第 1 至第 3 个交易日内有效；过了有效期还没成交，计划到期作废。"
 related: [plan.earnings, plan.status, agent.version_chain, review.plan_shadow]
-sources: [investment_assistant/workbench/plans.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/plan_levels.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

@@ -6,7 +6,7 @@ version: 1
 applies_to: [my-knowledge-1]
 summary: "你审定过或亲手写的经验：只追加、带版本，挂到概念或标的；Agent 只能读到截止时间之前写入的版本，草稿读不到。"
 related: [review.retro_card, system.append_only, system.cutoff, review.knowledge_performance]
-sources: [investment_assistant/workbench/knowledge_items.py, investment_assistant/workbench/repository.py]
+sources: [investment_assistant/review/knowledge/items.py, investment_assistant/review/repo.py]
 ---
 
 ## 是什么

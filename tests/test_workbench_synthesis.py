@@ -1,10 +1,11 @@
+import investment_assistant.analysis.repo as analysis_repo
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from investment_assistant.workbench import repository, synthesis
-from investment_assistant.workbench.rules import Candidate
+from investment_assistant.analysis import synthesis
+from investment_assistant.analysis.rules import Candidate
 
 T = date(2026, 10, 22)  # Thursday
 
@@ -63,28 +64,28 @@ def rule_cand(close=101.0):
 
 
 def test_store_candidate_is_idempotent(workbench_db):
-    first = repository.store_candidate(workbench_db, 'nvda', T, rule_cand(), run_id='r1')
-    again = repository.store_candidate(workbench_db, 'NVDA', T, rule_cand(), run_id='r2')
+    first = analysis_repo.store_candidate(workbench_db, 'nvda', T, rule_cand(), run_id='r1')
+    again = analysis_repo.store_candidate(workbench_db, 'NVDA', T, rule_cand(), run_id='r2')
     assert first['status'] == 'inserted' and again == {'status': 'existing', 'id': first['id']}
     assert workbench_db.execute('SELECT count(*), min(run_id) FROM signal_candidates').fetchone() == (1, 'r1')
 
 
 def test_store_candidate_never_overwrites_different_inputs(workbench_db):
-    first = repository.store_candidate(workbench_db, 'NVDA', T, rule_cand(), run_id='r1')
-    clash = repository.store_candidate(workbench_db, 'NVDA', T, rule_cand(close=99.0), run_id='r2')
+    first = analysis_repo.store_candidate(workbench_db, 'NVDA', T, rule_cand(), run_id='r1')
+    clash = analysis_repo.store_candidate(workbench_db, 'NVDA', T, rule_cand(close=99.0), run_id='r2')
     assert clash['status'] == 'conflict' and clash['id'] == first['id']
     stored = workbench_db.execute('SELECT inputs FROM signal_candidates').fetchone()[0]
     assert stored['values']['close'] == 101.0
 
 
 def test_open_units_exclude_decided_ones(workbench_db):
-    a = repository.store_candidate(workbench_db, 'NVDA', T, rule_cand(), run_id='r')
-    repository.store_candidate(workbench_db, 'MU', T, rule_cand(), run_id='r')
+    a = analysis_repo.store_candidate(workbench_db, 'NVDA', T, rule_cand(), run_id='r')
+    analysis_repo.store_candidate(workbench_db, 'MU', T, rule_cand(), run_id='r')
     workbench_db.execute(
         "INSERT INTO signal_decisions (request_id, request_hash, ticker, signal_date, candidate_ids, proposed_action, "
         "final_action, decision, reason) VALUES (%s, 'h', 'MU', %s, '{}', 'buy', 'buy', 'accept', 'ok')",
         [uuid.uuid4(), T])
-    units = repository.open_candidate_groups(workbench_db, since=T - timedelta(days=7))
+    units = analysis_repo.open_candidate_groups(workbench_db, since=T - timedelta(days=7))
     assert [(u['ticker'], u['signal_date']) for u in units] == [('NVDA', T)]
     assert [c['id'] for c in units[0]['candidates']] == [a['id']]
 

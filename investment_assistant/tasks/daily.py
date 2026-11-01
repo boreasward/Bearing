@@ -7,6 +7,8 @@ resume rows carry ``trigger_source = 'resume'``) and, when the run failed, sends
 ``_harness.run_task``: the status comes from the nodes' effective rows (D13), not from ``summary.errors``.
 """
 from __future__ import annotations
+import investment_assistant.core.schema as core_schema
+import investment_assistant.workflow.repo as workflow_repo
 
 import argparse
 import json
@@ -19,12 +21,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from investment_assistant.config import AssistantConfig, load_config
-from investment_assistant.core.locks import (LOCK_KEY as LOCK_KEY, DailyBusy as DailyBusy,
-                                             _active as _active, exclusive as exclusive,
-                                             executing as executing, is_running as is_running)
+from investment_assistant.core import locks
 from investment_assistant.tasks import _harness
-from investment_assistant.workbench import families, repository, service, workflow
-from investment_assistant.workbench import stages as stages_module
+from investment_assistant.core import redact as families, tx as service, stages as stages_module
+from investment_assistant.workflow import graph as workflow
+from investment_assistant.tasks import filings, ports
 from investment_assistant.core import tx as core_tx
 
 logger = logging.getLogger(__name__)
@@ -45,14 +46,14 @@ def ensure_ready() -> None:
     passes: the run itself reports what is wrong."""
     try:
         with core_tx.read_only_tx() as conn:
-            ready = repository.daily_ready(conn)
+            ready = core_schema.daily_ready(conn)
     except Exception:   # noqa: BLE001 - nothing to ask
         return
     if not ready:
         raise service.Unavailable('migration_028_missing')
     try:
         with core_tx.read_only_tx() as conn:
-            executable = repository.executable_ready(conn)
+            executable = core_schema.executable_ready(conn)
     except Exception:   # noqa: BLE001 - nothing to ask
         return
     if not executable:
@@ -133,7 +134,7 @@ def _notify_connection(config: AssistantConfig, result: dict[str, Any], notify_c
     ``reason`` is ``not_failed`` (the connection is not lost any more) or ``already_reported`` when nothing is sent. A
     notice that could not be sent is retried by the next execution. Never raises."""
     from investment_assistant.notify import notifier, templates
-    from investment_assistant.workbench import agent_connection
+    from investment_assistant.core.llm import connection as agent_connection
 
     attempt = result.get('attempt')
     if not attempt:
@@ -141,8 +142,8 @@ def _notify_connection(config: AssistantConfig, result: dict[str, Any], notify_c
     checked_at = datetime.now(UTC)
     try:
         with core_tx.read_only_tx() as conn:
-            rows = repository.stage_rows_for_run(conn, result['run_id'])
-            base = repository.last_connection_notice_at(conn)
+            rows = workflow_repo.stage_rows_for_run(conn, result['run_id'])
+            base = workflow_repo.last_connection_notice_at(conn)
         if not _hit_not_connected(rows, int(attempt)):
             return None
         stamp = checked_at.isoformat()
@@ -207,7 +208,7 @@ def _abort_reason(exc: BaseException) -> str:
 def _ready() -> bool:
     try:
         with core_tx.read_only_tx() as conn:
-            return repository.daily_ready(conn)
+            return core_schema.daily_ready(conn)
     except Exception:    # noqa: BLE001 - an unreadable database cannot run the workflow either
         return False
 
@@ -217,7 +218,7 @@ def _executable_ready() -> bool:
     without it is refused before anything is read — no half-new, half-old run (no timeline-1 fallback)."""
     try:
         with core_tx.read_only_tx() as conn:
-            return repository.executable_ready(conn)
+            return core_schema.executable_ready(conn)
     except Exception:    # noqa: BLE001 - an unreadable database cannot run the workflow either
         return False
 
@@ -225,7 +226,7 @@ def _executable_ready() -> bool:
 def _accounts_ready() -> bool:
     try:
         with core_tx.read_only_tx() as conn:
-            return repository.accounts_ready(conn)
+            return core_schema.accounts_ready(conn)
     except Exception:
         return False
 
@@ -242,7 +243,7 @@ def run(config: AssistantConfig | None = None, *, trigger_source: str = 'schedul
     started_at = datetime.now(UTC)
     scheduled = trigger_source == 'scheduled'
     try:
-        with exclusive(), _active(rid):
+        with locks.exclusive(), locks._active(rid):
             if not _ready():            # D36: no half-new, half-old runs
                 return _refused(rid, 'migration_028_missing', started_at=started_at, trigger_source=trigger_source,
                                 config=effective, notify_cfg=notify_cfg)
@@ -255,7 +256,8 @@ def run(config: AssistantConfig | None = None, *, trigger_source: str = 'schedul
             try:
                 result = workflow.run(run_id=rid, trigger=_trigger(trigger_source), now=moment, deps=deps,
                                       explicit_pool=explicit_pool, checkpointer_factory=checkpointer_factory,
-                                      sleep=sleep, notify_cfg=notify_cfg, config=effective)
+                                      sleep=sleep, notify_cfg=notify_cfg if notify_cfg is not None else _effective_notify(effective),
+                                      config=effective, send=ports.send, sec_scan=filings._scan)
             except workflow.CheckpointUnavailable:
                 return _refused(rid, 'checkpoint_unavailable', started_at=started_at, trigger_source=trigger_source,
                                 config=effective, notify_cfg=notify_cfg)
@@ -264,7 +266,7 @@ def run(config: AssistantConfig | None = None, *, trigger_source: str = 'schedul
                                 config=effective, notify_cfg=notify_cfg)
             return _report(result, started_at=started_at, trigger_source=trigger_source, config=effective,
                            notify_cfg=notify_cfg)
-    except DailyBusy:
+    except locks.DailyBusy:
         if not scheduled:
             raise
         return _refused(rid, 'daily_running', started_at=started_at, trigger_source=trigger_source,
@@ -279,15 +281,16 @@ def resume(run_id: str, node: str, *, now: datetime | None = None, deps: service
     ``service.Unavailable`` propagate before anything is written."""
     effective = config if config is not None else load_config()
     started_at = datetime.now(UTC)
-    with exclusive(), _active(run_id):
+    with locks.exclusive(), locks._active(run_id):
         if not _executable_ready():         # v2.9 D36: the same gate as a first run; refused before anything is written
             raise service.Unavailable('migration_029_missing')
         if not _accounts_ready():           # the current graph includes accounts even when entered through the CLI
             raise service.Unavailable('migration_030_missing')
         try:
             result = workflow.resume(run_id, node, now=now or datetime.now(UTC), deps=deps,
-                                     checkpointer_factory=checkpointer_factory, sleep=sleep, notify_cfg=notify_cfg,
-                                     config=effective)
+                                     checkpointer_factory=checkpointer_factory, sleep=sleep,
+                                     notify_cfg=notify_cfg if notify_cfg is not None else _effective_notify(effective),
+                                     config=effective, send=ports.send, sec_scan=filings._scan)
         except (workflow.ResumeRejected, LookupError, ValueError, service.Unavailable):
             raise                       # refused before anything ran: the caller maps these, nothing is written
         except workflow.CheckpointUnavailable:
@@ -305,7 +308,7 @@ def resume(run_id: str, node: str, *, now: datetime | None = None, deps: service
 def _show(run_id: str) -> int:
     """The node table of a run — status, duration, attempt, failures — and no raw summary."""
     with core_tx.read_only_tx() as conn:
-        rows = repository.stage_rows_for_run(conn, run_id)
+        rows = workflow_repo.stage_rows_for_run(conn, run_id)
     if not rows:
         print(f'没有这次运行：{run_id}', file=sys.stderr)
         return 2
@@ -344,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
             out = run(trigger_source='manual' if args.manual else 'scheduled')
         else:
             out = resume(args.run_id, args.node)
-    except DailyBusy:
+    except locks.DailyBusy:
         print('每日工作流正在运行（daily_running）', file=sys.stderr)
         return 2
     except workflow.ResumeRejected as exc:

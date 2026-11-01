@@ -6,7 +6,7 @@ version: 1
 applies_to: []
 summary: "观察池分核心池（至多 15 只）、扩展池（总数至多 100 只）和持仓股：核心与持仓推送并进入待决定，扩展池只影子跟踪、不推送。"
 related: [system.screen, system.push, review.weekly, family.universe]
-sources: [investment_assistant/workbench/pool.py, docs/features/pool-and-context.md]
+sources: [investment_assistant/analysis/pool.py, docs/features/pool-and-context.md]
 ---
 
 ## 是什么

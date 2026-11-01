@@ -1,7 +1,7 @@
 from datetime import date
 
-from investment_assistant.filings import sec_downloader
-from investment_assistant.filings.sec_downloader import SecEdgarDownloader
+from investment_assistant.data.adapters import sec_text as sec_downloader
+from investment_assistant.data.adapters.sec_text import SecEdgarDownloader
 
 
 def make_getter(tickers_json, submissions_json):

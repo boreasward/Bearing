@@ -1,4 +1,7 @@
 """Review math on synthetic bars (fabricated numbers)."""
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.execution.repo as execution_repo
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
@@ -8,7 +11,7 @@ import pytest
 from investment_assistant.core import tx as core_tx
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import review
+from investment_assistant.review import outcomes as review
 
 T = date(2026, 10, 1)  # Thursday
 NOW = datetime(2026, 11, 20, tzinfo=UTC)
@@ -207,7 +210,7 @@ def test_generating_a_new_week_leaves_an_old_snapshot_alone(workbench_db, monkey
     `review-7` one."""
     from contextlib import contextmanager
 
-    from investment_assistant.workbench import service
+    import investment_assistant.core.tx as service
 
     @contextmanager
     def connection():
@@ -217,7 +220,7 @@ def test_generating_a_new_week_leaves_an_old_snapshot_alone(workbench_db, monkey
     frozen = {'calc_version': 'review-7', 'units': {'decided': 3, 'undecided': 1}, 'by_decision': {'accept': {}}}
     old = review.save_weekly(workbench_db, old_week, frozen, notes='旧', supersedes_id=None)
     before = workbench_db.execute('SELECT id, calc_version, stats::text, supersedes_id FROM weekly_reviews').fetchall()
-    new = service.generate_weekly(date(2026, 10, 19), now=datetime(2026, 11, 2, 22, 30, tzinfo=UTC))
+    new = review_weekly.generate_weekly(date(2026, 10, 19), now=datetime(2026, 11, 2, 22, 30, tzinfo=UTC))
     assert new['calc_version'] == 'review-8' and new['id'] != old['id']
     after = workbench_db.execute('SELECT id, calc_version, stats::text, supersedes_id FROM weekly_reviews').fetchall()
     assert len(after) == 2 and [r for r in after if r[0] == old['id']] == before   # the old row is byte-for-byte the same
@@ -227,7 +230,7 @@ def test_generating_a_new_week_leaves_an_old_snapshot_alone(workbench_db, monkey
 # --- weekly snapshot persistence (disposable schema) ---
 
 def test_weekly_reviews_are_frozen_and_corrected_by_superseding(workbench_db):
-    from investment_assistant.workbench import ledger
+    from investment_assistant.execution import ledger
     week = date(2026, 10, 19)
     first = review.save_weekly(workbench_db, week, {'units': {'decided': 1}}, notes='初稿', supersedes_id=None)
     with pytest.raises(ledger.Conflict):
@@ -240,7 +243,7 @@ def test_weekly_reviews_are_frozen_and_corrected_by_superseding(workbench_db):
 
 
 def test_weekly_review_week_must_start_monday(workbench_db):
-    from investment_assistant.workbench import ledger
+    from investment_assistant.execution import ledger
     with pytest.raises(ledger.LedgerError):
         review.save_weekly(workbench_db, date(2026, 10, 20), {}, notes='', supersedes_id=None)
 
@@ -400,7 +403,7 @@ def test_agent1_plan_is_its_own_first_and_latest():
 def test_generate_weekly_counts_first_and_latest(workbench_db, monkeypatch):
     from contextlib import contextmanager
 
-    from investment_assistant.workbench import repository, service
+    import investment_assistant.core.tx as service
 
     @contextmanager
     def connection():
@@ -409,7 +412,7 @@ def test_generate_weekly_counts_first_and_latest(workbench_db, monkeypatch):
     day = date(2026, 10, 21)
     previous = None
     for version_no in range(3):
-        plan = repository.insert_plan(workbench_db, {
+        plan = execution_repo.insert_plan(workbench_db, {
             'ticker': 'NVDA', 'signal_date': day, 'kind': 'agent', 'based_on_id': None, 'plan_version': 'agent-2',
             'ref_price': D('100'), 'atr': D('2'), 'entry_low': D('99'), 'entry_high': D('101'), 'stop': D('94'),
             'target1': D('108'), 'trail_atr_multiple': D('3'), 'valid_from': date(2026, 10, 22),
@@ -417,20 +420,20 @@ def test_generate_weekly_counts_first_and_latest(workbench_db, monkeypatch):
             'invalid_reasons': [], 'warnings': [], 'inputs': {'bar_ids': [1]}, 'request_id': None,
             'request_hash': None})
         run_id, at = uuid.uuid4(), NOW - timedelta(days=30 - version_no)
-        repository.insert_agent_run(workbench_db, {
+        analysis_repo.insert_agent_run(workbench_db, {
             'id': run_id, 'ticker': 'NVDA', 'signal_date': day, 'pool': 'main', 'attempt': 1,
             'mode': 'propose' if version_no == 0 else 'revise', 'agent_version': 'agent-2', 'provider': 'chatgpt',
             'model': 'gpt-test', 'cutoff_at': at, 'status': 'ok', 'reason': None, 'output': {'action': 'buy'},
             'counter': None, 'plan_id': plan['id'], 'input_tokens': 0, 'output_tokens': 0,
             'started_at': at, 'finished_at': at}, [])
-        repository.insert_plan_version(workbench_db, {
+        execution_repo.insert_plan_version(workbench_db, {
             'plan_id': plan['id'], 'ticker': 'NVDA', 'signal_date': day, 'version_no': version_no,
             'supersedes_plan_id': previous, 'origin': 'signal' if version_no == 0 else 'review',
             'agent_run_id': run_id, 'cutoff_at': at, 'as_of_session': day,
             'diff': None if version_no == 0 else [{'field': 'stop', 'before': '94', 'after': '95'}],
             'schema_version': 'agent-2'})
         previous = plan['id']
-    out = service.generate_weekly(date(2026, 10, 19), now=NOW)
+    out = review_weekly.generate_weekly(date(2026, 10, 19), now=NOW)
     assert out['calc_version'] == 'review-8' and out['stats']['calc_version'] == 'review-8'
     # agent-2 versions carry no execution fields: plan-shadow-1, listed under keys that name that shadow
     assert out['stats']['shadow_versions']['plans_v1'] == 'plan-shadow-1'

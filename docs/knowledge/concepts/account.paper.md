@@ -6,7 +6,7 @@ version: 1
 applies_to: [account-1, paper-fill-1, stages-5, daily-2]
 summary: "模拟账户用日线在纸上结算 Agent 计划，分别观察 Agent 自管与照计划执行；默认无费用、无滑点，不连接券商。"
 related: [account.ledger, account.agent_portfolio, account.follow_plans, account.fill_rules, account.comparison]
-sources: [investment_assistant/workbench/accounts.py, investment_assistant/workbench/paper_fill.py, investment_assistant/workbench/paper_strategies.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
+sources: [investment_assistant/execution/accounts.py, investment_assistant/execution/paper/fill.py, investment_assistant/execution/paper/strategies.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
 ---
 
 ## 是什么

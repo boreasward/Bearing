@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "每只股票每个信号日合成一个决策单元，把当天所有候选合成一个建议动作：买入、卖出或观察；买卖同日并存时合成观察并标记冲突。"
 related: [system.conflict, system.decision, agent.brief, rule.trend_reclaim]
-sources: [investment_assistant/workbench/synthesis.py]
+sources: [investment_assistant/analysis/synthesis.py]
 ---
 
 ## 是什么

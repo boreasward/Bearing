@@ -3,7 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal as D
 from zoneinfo import ZoneInfo
 
-from investment_assistant.workbench import exits
+from investment_assistant.execution import exits
 
 NY = ZoneInfo('America/New_York')
 T0, T1, T2 = date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 22)

@@ -3,6 +3,7 @@ paper orders and decisions, chain consumption, and the three relaxations (stage_
 agent_runs mode 'portfolio' with nullable ticker/signal_date/pool, agent_tool_calls.phase 'portfolio').
 
 SQL tests run in a throwaway schema of the disposable test database only."""
+import investment_assistant.core.schema as core_schema
 import json
 import itertools
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from investment_assistant.workbench import repository
+# Repository consumers use their owning layers below.
 
 MIGRATION = Path('migrations/030_accounts.sql')
 NOW = datetime(2026, 10, 31, 22, 30, tzinfo=UTC)
@@ -157,9 +158,9 @@ def _order(conn, account_id, **overrides):
 
 def test_rerunnable(migrated_db):
     conn = migrated_db
-    assert repository.accounts_ready(conn) is False
+    assert core_schema.accounts_ready(conn) is False
     _apply(conn)
-    assert repository.accounts_ready(conn) is True
+    assert core_schema.accounts_ready(conn) is True
     before = {t: _constraints(conn, t) for t in ALL_TABLES}
     indexes = _indexes(conn)
     _apply(conn)                                              # rerunning must not fail or duplicate anything

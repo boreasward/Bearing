@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "观察候选：当日涨跌幅绝对值达到近 20 日波动率的 2.5 倍，且当日没有新财报。"
 related: [indicator.volatility_20, rule.new_filing, indicator.gap, system.decision_unit]
-sources: [investment_assistant/workbench/rules.py, investment_assistant/workbench/derivation.py, docs/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

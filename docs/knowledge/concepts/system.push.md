@@ -6,7 +6,7 @@ version: 2
 applies_to: []
 summary: "每日工作流的 push 节点把当日简报推到 Discord：概览、新计划、计划更新、持仓、待处理与异常、筛选报告；手动运行不推送，同一交易日不重复。"
 related: [system.stages, system.daily_workflow, system.pool_tiers, agent.review_outcome, system.gate_hold]
-sources: [investment_assistant/workbench/digest.py, investment_assistant/workbench/service.py, investment_assistant/tasks/daily.py, investment_assistant/notify/templates.py]
+sources: [investment_assistant/review/push_digest.py, investment_assistant/workflow/nodes/push.py, investment_assistant/tasks/daily.py, investment_assistant/notify/templates.py]
 ---
 
 ## 是什么

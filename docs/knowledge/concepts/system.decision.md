@@ -6,7 +6,7 @@ version: 2
 applies_to: []
 summary: "v2.9 起退役：不再有采纳 / 否决 / 降级按钮，采纳由成交推出；旧决定只读保留，旧链、旧复盘卡、旧周报仍按旧决定显示。"
 related: [system.decision_unit, review.position, review.version_basis, review.tracks, plan.own, review.execution_status]
-sources: [investment_assistant/workbench/ledger.py, investment_assistant/workbench/service.py]
+sources: [investment_assistant/execution/ledger.py, investment_assistant/execution/trades.py]
 ---
 
 ## 是什么

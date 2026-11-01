@@ -6,7 +6,7 @@ version: 2
 applies_to: [stages-4, stages-3, stages-2]
 summary: "每个阶段的状态五选一：success、partial、degraded、failed、skipped，优先级 skipped > failed > partial > degraded > success。"
 related: [system.stages, agent.reject_reasons, system.push]
-sources: [investment_assistant/workbench/stages.py]
+sources: [investment_assistant/core/stages.py]
 ---
 
 ## 是什么

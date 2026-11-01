@@ -1,6 +1,12 @@
 """The v2.9 read views (spec §9.1, §10, D34, D35): the plan table, the plan history, the holding-status rows and the
 plans a fill may follow. Built on the plan-review harness (fake fetchers, routed scripted model, `now` advancing by
 session) and a disposable schema; read-only, no network."""
+import investment_assistant.review.weekly as review_weekly
+from investment_assistant.execution import chains as execution_chains
+from investment_assistant.execution import trades as execution_trades
+import investment_assistant.core.schema as core_schema
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.review.repo as review_repo
 import uuid
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -11,7 +17,10 @@ from test_workbench_executable_flow import exit_review, fill, merge, renewal, sp
 from test_workbench_plan_review import S1, Market, counter, day, evening, make_model, proposal, run, signal_day, verdict
 from test_workbench_service import db   # noqa: F401  (fixture: service wired to the disposable schema)
 from investment_assistant.data.calendar import trading_days_between
-from investment_assistant.workbench import plan_review, plan_views, pool as pool_module, repository, service
+import investment_assistant.workflow.nodes.review as plan_review
+import investment_assistant.views.plan_table as plan_views
+from investment_assistant.analysis import pool as pool_module
+import investment_assistant.core.tx as service
 
 NY = ZoneInfo('America/New_York')
 
@@ -105,9 +114,9 @@ def test_plan_table_holding_and_ended_sort(db):
     market = Market()
     signal_day(db, market, ['SYNB', 'SYNTH'])                              # two chains, both opened on day(0)
     for ticker in ('SYNB', 'SYNTH'):
-        fill(db, ticker, '10', '125', 1, repository.chain_head(db, ticker, S1)['plan']['id'])
+        fill(db, ticker, '10', '125', 1, execution_repo.chain_head(db, ticker, S1)['plan']['id'])
     for ticker, instruction, reason in (('SYNB', 'hold', None), ('SYNTH', 'exit', 'time_stop')):
-        repository.insert_holding_status(db, {
+        execution_repo.insert_holding_status(db, {
             'ticker': ticker, 'session': day(2), 'chain_signal_date': S1, 'run_id': 'r', 'quantity': 10,
             'avg_cost': 125, 'held_sessions': 2, 'instruction': instruction, 'exit_reason': reason,
             'reason': '维持', 'timeline_version': 'timeline-2'})
@@ -128,7 +137,7 @@ def test_plan_table_ended_rows_newest_first(db):
 def test_closed_chain_is_an_ended_row_with_its_r(db):
     market = Market()
     holding_chain(db, market)
-    sold = repository.insert_trade(db, {
+    sold = execution_repo.insert_trade(db, {
         'request_id': uuid.uuid4(), 'ticker': 'SYNTH', 'side': 'sell', 'quantity': 10, 'price': 130, 'fee': 0,
         'executed_at': datetime.combine(day(2), time(10, 0), tzinfo=NY), 'decision_id': None, 'plan_id': None,
         'note': None}, 'h', recorded_at=evening(day(2)))
@@ -221,7 +230,7 @@ def test_retrigger_shown_in_chain_row_not_separate(db):
     spike(market, 'SYNTH', 1)
     summary, rows, model = run(db, market, 1, tickers=['SYNTH'], model=make_model(
         revise=renewal('SYNTH'), counter=counter()))
-    [merge_row] = repository.chain_retriggers_for(db, 'SYNTH')
+    [merge_row] = execution_repo.chain_retriggers_for(db, 'SYNTH')
     view = table(db, 1)
     [row] = rows_of(view, 'entry')
     assert len(view['groups']['entry']) == 1 and view['other_units'] == []
@@ -270,11 +279,11 @@ def test_plan_table_stale_holding_rows(db):
     and marked stale; the computed row is never stored."""
     market = Market()
     holding_chain(db, market)
-    assert repository.holding_status_for(db, session=day(2)) == []
+    assert execution_repo.holding_status_for(db, session=day(2)) == []
     [row] = rows_of(table(db, 2), 'holding')
     assert row['holding']['stale'] is True and row['holding']['instruction'] == 'hold'
     assert row['holding']['session'] == day(2) and row['holding']['held_sessions'] == 2
-    assert repository.holding_status_for(db, session=day(2)) == []             # nothing was written
+    assert execution_repo.holding_status_for(db, session=day(2)) == []             # nothing was written
     run(db, market, 2, tickers=['SYNTH'], model=make_model(review=verdict('SYNTH', 'maintain', 'ok', cite=False)))
     [stored] = rows_of(table(db, 2), 'holding')
     assert 'stale' not in stored['holding']                                      # the written row wins
@@ -285,7 +294,7 @@ def test_a_failing_ticker_leaves_no_partial_rows(db, monkeypatch):
     position still shows, computed by the holding section."""
     market = Market()
     holding_chain(db, market)
-    real_items, real_row, calls = plan_review.ticker_chain_items, plan_views._chain_row, []
+    real_items, real_row, calls = execution_chains.ticker_chain_items, plan_views._chain_row, []
 
     def two_items(*args, **kwargs):
         items = real_items(*args, **kwargs)
@@ -297,7 +306,7 @@ def test_a_failing_ticker_leaves_no_partial_rows(db, monkeypatch):
             raise RuntimeError('boom')
         return real_row(*args, **kwargs)
 
-    monkeypatch.setattr(plan_review, 'ticker_chain_items', two_items)
+    monkeypatch.setattr(execution_chains, 'ticker_chain_items', two_items)
     monkeypatch.setattr(plan_views, '_chain_row', second_fails)
     view = table(db, 2)
     assert view['errors'] == {'SYNTH': 'boom'} and len(calls) == 2
@@ -338,7 +347,7 @@ def test_position_without_a_chain_is_a_holding_row(db):
 
 
 def test_views_503_without_029(db, monkeypatch):
-    monkeypatch.setattr(repository, 'executable_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'executable_ready', lambda conn: False)
     for call in (lambda: plan_views.plan_table(db, session=day(0), now=evening(day(0))),
                  lambda: plan_views.plan_history(db, 'SYNTH', now=evening(day(0))),
                  lambda: plan_views.holding_status_view(db, session=day(0), now=evening(day(0))),
@@ -383,7 +392,7 @@ def test_plan_history_retrigger_version_and_fill_rows(db):
     v0 = entry_chain(db, market)
     spike(market, 'SYNTH', 1)
     run(db, market, 1, tickers=['SYNTH'], model=make_model(revise=renewal('SYNTH'), counter=counter()))
-    fill(db, 'SYNTH', '10', '125', 2, repository.chain_head(db, 'SYNTH', S1)['plan']['id'])
+    fill(db, 'SYNTH', '10', '125', 2, execution_repo.chain_head(db, 'SYNTH', S1)['plan']['id'])
     retime(db)
     view = plan_views.plan_history(db, 'SYNTH', now=evening(day(2)))
     kinds = [r['kind'] for r in view['rows']]
@@ -450,7 +459,7 @@ def test_linkable_default_follows_the_head_at_fill_time(db):
     v0 = entry_chain(db, market)
     spike(market, 'SYNTH', 1)
     run(db, market, 1, tickers=['SYNTH'], model=make_model(revise=renewal('SYNTH'), counter=counter()))
-    v1 = repository.chain_head(db, 'SYNTH', S1)
+    v1 = execution_repo.chain_head(db, 'SYNTH', S1)
     assert v1['version']['version_no'] == 1
     db.execute('UPDATE agent_plan_versions SET created_at = %s WHERE plan_id = %s',
                [evening(day(1)), v1['plan']['id']])
@@ -524,14 +533,14 @@ def test_plan_table_show_prints_three_groups(db, capsys):
 
 
 def test_plan_table_show_without_029(db, monkeypatch):
-    monkeypatch.setattr(repository, 'executable_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'executable_ready', lambda conn: False)
     out = []
     assert plan_views.show(day(0), out.append, now=evening(day(0))) == 2
     assert 'migration_029_missing' in out[0]
 
 
 def test_plan_table_notes_follow_the_row(db):
-    from investment_assistant.workbench import ledger
+    from investment_assistant.execution import ledger
 
     market = Market()
     entry_chain(db, market)
@@ -546,7 +555,7 @@ def test_plan_table_notes_follow_the_row(db):
 def test_notes_not_in_any_agent_input(db):
     """D25: a note is a log for yourself. After writing one and running a review with the fake model, no agent run
     input or tool call mentions it."""
-    from investment_assistant.workbench import ledger
+    from investment_assistant.execution import ledger
 
     market = Market()
     entry_chain(db, market)
@@ -568,20 +577,24 @@ def test_notes_not_in_any_agent_input(db):
     import dataclasses
     import json
 
-    from investment_assistant.workbench import retro
-    from investment_assistant.workbench.agent import discuss_tools
+    from investment_assistant.review import retro
+    from investment_assistant.review import discuss_tools
+    import investment_assistant.views.derivation as derivation_view
+    import investment_assistant.views.reasoning as reasoning
 
-    notes = repository.plan_notes_for(db, 'SYNTH', chain_signal_date=S1)
+    notes = execution_repo.plan_notes_for(db, 'SYNTH', chain_signal_date=S1)
     facts = {'subject': {'kind': 'unit', 'exit_basis': None},
              'execution': retro.execution_fact(buys=[], plans_by_trade={}, notes=notes)}
     assert secret in json.dumps(facts, ensure_ascii=False)                   # the card does carry it (for you)
-    card_id = repository.insert_review_card(db, {
+    card_id = review_repo.insert_review_card(db, {
         'event_key': 'unit:SYNTH:x', 'subject': 'unit', 'ticker': 'SYNTH', 'signal_date': S1, 'buy_trade_id': None,
         'end_kind': 'expired', 'end_session': day(3), 'retro_version': 'retro-2', 'facts': facts,
         'detected_run_id': 'r'})
     ctx = discuss_tools.DiscussContext(ticker='SYNTH', session=day(3), cutoff_at=evening(day(3)),
                                        read=lambda fn: fn(db), signal_date=S1, plan_id=None, card_id=card_id,
-                                       unit_plan_ids=frozenset(), unit_run_ids=frozenset())
+                                       unit_plan_ids=frozenset(), unit_run_ids=frozenset(),
+                                       read_derivation=derivation_view.plan_derivation_in,
+                                       read_agent_run=reasoning.view_in)
     context = discuss_tools.get_plan_context(ctx)
     assert secret not in json.dumps(context, ensure_ascii=False)
     assert [n['id'] for n in context['facts']['execution']['notes']] == [n['id'] for n in notes]
@@ -662,7 +675,7 @@ def test_include_extended_never_hides_a_position(db):
     db.execute('INSERT INTO pool_tiers (ticker, tier, effective_session, recorded_at) '
                "VALUES ('SYNA', 'extended', %s, %s)", [S1 - timedelta(days=1), evening(S1) - timedelta(days=1)])
     signal_day(db, market, None, pool=pool_module.Pool(core=('SYNTH',), extended=('SYNA',)))
-    fill(db, 'SYNA', '10', '125', 1, repository.chain_head(db, 'SYNA', S1)['plan']['id'])
+    fill(db, 'SYNA', '10', '125', 1, execution_repo.chain_head(db, 'SYNA', S1)['plan']['id'])
     hidden = table(db, 2)
     assert [r['ticker'] for r in rows_of(hidden, 'holding')] == ['SYNA'] and rows_of(hidden, 'holding')[0]['pool'] == 'extended'
     assert hidden['counts']['holding'] == 1
@@ -671,13 +684,13 @@ def test_include_extended_never_hides_a_position(db):
 
 def test_chain_view_versions_carry_their_execution(db):
     """I4 (R13): the plan page's 「执行状态」 column: the version a fill was linked to is adopted, the other one is not."""
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
 
     market = Market()
     v0 = entry_chain(db, market)
     spike(market, 'SYNTH', 1)
     run(db, market, 1, tickers=['SYNTH'], model=make_model(revise=renewal('SYNTH'), counter=counter()))
-    fill(db, 'SYNTH', '10', '125', 2, repository.chain_head(db, 'SYNTH', S1)['plan']['id'])
+    fill(db, 'SYNTH', '10', '125', 2, execution_repo.chain_head(db, 'SYNTH', S1)['plan']['id'])
     view = plan_review.chain_view('SYNTH', S1, now=evening(day(2)))
     first, second = view['versions']
     assert first['execution'] == {'status': 'not_executed'}                        # a holding chain waits for no fill
@@ -691,16 +704,16 @@ def test_trade_list_carries_the_plan_label(db):
     v0 = entry_chain(db, market)
     retime(db)
     fill(db, 'SYNTH', '10', '125', 1, v0['plan']['id'])
-    plain = repository.insert_trade(db, {
+    plain = execution_repo.insert_trade(db, {
         'request_id': uuid.uuid4(), 'ticker': 'SYNTH', 'side': 'sell', 'quantity': 5, 'price': 130, 'fee': 0,
         'executed_at': datetime.combine(day(2), time(10, 0), tzinfo=NY), 'decision_id': None, 'plan_id': None,
         'note': None}, 'h', recorded_at=evening(day(2)))
     db.commit()
-    rows = {str(t['id']): t for t in service.list_trades()}
+    rows = {str(t['id']): t for t in execution_trades.list_trades()}
     linked = next(t for t in rows.values() if t['plan_id'] == v0['plan']['id'])
     assert linked['plan_label'] == f'Agent SYNTH·09-01 第 0 版（有效至 {day(3):%m-%d}）'
     assert 'plan_label' not in rows[str(plain['id'])]
-    assert plan_views.plan_label(v0['plan'], version_no=0, state='入场期') == \
+    assert execution_trades.plan_label(v0['plan'], version_no=0, state='入场期') == \
         f'Agent SYNTH·09-01 第 0 版（入场期，有效至 {day(3):%m-%d}）'
 
 
@@ -711,10 +724,10 @@ def test_week_fills_belong_to_one_unit_and_own_plans_have_no_delay(db):
     entry_chain(db, market)
     spike(market, 'SYNTH', 1)
     run(db, market, 1, tickers=['SYNTH'], model=make_model(revise=renewal('SYNTH'), counter=counter()))
-    [merged] = repository.chain_retriggers_for(db, 'SYNTH')
+    [merged] = execution_repo.chain_retriggers_for(db, 'SYNTH')
     fill(db, 'SYNTH', '10', '125', 2, merged['baseline_plan_id'])
     retime(db)
-    week = service._week_units(db, S1 - timedelta(days=S1.weekday()), S1 + timedelta(days=6), now=evening(day(5)))
+    week = review_weekly._week_units(db, S1 - timedelta(days=S1.weekday()), S1 + timedelta(days=6), now=evening(day(5)))
     owned = [(f['unit_id'], str(f['trade']['id'])) for f in week['fills']]
     assert len(owned) == len(set(t for _, t in owned)) == 1                       # once, not once per unit
     states = {u['id']: u['execution'] for u in week['units']}
@@ -723,7 +736,8 @@ def test_week_fills_belong_to_one_unit_and_own_plans_have_no_delay(db):
 
 
 def test_a_fill_that_wrote_its_own_plan_has_no_delay(db):
-    from investment_assistant.workbench import ledger, review
+    from investment_assistant.review import outcomes as review
+    from investment_assistant.execution import ledger
 
     market = Market()
     entry_chain(db, market)
@@ -734,7 +748,7 @@ def test_a_fill_that_wrote_its_own_plan_has_no_delay(db):
                                    'own_plan': {'entry_low': '120', 'entry_high': '128', 'stop': '115',
                                                 'target1': '140'}}, now=evening(day(1)))
     db.commit()
-    week = service._week_units(db, S1 - timedelta(days=S1.weekday()), S1 + timedelta(days=6), now=evening(day(1)))
+    week = review_weekly._week_units(db, S1 - timedelta(days=S1.weekday()), S1 + timedelta(days=6), now=evening(day(1)))
     [one] = [f for f in week['fills'] if f['trade']['id'] == out['record']['id']]
     assert one['plan_created_at'] is None
     stats = review.weekly_stats(S1 - timedelta(days=S1.weekday()), week['units'], {}, [], segments=[], entry_opens={},

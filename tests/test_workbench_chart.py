@@ -2,8 +2,8 @@
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from investment_assistant.workbench import chart
-from investment_assistant.workbench.chart import KEEP, READ_LIMIT, WINDOWS, build
+import investment_assistant.views.chart as chart
+from investment_assistant.views.chart import KEEP, READ_LIMIT, WINDOWS, build
 
 
 def _bars(n, *, start=date(2026, 1, 1)):

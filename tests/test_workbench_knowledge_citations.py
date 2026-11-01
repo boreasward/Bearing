@@ -1,12 +1,17 @@
 """Knowledge citations are written with the plan, the revision or the review row, in the same transaction
 (v2.7 spec §6.2, D18, D27). SQL: explicit test database, the plan-review harness with a scripted model."""
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.review.repo as review_repo
 import json
 from datetime import UTC, datetime
 
 import pytest
 from langchain_core.messages import AIMessage
 
-from investment_assistant.workbench import briefs, repository, service
+from investment_assistant.analysis import briefs
+
+import investment_assistant.core.tx as service
 from test_workbench_plan_review import (STOP_UP, Market, _setup_stop, counter, day, evening, head, make_model,  # noqa: F401
                                         plan_json, reviews, run, settings, signal_day, tool, xmin)
 from test_workbench_repository_growth import item_with_versions
@@ -47,7 +52,7 @@ def know_verdict(outcome, ref, reason='依经验复查'):
 
 
 def citations(db, item_id):
-    return repository.citations_of(db, item_id)
+    return review_repo.citations_of(db, item_id)
 
 
 def test_first_version_writes_citations(db, item):
@@ -64,7 +69,7 @@ def test_first_version_writes_citations(db, item):
     # plan, run and citations: one transaction
     assert {xmin(db, 'trade_plans', 'id', plan_id), xmin(db, 'agent_runs', 'id', run_id),
             *{xmin(db, 'knowledge_citations', 'id', r['id']) for r in rows}} == {xmin(db, 'trade_plans', 'id', plan_id)}
-    assert [c['tool'] for c in repository.agent_tool_calls(db, run_id)][:2] == ['get_indicators', 'get_knowledge']
+    assert [c['tool'] for c in analysis_repo.agent_tool_calls(db, run_id)][:2] == ['get_indicators', 'get_knowledge']
 
 
 def test_runs_without_knowledge_write_no_citation_rows(db, item):
@@ -92,20 +97,20 @@ def test_citations_rolled_back_with_plan(db, item, monkeypatch):
     assert db.execute('SELECT count(*) FROM knowledge_citations').fetchone()[0] == 0
     assert db.execute("SELECT count(*) FROM trade_plans WHERE kind = 'agent'").fetchone()[0] == 0
     assert head(db) is None
-    runs = repository.agent_runs_for(db, 'SYNTH', day(0))
+    runs = analysis_repo.agent_runs_for(db, 'SYNTH', day(0))
     assert runs and runs[-1]['status'] == 'error' and runs[-1]['plan_id'] is None     # the unit's error row stands alone
 
 
 def test_citations_not_written_when_the_plan_row_fails(db, item, monkeypatch):
     ref = ref_of(item)
-    real_store = repository.store_plan
+    real_store = execution_repo.store_plan
 
     def failing(conn, plan):
         if plan.get('kind') == 'agent':
             raise RuntimeError('plan insert failed')
         return real_store(conn, plan)
 
-    monkeypatch.setattr(repository, 'store_plan', failing)
+    monkeypatch.setattr(execution_repo, 'store_plan', failing)
     run(db, Market(), 0, tickers=['SYNTH'], model=make_model(propose=know_proposal('SYNTH', ref),
                                                               counter=know_counter(ref)))
     assert db.execute('SELECT count(*) FROM knowledge_citations').fetchone()[0] == 0
@@ -173,7 +178,7 @@ def test_rejected_and_pass_runs_write_no_citations(db, item):
                                 *know_proposal('SYNTB', ref, cite_ref='know:99@1')],    # SYNTB cites an unreturned lesson
                        counter=counter())
     summary, _, _ = run(db, Market(), 0, tickers=['SYNTA', 'SYNTB'], model=model)
-    runs = {t: repository.agent_runs_for(db, t, day(0))[-1] for t in ('SYNTA', 'SYNTB')}
+    runs = {t: analysis_repo.agent_runs_for(db, t, day(0))[-1] for t in ('SYNTA', 'SYNTB')}
     assert (runs['SYNTA']['status'], runs['SYNTA']['plan_id']) == ('pass', None)
     assert (runs['SYNTB']['status'], runs['SYNTB']['reason']) == ('rejected', 'invalid_citation')
     assert db.execute('SELECT count(*) FROM knowledge_citations').fetchone()[0] == 0
@@ -199,11 +204,12 @@ def test_agent_run_row_versions_for_new_modes(db):
     now = evening(day(0))
 
     def row(mode):
-        return service._agent_run_row(unit, settings=settings(), attempt=1, now=now, status='skipped',
+        from investment_assistant.core.llm.model import _agent_run_row
+        return _agent_run_row(unit, settings=settings(), attempt=1, now=now, status='skipped',
                                       reason='stage_budget', mode=mode)
 
     assert [row(m)['agent_version'] for m in ('retro', 'discuss', 'propose', 'revise', 'review', 'interpret')] == [
         'agent-retro-2', 'agent-discuss-1', 'agent-3', 'agent-3', 'agent-review-2', 'agent-brief-1']
     for mode in ('retro', 'discuss'):                             # migration 027 relaxed the mode constraint
-        stored = repository.insert_agent_run(db, row(mode), [])
+        stored = analysis_repo.insert_agent_run(db, row(mode), [])
         assert (stored['mode'], stored['status']) == (mode, 'skipped')

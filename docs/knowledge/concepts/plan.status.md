@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "计划只有 ok / invalid 两种状态；作废原因（决定性的）与提示（仅提醒的）要分开读。"
 related: [plan.earnings, plan.sizing, plan.context_flags, review.track_status]
-sources: [investment_assistant/workbench/plans.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/plan_levels.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

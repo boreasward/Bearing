@@ -1,9 +1,14 @@
 """Three-track comparison pure functions (P4 design §4): statuses, R, summary."""
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.execution.repo_legacy as execution_repo_legacy
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal as D
 
-from investment_assistant.workbench import tracks
+from investment_assistant.review import tracks
 
 S = date(2026, 10, 22)
 PLAN = {'id': uuid.uuid4(), 'kind': 'rule', 'stop': D('95'), 'signal_date': S,
@@ -335,12 +340,13 @@ def test_no_plan_buy():
     assert unresolved['status'] == 'no_plan'
 
 
-# SQL (disposable schema): service._track_rows over real rows.
+# SQL (disposable schema): review_weekly._track_rows over real rows.
 
 import pytest  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 
-from investment_assistant.workbench import plan_shadow, repository, service  # noqa: E402
+import investment_assistant.core.tx as service
+from investment_assistant.execution import simulation as plan_shadow# noqa: E402
 
 NOW = datetime(2026, 10, 28, 1, 0, tzinfo=UTC)
 SESSION = date(2026, 10, 27)
@@ -370,12 +376,12 @@ def _plan(conn, ticker, *, kind='agent', version='agent-1', **levels):
             'invalid_reasons': [], 'warnings': [], 'inputs': {'bar_ids': [1]}, 'request_id': None,
             'request_hash': None}
     plan.update(levels)
-    return repository.insert_plan(conn, plan)
+    return execution_repo.insert_plan(conn, plan)
 
 
 def _run_row(conn, ticker, *, status='ok', plan=None, mode='propose', version='agent-1', reason=None, at=None):
     at = at or NOW - timedelta(days=5)
-    return repository.insert_agent_run(conn, {
+    return analysis_repo.insert_agent_run(conn, {
         'id': uuid.uuid4(), 'ticker': ticker, 'signal_date': S, 'pool': 'main', 'attempt': 1, 'mode': mode,
         'agent_version': version, 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': at, 'status': status,
         'reason': reason, 'output': {'action': 'buy'}, 'counter': None,
@@ -387,7 +393,7 @@ def _version(conn, ticker, version_no, supersedes=None, **levels):
     plan = _plan(conn, ticker, version='agent-2', **levels)
     run = _run_row(conn, ticker, plan=plan, mode='propose' if version_no == 0 else 'revise', version='agent-2',
                    at=NOW - timedelta(days=5 - version_no))
-    repository.insert_plan_version(conn, {
+    execution_repo.insert_plan_version(conn, {
         'plan_id': plan['id'], 'ticker': ticker, 'signal_date': S, 'version_no': version_no,
         'supersedes_plan_id': supersedes, 'origin': 'signal' if version_no == 0 else 'review',
         'agent_run_id': run['id'], 'cutoff_at': run['cutoff_at'], 'as_of_session': S,
@@ -409,11 +415,11 @@ def _decide(conn, ticker, *, plan_id=None, agent_plan_id=None, final='buy'):
            'brief_id': None, 'proposed_action': 'buy', 'final_action': final,
            'decision': 'accept' if final == 'buy' else 'reject', 'reason': '测试', 'supersedes_id': None,
            'plan_id': plan_id, 'agent_plan_id': agent_plan_id, 'review_view': None}
-    return repository._insert_decision_for_tests(conn, rec, 'h', decided_at=NOW - timedelta(days=4))
+    return execution_repo_legacy._insert_decision_for_tests(conn, rec, 'h', decided_at=NOW - timedelta(days=4))
 
 
 def _rows(conn):
-    return {row['ticker']: row for row in service._track_rows(conn, S - timedelta(days=5), SESSION,
+    return {row['ticker']: row for row in review_weekly._track_rows(conn, S - timedelta(days=5), SESSION,
                                                                 session=SESSION, now=NOW)}
 
 
@@ -448,10 +454,10 @@ def test_version_basis_undecided_is_first(workbench_db):
 
 def _old_agent(conn, ticker):
     """The pre-v2.5 reading: latest propose run and the unit's agent plan."""
-    spy = repository.read_bars(conn, 'SPY', SESSION, cutoff_at=NOW, limit=400)
-    run = repository.latest_agent_run(conn, ticker, S)
-    plan = repository.agent_plan(conn, ticker, S)
-    outcome = (plan_shadow.simulate(plan, repository.read_bars(conn, ticker, SESSION, cutoff_at=NOW, limit=400),
+    spy = data_repo.read_bars(conn, 'SPY', SESSION, cutoff_at=NOW, limit=400)
+    run = analysis_repo.latest_agent_run(conn, ticker, S)
+    plan = execution_repo.agent_plan(conn, ticker, S)
+    outcome = (plan_shadow.simulate(plan, data_repo.read_bars(conn, ticker, SESSION, cutoff_at=NOW, limit=400),
                                     spy, splits=[]) if plan is not None and plan['status'] == 'ok' else None)
     old = {k: v for k, v in tracks.agent_track(run, plan, outcome).items() if k not in NEW_KEYS}
     return {**old, 'run_id': str(old['run_id']) if old['run_id'] else None,

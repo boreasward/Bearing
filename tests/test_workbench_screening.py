@@ -4,6 +4,11 @@ Universe: U00-U29 fabricated range tickers plus SYNTH on the manual list.
 U00-U02 trigger trend_reclaim on S1, U03-U24 form the setup band with
 descending relative strength, U25-U29 fail the setup band; QQQ is flat.
 """
+import investment_assistant.workflow.screen_collection as workflow_screen_collection
+import investment_assistant.analysis.units as analysis_units
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
 import socket
 import sys
 from contextlib import contextmanager
@@ -16,8 +21,12 @@ import pytest
 from investment_assistant.core import tx as core_tx
 
 from investment_assistant.data.calendar import add_trading_days, trading_days_between
-from investment_assistant.workbench import repository, service
-from investment_assistant.workbench import universe as universe_module
+import investment_assistant.workflow.batch as service
+from investment_assistant.views.today import unit_cards
+from investment_assistant.views.screen import screen_view, replay_screen
+from investment_assistant.workflow.nodes.push import push
+from investment_assistant.tasks import ports
+from investment_assistant.data.adapters import universe as universe_module
 
 NY = ZoneInfo('America/New_York')
 S1 = add_trading_days(datetime(2026, 9, 1).date(), 0)          # Tuesday signal session
@@ -139,9 +148,9 @@ def seed_watchlist(conn, rows=(('SYNTH', ['core']),)):
 
 
 def stored_results(conn, session, *, now):
-    run = repository.latest_screen_run(conn, session=session)
+    run = analysis_repo.latest_screen_run(conn, session=session)
     assert run is not None
-    return repository.screen_results(conn, run['id'])
+    return analysis_repo.screen_results(conn, run['id'])
 
 
 def test_screen_selects_and_extends_pool(offline):
@@ -163,7 +172,7 @@ def test_screen_selects_and_extends_pool(offline):
 def test_valid_screen_plan_is_decidable(offline):
     seed_watchlist(offline)
     service.run_batch(now=evening(S1), deps=make_deps())
-    view = service.unit_cards(now=evening(S1))
+    view = unit_cards(now=evening(S1))
     u00 = next(u for u in view['units'] if u['ticker'] == 'U00')
     assert u00['source'] == 'screen' and u00['plan'] is not None and u00['plan']['status'] == 'ok'
     ctx = u00['plan']['inputs']['context']
@@ -171,7 +180,7 @@ def test_valid_screen_plan_is_decidable(offline):
     u05 = next(u for u in view['extended_units'] if u['ticker'] == 'U05')
     assert u05['plan'] is None and u05['proposed_action'] == 'watch'
     with core_tx.connection() as conn:
-        groups = service._session_units(conn, S1, now=evening(S1))
+        groups = analysis_units._session_units(conn, S1, now=evening(S1))
     assert any(u['ticker'] == 'U00' for u in groups['main_buy'])
     assert not any(u['ticker'] == 'U05' for u in groups['main_buy'])
 
@@ -191,7 +200,7 @@ def test_invalid_screen_plan_stays_read_only(offline):
     seed_watchlist(offline)
     deps = make_deps(earnings=FlippingEarnings(add_trading_days(S1, 20), add_trading_days(S1, 2)))
     service.run_batch(now=evening(S1), deps=deps)
-    view = service.unit_cards(now=evening(S1))
+    view = unit_cards(now=evening(S1))
     assert not any(u['ticker'] == 'U01' for u in view['units'])
     u01 = next(u for u in view['extended_units'] if u['ticker'] == 'U01')
     assert u01['plan'] is not None and u01['plan']['status'] == 'invalid'
@@ -209,7 +218,7 @@ def test_retention_and_eviction(offline):
     assert 'U00' not in batch['screen']['members']
     assert 'U00' in batch['screen']['removed']
     assert 'U00' not in batch['screen']['evicted']              # expired, not crowded out
-    entry = repository.pool_entry_at(offline, 'U00', add_trading_days(S1, 10),
+    entry = data_repo.pool_entry_at(offline, 'U00', add_trading_days(S1, 10),
                                      cutoff_at=evening(add_trading_days(S1, 11)))
     assert entry['tier'] == 'removed' and entry['source'] == 'screen'
 
@@ -240,8 +249,8 @@ def test_universe_fetch_failures_are_skips_not_filters(offline):
 
 
 def test_collect_returns_failure_reasons(offline):
-    from investment_assistant.workbench import pool as pool_module
-    from investment_assistant.workbench import screening
+    from investment_assistant.analysis import pool as pool_module
+    from investment_assistant.analysis import screening
 
     class RateLimitedSources(ScreenSources):
         def bars(self, ticker, start, end_exclusive):
@@ -253,11 +262,11 @@ def test_collect_returns_failure_reasons(offline):
     deps = make_deps(RateLimitedSources(),
                      universe=universe_module.Universe('test', S1, 'test', ('XXX', 'U00')))
     # run_stage reads the benchmark from the store; outside run_batch nothing collected QQQ yet.
-    from investment_assistant.workbench import collect
+    import investment_assistant.data.collect as collect
     collect.bars_one('QQQ', session=S1, now=evening(S1), deps=deps,
                      lookback_days=screening.COLLECT_LOOKBACK_DAYS)
     # v2.8 D4: the range is collected by the collect node (``collect_range``); run_stage only reads and carries the outcomes
-    fetched, failures, reasons = screening.collect_range(core_tx.connection, session=S1, now=evening(S1),
+    fetched, failures, reasons = workflow_screen_collection.collect_range(core_tx.connection, session=S1, now=evening(S1),
                                                           targets=['XXX', 'U00'], deps=deps)
     assert (fetched, failures, reasons) == ({'U00'}, ['XXX'], {'XXX': 'rate limited'})
     stage = screening.run_stage(session=S1, now=evening(S1),
@@ -300,7 +309,7 @@ def test_universe_missing_carries_members(offline):
 
 
 def _regime_sample(monkeypatch):
-    from investment_assistant.workbench import regime
+    from investment_assistant.analysis import regime
     seen = []
     real = regime.snapshot
 
@@ -348,7 +357,7 @@ class CountingSources(ScreenSources):
 def _buy(conn, ticker, day):
     import uuid
     from decimal import Decimal
-    repository.insert_trade(conn, {
+    execution_repo.insert_trade(conn, {
         'request_id': uuid.uuid4(), 'ticker': ticker, 'side': 'buy', 'quantity': Decimal('10'),
         'price': Decimal('100'), 'fee': Decimal('0'),
         'executed_at': datetime.combine(day, time(15, 0), tzinfo=NY), 'decision_id': None, 'note': None},
@@ -385,9 +394,9 @@ def test_screen_view_defaults_to_newest_run(offline):
     # Before the next batch runs, the latest closed session has no run yet: show the last one.
     seed_watchlist(offline)
     service.run_batch(now=evening(S1), deps=make_deps())
-    report = service.screen_view(now=evening(add_trading_days(S1, 1)))['report']
+    report = screen_view(now=evening(add_trading_days(S1, 1)))['report']
     assert report is not None and report['session'] == S1.isoformat()
-    assert service.screen_view(now=evening(S1), session=add_trading_days(S1, 1))['report'] is None
+    assert screen_view(now=evening(S1), session=add_trading_days(S1, 1))['report'] is None
 
 
 def test_universe_stale_flag(offline):
@@ -406,13 +415,13 @@ def test_manual_source_flip(offline):
     offline.execute("INSERT INTO watchlist_items (ticker, status, tags) VALUES ('U03', 'active', '{}')")
     offline.commit()
     service.run_batch(now=evening(day1), deps=deps)
-    entry = repository.pool_entry_at(offline, 'U03', day1, cutoff_at=evening(day1) + timedelta(hours=1))
+    entry = data_repo.pool_entry_at(offline, 'U03', day1, cutoff_at=evening(day1) + timedelta(hours=1))
     assert entry == {'tier': 'extended', 'sector_etf': None, 'source': 'watchlist'}
     day2 = add_trading_days(S1, 2)
     offline.execute("DELETE FROM watchlist_items WHERE ticker = 'U03'")
     offline.commit()
     service.run_batch(now=evening(day2), deps=deps)
-    entry = repository.pool_entry_at(offline, 'U03', day2, cutoff_at=evening(day2) + timedelta(hours=1))
+    entry = data_repo.pool_entry_at(offline, 'U03', day2, cutoff_at=evening(day2) + timedelta(hours=1))
     assert entry == {'tier': 'extended', 'sector_etf': None, 'source': 'screen'}
 
 
@@ -437,7 +446,7 @@ def test_force_push_reads_screen_from_db(offline, monkeypatch):
     seed_watchlist(offline)
     service.run_batch(now=evening(S1), deps=make_deps())
     spy = PushSpy()
-    out = service.push(now=evening(S1) + timedelta(hours=1), force=True, summary=None,
+    out = push(now=evening(S1) + timedelta(hours=1), force=True, summary=None, send=ports.send,
                        notify_cfg=NotifyConfig(), client=spy)
     assert out['sent'] is True
     pushed = '\n'.join(str(p) for p in spy.payloads)
@@ -454,10 +463,10 @@ def test_replay_is_read_only(offline, monkeypatch):
     before = {t: offline.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in tables}
     monkeypatch.setattr(universe_module, 'load',
                         lambda: universe_module.Universe('test', S1, 'test', UNIVERSE_TICKERS))
-    reports = service.replay_screen(now=evening(add_trading_days(S1, 1)), sessions=2)['reports']
+    reports = replay_screen(now=evening(add_trading_days(S1, 1)), sessions=2)['reports']
     assert [r['session'] for r in reports] == [add_trading_days(S1, 1).isoformat(), S1.isoformat()]
-    s1_run = repository.latest_screen_run(offline, session=S1)
-    stored_selected = [r['ticker'] for r in repository.screen_results(offline, s1_run['id']) if r['selected']]
+    s1_run = analysis_repo.latest_screen_run(offline, session=S1)
+    stored_selected = [r['ticker'] for r in analysis_repo.screen_results(offline, s1_run['id']) if r['selected']]
     assert reports[1]['selected'] == stored_selected
     assert all(r.get('note') == '财报日用当前已知值，非当时时点值' for r in reports)
     after = {t: offline.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in tables}
@@ -467,11 +476,11 @@ def test_replay_is_read_only(offline, monkeypatch):
 def test_replay_bounds(offline):
     for n in (0, 21):
         with pytest.raises(ValueError):
-            service.replay_screen(now=evening(S1), sessions=n)
+            replay_screen(now=evening(S1), sessions=n)
 
 
 def test_report_full_keeps_all_setups(offline):
-    from investment_assistant.workbench import screening
+    from investment_assistant.analysis import screening
     seed_watchlist(offline)
     service.run_batch(now=evening(S1), deps=make_deps())
     with core_tx.connection() as conn:
@@ -528,7 +537,7 @@ def test_locked_over_pool_cap_keeps_batch_alive(offline, monkeypatch):
     assert batch['pool']['screen'] == 5                       # 100 - 95 manual
     assert len(batch['screen']['members']) == 5
     assert len(batch['screen']['evicted']) == 1               # the sixth locked pick
-    active = {t for t, row in repository.pool_latest(offline).items() if row['tier'] != 'removed'}
+    active = {t for t, row in analysis_repo.pool_latest(offline).items() if row['tier'] != 'removed'}
     assert len(active) == 100
     assert batch['errors'] == []
 
@@ -558,5 +567,5 @@ def test_error_path_carryover_respects_pool_cap(offline, monkeypatch):
     assert batch['screen']['status'] == 'error'
     assert len(batch['screen']['members']) <= 5               # 100 - 95 manual
     assert any(str(e).startswith('screen:') for e in batch['errors'])
-    active = {t for t, row in repository.pool_latest(offline).items() if row['tier'] != 'removed'}
+    active = {t for t, row in analysis_repo.pool_latest(offline).items() if row['tier'] != 'removed'}
     assert len(active) <= 100

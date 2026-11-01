@@ -6,7 +6,7 @@ version: 1
 applies_to: [screen-1]
 summary: "最近 20 日 收盘价 × 成交量 的平均值；每日筛选要求不低于 5000 万美元，否则记为流动性不足。"
 related: [system.screen, indicator.screen_rs, family.universe]
-sources: [investment_assistant/workbench/screen.py, docs/features/pool-and-context.md]
+sources: [investment_assistant/analysis/screen_rules.py, docs/features/pool-and-context.md]
 ---
 
 ## 是什么

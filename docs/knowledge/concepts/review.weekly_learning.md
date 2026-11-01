@@ -6,7 +6,7 @@ version: 1
 applies_to: [review-7, review-8]
 summary: "周度复盘新增的一段：本周结束的交易的纪律四项、本周的复盘卡摘要、本周被检验的知识，随周度快照冻结，也随周度推送。"
 related: [review.weekly, review.retro_card, review.knowledge_performance, system.my_knowledge, review.discipline_chase]
-sources: [investment_assistant/workbench/review.py, investment_assistant/workbench/review_digest.py, investment_assistant/notify/templates.py]
+sources: [investment_assistant/review/outcomes.py, investment_assistant/review/period_digest.py, investment_assistant/notify/templates.py]
 ---
 
 ## 是什么

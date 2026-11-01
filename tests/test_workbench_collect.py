@@ -1,4 +1,5 @@
 """Offline tests for collect.py's tally and fetch-run writing (v2.3 Task 5, design §6.2)."""
+import investment_assistant.data.repo as data_repo
 import contextlib
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
@@ -9,7 +10,8 @@ import pytest
 from investment_assistant.core import tx as core_tx
 
 from investment_assistant.data import fetch_policy as fp
-from investment_assistant.workbench import collect, repository, service
+import investment_assistant.data.collect as collect
+import investment_assistant.core.tx as service
 
 SESSION = date(2026, 10, 22)
 NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)
@@ -211,12 +213,12 @@ def stored(monkeypatch):
         yield object()
 
     monkeypatch.setattr(core_tx, '_tx', tx)
-    monkeypatch.setattr(repository, 'store_bars', lambda conn, t, rows, *, now: {'inserted': len(rows) - 1,
+    monkeypatch.setattr(data_repo, 'store_bars', lambda conn, t, rows, *, now: {'inserted': len(rows) - 1,
                                                                                    'unchanged': 1})
-    monkeypatch.setattr(repository, 'store_news', lambda conn, entries, *, now: {'inserted': len(entries),
+    monkeypatch.setattr(data_repo, 'store_news', lambda conn, entries, *, now: {'inserted': len(entries),
                                                                                    'existing': 0})
-    monkeypatch.setattr(repository, 'store_macro', lambda conn, s, rows, *, now: {'inserted': 3, 'unchanged': 0})
-    monkeypatch.setattr(repository, 'fill_filing_acceptance', lambda conn, metas: len(metas))
+    monkeypatch.setattr(data_repo, 'store_macro', lambda conn, s, rows, *, now: {'inserted': 3, 'unchanged': 0})
+    monkeypatch.setattr(data_repo, 'fill_filing_acceptance', lambda conn, metas: len(metas))
 
 
 def _targets(tally):
@@ -259,7 +261,7 @@ def test_failures_after_a_good_fetch_keep_the_attempts(stored, monkeypatch):
     def broken_store(conn, t, rows, *, now):
         raise RuntimeError('disk full')
 
-    monkeypatch.setattr(repository, 'store_bars', broken_store)
+    monkeypatch.setattr(data_repo, 'store_bars', broken_store)
     frame = pd.DataFrame({'Open': 10.0, 'High': 11.0, 'Low': 9.0, 'Close': 10.5, 'Adj Close': 10.5,
                           'Volume': 1000, 'Stock Splits': 0.0}, index=pd.DatetimeIndex(['2026-10-28']))
     tally = collect.Tally('bars', 'daily', ['NVDA'])

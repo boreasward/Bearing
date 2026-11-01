@@ -3,6 +3,13 @@ accounting and gates, drafting, the verdict, the views and the command line.
 
 The ledger rows are written straight through the repository (a plan, a decision, trades) and the daily bars are
 fabricated test prices; a scripted model answers the drafts. Helpers here are shared with the other growth tests."""
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.core.schema as core_schema
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.execution.repo_legacy as execution_repo_legacy
+import investment_assistant.review.repo as review_repo
 import json
 import uuid
 from contextlib import nullcontext
@@ -17,9 +24,14 @@ from langchain_core.messages import AIMessage
 from test_workbench_service import (NOW, SESSION, Sources, _agent_settings, agent_deps, db, deps,  # noqa: F401
                                     seed_watchlist)
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import discipline as discipline_module
-from investment_assistant.workbench import ledger, repository, retro, retro_cards, service
-from investment_assistant.workbench import stages as stages_module
+from investment_assistant.review import discipline as discipline_module
+from investment_assistant.review import retro
+from investment_assistant.review import retro_cards
+import investment_assistant.core.tx as service
+from investment_assistant.core.constants import AGENT_DEADLINE_S
+from investment_assistant.execution import ledger
+import investment_assistant.core.stages as stages_module
+from investment_assistant.workflow.recorder import StageRecorder
 
 NY = ZoneInfo('America/New_York')
 FETCHED = NOW - timedelta(days=2)
@@ -41,7 +53,7 @@ def evening(day: date) -> datetime:
 def put_bars(db, ticker: str, path: dict[date, tuple], *, fetched=FETCHED) -> None:
     rows = [{'price_date': d, 'open': o, 'high': h, 'low': l, 'close': c, 'adj_close': c, 'volume': 1000,
              'split_factor': 1} for d, (o, h, l, c) in sorted(path.items())]
-    repository.store_bars(db, ticker, rows, now=fetched)
+    data_repo.store_bars(db, ticker, rows, now=fetched)
 
 
 def flat(first: date, last: date, price=100.0, high=101.0, low=99.0) -> dict[date, tuple]:
@@ -53,7 +65,7 @@ def flat(first: date, last: date, price=100.0, high=101.0, low=99.0) -> dict[dat
 
 
 def make_plan(db, ticker: str, signal_date: date, *, status='ok', reasons=(), valid_from=None, valid_until=None):
-    return repository.insert_plan(db, {
+    return execution_repo.insert_plan(db, {
         'ticker': ticker, 'signal_date': signal_date, 'kind': 'rule', 'based_on_id': None, 'plan_version': 'plan-1',
         'ref_price': 100, 'atr': 2, 'entry_low': 98, 'entry_high': 102, 'stop': 94, 'target1': 112,
         'trail_atr_multiple': 3, 'valid_from': valid_from or add_trading_days(signal_date, 1),
@@ -65,7 +77,7 @@ def make_plan(db, ticker: str, signal_date: date, *, status='ok', reasons=(), va
 def make_decision(db, ticker, signal_date, plan_id, *, decision='accept', decided_at=None, action='buy',
                   supersedes_id=None):
     final = {'accept': action, 'reject': 'ignore', 'downgrade': 'watch'}[decision]
-    return repository._insert_decision_for_tests(db, {
+    return execution_repo_legacy._insert_decision_for_tests(db, {
         'request_id': uuid.uuid4(), 'ticker': ticker, 'signal_date': signal_date, 'candidate_ids': [uuid.uuid4()],
         'brief_id': None, 'proposed_action': action, 'final_action': final, 'decision': decision,
         'reason': '合成样例决定', 'supersedes_id': supersedes_id, 'plan_id': plan_id},
@@ -73,7 +85,7 @@ def make_decision(db, ticker, signal_date, plan_id, *, decision='accept', decide
 
 
 def make_trade(db, ticker, side, price, when, decision_id=None, quantity=10, plan_id=None):
-    return repository.insert_trade(db, {
+    return execution_repo.insert_trade(db, {
         'request_id': uuid.uuid4(), 'ticker': ticker, 'side': side, 'quantity': quantity, 'price': price, 'fee': 0,
         'executed_at': when, 'decision_id': decision_id, 'plan_id': plan_id, 'note': None}, 'h', recorded_at=NOW)
 
@@ -149,7 +161,7 @@ def draft_reply(*, lessons: int = 1, refs=('fact:plans', 'fact:bars_after'), rev
 
 def connection_is(monkeypatch, status='connected'):
     """The agent connection as ``settings_from_env`` reads it (v2.8: the ChatGPT connection, not an API key)."""
-    from investment_assistant.workbench import agent_connection
+    from investment_assistant.core.llm import connection as agent_connection
 
     info = {'status': status, 'scopes_ok': status == 'connected', 'model': 'gpt-test' if status == 'connected' else None,
             'secret': 'test-access-token' if status == 'connected' else None}
@@ -171,7 +183,7 @@ def run_stage(db, d, *, session=SESSION, now=NOW, summary=None, started=0.0, clo
 
 
 def cards(db):
-    return repository.review_cards(db)
+    return review_repo.review_cards(db)
 
 
 def only_card(db, ticker=None):
@@ -202,11 +214,11 @@ def test_close_creates_card_and_drafts(db, scripted_model):
     assert facts['discipline']['totals'] == {'chase': 1, 'early_take': 0, 'held_loser': 0, 'unplanned': 0,
                                              'pending': 1}
     assert facts['discipline']['trades'][0]['immature'] == ['early_take']
-    drafts = repository.card_drafts(db, card['id'])
+    drafts = review_repo.card_drafts(db, card['id'])
     assert [(x['status'], x['trigger'], x['attempt']) for x in drafts] == [('ok', 'batch', 1)]
-    lessons = repository.knowledge_drafts(db, open_only=True)
+    lessons = review_repo.knowledge_drafts(db, open_only=True)
     assert [(x['origin'], x['lesson_index']) for x in lessons] == [('review_card', 0), ('review_card', 1)]
-    run = repository.agent_run_by_id(db, drafts[0]['agent_run_id'])
+    run = data_repo.agent_run_by_id(db, drafts[0]['agent_run_id'])
     assert (run['mode'], run['agent_version'], run['status'], run['plan_id']) == ('retro', 'agent-retro-2', 'ok', None)
     assert run['signal_date'] == s['signal_date'] and run['pool'] == 'main'
     assert summary['retro'] == {'new_cards': 1, 'drafts': 1, 'to_review': 1}
@@ -223,7 +235,7 @@ def test_retro_counts_match_rows(db, scripted_model):
     assert len(rows) == 4
     by_kind = {c['ticker']: c['end_kind'] for c in rows}
     assert by_kind == {'ZZZA': 'position_closed', 'ZZZB': 'stop', 'ZZZC': 'expired', 'ZZZD': 'invalidated'}
-    drafts = [x for c in rows for x in repository.card_drafts(db, c['id'])]
+    drafts = [x for c in rows for x in review_repo.card_drafts(db, c['id'])]
     assert acc.input_count == 4 and acc.output_count == len(drafts) == 4
     assert all(x['status'] == 'ok' for x in drafts)
     assert sorted(acc.outputs['card_ids']) == sorted(c['id'] for c in rows)
@@ -276,7 +288,7 @@ def test_unplanned_trade_card(db, scripted_model):
     assert facts['tracks'] == {'actual': {'status': 'no_plan', 'status_text': '无计划成交', 'r': None,
                                           'plan_id': None, 'plan_kind': None}}
     assert facts['discipline']['totals']['unplanned'] == 1 and facts['subject']['buy_trade_id'] == str(s['buy']['id'])
-    run = repository.agent_run_by_id(db, repository.card_drafts(db, card['id'])[0]['agent_run_id'])
+    run = data_repo.agent_run_by_id(db, review_repo.card_drafts(db, card['id'])[0]['agent_run_id'])
     assert run['signal_date'] == D(-2)                                  # the buy's New York day
 
 
@@ -346,7 +358,7 @@ def test_facts_tracks_equal_track_rows(db, scripted_model):
     s = scenario(db, 'ZZZA')
     run_stage(db, stage_deps(scripted_model, [draft_reply()]))
     card = only_card(db)
-    [row] = [r for r in service._track_rows(db, s['signal_date'], s['signal_date'], session=SESSION, now=NOW)
+    [row] = [r for r in review_weekly._track_rows(db, s['signal_date'], s['signal_date'], session=SESSION, now=NOW)
              if r['ticker'] == 'ZZZA']
     tracks = card['facts']['tracks']
     assert set(tracks) == {'rule', 'agent', 'actual'}
@@ -362,7 +374,7 @@ def test_facts_discipline_equals_evaluate(db, scripted_model):
     s = scenario(db, 'ZZZA')
     run_stage(db, stage_deps(scripted_model, [draft_reply()]))
     frozen = only_card(db)['facts']['discipline']
-    live = service.discipline(now=NOW)
+    live = review_weekly.discipline(now=NOW)
     [mine] = [t for t in live['trades'] if t['trade_id'] == str(s['buy']['id'])]
     assert frozen['trades'] == [{'trade_id': mine['trade_id'], 'flags': mine['flags'], 'immature': mine['immature']}]
     assert mine['flags'] == ['chase'] and mine['immature'] == ['early_take']
@@ -401,7 +413,7 @@ def test_card_view_discipline_now_differs(db, scripted_model):
 
 def _copies(db, card, n):
     for i in range(n):
-        repository.insert_review_card(db, {
+        review_repo.insert_review_card(db, {
             'event_key': f"copy:{card['id']}:{i}", 'subject': 'unit', 'ticker': card['ticker'],
             'signal_date': card['signal_date'], 'buy_trade_id': None, 'end_kind': card['end_kind'],
             'end_session': card['end_session'] - timedelta(days=0), 'retro_version': card['retro_version'],
@@ -434,12 +446,12 @@ def test_draft_cap_and_gates(db, scripted_model):
     db.execute('DELETE FROM knowledge_drafts')
     db.execute('DELETE FROM review_card_drafts')
     db.commit()
-    out, summary, acc = run_stage(db, stage_deps(scripted_model, []), clock=lambda: service.AGENT_DEADLINE_S + 1)
+    out, summary, acc = run_stage(db, stage_deps(scripted_model, []), clock=lambda: AGENT_DEADLINE_S + 1)
     assert [(s['reason'], s['count']) for s in acc.skips] == [('stage_budget', 7)]
     assert acc.detail['drafts']['skipped'] == 7
     rows = db.execute("SELECT status, reason FROM review_card_drafts").fetchall()
     assert sorted(rows) == [('skipped', 'stage_budget')] * 7                 # one skip row per card, with the reason
-    out, summary, acc = run_stage(db, stage_deps(scripted_model, []), clock=lambda: service.AGENT_DEADLINE_S + 1)
+    out, summary, acc = run_stage(db, stage_deps(scripted_model, []), clock=lambda: AGENT_DEADLINE_S + 1)
     assert db.execute('SELECT count(*) FROM review_card_drafts').fetchone()[0] == 7      # same reason: no new rows
 
     # quota_exhausted: the agent stage already ran into the quota
@@ -448,7 +460,7 @@ def test_draft_cap_and_gates(db, scripted_model):
     assert [(s['reason'], s['count']) for s in acc.skips] == [('quota_exhausted', 7)]
 
     # token_budget: today's tokens are already at the limit
-    repository.insert_agent_run(db, {
+    analysis_repo.insert_agent_run(db, {
         'id': uuid.uuid4(), 'ticker': 'AAA', 'signal_date': SESSION, 'pool': 'main', 'attempt': 1, 'mode': 'propose',
         'agent_version': 'agent-2', 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': NOW, 'status': 'error',
         'reason': 'model_error', 'output': None, 'counter': None, 'plan_id': None, 'input_tokens': 900,
@@ -460,12 +472,12 @@ def test_draft_cap_and_gates(db, scripted_model):
     first = min(cards(db), key=lambda c: c['id'])           # the oldest end is drafted first
     db.execute('DELETE FROM review_card_drafts')
     for attempt in (1, 2, 3):
-        repository.insert_card_draft(db, {'card_id': first['id'], 'attempt': attempt, 'trigger': 'batch',
+        review_repo.insert_card_draft(db, {'card_id': first['id'], 'attempt': attempt, 'trigger': 'batch',
                                           'agent_run_id': None, 'status': 'skipped', 'reason': 'old', 'output': None})
     db.execute("UPDATE review_card_drafts SET status = 'rejected', reason = 'invalid_citation', "
                "agent_run_id = (SELECT id FROM agent_runs LIMIT 1) WHERE card_id = %s", (first['id'],))
     db.commit()
-    assert retro.card_status(drafts=repository.card_drafts(db, first['id']), verdict=None) == 'draft_failed'
+    assert retro.card_status(drafts=review_repo.card_drafts(db, first['id']), verdict=None) == 'draft_failed'
     out, summary, acc = run_stage(db, stage_deps(scripted_model, [draft_reply() for _ in range(6)]))
     assert acc.input_count == 6 and [(s['reason'], s['count']) for s in acc.skips] == [('draft_cap', 1)]
     assert acc.detail['drafts'] == {'ok': 5, 'rejected': 0, 'error': 0, 'skipped': 1}
@@ -504,13 +516,13 @@ def test_max_attempts_is_reported_once_and_draft_failed_is_not_needing(db, scrip
     card = only_card(db)
     assert retro_cards.card_state(db, card['id'])['status'] == 'draft_failed'
     rows = []
-    recorder = stages_module.StageRecorder('run-4', 'manual_batch', SESSION, writer=rows.append, wall_now=lambda: NOW)
+    recorder = StageRecorder('run-4', 'manual_batch', SESSION, writer=rows.append, wall_now=lambda: NOW)
     with recorder.stage('retro') as acc:
         retro_cards.run_stage(SESSION, now=NOW, deps=stage_deps(scripted_model, [], connection='disconnected'),
                               summary={'errors': []}, started=0.0, clock=lambda: 0.0, run_id='run-4', acc=acc)
     [row] = [r for r in rows if r['stage'] == 'retro']
     assert (row['status'], row['input_count'], row['skips'], row['degradations']) == ('success', 0, [], [])
-    assert len(repository.card_drafts(db, card['id'])) == 3                # nothing written after the third failure
+    assert len(review_repo.card_drafts(db, card['id'])) == 3                # nothing written after the third failure
 
 
 def test_verdict_landing_while_the_model_runs_leaves_no_orphan_lessons(db, scripted_model):
@@ -531,9 +543,9 @@ def test_verdict_landing_while_the_model_runs_leaves_no_orphan_lessons(db, scrip
     db.commit()
     assert (out['status'], out['reason']) == ('rejected', 'card_reviewed')
     assert db.execute('SELECT count(*) FROM knowledge_drafts').fetchone()[0] == 0
-    last = repository.card_drafts(db, card['id'])[-1]
+    last = review_repo.card_drafts(db, card['id'])[-1]
     assert (last['status'], last['reason'], last['output']) == ('rejected', 'card_reviewed', None)
-    assert repository.agent_run_by_id(db, last['agent_run_id'])['mode'] == 'retro'      # the run (and its tokens) is kept
+    assert data_repo.agent_run_by_id(db, last['agent_run_id'])['mode'] == 'retro'      # the run (and its tokens) is kept
     assert retro_cards.card_state(db, card['id'])['status'] == 'reviewed'
     assert retro_cards.card_view(card['id'], now=NOW)['lesson_drafts'] == []
 
@@ -569,7 +581,7 @@ def test_two_drafts_in_a_row_get_distinct_attempts_and_the_second_is_draft_exist
     out = retro_cards.draft_card(card['id'], now=NOW, deps=first_deps, trigger='manual')
     db.commit()
     assert (out['status'], out['reason']) == ('rejected', 'draft_exists')            # no exception, the run is kept
-    drafts = repository.card_drafts(db, card['id'])
+    drafts = review_repo.card_drafts(db, card['id'])
     assert [(d['attempt'], d['status'], d['reason']) for d in drafts][-2:] == [(2, 'ok', None),
                                                                                (3, 'rejected', 'draft_exists')]
     assert db.execute('SELECT count(*) FROM knowledge_drafts').fetchone()[0] == 1
@@ -582,7 +594,7 @@ def test_skip_rows_take_the_card_lock(db, scripted_model):
     card = only_card(db)
     retro_cards._record_skip(card['id'], 'stage_budget', 'batch')
     retro_cards._record_skip(card['id'], 'stage_budget', 'batch')
-    assert [(d['attempt'], d['reason']) for d in repository.card_drafts(db, card['id'])] == [
+    assert [(d['attempt'], d['reason']) for d in review_repo.card_drafts(db, card['id'])] == [
         (1, 'agent_unavailable: not_connected'), (2, 'stage_budget')]
 
 
@@ -619,7 +631,7 @@ def test_agent_unavailable_still_creates_cards(db, scripted_model):
     scenario(db, 'ZZZA')
     scenario(db, 'ZZZB', 'stop')
     rows = []
-    recorder = stages_module.StageRecorder('run-off', 'manual_batch', SESSION, writer=rows.append,
+    recorder = StageRecorder('run-off', 'manual_batch', SESSION, writer=rows.append,
                                            wall_now=lambda: NOW)
     summary = {'errors': [], 'agent': None}
     with recorder.stage('retro') as acc:
@@ -638,7 +650,7 @@ def test_agent_unavailable_still_creates_cards(db, scripted_model):
 def test_nothing_to_draft_is_a_plain_success_even_without_an_agent(db, scripted_model):
     scenario(db, 'ZZZQ', 'stop', shift=-9)                      # ended long before the window: no event, no card
     rows = []
-    recorder = stages_module.StageRecorder('run-quiet', 'manual_batch', SESSION, writer=rows.append,
+    recorder = StageRecorder('run-quiet', 'manual_batch', SESSION, writer=rows.append,
                                            wall_now=lambda: NOW)
     with recorder.stage('retro') as acc:
         retro_cards.run_stage(SESSION, now=NOW, deps=stage_deps(scripted_model, [], connection='disconnected'),
@@ -654,8 +666,8 @@ def test_rejected_and_error_drafts_are_accounted(db, scripted_model):
     bad = AIMessage(content='不是 JSON')
     d = stage_deps(scripted_model, [bad, draft_reply()])
     out, summary, acc = run_stage(db, d)
-    statuses = sorted((c['ticker'], repository.card_drafts(db, c['id'])[0]['status'],
-                       repository.card_drafts(db, c['id'])[0]['reason']) for c in cards(db))
+    statuses = sorted((c['ticker'], review_repo.card_drafts(db, c['id'])[0]['status'],
+                       review_repo.card_drafts(db, c['id'])[0]['reason']) for c in cards(db))
     assert statuses == [('ZZZA', 'ok', None), ('ZZZB', 'rejected', 'retro_malformed')]       # the older end is drafted first
     assert acc.detail['drafts'] == {'ok': 1, 'rejected': 1, 'error': 0, 'skipped': 0}
     assert [x['kind'] for x in acc.degradations] == ['draft_rejected']
@@ -704,7 +716,7 @@ def _drafted_card(db, scripted_model, lessons=2):
     scenario(db, 'ZZZA')
     run_stage(db, stage_deps(scripted_model, [draft_reply(lessons=lessons)]))
     card = only_card(db)
-    return card, repository.knowledge_drafts(db, open_only=True)
+    return card, review_repo.knowledge_drafts(db, open_only=True)
 
 
 def test_verdict_requires_all_drafts(db, scripted_model):
@@ -723,7 +735,7 @@ def test_verdict_requires_all_drafts(db, scripted_model):
         with pytest.raises(ValueError):
             retro_cards.verdict(card['id'], broken, now=NOW)
     db.rollback()
-    assert repository.card_verdict(db, card['id']) is None
+    assert review_repo.card_verdict(db, card['id']) is None
     assert db.execute('SELECT count(*) FROM knowledge_items').fetchone()[0] == 0
 
 
@@ -738,11 +750,11 @@ def test_verdict_creates_items_versions_and_draft_verdicts_atomically(db, script
     assert result['status'] == 'created'
     assert [(x['draft_id'], x['action'], x['ref'] is not None) for x in result['lessons']] == [
         (lessons[0]['id'], 'approve', True), (lessons[1]['id'], 'dismiss', False), (None, 'approve', True)]
-    verdict = repository.card_verdict(db, card['id'])
+    verdict = review_repo.card_verdict(db, card['id'])
     assert verdict['note'] == '我的复盘：下次不追' and verdict['draft_id'] is not None
     items = db.execute('SELECT id, origin, source_card_id, source_discussion_id FROM knowledge_items ORDER BY id').fetchall()
     assert [(o, c, d) for _, o, c, d in items] == [('review_card', card['id'], None)] * 2
-    versions, _ = repository.knowledge_rows(db, cutoff=None)
+    versions, _ = data_repo.knowledge_rows(db, cutoff=None)
     assert [(v['version'], v['title'], v['supersedes_id'], v['draft_id']) for v in versions] == [
         (1, '改过的标题', None, lessons[0]['id']), (1, '另写的', None, None)]
     assert versions[0]['concepts'] == ['concept:review.discipline_chase@1'] and versions[0]['tickers'] == ['ZZZA']
@@ -750,7 +762,7 @@ def test_verdict_creates_items_versions_and_draft_verdicts_atomically(db, script
     dv = db.execute('SELECT draft_id, action, knowledge_version_id FROM knowledge_draft_verdicts '
                     'ORDER BY draft_id').fetchall()
     assert dv == [(lessons[0]['id'], 'approve', versions[0]['id']), (lessons[1]['id'], 'dismiss', None)]
-    assert repository.knowledge_drafts(db, open_only=True) == []
+    assert review_repo.knowledge_drafts(db, open_only=True) == []
     view = retro_cards.card_view(card['id'], now=NOW)
     assert view['status'] == 'reviewed'
     assert view['verdict']['note'] == '我的复盘：下次不追'
@@ -787,7 +799,7 @@ def test_verdict_without_draft_note_only(db, scripted_model):
     result = retro_cards.verdict(card['id'], {'request_id': str(uuid.uuid4()), 'note': '只写复盘',
                                              'lessons': []}, now=NOW)
     assert result['status'] == 'created' and result['lessons'] == []
-    verdict = repository.card_verdict(db, card['id'])
+    verdict = review_repo.card_verdict(db, card['id'])
     assert verdict['note'] == '只写复盘' and verdict['draft_id'] is None
     assert db.execute('SELECT count(*) FROM knowledge_items').fetchone()[0] == 0
     assert retro_cards.card_view(card['id'], now=NOW)['status'] == 'reviewed'
@@ -811,7 +823,7 @@ def test_redraft_conflicts(db, scripted_model, monkeypatch):
         retro_cards.redraft_check(card['id'])
     connection_is(monkeypatch)
     monkeypatch.setenv('WORKBENCH_AGENT_DAILY_TOKENS', '100')
-    repository.insert_agent_run(db, {
+    analysis_repo.insert_agent_run(db, {
         'id': uuid.uuid4(), 'ticker': 'AAA', 'signal_date': SESSION, 'pool': 'main', 'attempt': 1, 'mode': 'propose',
         'agent_version': 'agent-2', 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': NOW, 'status': 'error',
         'reason': 'model_error', 'output': None, 'counter': None, 'plan_id': None, 'input_tokens': 150,
@@ -836,7 +848,7 @@ def test_manual_redraft_is_not_capped_and_adds_an_attempt(db, scripted_model):
     assert retro_cards.card_state(db, card['id'])['status'] == 'draft_failed'      # three failures
     out = retro_cards.redraft(card['id'], now=NOW, deps=stage_deps(scripted_model, [draft_reply()]))
     assert out['status'] == 'ok' and out['draft_id'] is not None
-    drafts = repository.card_drafts(db, card['id'])
+    drafts = review_repo.card_drafts(db, card['id'])
     assert [(d['attempt'], d['trigger'], d['status']) for d in drafts] == [
         (1, 'batch', 'rejected'), (2, 'manual', 'rejected'), (3, 'manual', 'rejected'), (4, 'manual', 'ok')]
     again = retro_cards.draft_card(card['id'], now=NOW, deps=stage_deps(scripted_model, []))
@@ -903,7 +915,7 @@ def test_retro_check_cli(db, scripted_model, capsys):
     assert '事实已变化' not in out.replace('事实已变化 0', '')
     # a trade voided after the card was frozen: the facts changed, the check still passes and says so
     sell = db.execute("SELECT id FROM trades WHERE ticker = 'ZZZA' AND side = 'sell'").fetchone()[0]
-    repository.mark_trade_voided(db, sell, 'typo', voided_at=NOW)
+    execution_repo.mark_trade_voided(db, sell, 'typo', voided_at=NOW)
     db.commit()
     code, out = _run(capsys, 'check', '--since', since, '--until', SESSION.isoformat())
     assert code == 0 and '事实已变化' in out
@@ -932,13 +944,13 @@ def test_retro_check_compares_facts_as_of_the_freeze(db, scripted_model, capsys)
     later[D(2)] = (110.0, 113.0, 109.0, 112.0)                          # the rule plan's shadow reaches T1 (112)
     put_bars(db, 'ZZZA', later, fetched=at(D(1)))
     db.commit()
-    assert retro_cards._fresh_tracks(service.unit_track_row(
+    assert retro_cards._fresh_tracks(review_weekly.unit_track_row(
         db, 'ZZZA', only_card(db)['signal_date'], session=D(3), now=NOW + timedelta(days=30)))['rule'] \
         != only_card(db)['facts']['tracks']['rule']                     # the premise: today's row really drifted
     code, out = _run(capsys, 'check', '--since', since, '--until', until)
     assert code == 0 and '事实已变化 0' in out and '事实已变化：' not in out
     sell = db.execute("SELECT id FROM trades WHERE ticker = 'ZZZA' AND side = 'sell'").fetchone()[0]
-    repository.mark_trade_voided(db, sell, 'typo', voided_at=NOW)
+    execution_repo.mark_trade_voided(db, sell, 'typo', voided_at=NOW)
     db.commit()
     code, out = _run(capsys, 'check', '--since', since, '--until', until)
     assert code == 0 and '事实已变化 1' in out and '事实已变化：tracks' in out
@@ -979,10 +991,10 @@ def test_detect_show_and_draft_commands(db, scripted_model, capsys, monkeypatch)
     assert code == 0 and 'ZZZA' in out and '平仓（自行卖出）' in out and '执行 采纳（照规则基线）' in out
     assert _run(capsys, 'show', '--card', '999999')[0] == 1
     built = stage_deps(scripted_model, [draft_reply()])
-    monkeypatch.setattr(retro_cards.service, 'Deps', lambda: built)
+    monkeypatch.setattr(core_tx, 'Deps', lambda: built)
     code, out = _run(capsys, 'draft', '--card', str(card['id']))
     assert code == 0 and '起草结果：ok' in out
-    assert repository.card_drafts(db, card['id'])[0]['trigger'] == 'manual'
+    assert review_repo.card_drafts(db, card['id'])[0]['trigger'] == 'manual'
 
 
 def test_retro_read_paths_are_read_only(db, scripted_model, monkeypatch):
@@ -1050,18 +1062,18 @@ def test_retro2_subject_for_a_fill_linked_to_a_merged_units_baseline(db, scripte
     db.execute("UPDATE trade_plans SET kind = 'agent', plan_version = 'agent-3', entry_type = 'zone_limit', "
                'max_hold_sessions = 10 WHERE id = %s', [chain_plan['id']])
     run_id = uuid.uuid4()
-    repository.insert_agent_run(db, {
+    analysis_repo.insert_agent_run(db, {
         'id': run_id, 'ticker': 'ZZZM', 'signal_date': signal_chain, 'pool': 'main', 'attempt': 1, 'mode': 'propose',
         'agent_version': 'agent-3', 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': at(D(-4)),
         'status': 'ok', 'reason': None, 'output': {'action': 'buy'}, 'counter': None, 'plan_id': chain_plan['id'],
         'input_tokens': 0, 'output_tokens': 0, 'started_at': at(D(-4)), 'finished_at': at(D(-4))}, [])
-    repository.insert_plan_version(db, {
+    execution_repo.insert_plan_version(db, {
         'plan_id': chain_plan['id'], 'ticker': 'ZZZM', 'signal_date': signal_chain, 'version_no': 0,
         'supersedes_plan_id': None, 'origin': 'signal', 'agent_run_id': run_id, 'cutoff_at': at(D(-4)),
         'as_of_session': signal_chain, 'diff': None, 'schema_version': 'agent-3'})
     db.execute('UPDATE agent_plan_versions SET created_at = %s', [at(D(-4))])
     merged_plan = make_plan(db, 'ZZZM', signal_merged)
-    repository.insert_chain_retrigger(db, {
+    execution_repo.insert_chain_retrigger(db, {
         'ticker': 'ZZZM', 'unit_signal_date': signal_merged, 'chain_signal_date': signal_chain, 'chain_state': 'entry',
         'rule_ids': ['volume_breakout'], 'baseline_plan_id': merged_plan['id'], 'entry_cap': D(6), 'run_id': 'r',
         'timeline_version': 'timeline-2', 'created_at': at(D(-3))})
@@ -1079,7 +1091,7 @@ def test_retro2_facts_execution_holding(db, scripted_model):
     `holding` (the daily status rows summarised: the exit instruction and how long the sale took)."""
     s = plan_linked_unit(db, 'ZZZH', notes=('这笔想拿到 T1',))
     for index, (offset, instruction, reason) in enumerate(((-1, 'hold', None), (-0, 'exit', 'time_stop'))):
-        repository.insert_holding_status(db, {
+        execution_repo.insert_holding_status(db, {
             'ticker': 'ZZZH', 'session': D(offset), 'run_id': 'r', 'quantity': 10, 'avg_cost': 103, 'held_sessions': index + 2,
             'max_hold_sessions': 10, 'instruction': instruction, 'exit_reason': reason, 'reason': '维持',
             'timeline_version': 'timeline-2'})
@@ -1107,12 +1119,12 @@ def test_retro1_cards_render_unchanged(db, scripted_model, capsys):
     the card's own version picks its keys, its facts text and its prompt."""
     s = scenario(db, 'ZZZA')
     cache = retro_cards._Cache(db, SESSION, NOW)
-    [subject] = [x for x in repository.retro_subjects(db, since=D(-4), until=SESSION) if x['ticker'] == 'ZZZA']
+    [subject] = [x for x in review_repo.retro_subjects(db, since=D(-4), until=SESSION) if x['ticker'] == 'ZZZA']
     item = retro_cards._evaluate(subject, cache, window_start=D(-4), known=lambda key: False)
     assert item['state'] == 'event' and not subject.get('v2')
     facts = retro_cards._freeze(db, {**item, 'subject': subject}, cache, session=SESSION, now=NOW)
     assert set(facts) == set(retro.FACT_KEYS) and facts['decision']['text'] == '采纳（照规则计划）'
-    card_id = repository.insert_review_card(db, {
+    card_id = review_repo.insert_review_card(db, {
         'event_key': item['event']['event_key'], 'subject': 'unit', 'ticker': 'ZZZA', 'signal_date': s['signal_date'],
         'buy_trade_id': None, 'end_kind': item['event']['end_kind'], 'end_session': item['event']['end_session'],
         'retro_version': 'retro-1', 'facts': facts, 'detected_run_id': 'old'})
@@ -1130,7 +1142,7 @@ def test_retro1_cards_render_unchanged(db, scripted_model, capsys):
     built = agent_deps(scripted_model, [draft_reply(review_ref='fact:decision')], settings=_agent_settings())
     result = retro_cards.draft_card(card_id, now=NOW, deps=built, trigger='manual')
     assert result['status'] == 'ok'
-    run = repository.agent_run_by_id(db, result['agent_run_id'])
+    run = data_repo.agent_run_by_id(db, result['agent_run_id'])
     assert run['agent_version'] == 'agent-retro-1'
 
 
@@ -1143,7 +1155,7 @@ def test_retro2_check_cli(db, scripted_model, capsys):
     assert code == 0 and '齐全' in out and '事实不全 0' in out
     card = only_card(db)
     broken = {k: v for k, v in card['facts'].items() if k != 'holding'}
-    repository.insert_review_card(db, {
+    review_repo.insert_review_card(db, {
         'event_key': 'copy:broken', 'subject': 'unit', 'ticker': 'ZZZC', 'signal_date': card['signal_date'],
         'buy_trade_id': None, 'end_kind': 'position_closed', 'end_session': card['end_session'],
         'retro_version': 'retro-2', 'facts': broken, 'detected_run_id': 'x'})
@@ -1154,7 +1166,7 @@ def test_retro2_check_cli(db, scripted_model, capsys):
 
 def test_retro_cli_without_029_exits_2(db, capsys, monkeypatch):
     """M10: the review-card scan reads 029 tables; without them the command says migration_029_missing, exit code 2."""
-    monkeypatch.setattr(repository, 'executable_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'executable_ready', lambda conn: False)
     code = retro_cards.main(['check', '--since', D(-4).isoformat()])
     captured = capsys.readouterr()
     assert code == 2 and 'migration_029_missing' in captured.err

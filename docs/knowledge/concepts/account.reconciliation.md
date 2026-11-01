@@ -6,7 +6,7 @@ version: 1
 applies_to: [account-1]
 summary: "券商快照与同日或之前最近交易日的账本权益比较，差额同时不超 1% 与 100 美元才算一致；对账只提示，不改账。"
 related: [account.ledger, review.monthly_return, review.position]
-sources: [investment_assistant/workbench/accounts.py, investment_assistant/workbench/account.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
+sources: [investment_assistant/execution/accounts.py, investment_assistant/execution/account_records.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
 ---
 
 ## 是什么

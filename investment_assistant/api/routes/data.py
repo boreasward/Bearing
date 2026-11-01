@@ -7,7 +7,8 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 
-from investment_assistant.workbench import data_view, service
+from investment_assistant.views import data as data_view
+from investment_assistant.core import tx as service
 
 router = APIRouter()
 

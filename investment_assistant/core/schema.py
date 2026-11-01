@@ -71,3 +71,37 @@ def five_layers_ready(conn) -> bool:
     """True when migration 031 has run. TODO(Task 2): implement the real gate; the placeholder
     passes so Task 0's sinks stay behaviour-neutral."""
     return True
+
+
+def fetch_runs_ready(conn) -> bool:
+    """True when migration 024 has run; the workbench itself does not require this table."""
+    return conn.execute("SELECT to_regclass('data_fetch_runs')").fetchone()[0] is not None
+
+
+def stage_runs_ready(conn) -> bool:
+    """True when migration 025 has run; the workbench itself does not require this table."""
+    return conn.execute("SELECT to_regclass('stage_runs')").fetchone()[0] is not None
+
+
+def timeline_ready(conn) -> bool:
+    """True when migration 026 has run: the three tables and signal_decisions.agent_plan_id exist.
+
+    Resolved through the search_path like every other query here, and never raises on a missing
+    table, so the caller's transaction stays usable."""
+    row = conn.execute(
+        "SELECT to_regclass('agent_plan_versions') IS NOT NULL AND to_regclass('plan_reviews') IS NOT NULL "
+        "AND to_regclass('user_inputs') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_attribute "
+        "WHERE attrelid = to_regclass('signal_decisions') AND attname = 'agent_plan_id' AND NOT attisdropped)"
+    ).fetchone()
+    return bool(row[0])
+
+
+GROWTH_TABLES = ('review_cards', 'review_card_drafts', 'discussions', 'knowledge_items', 'discussion_turns',
+                 'knowledge_drafts', 'knowledge_versions', 'knowledge_status', 'knowledge_draft_verdicts',
+                 'review_card_verdicts', 'knowledge_citations')
+
+def growth_ready(conn) -> bool:
+    """True when migration 027 has run: all eleven tables exist. One ``to_regclass`` query, resolved through
+    the search_path, that never raises on a missing table."""
+    checks = ' AND '.join(f"to_regclass('{table}') IS NOT NULL" for table in GROWTH_TABLES)
+    return bool(conn.execute(f'SELECT {checks}').fetchone()[0])

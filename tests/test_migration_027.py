@@ -1,4 +1,5 @@
 """Migration 027 (v2.7 spec §11): eleven append-only tables and three relaxed constraints. Throwaway schema only."""
+import investment_assistant.core.dbutil as core_dbutil
 import json
 import os
 import re
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from investment_assistant.workbench import repository
+# Repository consumers use their owning layers below.
 
 MIGRATION = Path('migrations/027_growth_loop.sql')
 NEW_TABLES = ('review_cards', 'review_card_drafts', 'discussions', 'knowledge_items', 'discussion_turns',
@@ -392,12 +393,13 @@ def test_citation_fk_to_version(migrated_db):
 
 
 def test_new_tables_not_in_workbench_tables():
-    assert not set(NEW_TABLES) & set(repository.WORKBENCH_TABLES)
+    assert not set(NEW_TABLES) & set(core_dbutil.WORKBENCH_TABLES)
 
 
 def test_repository_only_inserts_into_new_tables():
-    source = Path(repository.__file__).read_text(encoding='utf-8')
+    from investment_assistant.review import repo as review_repo
+    source = Path(review_repo.__file__).read_text(encoding='utf-8')
     for table in NEW_TABLES:
         assert not re.search(rf'UPDATE\s+{table}\b', source), table
         assert not re.search(rf'DELETE\s+FROM\s+{table}\b', source), table
-    assert tuple(repository.GROWTH_TABLES) == NEW_TABLES
+    assert tuple(core_dbutil.GROWTH_TABLES) == NEW_TABLES

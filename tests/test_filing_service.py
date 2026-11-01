@@ -2,8 +2,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from investment_assistant.config import FilingsConfig
-from investment_assistant.filings import service
-from investment_assistant.filings.service import download_configured_filings
+from investment_assistant.data.sec import storage as service
+from investment_assistant.data.sec.storage import download_configured_filings
 
 
 class FakeDownloader:

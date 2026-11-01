@@ -7,15 +7,16 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from investment_assistant.workbench import plan_shadow, positions
+from investment_assistant.execution import simulation as plan_shadow
+from investment_assistant.execution import positions
 
 D0, D1, D2, D3 = date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 22), date(2026, 10, 23)
 ACCOUNT = {'id': 'account', 'params': {'fee_per_trade': 0}}
 
 
 def engine():
-    assert util.find_spec('investment_assistant.workbench.paper_fill') is not None, 'paper fill module missing'
-    return import_module('investment_assistant.workbench.paper_fill')
+    assert util.find_spec('investment_assistant.execution.paper.fill') is not None, 'paper fill module missing'
+    return import_module('investment_assistant.execution.paper.fill')
 
 
 def plan(kind='zone_limit', **kw):
@@ -244,7 +245,7 @@ def test_half_rounds_on_the_execution_day_basis_when_a_later_split_is_known(spli
 
 def test_reason_text_tables_cover_every_enum():
     eng = engine()
-    from investment_assistant.workbench import entry_rules
+    from investment_assistant.execution import entry_rules
     assert set(eng.CANCEL_REASON_TEXT) == {'superseded_by_revision', 'chain_ended', 'agent_cancel',
                                            'validity_expired', 'account_closed'}
     assert set(eng.VOID_REASON_TEXT) == set(entry_rules.VOID_REASONS)

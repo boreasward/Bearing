@@ -22,7 +22,7 @@ def isolate_unit_tests_from_local_database(monkeypatch):
         monkeypatch.delenv(f'WORKBENCH_CHATGPT_{name}', raising=False)
     # No test may read (or refresh) a real ChatGPT connection: the default reader says "not connected". Tests that
     # need a connected agent pass settings / read_connection explicitly.
-    from investment_assistant.workbench import agent_connection
+    from investment_assistant.core.llm import connection as agent_connection
     monkeypatch.setattr(agent_connection, 'read_for_settings',
                         lambda: {'status': 'disconnected', 'scopes_ok': False, 'model': None, 'secret': None})
     # ... and the ChatGPT HTTP layer can only reach the loopback (fake authorization servers), never a real host.
@@ -30,7 +30,7 @@ def isolate_unit_tests_from_local_database(monkeypatch):
 
     import httpx
 
-    from investment_assistant.workbench.agent import chatgpt, model as agent_model
+    from investment_assistant.core.llm import chatgpt, model as agent_model
 
     real_http, real_client = chatgpt._http, agent_model._http_client
 

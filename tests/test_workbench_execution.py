@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from investment_assistant.workbench import execution
+from investment_assistant.execution import adoption as execution
 
 SD = date(2026, 10, 29)                      # chain signal date
 VF, VU = date(2026, 10, 30), date(2026, 11, 3)

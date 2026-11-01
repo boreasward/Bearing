@@ -9,7 +9,9 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import discipline, plan_shadow, retro
+from investment_assistant.review import discipline
+from investment_assistant.review import retro
+from investment_assistant.execution import simulation as plan_shadow
 
 NY = ZoneInfo('America/New_York')
 D0, D1, D2, D3, D4, D5, S = (date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 22), date(2026, 10, 23),
@@ -288,8 +290,10 @@ def test_retro_module_stays_pure():
             names += [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
             names += [f'{node.module}.{alias.name}' for alias in node.names]
-    parts = {part for name in names for part in name.split('.')}
-    assert not parts & {'service', 'agent', 'repository'}, names
+    forbidden = ('investment_assistant.analysis', 'investment_assistant.workflow',
+                 'investment_assistant.core.tx')
+    assert not [name for name in names if any(name == prefix or name.startswith(prefix + '.')
+                                             for prefix in forbidden)], names
 
 
 # ---- frozen facts ------------------------------------------------------------------------------

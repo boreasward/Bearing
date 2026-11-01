@@ -1,4 +1,5 @@
 """Portfolio evidence/structure and a single-phase graph, using only scripted models."""
+import investment_assistant.data.repo as data_repo
 import json
 import re
 from datetime import UTC, date, datetime
@@ -9,17 +10,17 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from investment_assistant.workbench.agent import graph
-from investment_assistant.workbench.agent.citations import Rejected
-from investment_assistant.workbench.agent.tools import ToolContext
+from investment_assistant.analysis.agent import graph
+from investment_assistant.execution.citations import Rejected
+from investment_assistant.analysis.agent.tools import ToolContext
 
 NOW = datetime(2026, 10, 21, 22, tzinfo=UTC)
 S = NOW.date()
 
 
 def checker():
-    assert util.find_spec('investment_assistant.workbench.agent.portfolio_check') is not None
-    return import_module('investment_assistant.workbench.agent.portfolio_check')
+    assert util.find_spec('investment_assistant.execution.portfolio_check') is not None
+    return import_module('investment_assistant.execution.portfolio_check')
 
 
 def facts():
@@ -68,8 +69,8 @@ def test_bad_structure_is_rejected(bad):
 
 def run(make, messages, monkeypatch):
     assert hasattr(graph, 'run_portfolio')
-    from investment_assistant.workbench import repository
-    monkeypatch.setattr(repository, 'read_bars', lambda conn, ticker, session, **kw: [])
+    # Repository consumers use their owning layers below.
+    monkeypatch.setattr(data_repo, 'read_bars', lambda conn, ticker, session, **kw: [])
     model = make(messages)
     ctx = ToolContext(ticker='ACCOUNT', session=S, cutoff_at=NOW, read=lambda fn: fn(object()))
     result = graph.run_portfolio(account={'id': 'a', 'name': 'test'}, ctx=ctx, model=model,

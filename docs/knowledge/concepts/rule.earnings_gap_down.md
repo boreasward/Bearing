@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "卖出候选：8-K Item 2.02 财报发布后的第一个交易日，开盘较前收盘跳空 ≤ −3%，且收盘不高于开盘。"
 related: [rule.earnings_gap_up, indicator.gap, family.sec_filings, system.conflict]
-sources: [investment_assistant/workbench/rules.py, investment_assistant/workbench/derivation.py, docs/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

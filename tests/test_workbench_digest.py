@@ -5,7 +5,7 @@ from decimal import Decimal as D
 
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.notify import templates
-from investment_assistant.workbench import digest
+from investment_assistant.review import push_digest as digest
 
 SESSION = date(2026, 10, 22)
 URL = 'http://localhost:8787'

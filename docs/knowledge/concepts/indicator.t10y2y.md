@@ -6,7 +6,7 @@ version: 1
 applies_to: [regime-2]
 summary: "FRED 序列 T10Y2Y，10 年期与 2 年期美债收益率之差；只作背景信息，附 20 个观测前的变化。"
 related: [family.fred, indicator.hy_oas, indicator.regime]
-sources: [investment_assistant/workbench/macro.py, investment_assistant/workbench/regime.py]
+sources: [investment_assistant/data/adapters/fred.py, investment_assistant/derivation/indicators/breadth.py]
 ---
 
 ## 是什么

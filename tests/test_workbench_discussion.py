@@ -2,6 +2,9 @@
 
 ``ask_check`` is the synchronous half (checks and your turn) and ``answer`` the background body; the tests call
 them one after the other, the way the route does, and read the discussion back through ``view``."""
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.data.repo as data_repo
+import investment_assistant.review.repo as review_repo
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -13,10 +16,14 @@ from test_workbench_my_knowledge import agent_plan, body as knowledge_body
 from test_workbench_retro_cards import (D, NOW, SESSION, draft_reply, make_plan, put_bars, flat, run_stage,  # noqa: F401
                                         scenario, stage_deps)
 from test_workbench_service import db  # noqa: F401
-from investment_assistant.tasks import runner
-from investment_assistant.workbench import (discussion, ledger, my_knowledge, repository, retro_cards, service,
-                                            user_inputs)
-from investment_assistant.workbench.agent import discuss_tools
+from investment_assistant.core import runner
+from investment_assistant.review import discussion
+from investment_assistant.review.knowledge import my_knowledge
+from investment_assistant.review import retro_cards
+import investment_assistant.core.tx as service
+from investment_assistant.execution import ledger
+from investment_assistant.execution import user_inputs
+from investment_assistant.review import discuss_tools
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +34,7 @@ def agent_on(monkeypatch):
 
 def connection_is(monkeypatch, status='connected'):
     """The agent connection as ``settings_from_env`` reads it (v2.8: the ChatGPT connection, not an API key)."""
-    from investment_assistant.workbench import agent_connection
+    from investment_assistant.core.llm import connection as agent_connection
 
     info = {'status': status, 'scopes_ok': status == 'connected', 'model': 'gpt-test' if status == 'connected' else None,
             'secret': 'test-access-token' if status == 'connected' else None}
@@ -61,14 +68,17 @@ def ask(discussion_id, text='这个止损怎么来的？', **over):
 
 
 def run_answer(db, discussion_id, asked, make, replies, **settings):
+    import investment_assistant.views.derivation as derivation_view
+    import investment_assistant.views.reasoning as reasoning
     d = stage_deps(make, replies, **settings)
-    out = discussion.answer(discussion_id, asked['turn_id'], now=NOW, deps=d, run_id='discuss-test')
+    out = discussion.answer(discussion_id, asked['turn_id'], now=NOW, deps=d, run_id='discuss-test',
+                            read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in)
     db.commit()
     return out, d
 
 
 def turns(db, discussion_id):
-    return repository.turns(db, discussion_id)
+    return review_repo.turns(db, discussion_id)
 
 
 def table_counts(db) -> dict[str, int]:
@@ -159,7 +169,7 @@ def test_ask_preconditions(db, monkeypatch):
 
     monkeypatch.setenv('WORKBENCH_AGENT_DAILY_TOKENS', '100')
     started = datetime.now(UTC)
-    repository.insert_agent_run(db, {
+    analysis_repo.insert_agent_run(db, {
         'id': uuid.uuid4(), 'ticker': 'AAA', 'signal_date': SESSION, 'pool': 'main', 'attempt': 1, 'mode': 'propose',
         'agent_version': 'agent-2', 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': NOW, 'status': 'error',
         'reason': 'model_error', 'output': None, 'counter': None, 'plan_id': None, 'input_tokens': 150,
@@ -212,7 +222,7 @@ def test_turn_written_before_answer_and_cutoff(db, scripted_model):
     record, plan, _ = make_discussion(db)
     asked = ask(record['id'])
     [user] = turns(db, record['id'])
-    assert repository.agent_runs_for(db, 'ZZZA', D(-3), mode='discuss') == []        # nothing answered yet
+    assert analysis_repo.agent_runs_for(db, 'ZZZA', D(-3), mode='discuss') == []        # nothing answered yet
     assert discussion.view(record['id'])['turns'][0]['state'] == 'pending'
     out, d = run_answer(db, record['id'], asked, scripted_model,
                         [AIMessage(content='', tool_calls=[tool_call('get_plan_context')]),
@@ -222,18 +232,18 @@ def test_turn_written_before_answer_and_cutoff(db, scripted_model):
     assert (reply['role'], reply['seq'], reply['reply_to'], reply['status']) == ('assistant', 2, user['id'], 'ok')
     assert reply['cutoff_at'] == user['created_at'] and reply['created_at'] > user['created_at']
     assert reply['refs'] == ['call:1', 'fact:context'] and reply['body'].startswith('止损来自')
-    run = repository.agent_run_by_id(db, reply['agent_run_id'])
+    run = data_repo.agent_run_by_id(db, reply['agent_run_id'])
     assert str(run['id']) == user['run_id'] == asked['run_id']
     assert (run['mode'], run['agent_version'], run['status'], run['plan_id'], run['cutoff_at']) == (
         'discuss', 'agent-discuss-1', 'ok', None, user['created_at'])
     assert (run['ticker'], run['signal_date'], run['input_tokens'], run['output_tokens']) == ('ZZZA', D(-3), 20, 10)
-    calls = repository.agent_tool_calls(db, run['id'])
+    calls = analysis_repo.agent_tool_calls(db, run['id'])
     assert [(c['seq'], c['phase'], c['tool']) for c in calls] == [(1, 'discuss', 'get_plan_context')]
     assert calls[0]['result']['data']['plan']['id'] == str(plan['id'])
     # the prompt carried the cutoff, the history and the question; the reasoning view finds the discussion
     human = d.agent_model.seen[0][1].content
     assert '[fact:context]' in human and '提问时刻' in human and '这个止损怎么来的？' in human
-    from investment_assistant.workbench import reasoning
+    import investment_assistant.views.reasoning as reasoning
     view = reasoning.reasoning(str(run['id']))
     assert [s['kind'] for s in view['steps']][0] == 'question' and view['steps'][-2]['kind'] == 'answer'
     assert discussion.wait_state(user) == 'interrupted'              # answered turns are never asked for state
@@ -276,15 +286,15 @@ def test_discussion_writes_only_own_tables(db, scripted_model, monkeypatch):
     assert (after['discussion_turns'] - before['discussion_turns'], after['agent_runs'] - before['agent_runs'],
             after['agent_tool_calls'] - before['agent_tool_calls'], after['knowledge_drafts'] - before['knowledge_drafts']
             ) == (2, 1, 5, 1)
-    calls = repository.agent_tool_calls(db, repository.turns(db, record['id'])[1]['agent_run_id'])
+    calls = analysis_repo.agent_tool_calls(db, review_repo.turns(db, record['id'])[1]['agent_run_id'])
     assert [c['result'].get('error') for c in calls] == [None] * 5
     assert [c['tool'] for c in calls] == ['get_plan_context', 'get_derivation', 'get_agent_run', 'get_knowledge',
                                          'get_concept']
     assert calls[0]['result']['data']['plan']['id'] == str(plan['id'])
     assert calls[2]['result']['data']['run']['mode'] == 'propose'
-    [stored] = repository.knowledge_drafts(db, open_only=True)
+    [stored] = review_repo.knowledge_drafts(db, open_only=True)
     assert (stored['origin'], stored['target_knowledge_id'], stored['target_version']) == ('discussion', kid, 1)
-    reply = repository.turns(db, record['id'])[1]
+    reply = review_repo.turns(db, record['id'])[1]
     assert stored['discussion_turn_id'] == reply['id'] and stored['concepts'] == ['plan.stop']
     shown = discussion.view(record['id'])['turns'][1]['knowledge_draft']
     assert shown['id'] == stored['id'] and shown['verdict'] is None and shown['target_knowledge_id'] == kid
@@ -304,14 +314,16 @@ def test_discussion_tools_run_in_read_only_transactions(db, scripted_model, monk
     out, d = run_answer(db, record['id'], asked, scripted_model,
                         [AIMessage(content='', tool_calls=[tool_call('get_plan_context')]),
                          answer_reply(refs=['fact:context'])])
-    reply = repository.turns(db, record['id'])[1]
-    [call] = repository.agent_tool_calls(db, reply['agent_run_id'])
+    reply = review_repo.turns(db, record['id'])[1]
+    [call] = analysis_repo.agent_tool_calls(db, reply['agent_run_id'])
     assert 'error' in call['result'] and 'read-only' in call['result']['error'].lower()
     assert db.execute('SELECT count(*) FROM trade_plans').fetchone()[0] == before['trade_plans'] == 1
     assert plan['id'] is not None
 
 
 def test_answer_exception_writes_error_turn(db, scripted_model):
+    import investment_assistant.views.derivation as derivation_view
+    import investment_assistant.views.reasoning as reasoning
     record, _, _ = make_discussion(db)
     asked = ask(record['id'])
 
@@ -324,14 +336,15 @@ def test_answer_exception_writes_error_turn(db, scripted_model):
 
     d = stage_deps(scripted_model, [])
     d.agent_model = Exploding()
-    out = discussion.answer(record['id'], asked['turn_id'], now=NOW, deps=d, run_id='discuss-x')
+    out = discussion.answer(record['id'], asked['turn_id'], now=NOW, deps=d, run_id='discuss-x',
+                            read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in)
     db.commit()
     assert out == {'status': 'error', 'reason': 'model_error', 'turn_id': asked['turn_id']}
     user, reply = turns(db, record['id'])
     assert (reply['status'], reply['reason'], reply['body'], reply['cutoff_at']) == ('error', 'model_error', '',
                                                                                     user['created_at'])
     assert 'provider down' in reply['detail']['error'] and 'sk-test' not in json.dumps(reply['detail'])
-    run = repository.agent_run_by_id(db, reply['agent_run_id'])
+    run = data_repo.agent_run_by_id(db, reply['agent_run_id'])
     assert (run['status'], run['reason'], run['mode']) == ('error', 'model_error', 'discuss')
     view = discussion.view(record['id'])
     assert view['turns'][0]['state'] is None and view['turns'][1]['status'] == 'error'
@@ -339,7 +352,7 @@ def test_answer_exception_writes_error_turn(db, scripted_model):
     # a failure before the model is reached still leaves an answer, without a run; an answered (even failed)
     # turn does not make the discussion busy
     again = ask(record['id'], '第三问')
-    import investment_assistant.workbench.discussion as module
+    import investment_assistant.review.discussion as module
     original = module._load
 
     def broken(*args, **kwargs):
@@ -348,12 +361,13 @@ def test_answer_exception_writes_error_turn(db, scripted_model):
     module._load = broken
     try:
         out = discussion.answer(record['id'], again['turn_id'], now=NOW, deps=stage_deps(scripted_model, []),
-                                run_id='discuss-y')
+                                run_id='discuss-y', read_derivation=derivation_view.plan_derivation_in,
+                                read_agent_run=reasoning.view_in)
     finally:
         module._load = original
     db.commit()
     assert out['status'] == 'error'
-    last = repository.turns(db, record['id'])[-1]
+    last = review_repo.turns(db, record['id'])[-1]
     assert (last['status'], last['agent_run_id']) == ('error', None) and 'context unreadable' in last['detail']['error']
 
 
@@ -411,7 +425,7 @@ def test_attachment_in_prompt_marked(db, scripted_model):
     attachment = human.split('## 附件（用户提供，非证据，不可引用）')[1]
     assert '要改写的经验' in attachment and '第二版经验' not in attachment          # the attached version, not the newest
     assert human.index('## 你要回答的问题') < human.index('## 附件')
-    [stored] = repository.knowledge_drafts(db, open_only=True)
+    [stored] = review_repo.knowledge_drafts(db, open_only=True)
     assert (stored['target_knowledge_id'], stored['target_version']) == (kid, 1)
     view = discussion.view(record['id'])
     assert view['turns'][0]['attachment'] == {'kind': 'knowledge', 'id': kid, 'version': 1, 'title': '要改写的经验'}
@@ -437,9 +451,9 @@ def test_rejected_answer_keeps_raw_body(db, scripted_model):
     user, reply = turns(db, record['id'])
     assert (reply['status'], reply['reason'], reply['refs']) == ('rejected', 'invalid_citation', [])
     assert reply['body'] == raw                                               # the raw text, for 「仍要看原文」
-    run = repository.agent_run_by_id(db, reply['agent_run_id'])
+    run = data_repo.agent_run_by_id(db, reply['agent_run_id'])
     assert (run['status'], run['reason'], run['output']) == ('rejected', 'invalid_citation', None)
-    assert repository.knowledge_drafts(db, open_only=True) == []
+    assert review_repo.knowledge_drafts(db, open_only=True) == []
     view = discussion.view(record['id'])['turns'][1]
     assert view['status'] == 'rejected' and view['body'] == raw
 
@@ -451,9 +465,9 @@ def test_bad_draft_is_dropped_and_the_answer_stays(db, scripted_model):
              'tickers': ['ZZZA'], 'refs': ['fact:context'], 'target': None}
     out, d = run_answer(db, record['id'], asked, scripted_model, [answer_reply(draft=draft)])
     assert out['status'] == 'ok'
-    reply = repository.turns(db, record['id'])[1]
+    reply = review_repo.turns(db, record['id'])[1]
     assert reply['status'] == 'ok' and reply['detail'] == {'draft_dropped': 'lesson_invalid'}
-    assert repository.knowledge_drafts(db, open_only=True) == []
+    assert review_repo.knowledge_drafts(db, open_only=True) == []
 
 
 def test_user_input_request_id_derivation_and_replay(db, scripted_model):
@@ -481,7 +495,7 @@ def test_user_input_request_id_derivation_and_replay(db, scripted_model):
     ref = f"user:{saved['record']['id']}"
     out, d = run_answer(db, record['id'], second, scripted_model, [answer_reply(refs=[ref])])
     assert out['status'] == 'ok' and f'[{ref}]' in d.agent_model.seen[0][1].content
-    assert repository.turns(db, record['id'])[-1]['refs'] == [ref]
+    assert review_repo.turns(db, record['id'])[-1]['refs'] == [ref]
 
 
 def test_view_shape(db, scripted_model):
@@ -512,8 +526,8 @@ def test_unit_scope_of_the_tools(db, scripted_model):
     out, d = run_answer(db, record['id'], asked, scripted_model,
                         [AIMessage(content='', tool_calls=[tool_call('get_derivation', {'plan_id': str(foreign['id'])})]),
                          answer_reply(refs=['call:1'])])
-    reply = repository.turns(db, record['id'])[1]
-    [call] = repository.agent_tool_calls(db, reply['agent_run_id'])
+    reply = review_repo.turns(db, record['id'])[1]
+    [call] = analysis_repo.agent_tool_calls(db, reply['agent_run_id'])
     assert call['result']['error'] == '只能查本次讨论的计划与运行'
     assert plan['id'] is not None
 
@@ -523,14 +537,14 @@ def test_busy_marker_is_registered_inside_the_lock_before_the_turn_is_written(db
     failed write must not leave the marker behind."""
     record, _, _ = make_discussion(db)
     seen = {}
-    real = repository.insert_turn
+    real = review_repo.insert_turn
 
     def spy(conn, row):
         seen['marker'] = discussion._RUNNERS.get(row['run_id'])
         seen['turn_state'] = discussion.wait_state({'run_id': row['run_id']})
         return real(conn, row)
 
-    monkeypatch.setattr(repository, 'insert_turn', spy)
+    monkeypatch.setattr(review_repo, 'insert_turn', spy)
     asked = ask(record['id'], '第一问')
     assert seen == {'marker': '', 'turn_state': 'pending'}
     assert discussion._RUNNERS[asked['run_id']] == ''
@@ -539,7 +553,7 @@ def test_busy_marker_is_registered_inside_the_lock_before_the_turn_is_written(db
         seen['key'] = row['run_id']
         raise RuntimeError('write failed')
 
-    monkeypatch.setattr(repository, 'insert_turn', failing)
+    monkeypatch.setattr(review_repo, 'insert_turn', failing)
     discussion.release(asked['run_id'])
     with pytest.raises(RuntimeError):
         ask(record['id'], '第二问')

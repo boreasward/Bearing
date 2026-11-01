@@ -1,5 +1,11 @@
 """My knowledge (v2.7 spec §5, §7, §12) against a disposable schema: versions, status, idempotency, concurrency,
 performance, lesson drafts and the cutoff check."""
+import investment_assistant.data.repo as data_repo
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.review.shadow as review_shadow
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.review.repo as review_repo
 import threading
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -11,9 +17,14 @@ from investment_assistant.core import tx as core_tx
 from test_workbench_retro_cards import (D, NOW, SESSION, at, draft_reply, evening, make_decision, make_plan,  # noqa: F401
                                         make_trade, put_bars, flat, run_stage, scenario, stage_deps)
 from test_workbench_service import db  # noqa: F401
-from investment_assistant.workbench import (knowledge, knowledge_items, knowledge_perf, ledger, my_knowledge,
-                                            repository, service)
-from investment_assistant.workbench.agent import tools as agent_tools
+from investment_assistant.review.knowledge import items as knowledge_items
+from investment_assistant.review.knowledge import perf as knowledge_perf
+from investment_assistant.review.knowledge import my_knowledge
+import investment_assistant.core.tx as service
+from investment_assistant.execution import ledger
+from investment_assistant.core import knowledge
+from investment_assistant.data import repo as data_repo
+from investment_assistant.analysis.agent import tools as agent_tools
 
 
 def body(**over):
@@ -67,7 +78,7 @@ def test_create_revise_archive_restore(db):
         my_knowledge.item_view(kid, version=9)
     with pytest.raises(LookupError):
         my_knowledge.item_view(999999)
-    versions, statuses = repository.knowledge_rows(db, cutoff=None)
+    versions, statuses = data_repo.knowledge_rows(db, cutoff=None)
     assert [v['version'] for v in versions] == [1, 2, 3] and len(statuses) == 2
 
     status(kid, 'archived')
@@ -88,7 +99,7 @@ def test_revise_stale_409(db):
         revise(999999, 1)
     with pytest.raises(ValueError, match='base_version'):
         my_knowledge.revise(kid, body(), now=NOW)                       # base_version is required
-    assert len(repository.knowledge_rows(db, cutoff=None, knowledge_id=kid)[0]) == 2
+    assert len(data_repo.knowledge_rows(db, cutoff=None, knowledge_id=kid)[0]) == 2
 
 
 def test_revise_archived_409(db):
@@ -184,7 +195,7 @@ def test_concurrent_revise_one_wins(db, monkeypatch):
     outcomes = sorted(r[1] for r in results)
     assert outcomes == ['created', 'knowledge_stale: 这条知识已更新到第 2 版，请刷新后再改']
     monkeypatch.undo()
-    assert [v['version'] for v in repository.knowledge_rows(db, cutoff=None, knowledge_id=kid)[0]] == [1, 2]
+    assert [v['version'] for v in data_repo.knowledge_rows(db, cutoff=None, knowledge_id=kid)[0]] == [1, 2]
 
 
 def test_concepts_need_catalog_503(db, monkeypatch):
@@ -209,7 +220,7 @@ def test_views_need_migration_027(db):
         with pytest.raises(service.Unavailable, match='迁移 027'):
             call()
     with service.read_only_tx() as conn:
-        assert my_knowledge.refs_for_plans(conn, [uuid.uuid4()]) == {}
+        assert data_repo.plan_knowledge_refs(conn, [uuid.uuid4()]) == {}
 
 
 def test_list_view_filters_and_counts(db):
@@ -237,7 +248,7 @@ def test_list_view_filters_and_counts(db):
 # ---------------------------------------------------------------- citations and performance
 
 def agent_plan(db, ticker, signal_date, version_no, previous=None, *, stop=94):
-    plan = repository.insert_plan(db, {
+    plan = execution_repo.insert_plan(db, {
         'ticker': ticker, 'signal_date': signal_date, 'kind': 'agent', 'based_on_id': None, 'plan_version': 'agent-2',
         'ref_price': 100, 'atr': 2, 'entry_low': 98, 'entry_high': 102, 'stop': stop, 'target1': 112,
         'trail_atr_multiple': 3, 'valid_from': D(-2), 'valid_until': D(0), 'sizing': {'status': 'no_equity'},
@@ -245,13 +256,13 @@ def agent_plan(db, ticker, signal_date, version_no, previous=None, *, stop=94):
         'request_hash': None})
     run_id = uuid.uuid4()
     started = NOW - timedelta(days=3 - version_no)
-    repository.insert_agent_run(db, {
+    analysis_repo.insert_agent_run(db, {
         'id': run_id, 'ticker': ticker, 'signal_date': signal_date, 'pool': 'main', 'attempt': 1,
         'mode': 'propose' if version_no == 0 else 'revise', 'agent_version': 'agent-2', 'provider': 'chatgpt',
         'model': 'gpt-test', 'cutoff_at': started, 'status': 'ok', 'reason': None, 'output': {'action': 'buy'},
         'counter': None, 'plan_id': plan['id'], 'input_tokens': 0, 'output_tokens': 0, 'started_at': started,
         'finished_at': started}, [])
-    repository.insert_plan_version(db, {
+    execution_repo.insert_plan_version(db, {
         'plan_id': plan['id'], 'ticker': ticker, 'signal_date': signal_date, 'version_no': version_no,
         'supersedes_plan_id': previous, 'origin': 'signal' if version_no == 0 else 'review',
         'agent_run_id': run_id, 'cutoff_at': started, 'as_of_session': signal_date,
@@ -261,7 +272,7 @@ def agent_plan(db, ticker, signal_date, version_no, previous=None, *, stop=94):
 
 
 def cite(db, run_id, plan_id, kid, version, field='thesis'):
-    repository.insert_knowledge_citations(db, [{'agent_run_id': run_id, 'plan_id': plan_id, 'knowledge_id': kid,
+    analysis_repo.insert_knowledge_citations(db, [{'agent_run_id': run_id, 'plan_id': plan_id, 'knowledge_id': kid,
                                                 'version': version, 'field': field, 'call_seq': 1}])
 
 
@@ -296,15 +307,15 @@ def test_performance_view(db):
     assert out['by_version'] == [{'version': 1, 'plans': 1, 'units': 1}, {'version': 2, 'plans': 2, 'units': 2}]
 
     # the same call the plan-shadow view makes for the same plans (get the data the same way)
-    shadow = service.plan_shadow(now=NOW, since=D(-10))
+    shadow = review_shadow.plan_shadow(now=NOW, since=D(-10))
     simulated = {str(p['id']): p['outcome'] for p in shadow['plans']}
     assert by_unit['ZZZA']['r'] == simulated[str(plan0['id'])]['r']
     assert by_unit['ZZZA']['status'] == simulated[str(plan0['id'])]['status']
     assert by_unit['ZZZB']['status'] == simulated[str(other['id'])]['status']
 
     # and it is knowledge_perf.summarize over those inputs
-    citations = repository.citations_of(db, kid)
-    plans = {str(p['id']): {**repository.plan_by_id(db, p['id']), 'version_no': n}
+    citations = review_repo.citations_of(db, kid)
+    plans = {str(p['id']): {**execution_repo.plan_by_id(db, p['id']), 'version_no': n}
              for p, n in ((plan0, 0), (plan1, 1), (other, 0))}
     expected = knowledge_perf.summarize(citations=citations, plans=plans, outcomes=simulated, reviews_cited=0)
     assert out == expected
@@ -321,11 +332,11 @@ def test_review_citation_is_counted_apart(db):
     kid = create(tickers=['ZZZA'])['knowledge_id']
     plan, run = agent_plan(db, 'ZZZA', D(-3), 0)
     put_bars(db, 'ZZZA', flat(D(-8), D(0)))
-    review = repository.insert_plan_review(db, {
+    review = execution_repo.insert_plan_review(db, {
         'ticker': 'ZZZA', 'signal_date': D(-3), 'head_plan_id': plan['id'], 'session': D(-1), 'trigger': 'batch',
         'run_id': 'r', 'mode': 'entry', 'timeline_version': 'timeline-1', 'outcome': 'maintain',
         'decided_by': 'agent', 'reason': '维持', 'review_agent_run_id': run, 'attempt': 1, 'cutoff_at': NOW})
-    repository.insert_knowledge_citations(db, [{'agent_run_id': run, 'plan_id': None, 'review_id': review['id'],
+    analysis_repo.insert_knowledge_citations(db, [{'agent_run_id': run, 'plan_id': None, 'review_id': review['id'],
                                                 'knowledge_id': kid, 'version': 1, 'field': 'review', 'call_seq': 2}])
     db.commit()
     out = my_knowledge.performance(kid, now=NOW)
@@ -344,7 +355,7 @@ def test_refs_for_plans_and_current_version(db):
     cite(db, run, plan['id'], kid, 1, 'counter')
     db.commit()
     with service.read_only_tx() as conn:
-        refs = my_knowledge.refs_for_plans(conn, [plan['id'], quiet['id']])
+        refs = data_repo.plan_knowledge_refs(conn, [plan['id'], quiet['id']])
     assert refs == {str(plan['id']): [{'ref': f'know:{kid}@1', 'title': '第一版标题',
                                        'fields': ['thesis', 'counter'], 'current_version': 2}]}
 
@@ -357,12 +368,12 @@ _drafts_made = [0]
 def discussion_draft(db, *, target=None):
     _drafts_made[0] += 1
     plan = make_plan(db, 'ZZZA', D(-3 - _drafts_made[0]))
-    discussion = repository.insert_discussion(db, {
+    discussion = review_repo.insert_discussion(db, {
         'request_id': uuid.uuid4(), 'request_hash': 'h', 'context_kind': 'plan', 'ticker': 'ZZZA',
         'signal_date': D(-3), 'plan_id': plan['id'], 'card_id': None})
-    user = repository.insert_turn(db, {'discussion_id': discussion['id'], 'seq': 1, 'role': 'user',
+    user = review_repo.insert_turn(db, {'discussion_id': discussion['id'], 'seq': 1, 'role': 'user',
                                        'request_id': uuid.uuid4(), 'request_hash': 'h', 'body': '问'})
-    reply = repository.insert_turn(db, {'discussion_id': discussion['id'], 'seq': 2, 'role': 'assistant',
+    reply = review_repo.insert_turn(db, {'discussion_id': discussion['id'], 'seq': 2, 'role': 'assistant',
                                         'body': '答', 'reply_to': user['id'], 'status': 'ok', 'refs': ['fact:context'],
                                         'cutoff_at': NOW})
     row = {'origin': 'discussion', 'discussion_turn_id': reply['id'], 'title': '讨论里的经验', 'body': '正文',
@@ -370,7 +381,7 @@ def discussion_draft(db, *, target=None):
            'refs': ['call:1']}
     if target:
         row.update(target_knowledge_id=target[0], target_version=target[1])
-    draft_id = repository.insert_knowledge_draft(db, row)
+    draft_id = review_repo.insert_knowledge_draft(db, row)
     db.commit()                                  # an error inside a use case rolls the shared test connection back
     return discussion, reply, draft_id
 
@@ -384,9 +395,9 @@ def test_discussion_draft_verdict_new_and_target(db):
     out = my_knowledge.draft_verdict(draft_id, {'request_id': request, 'action': 'approve', 'title': '改过的标题'}, now=NOW)
     assert out['status'] == 'created' and out['record']['action'] == 'approve'
     kid = int(out['record']['ref'].split(':')[1].split('@')[0])
-    item = repository.knowledge_item(db, kid)
+    item = review_repo.knowledge_item(db, kid)
     assert (item['origin'], item['source_discussion_id']) == ('discussion', discussion['id'])
-    versions, _ = repository.knowledge_rows(db, cutoff=None, knowledge_id=kid)
+    versions, _ = data_repo.knowledge_rows(db, cutoff=None, knowledge_id=kid)
     assert [(v['version'], v['title'], v['draft_id'], v['concepts']) for v in versions] == [
         (1, '改过的标题', draft_id, ['concept:plan.stop@1'])]
     assert my_knowledge.drafts_view(open_only=True)['drafts'] == []
@@ -414,7 +425,7 @@ def test_discussion_draft_verdict_new_and_target(db):
                                                 'base_version': 2}, now=NOW)
     assert done['record']['ref'] == f'know:{kid}@3'
     assert {d['id']: d for d in my_knowledge.drafts_view(open_only=False)['drafts']}[rewrite]['target_current_version'] == 3
-    versions, _ = repository.knowledge_rows(db, cutoff=None, knowledge_id=kid)
+    versions, _ = data_repo.knowledge_rows(db, cutoff=None, knowledge_id=kid)
     assert [(v['version'], v['draft_id']) for v in versions] == [(1, draft_id), (2, None), (3, rewrite)]
     # dismissing writes the decision only
     _, _, dismissed = discussion_draft(db)
@@ -432,13 +443,13 @@ def test_draft_edit_must_still_have_counter_examples(db):
     with pytest.raises(ValueError, match='counter_examples'):
         my_knowledge.draft_verdict(draft_id, {'request_id': str(uuid.uuid4()), 'action': 'approve',
                                               'counter_examples': ' '}, now=NOW)
-    assert repository.knowledge_drafts(db, open_only=True)[0]['id'] == draft_id
+    assert review_repo.knowledge_drafts(db, open_only=True)[0]['id'] == draft_id
 
 
 def test_card_draft_verdict_409_review_on_card(db, scripted_model):
     scenario(db, 'ZZZA')
     run_stage(db, stage_deps(scripted_model, [draft_reply()]))
-    [lesson] = repository.knowledge_drafts(db, open_only=True)
+    [lesson] = review_repo.knowledge_drafts(db, open_only=True)
     with pytest.raises(ledger.Conflict, match='^review_on_card$'):
         my_knowledge.draft_verdict(lesson['id'], {'request_id': str(uuid.uuid4()), 'action': 'approve'}, now=NOW)
     listed = my_knowledge.drafts_view(open_only=True)['drafts']
@@ -466,7 +477,7 @@ def knowledge_at(db, stamps, **over):
 def run_with_call(db, cutoff, entries, *, args=None, error=None):
     run_id = uuid.uuid4()
     envelope = {'ref': 'call:1', **({'error': error} if error else {'data': {'entries': entries}})}
-    repository.insert_agent_run(db, {
+    analysis_repo.insert_agent_run(db, {
         'id': run_id, 'ticker': 'NVDA', 'signal_date': D(-3), 'pool': 'main', 'attempt': 1, 'mode': 'review',
         'agent_version': 'agent-review-1', 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': cutoff, 'status': 'error',
         'reason': 'model_error', 'output': None, 'counter': None, 'plan_id': None, 'input_tokens': 0,
@@ -494,7 +505,7 @@ def test_check_cutoff_cli(db, capsys):
     plan, _ = agent_plan(db, 'NVDA', D(-3), 0)
     code, out = lines(db)
     assert code == 0 and '→ 通过' in out[-1] and '核对 1 次 get_knowledge 调用' in out[-1]
-    repository.insert_knowledge_citations(db, [{'agent_run_id': run, 'plan_id': None, 'knowledge_id': kid,
+    analysis_repo.insert_knowledge_citations(db, [{'agent_run_id': run, 'plan_id': None, 'knowledge_id': kid,
                                                 'version': 1, 'field': 'thesis', 'call_seq': 1}])
     code, out = lines(db)
     assert code == 0 and '1 条引用' in out[-1]
@@ -512,14 +523,14 @@ def test_check_cutoff_cli(db, capsys):
 
     # a citation whose run never saw the reference
     stranger = run_with_call(db, cutoff, [])
-    repository.insert_knowledge_citations(db, [{'agent_run_id': stranger, 'plan_id': None, 'knowledge_id': kid,
+    analysis_repo.insert_knowledge_citations(db, [{'agent_run_id': stranger, 'plan_id': None, 'knowledge_id': kid,
                                                 'version': 2, 'field': 'thesis', 'call_seq': 1}])
     code, out = lines(db)
     assert code == 1 and any('没有任何 get_knowledge 调用返回过它' in line and f'know:{kid}@2' in line for line in out)
     assert plan is not None
     # a returned entry that was archived by the cutoff is a violation too
     db.execute('DELETE FROM knowledge_citations WHERE agent_run_id = %s', (stranger,))
-    repository.insert_knowledge_status(db, {'knowledge_id': kid, 'status': 'archived', 'reason': '',
+    review_repo.insert_knowledge_status(db, {'knowledge_id': kid, 'status': 'archived', 'reason': '',
                                             'request_id': uuid.uuid4(), 'request_hash': 'h'})
     db.execute('UPDATE knowledge_status SET created_at = %s', (T0 + timedelta(hours=6),))
     db.execute('DELETE FROM agent_tool_calls WHERE run_id = %s', (stranger,))
@@ -569,7 +580,7 @@ def test_generate_weekly_carries_learning(db, scripted_model):
     cite(db, run, plan['id'], kid, 1, 'thesis')
     db.commit()
 
-    out = service.generate_weekly(WEEK, now=NOW)
+    out = review_weekly.generate_weekly(WEEK, now=NOW)
     stats = out['stats']
     assert out['calc_version'] == 'review-8' and set(stats['learning']) == {'discipline', 'cards', 'counts', 'knowledge'}
     learning = stats['learning']
@@ -583,8 +594,8 @@ def test_generate_weekly_carries_learning(db, scripted_model):
     assert tested['sample'] == {'count': 1, 'determined': 1, 'expired': 0, 'r_mean': None, 'r_median': None}
     # the frozen snapshot is what the push reads: the field carries these lines
     from investment_assistant.notify import templates
-    from investment_assistant.workbench import review_digest
-    payload = review_digest.weekly(repository.weekly_head(db, WEEK), public_url='http://localhost:8787')
+    from investment_assistant.review import period_digest as review_digest
+    payload = review_digest.weekly(review_repo.weekly_head(db, WEEK), public_url='http://localhost:8787')
     text = {f.name: f.value for f in templates.workbench_weekly(payload)[0].fields}['你学到了什么']
     assert text.splitlines()[0] == '纪律（本周结束的 1 笔）：追高 1 · 过早止盈 0 · 死扛亏损 0 · 计划外 0 · 待定 1'
     assert f'know:{kid}@1 被检验的经验 · 样本 1（少于 5 个不给均值）' in text.splitlines()
@@ -595,7 +606,7 @@ def test_generate_weekly_without_migration_027_has_empty_learning(db):
                'knowledge_versions, knowledge_status, discussion_turns, knowledge_items, discussions, '
                'review_card_drafts, review_cards CASCADE')
     db.commit()
-    stats = service.generate_weekly(WEEK, now=NOW)['stats']
+    stats = review_weekly.generate_weekly(WEEK, now=NOW)['stats']
     assert stats['learning'] == {
         'discipline': {'cards': 0, 'chase': 0, 'early_take': 0, 'held_loser': 0, 'unplanned': 0, 'pending': 0},
         'cards': [], 'counts': {'total': 0, 'reviewed': 0, 'to_review': 0, 'drafting': 0, 'draft_failed': 0},

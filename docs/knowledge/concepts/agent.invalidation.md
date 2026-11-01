@@ -6,7 +6,7 @@ version: 2
 applies_to: [agent-2, agent-3, condition-1, condition-2]
 summary: "Agent 计划必须给出 1 到 5 条失效条件，取自条件登记表，每条带引用；任一条成立，系统规则直接作废这份计划；最长持有由宿主另外注入。"
 related: [agent.review_when, agent.review_outcome, agent.version_chain, agent.signals, agent.citation]
-sources: [investment_assistant/workbench/agent/conditions.py, investment_assistant/workbench/agent/plan_check.py, investment_assistant/workbench/timeline.py]
+sources: [investment_assistant/execution/conditions.py, investment_assistant/execution/plan_check.py, investment_assistant/execution/timeline.py]
 ---
 
 ## 是什么

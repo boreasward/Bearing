@@ -6,7 +6,7 @@ version: 1
 applies_to: []
 summary: "你录入的成交按先进先出配对出持仓和已平仓批次，买入费用计入成本、卖出费用按数量分摊、跨拆股按比例换算；录错只能作废。"
 related: [system.decision, review.discipline_unplanned, plan.trailing_stop, system.append_only]
-sources: [investment_assistant/workbench/positions.py, investment_assistant/workbench/ledger.py, investment_assistant/workbench/exits.py]
+sources: [investment_assistant/execution/positions.py, investment_assistant/execution/ledger.py, investment_assistant/execution/exits.py]
 ---
 
 ## 是什么

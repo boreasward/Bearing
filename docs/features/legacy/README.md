@@ -15,3 +15,7 @@ roadmap v1 的遗留功能在 v2.1.0 统一收拢：没有价值的整体删除�
 | 推送路由的 `metrics`、`scores` 与 `daily` 频道 | 删除；已存设置在读取时过滤，路由失效返回结构化错误 |
 
 旧地址（`#data/...`、`#technicals/...`、`#strategy/...`、`#trade/...`）回落到「今日」。六张遗留表由[迁移 022](../../operations/migrations-and-backup.md) 删除，`job_reports` 历史行与已冻结的 `backcheck-1` 记录保留。
+
+## 五层搬家：退役的美股研究同步入口
+
+`us_research sync` 与 `tasks/us_research.py` 已删除；`POST /api/us-research/sync` 返回 **410** `{"error":"use_data_menu"}`，手动采集入口统一到「数据」菜单。财季、指引、申报的 GET 保留，实现在 `analysis/fundamentals.py`；行情改读已入库的 `price_bars`，不再使用旧 market dataset 或发起在线行情采集。SEC 成功归档后的本地研究刷新仍保留，实现在 `data/acquisition.py`。

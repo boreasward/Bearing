@@ -202,7 +202,7 @@ def test_read_only_reader_uses_get_and_forces_transaction_mode(monkeypatch):
     import psycopg
     import requests
     from investment_assistant import db
-    from investment_assistant.us_research import repository
+    from investment_assistant.data import repo as repository
     calls = []
     class Connection:
         def execute(self, sql): calls.append(('sql',sql))

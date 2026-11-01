@@ -6,7 +6,7 @@ version: 1
 applies_to: [tracks-1, tracks-2]
 summary: "对同一批买入单元，把规则计划、Agent 计划和你的实际执行三条轨道并列，R 都按各自计划的止损算；均值只用已确定的值。v2.9 起 Agent 轨道取成交关联的那一版，实际轨道取成交关联的计划。"
 related: [review.track_status, review.version_basis, review.r_multiple, review.plan_shadow, review.first_latest]
-sources: [investment_assistant/workbench/tracks.py, investment_assistant/workbench/discipline.py]
+sources: [investment_assistant/review/tracks.py, investment_assistant/review/discipline.py]
 ---
 
 ## 是什么

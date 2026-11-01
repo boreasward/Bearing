@@ -6,7 +6,7 @@ version: 1
 applies_to: [entry-1, plan-2, agent-3]
 summary: "计划写明怎么挂单：区间限价、突破买入或次日开盘三选一；规则基线恒用区间限价，Agent 只选类型，开盘情形的做法由系统按类型生成。"
 related: [plan.open_scenarios, plan.entry_zone, plan.max_hold, plan.own, agent.action_levels]
-sources: [investment_assistant/workbench/entry_rules.py, investment_assistant/workbench/plans.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/entry_rules.py, investment_assistant/execution/plan_levels.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

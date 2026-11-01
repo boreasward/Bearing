@@ -1,6 +1,7 @@
 """Every external call site of spec §6.2 runs under fetch-1 (offline: fake servers on 127.0.0.1, injected fetchers).
 
 Sleeps are injected or recorded, so retries cost nothing; `attempts` and `FetchError.kind` are asserted per row."""
+import investment_assistant.data.repo as data_repo
 import contextlib
 import json
 import time
@@ -15,11 +16,14 @@ import requests
 
 from investment_assistant.data import fetch_policy as fp
 from investment_assistant.data import http
-from investment_assistant.filings import monitor_source, sec_downloader
-from investment_assistant.filings.monitor_source import EdgarSource
+from investment_assistant.data.sources import edgar as monitor_source
+from investment_assistant.data.adapters import sec_text as sec_downloader
+from investment_assistant.data.sources.edgar import EdgarSource
 from investment_assistant.notify.discord import DiscordChannel, DiscordClient
 from investment_assistant.notify.discord_bot import DeliveryError, DiscordBotClient
-from investment_assistant.workbench import bars, collect, earnings, macro, news, repository, service
+import investment_assistant.data.collect as collect
+import investment_assistant.core.tx as service
+from investment_assistant.data.adapters import bars, earnings, fred as macro, news
 from test_fetch_policy import FAST, FAST_POST, FakeServer, closed_port, reply
 
 SESSION = date(2026, 10, 28)
@@ -52,13 +56,13 @@ def fake_db(monkeypatch):
         yield object()
 
     monkeypatch.setattr(core_tx, '_tx', tx)
-    monkeypatch.setattr(repository, 'store_bars', lambda conn, ticker, rows, *, now: (
+    monkeypatch.setattr(data_repo, 'store_bars', lambda conn, ticker, rows, *, now: (
         stored.bars.append((ticker, rows)) or {'inserted': len(rows), 'unchanged': 0}))
-    monkeypatch.setattr(repository, 'store_news', lambda conn, entries, *, now: (
+    monkeypatch.setattr(data_repo, 'store_news', lambda conn, entries, *, now: (
         stored.news.append(entries) or {'inserted': len(entries), 'existing': 0}))
-    monkeypatch.setattr(repository, 'store_macro', lambda conn, series_id, rows, *, now: (
+    monkeypatch.setattr(data_repo, 'store_macro', lambda conn, series_id, rows, *, now: (
         stored.macro.append((series_id, rows)) or {'inserted': len(rows), 'unchanged': 0}))
-    monkeypatch.setattr(repository, 'fill_filing_acceptance', lambda conn, metas: (
+    monkeypatch.setattr(data_repo, 'fill_filing_acceptance', lambda conn, metas: (
         stored.acceptance.append(metas) or len(metas)))
     return stored
 

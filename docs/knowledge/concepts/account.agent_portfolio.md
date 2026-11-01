@@ -6,7 +6,7 @@ version: 1
 applies_to: [account-1, agent-portfolio-1]
 summary: "Agent 在宿主给定的可买计划与股数上限内选择买卖、撤单和继续持有；不能改计划价位或取消自动退出。"
 related: [account.paper, account.follow_plans, account.fill_rules, plan.sizing, plan.max_hold]
-sources: [investment_assistant/workbench/agent/graph.py, investment_assistant/workbench/agent/portfolio_check.py, investment_assistant/workbench/paper_strategies.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
+sources: [investment_assistant/analysis/agent/graph.py, investment_assistant/execution/portfolio_check.py, investment_assistant/execution/paper/strategies.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
 ---
 
 ## 是什么

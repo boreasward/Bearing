@@ -17,7 +17,8 @@ import pytest
 from investment_assistant.core import tx as core_tx
 from psycopg_pool import ConnectionPool
 
-from investment_assistant.workbench import collect, service
+import investment_assistant.data.collect as collect
+import investment_assistant.core.tx as service
 
 
 @pytest.fixture

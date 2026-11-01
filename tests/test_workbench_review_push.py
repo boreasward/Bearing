@@ -2,6 +2,10 @@
 
 SQL against a disposable schema; the Discord client is a recording fake.
 """
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.execution.repo_legacy as execution_repo_legacy
+import investment_assistant.review.repo as review_repo
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -11,7 +15,9 @@ import pytest
 from investment_assistant.core import tx as core_tx
 
 from investment_assistant.config import NotifyConfig
-from investment_assistant.workbench import repository, service
+import investment_assistant.core.tx as service
+import investment_assistant.workflow.nodes.retro as retro_node
+from investment_assistant.tasks import ports
 
 W = date(2026, 10, 19)                 # the week of 2026-10-19
 SAT_MORNING = datetime(2026, 10, 24, 0, 0, tzinfo=UTC)   # 北京周六 08:00
@@ -49,7 +55,7 @@ def cfg(**overrides):
 
 
 def tick(db, now=SAT_MORNING, *, notify_cfg=None, client=None, trigger_source='scheduled'):
-    return service.review_tick(now=now, notify_cfg=notify_cfg or cfg(), trigger_source=trigger_source,
+    return retro_node.review_tick(now=now, notify_cfg=notify_cfg or cfg(), send=ports.send, trigger_source=trigger_source,
                                client=client)
 
 
@@ -58,13 +64,13 @@ def _messages(client, marker):
 
 
 def _snapshot(db, *, as_of, recorded_at, equity='100000'):
-    repository.insert_snapshot(db, {'request_id': str(uuid.uuid4()), 'as_of': as_of.isoformat(),
+    execution_repo.insert_snapshot(db, {'request_id': str(uuid.uuid4()), 'as_of': as_of.isoformat(),
                                     'equity': equity, 'note': None, 'supersedes_id': None}, 'h',
                                recorded_at=recorded_at)
 
 
 def _decision(db, *, decided_at):
-    repository._insert_decision_for_tests(db, {'request_id': str(uuid.uuid4()), 'ticker': 'NVDA',
+    execution_repo_legacy._insert_decision_for_tests(db, {'request_id': str(uuid.uuid4()), 'ticker': 'NVDA',
                                     'signal_date': decided_at.date(), 'candidate_ids': [], 'brief_id': None,
                                     'proposed_action': 'watch', 'final_action': 'watch', 'decision': 'accept',
                                     'reason': '启用判断用例', 'supersedes_id': None}, 'h', decided_at=decided_at)
@@ -80,11 +86,11 @@ def test_tick_generates_and_pushes_weekly(db):
     assert len(_messages(client, '周度复盘')) == 1
     row = db.execute('SELECT kind, period, sent, messages, trigger_source FROM review_pushes').fetchone()
     assert row == ('weekly', W, True, 1, 'scheduled')
-    assert repository.weekly_head(db, W)['notes'] == '自动生成'
+    assert review_repo.weekly_head(db, W)['notes'] == '自动生成'
 
 
 def test_tick_reuses_snapshot_generated_after_close(db):
-    repository.insert_weekly_review(db, W, 'review-4', {'units': {'decided': 0}}, '手写', None)
+    review_repo.insert_weekly_review(db, W, 'review-4', {'units': {'decided': 0}}, '手写', None)
     client = FakeClient()
     out = tick(db, client=client)
     assert out['weekly']['action'] == 'reused'                  # 收盘后已有快照，直接沿用
@@ -93,12 +99,12 @@ def test_tick_reuses_snapshot_generated_after_close(db):
 
 
 def test_tick_supersedes_snapshot_generated_before_close(db):
-    repository.insert_weekly_review(db, W, 'review-3', {'units': {'decided': 0}}, '周三', None)
+    review_repo.insert_weekly_review(db, W, 'review-3', {'units': {'decided': 0}}, '周三', None)
     db.execute("UPDATE weekly_reviews SET created_at = '2026-10-21T22:00:00+00:00' WHERE notes = '周三'")
     client = FakeClient()
     out = tick(db, client=client)
     assert out['weekly']['action'] == 'generated'               # 收盘前的快照被更替
-    head = repository.weekly_head(db, W)
+    head = review_repo.weekly_head(db, W)
     assert head['notes'] == '自动生成' and head['supersedes_id'] is not None
     assert out['weekly']['push']['review_id'] == head['id']     # 推送的是新快照
 
@@ -185,18 +191,18 @@ def test_monthly_generated_after_snapshot_recorded(db):
     assert out['monthly']['action'] == 'generated'
     assert out['monthly']['push']['sent'] is True
     assert len(_messages(client, '月度复盘 · 2026-10')) == 1
-    head = repository.monthly_head(db, date(2026, 10, 1))
+    head = review_repo.monthly_head(db, date(2026, 10, 1))
     assert head['notes'] == '自动生成'
 
 
 def test_monthly_head_older_than_snapshot_is_superseded(db):
     _snapshot(db, as_of=date(2026, 10, 31), recorded_at=datetime(2026, 11, 1, 12, tzinfo=UTC))
-    repository.insert_monthly_review(db, date(2026, 10, 1), 'monthly-2', {'month': '2026-10'}, '旧', None)
+    review_repo.insert_monthly_review(db, date(2026, 10, 1), 'monthly-2', {'month': '2026-10'}, '旧', None)
     db.execute("UPDATE monthly_reviews SET created_at = '2026-10-31T20:00:00+00:00' WHERE notes = '旧'")
     client = FakeClient()
     out = tick(db, now=datetime(2026, 11, 7, 0, 0, tzinfo=UTC), client=client)
     assert out['monthly']['action'] == 'generated'              # 快照晚于旧快照生成时间，更替
-    head = repository.monthly_head(db, date(2026, 10, 1))
+    head = review_repo.monthly_head(db, date(2026, 10, 1))
     assert head['notes'] == '自动生成' and head['supersedes_id'] is not None
 
 
@@ -205,7 +211,7 @@ def test_monthly_head_older_than_snapshot_is_superseded(db):
 def test_manual_push_forces_resend(db):
     client = FakeClient()
     tick(db, client=client)
-    out = service.push_review('weekly', W, now=SAT_MORNING, notify_cfg=cfg(), client=client)
+    out = retro_node.push_review('weekly', W, now=SAT_MORNING, notify_cfg=cfg(), send=ports.send, client=client)
     assert out['sent'] is True                                  # 手动不受已推送限制
     assert len(_messages(client, '周度复盘')) == 2
     row = db.execute("SELECT trigger_source FROM review_pushes WHERE trigger_source = 'manual'").fetchone()
@@ -214,15 +220,15 @@ def test_manual_push_forces_resend(db):
 
 def test_manual_push_unknown_period_404(db):
     with pytest.raises(LookupError):
-        service.push_review('weekly', date(2026, 11, 16), now=SAT_MORNING, notify_cfg=cfg())
+        retro_node.push_review('weekly', date(2026, 11, 16), now=SAT_MORNING, notify_cfg=cfg(), send=ports.send)
 
 
 def test_manual_push_bad_kind_or_period():
-    from investment_assistant.workbench import ledger
+    from investment_assistant.execution import ledger
     with pytest.raises(ledger.LedgerError):
-        service.push_review('daily', W, now=SAT_MORNING, notify_cfg=cfg())
+        retro_node.push_review('daily', W, now=SAT_MORNING, notify_cfg=cfg(), send=ports.send)
     with pytest.raises(ledger.LedgerError):
-        service.push_review('weekly', W + timedelta(days=1), now=SAT_MORNING, notify_cfg=cfg())
+        retro_node.push_review('weekly', W + timedelta(days=1), now=SAT_MORNING, notify_cfg=cfg(), send=ports.send)
 
 
 def test_push_reason_redacted(db):
@@ -235,19 +241,19 @@ def test_push_reason_redacted(db):
 
 
 def test_generation_conflict_recorded_and_retried(db, monkeypatch):
-    from investment_assistant.workbench import ledger
-    real_generate = service.generate_weekly
+    from investment_assistant.execution import ledger
+    real_generate = review_weekly.generate_weekly
 
     def conflicting(week_start, **kwargs):
         raise ledger.Conflict('该周已有更新的复盘；请更正最新一条')
 
-    monkeypatch.setattr(service, 'generate_weekly', conflicting)
+    monkeypatch.setattr(review_weekly, 'generate_weekly', conflicting)
     client = FakeClient()
     first = tick(db, client=client)
     assert first['weekly']['action'] == 'error'
     assert any('该周已有更新' in str(e) for e in first['errors'])
     assert _messages(client, '周度复盘') == []                   # 周度出错不影响月度部分
     assert first['monthly']['action'] != 'error'
-    monkeypatch.setattr(service, 'generate_weekly', real_generate)
+    monkeypatch.setattr(review_weekly, 'generate_weekly', real_generate)
     second = tick(db, client=client)
     assert second['weekly']['action'] == 'generated' and second['weekly']['push']['sent'] is True

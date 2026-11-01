@@ -6,7 +6,7 @@ version: 2
 applies_to: [monthly-3, monthly-4, monthly-5]
 summary: "月度收益优先用两个月末最后交易日的账本权益，扣除区间净出入金；未开账或缺任一端点时回退券商快照，注明来源。"
 related: [account.ledger, account.reconciliation, account.comparison, review.process_check, review.sensitivity, review.weekly, review.position]
-sources: [investment_assistant/workbench/monthly.py, investment_assistant/workbench/accounts.py, investment_assistant/config.py]
+sources: [investment_assistant/review/monthly.py, investment_assistant/execution/accounts.py, investment_assistant/config.py]
 ---
 
 ## 是什么

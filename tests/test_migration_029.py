@@ -2,6 +2,7 @@
 chain_retriggers, holding_status, plan_notes, the relaxed plan_reviews constraint.
 
 SQL tests run in a throwaway schema of the disposable test database only."""
+import investment_assistant.core.schema as core_schema
 import json
 import os
 import uuid
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from investment_assistant.workbench import repository
+# Repository consumers use their owning layers below.
 
 MIGRATION = Path('migrations/029_executable_plans.sql')
 NOW = datetime(2026, 10, 30, 22, 30, tzinfo=UTC)
@@ -153,9 +154,9 @@ def _constraints(conn, table):
 
 def test_029_idempotent(migrated_db):
     conn = migrated_db
-    assert repository.executable_ready(conn) is False
+    assert core_schema.executable_ready(conn) is False
     _apply(conn)
-    assert repository.executable_ready(conn) is True
+    assert core_schema.executable_ready(conn) is True
     before = {t: _constraints(conn, t) for t in ('trades', 'trade_plans', 'plan_reviews', 'chain_retriggers',
                                                   'holding_status', 'plan_notes')}
     indexes = sorted(row[0] for row in conn.execute(

@@ -6,7 +6,7 @@ version: 2
 applies_to: [timeline-1, timeline-2]
 summary: "链状态共九种，取第一条成立的：legacy、invalidated、closed_by_decision、exiting、holding、position_closed、superseded、expired、entry。"
 related: [agent.version_chain, agent.review_outcome, agent.legacy, system.decision]
-sources: [investment_assistant/workbench/timeline.py, investment_assistant/workbench/execution.py]
+sources: [investment_assistant/execution/timeline.py, investment_assistant/execution/adoption.py]
 ---
 
 ## 是什么

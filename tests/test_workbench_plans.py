@@ -6,7 +6,8 @@ from decimal import Decimal
 import pytest
 
 from investment_assistant.config import WorkbenchConfig
-from investment_assistant.workbench import plans
+from investment_assistant.execution import plan_levels as plans
+from investment_assistant.derivation.indicators.price import atr14
 
 PARAMS = WorkbenchConfig()
 
@@ -35,8 +36,8 @@ def _exposure(ticker_value='0', total_value='0'):
 
 
 def test_atr14_wilder():
-    assert plans.atr14(_bars(15)) == Decimal('2')
-    assert plans.atr14(_bars(14)) is None
+    assert atr14(_bars(15)) == Decimal('2')
+    assert atr14(_bars(14)) is None
 
 
 def test_rule_levels():
@@ -141,7 +142,7 @@ def test_build_rule_plan_fields():
     bars = _bars()
     plan = plans.build_rule_plan(ticker='NVDA', signal_date=date(2026, 10, 21), bars=bars, earnings_row=None,
                                  snapshot=_snapshot(), exposure=_exposure(), params=PARAMS)
-    levels = plans.rule_levels(Decimal('100'), plans.atr14(bars))
+    levels = plans.rule_levels(Decimal('100'), atr14(bars))
     for key, value in levels.items():
         assert plan[key] == value
     assert plan['kind'] == 'rule'

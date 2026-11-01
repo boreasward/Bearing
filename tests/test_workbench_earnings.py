@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from investment_assistant.workbench import earnings
+from investment_assistant.data.adapters import earnings
 
 TODAY = date(2026, 10, 22)
 

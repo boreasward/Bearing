@@ -6,7 +6,7 @@ version: 1
 applies_to: [screen-1]
 summary: "手动维护的纳指 100 成分名单（版本化文件），是每日筛选的范围和区制广度样本；as_of 超过 120 天记 universe_stale。"
 related: [system.screen, indicator.breadth, system.pool_tiers]
-sources: [investment_assistant/workbench/universe.py, config/universes/nasdaq100.json, docs/features/pool-and-context.md, docs/features/data-menu.md]
+sources: [investment_assistant/data/adapters/universe.py, config/universes/nasdaq100.json, docs/features/pool-and-context.md, docs/features/data-menu.md]
 ---
 
 ## 是什么

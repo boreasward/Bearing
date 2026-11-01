@@ -1,4 +1,5 @@
 from __future__ import annotations
+import investment_assistant.data.repo as data_repo
 
 import os
 from datetime import UTC, date, datetime
@@ -48,9 +49,9 @@ def _enrich(row, conn):
               'datasets': {}, 'next_event': None}
     if conn is None or market is None:
         return result
-    from investment_assistant.us_research import repository as us_repo
+    from investment_assistant.data import repo as us_repo
     from investment_assistant.data.identity import stock_id as us_stock_id
-    from investment_assistant.workbench import repository as wb_repo
+    # Repository consumers use their owning layers below.
     sid = us_stock_id(row['ticker'])
     states = us_repo.states(conn, sid)
     financials = us_repo.read_rows(conn, sid, 'financials')
@@ -59,7 +60,7 @@ def _enrich(row, conn):
                and r.get('start') and r.get('end') and r['start'] < r['end']]
     successful = states.get('financials', {}).get('last_success_details') or {}
     identity = successful.get('identity') or {}
-    earnings = wb_repo.latest_earnings(conn, row['ticker'], cutoff_at=datetime.now(UTC))
+    earnings = data_repo.latest_earnings(conn, row['ticker'], cutoff_at=datetime.now(UTC))
     earnings_day = str(earnings.get('earnings_date')) if earnings and earnings.get('earnings_date') else None
     next_event = ({'date': earnings_day, 'kind': 'earnings', 'title': None}
                   if earnings_day and earnings_day >= date.today().isoformat() else None)
@@ -106,7 +107,7 @@ def _validate_pool_write(conn, ticker: str, fields: dict[str, Any]) -> None:
     if 'tags' in fields:
         merged['tags'] = fields['tags']
     result = [merged if r['ticker'] == ticker else r for r in rows] if existing else rows + [merged]
-    from investment_assistant.workbench.pool import from_watchlist
+    from investment_assistant.analysis.pool import from_watchlist
     from_watchlist(result)
 
 

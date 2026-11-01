@@ -19,8 +19,14 @@ from decimal import Decimal
 from typing import Any
 
 from investment_assistant.config import WorkbenchConfig
-from investment_assistant.workbench import discipline, derivation, monthly, plans, regime, rules, tracks
-from investment_assistant.workbench.agent import tools as agent_tools
+from investment_assistant.review import discipline
+from investment_assistant.review import monthly
+from investment_assistant.analysis import regime
+from investment_assistant.analysis import rules
+from investment_assistant.review import tracks
+from investment_assistant.execution import plan_levels as plans
+from investment_assistant.derivation import chain as derivation
+from investment_assistant.derivation.indicators import price, breadth
 
 import test_workbench_agent_tools
 import test_workbench_derivation
@@ -68,9 +74,9 @@ def _snapshot(equity: str = '100000', tag: int = 1) -> dict:
 # ---------------------------------------------------------------- plans
 
 def _plans_cases(out: dict) -> None:
-    out['plans.atr14.constant_tr_2'] = plans.atr14(test_workbench_plans._bars(15))
-    out['plans.atr14.fourteen_bars_none'] = plans.atr14(test_workbench_plans._bars(14))
-    out['plans.atr14.flat_zero'] = plans.atr14(test_workbench_plans._bars(15, flat=True))
+    out['plans.atr14.constant_tr_2'] = price.atr14(test_workbench_plans._bars(15))
+    out['plans.atr14.fourteen_bars_none'] = price.atr14(test_workbench_plans._bars(14))
+    out['plans.atr14.flat_zero'] = price.atr14(test_workbench_plans._bars(15, flat=True))
     out['plans.rule_levels.ref100_atr3'] = plans.rule_levels(Decimal('100'), Decimal('3'))
     out['plans.rule_levels.half_up_rounding'] = plans.rule_levels(Decimal('10.005'), Decimal('0.01'))
     out['plans.validity.thanksgiving_week'] = plans.validity(date(2026, 11, 25))
@@ -96,8 +102,8 @@ def _indicators_cases(out: dict) -> None:
     bars = test_workbench_agent_tools._bars
     ticker = bars([100 + i for i in range(300)])
     ticker[-1]['volume'] = 3000
-    out['agent.tools.indicators.full_300'] = agent_tools.indicators(ticker, bars([500.0] * 300))
-    out['agent.tools.indicators.short_120_nulls'] = agent_tools.indicators(bars([100 + i for i in range(120)]),
+    out['agent.tools.indicators.full_300'] = price.indicators(ticker, bars([500.0] * 300))
+    out['agent.tools.indicators.short_120_nulls'] = price.indicators(bars([100 + i for i in range(120)]),
                                                                            bars([500] * 120))
 
 
@@ -106,20 +112,20 @@ def _indicators_cases(out: dict) -> None:
 def _regime_cases(out: dict) -> None:
     session = test_workbench_regime.SESSION
     _bars = test_workbench_regime._bars
-    out['regime.breadth.eligibility_by_history'] = regime.breadth(
+    out['regime.breadth.eligibility_by_history'] = breadth.breadth(
         {'A': _bars(120), 'B': _bars(300, closes=[100] * 299 + [50])}, session)
-    out['regime.breadth.excludes_stale_ticker'] = regime.breadth(
+    out['regime.breadth.excludes_stale_ticker'] = breadth.breadth(
         {'STALE': _bars(60, end=session - test_workbench_regime.timedelta(days=1)), 'FRESH': _bars(60)}, session)
-    out['regime.breadth.new_high_and_low'] = regime.breadth(
+    out['regime.breadth.new_high_and_low'] = breadth.breadth(
         {'H': _bars(300, closes=list(range(1, 301))), 'L': _bars(300, closes=list(range(300, 0, -1)))}, session)
     spy_flat = _bars(70, closes=[100] * 70)
-    out['regime.sector_strength.weak'] = regime.sector_strength(
+    out['regime.sector_strength.weak'] = breadth.sector_strength(
         _bars(70, closes=list(range(140, 70, -1))), spy_flat, session)
-    out['regime.sector_strength.strong'] = regime.sector_strength(
+    out['regime.sector_strength.strong'] = breadth.sector_strength(
         _bars(70, closes=list(range(70, 140))), spy_flat, session)
-    out['regime.sector_strength.mixed'] = regime.sector_strength(
+    out['regime.sector_strength.mixed'] = breadth.sector_strength(
         _bars(70, closes=[90] * 40 + [100] * 30), spy_flat, session)
-    out['regime.sector_strength.short_history_none'] = regime.sector_strength(_bars(60), spy_flat, session)
+    out['regime.sector_strength.short_history_none'] = breadth.sector_strength(_bars(60), spy_flat, session)
 
 
 # ---------------------------------------------------------------- screen

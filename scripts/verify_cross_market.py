@@ -103,7 +103,7 @@ def verify_fact(fact, snapshots):
     tokens = fact['source_locator'].split('/')
     require(len(tokens) == 7 and tokens[1:3] == ['facts','us-gaap'] and tokens[4] == 'units', 'source_locator')
     require(tokens[3] == fact.get('concept') and tokens[5].replace('~1','/').replace('~0','~') == fact.get('unit'), 'source_concept_unit')
-    from investment_assistant.us_research.domain import CONCEPTS
+    from investment_assistant.data.fundamentals import CONCEPTS
     require(fact.get('concept') in CONCEPTS.get(fact.get('metric'), ()), 'source_metric')
     url = urlsplit(fact.get('source_url') or '')
     require(url.scheme == 'https' and url.hostname in {'www.sec.gov','sec.gov'} and
@@ -180,7 +180,7 @@ def verify_quarter(name, metric, quarter, facts):
         matches = [r for r in facts if r['end'] == end and (not r.get('start') or r['start'] == start)]
         require(bool(matches) and all(equal(value, r['value']) for r in matches), 'quarter_arithmetic')
     else:
-        from investment_assistant.us_research.domain import NON_ADDITIVE
+        from investment_assistant.data.fundamentals import NON_ADDITIVE
         require(name not in NON_ADDITIVE, 'quarter_arithmetic')
         current = [r for r in facts if r['end'] == end and r.get('start') and r['start'] < start]
         previous_end = (date.fromisoformat(start)-timedelta(days=1)).isoformat()
@@ -302,7 +302,7 @@ def read_bundle(api_url):
     import psycopg
     import requests
     from investment_assistant.db import list_watchlist_items
-    from investment_assistant.us_research import repository
+    from investment_assistant.data import repo as repository
     url = os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL')
     require(bool(url), 'database_configuration')
     parsed = urlsplit(api_url)

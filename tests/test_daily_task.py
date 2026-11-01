@@ -1,5 +1,6 @@
 """The ``daily`` task shell (v2.8 §4.7, §5.9): one ``job_reports`` row per execution, the status mapping, the
 ``daily:run`` lock, the node table CLI and the manual-only ``sec_backfill``. SQL tests on the disposable database."""
+import investment_assistant.core.schema as core_schema
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -9,7 +10,8 @@ from test_daily_workflow import RUN_ID, effective, fake_sec, flaky, no_fetch_bac
 from test_workbench_service import NOW, SESSION, _agent_settings, seed_watchlist
 
 from investment_assistant.tasks import daily, filings
-from investment_assistant.workbench import workflow
+from investment_assistant.core import locks
+import investment_assistant.workflow.graph as workflow
 
 
 def run_daily(clock, factory=None, **kwargs):
@@ -56,10 +58,10 @@ def test_a_real_degraded_run_maps_to_degraded(daily_db, clock, notices, job_repo
 
 def test_daily_running_lock(daily_db, clock, notices, job_reports):
     seed_watchlist(daily_db, [('NVDA', ['core'])])
-    with daily.exclusive():
-        with pytest.raises(daily.DailyBusy):
+    with locks.exclusive():
+        with pytest.raises(locks.DailyBusy):
             run_daily(clock, trigger_source='manual')
-        with pytest.raises(daily.DailyBusy):
+        with pytest.raises(locks.DailyBusy):
             daily.resume(RUN_ID, 'collect', now=NOW, config=daily_config())
         out = run_daily(clock, trigger_source='scheduled')                      # a scheduled tick records and goes on
     assert out['status'] == 'error' and out['summary']['error'] == 'daily_running'
@@ -108,8 +110,8 @@ def test_sec_backfill_job_report_task(daily_db, clock, notices, job_reports, fak
     fetch = daily_db.execute("SELECT job, trigger, run_id, family FROM data_fetch_runs").fetchall()
     assert fetch == [('sec_backfill', 'manual_family', out['run_id'], 'sec_filings')]
     assert daily_db.execute('SELECT count(*) FROM stage_runs').fetchone()[0] == 0           # outside the graph
-    with daily.exclusive():                                                                  # and under the daily lock
-        with pytest.raises(daily.DailyBusy):
+    with locks.exclusive():                                                                  # and under the daily lock
+        with pytest.raises(locks.DailyBusy):
             filings.backfill(daily_config(), start_date=date(2026, 10, 1))
 
 
@@ -174,7 +176,7 @@ def test_resume_aborting_outside_a_node_is_reported(daily_db, clock, notices, jo
 
 def test_failure_notice_names_the_booked_failed_stage(daily_db, clock, notices, job_reports, monkeypatch):
     """M1: a stage that books ``failed`` without stopping the chain (retro cards) still names itself in the notice."""
-    from investment_assistant.workbench import retro_cards
+    from investment_assistant.review import retro_cards
 
     def boom(*args, **kwargs):
         raise RuntimeError('retro exploded')
@@ -190,12 +192,12 @@ def test_failure_notice_names_the_booked_failed_stage(daily_db, clock, notices, 
 
 
 def test_is_running_only_looks_at_the_lock(daily_db):
-    assert daily.is_running() is False
-    with daily.exclusive():
-        assert daily.is_running() is True
-        assert daily.is_running() is True                         # probing never takes or releases it
-    assert daily.is_running() is False
-    with daily.exclusive():                                       # and a probe leaves nothing behind
+    assert locks.is_running() is False
+    with locks.exclusive():
+        assert locks.is_running() is True
+        assert locks.is_running() is True                         # probing never takes or releases it
+    assert locks.is_running() is False
+    with locks.exclusive():                                       # and a probe leaves nothing behind
         pass
 
 
@@ -217,7 +219,7 @@ class Episode:
 
 @pytest.fixture
 def episode(monkeypatch):
-    from investment_assistant.workbench import agent_connection
+    from investment_assistant.core.llm import connection as agent_connection
 
     fake = Episode()
     monkeypatch.setattr(agent_connection, 'first_failure_since_ok', fake)
@@ -322,8 +324,8 @@ def test_no_connection_notice_without_not_connected(daily_db, clock, notices, jo
 
 
 def test_connection_notice_failure_never_changes_the_run(daily_db, clock, notices, job_reports, monkeypatch):
-    from investment_assistant.workbench import agent_connection
-    from investment_assistant.workbench.agent.chatgpt import ChatGPTError
+    from investment_assistant.core.llm import connection as agent_connection
+    from investment_assistant.core.llm.chatgpt import ChatGPTError
 
     def broken(*, since=None):
         raise ChatGPTError('migration_028_missing', '迁移 028 未执行。')
@@ -363,7 +365,7 @@ def test_a_stage_failed_run_says_it_cannot_be_resumed(daily_db, clock, notices, 
     """A push the notifier could not send (a 502, no retry) is booked ``failed`` by the stage while the chain runs on to
     the end: the run is failed, but the checkpoint has no next node — the notice carries no 续跑 field and the detail
     says ``stage_failed`` (v2.8 final review I1)."""
-    from investment_assistant.workbench import run_detail
+    import investment_assistant.views.runs.detail as run_detail
 
     seed_watchlist(daily_db, [('NVDA', ['core'])])
     notices.result = {'sent': False, 'reason': 'http_502'}
@@ -392,10 +394,10 @@ def test_a_chain_stopping_failure_still_tells_when_to_resume(daily_db, clock, no
 def test_daily_refuses_without_029(daily_db, clock, notices, job_reports, monkeypatch):
     """v2.9 D36: no graph, no stage rows, one `error / migration_029_missing` report and one failure notice —
     checked before any plan or trade is read."""
-    from investment_assistant.workbench import repository, service
+    import investment_assistant.core.tx as service
 
     seed_watchlist(daily_db, [('NVDA', ['core'])])
-    monkeypatch.setattr(repository, 'executable_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'executable_ready', lambda conn: False)
     out = run_daily(clock)
     assert out['status'] == 'error' and out['summary']['error'] == 'migration_029_missing'
     assert [(r['status'], r['summary']['error']) for r in job_reports.rows()] == [('error', 'migration_029_missing')]
@@ -407,9 +409,9 @@ def test_daily_refuses_without_029(daily_db, clock, notices, job_reports, monkey
 
 def test_daily_resume_refuses_without_029(daily_db, clock, notices, job_reports, monkeypatch):
     """Review M4: a resume is gated like a first run — 503 `migration_029_missing`, nothing written."""
-    from investment_assistant.workbench import repository, service
+    import investment_assistant.core.tx as service
 
-    monkeypatch.setattr(repository, 'executable_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'executable_ready', lambda conn: False)
     with pytest.raises(service.Unavailable, match='migration_029_missing'):
         daily.resume(RUN_ID, 'collect', now=NOW, config=daily_config(), notify_cfg=NotifyCfg())
     assert job_reports.rows() == [] and daily_db.execute('SELECT count(*) FROM stage_runs').fetchone()[0] == 0

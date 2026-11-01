@@ -22,9 +22,9 @@ from investment_assistant.core import tx as core_tx
 import requests
 from langchain_core.messages import HumanMessage
 
-from investment_assistant.workbench import agent_connection, service
-from investment_assistant.workbench.agent import chatgpt, model
-from investment_assistant.workbench.agent.chatgpt import ChatGPTError
+from investment_assistant.core.llm import connection as agent_connection
+from investment_assistant.core.llm import chatgpt, model
+from investment_assistant.core.llm.chatgpt import ChatGPTError
 from test_agent_chatgpt_oauth import NOW, _get, auth, id_token, token_body  # noqa: F401  (auth is a fixture)
 from test_agent_responses_model import _sse, failed_events
 

@@ -6,8 +6,8 @@ from decimal import Decimal
 
 import pytest
 
-from investment_assistant.workbench.agent.citations import Rejected
-from investment_assistant.workbench.agent.plan_check import check_plan, check_review, diff, filter_counter_v2
+from investment_assistant.execution.citations import Rejected
+from investment_assistant.execution.plan_check import check_plan, check_review, diff, filter_counter_v2
 
 REFS = {'call:1', 'call:2', 'call:3'}
 PRICE_REFS = {'call:1'}
@@ -335,7 +335,7 @@ def test_check_review_rejections(text, reason):
 
 # ---------------------------------------------------------------- agent-3 (v2.9 spec §5.5, D7, R3)
 
-from investment_assistant.workbench.agent import plan_check  # noqa: E402
+from investment_assistant.execution import plan_check# noqa: E402
 
 
 def payload3(**over) -> dict:

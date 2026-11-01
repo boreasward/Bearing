@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ('investment_assistant', 'scripts')
 WRITE = re.compile(r'\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?signal_decisions\b', re.I)
 FIXTURE_HELPER = '_insert_decision_for_tests'
-HELPER_FILE = ROOT / 'investment_assistant' / 'workbench' / 'repository.py'
+HELPER_FILE = ROOT / 'investment_assistant' / 'execution' / 'repo_legacy.py'
 
 
 def _python_files():

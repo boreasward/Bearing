@@ -15,7 +15,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 
 | 任务 | 模块 | 调度 | 说明 |
 | --- | --- | --- | --- |
-| `daily` | `tasks/daily.py`（图在 `workbench/workflow.py`） | 迁移 028 种子：北京 11:30，周二至周六（`weekday_mask = 2-6`，`Asia/Shanghai`），`enabled` 沿用原 `workbench` 行 | `daily-2` 的十一个节点，账户结算与模拟决策在 `review` 后、`push` 前，见[每日计划](../features/daily-plan.md#每日流程) |
+| `daily` | `tasks/daily.py`（图在 `workflow/graph.py`） | 迁移 028 种子：北京 11:30，周二至周六（`weekday_mask = 2-6`，`Asia/Shanghai`），`enabled` 沿用原 `workbench` 行 | `daily-2` 的十一个节点，账户结算与模拟决策在 `review` 后、`push` 前，见[每日计划](../features/daily-plan.md#每日流程) |
 | `sec_backfill` | `tasks/filings.py` 的 `backfill` | **不进 `scheduled_jobs`**，只手动 | 按日期回补 SEC 申报；调度器从不执行它，`GET /api/jobs/scheduled` 以 `manual_only: true` 的行列出它 |
 
 北京周二至周六 11:30 = 纽约周一至周五 22:30（冬令时）/ 23:30（夏令时），都在当天收盘后、次日开盘前。LaunchAgent 不需要改：任务是 `scheduled_jobs` 里的行，由 API 进程内的调度线程执行。旧任务名（`workbench`、`workbench_review`、`filings`）调用 `POST /api/jobs/{name}/run` 返回 404。
@@ -70,7 +70,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 
 ### 账户结算与模拟决策（v2.11）
 
-`accounts` 是原 `daily` 中的一个节点，没有另建定时任务。`service.stage_accounts` 委托 `workbench/paper_accounts.py`，按以下顺序执行：
+`accounts` 是原 `daily` 中的一个节点，没有另建定时任务。`workflow/nodes/accounts.py` 编排 `execution/paper/accounts.py` 的结算与 `analysis/agent/runner.py` 的模型用例，按以下顺序执行：
 
 1. 所有模拟账户逐交易日结算此前挂单、止损、T1 和时间止损，写模拟成交及每日权益。
 2. 写真实账户权益：补齐上次有行以来的交易日，并重算最近 5 个交易日；真实账户未开账时不写权益行。
@@ -81,7 +81,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 - **补结算**：模拟账户从 `settled_through` 的下一交易日起逐日结算到本次 session，补权益和成交；缺跑的中间日期不补造决策。`collect` 覆盖模拟持仓和在挂买单标的；缺当日日线时该标的当天不成交，记录 `bars_missing`，估值沿用旧收盘时另标 `stale`。
 - **幂等与隔离**：账户锁保护读取、检查与写入；`paper_decisions` 的 `(account_id, session)` 唯一，同一天已有决策（包括 `skipped`）就沿用，不重复调用模型或下单。结算水位、订单状态和链消耗记录防止重复成交；账户间的成交、现金与持仓分别读取，不改全局 Agent 链状态。
 - **模型不可用**：断连、额度、模型错误、每日 token 上限或阶段窗口耗尽时，记 `skipped` 与安全原因；此前的订单结算和自动退出已执行，照计划执行账户照常运行。单个账户出错记逐账户失败，其余账户继续。
-- **运行详情与核对**：`accounts` 的结果列出账户、结算数量、权益、持仓与决策状态；账户页展开订单和决策证据，见[账户与模拟交易](../features/accounts.md)。只读命令行为 `python -m investment_assistant.workbench.paper_accounts show [--account UUID或名称] [--session YYYY-MM-DD]`。
+- **运行详情与核对**：`accounts` 的结果列出账户、结算数量、权益、持仓与决策状态；账户页展开订单和决策证据，见[账户与模拟交易](../features/accounts.md)。只读命令行为 `python -m investment_assistant.views.account show [--account UUID或名称] [--session YYYY-MM-DD]`。
 
 真实库备份、迁移 030 的单事务执行与服务重启须在单独授权后进行；本地代码与文档准备不代表这些步骤已执行。迁移须先于运行新代码，缺 030 时账户接口返回 503，`daily` 与续跑前检拒绝运行。真实开账和模拟账户首次运行的结果仍需真实数据验收。
 
@@ -96,12 +96,12 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 
 ### 运行一览（v2.6）
 
-阶段证据在「今日」顶部以「运行一览」展示，数据来自只读接口 `GET /api/workbench/run-overview?session=YYYY-MM-DD[&run_id=…]`（`session` 缺省为最近已收盘交易日），实现是 `workbench/run_overview.py`。它**只读 `stage_runs`**（一个只读事务，不读别的表、不调用外部数据源），每个阶段返回与行逐字段相同的数字（`input_count`、`output_count`、`skips`、`failures`、`degradations`、`reason`、`duration_ms`），另加后端按模板拼好的一句话 `sentence`、原因文案（`reason_text`、`skips[].text`、`degradations[].text`）、状态文案 `status_text` 和该阶段的概念卡 `concepts`；整次运行另有 `headline`（如「定时运行 · 11:30 开始 · 用时 3 分 12 秒 · 11 个阶段：成功 9 · 降级 1 · 跳过 1」，时间为北京时间；运行失败时改为「10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：<原因>；其后 9 个节点未执行」，续跑后另加「（第 2 次执行，从「数据采集」续跑）」）。`sec_monitor` 的句子是「扫描 n 只，新归档 k 份申报，通知 m 条」（下载器模式「下载器模式：新下载 k 份申报」，目标失败时后缀「；f 只失败」）。`retro` 的句子在下面两种之后加「；周度复盘：已推送 / 已生成未推送 / 未到期；月度：…」（休市日没有复盘卡检测，只有这半句），`not_due` 整句「今天没有到期的复盘」；原来的两种：有事件或起草时「新结束 {events} 笔（平仓 a · 止损 b · 到 T1 c · 过期 d · 作废 e，只列非零项），新建复盘卡 {new_cards} 张；起草 {ok}/{attempted} 张；待审定 {to_review} 张」（`attempted` = 本次真正起草的张数，即成功 + 作废 + 出错，被跳过的不算；旧行没有 `detail.drafts` 时退回输入数），都为 0 时「没有新结束的计划或平仓；待审定 {to_review} 张」，其概念卡是 `review.retro_card`、`review.retro_end`。
+阶段证据在「今日」顶部以「运行一览」展示，数据来自只读接口 `GET /api/workbench/run-overview?session=YYYY-MM-DD[&run_id=…]`（`session` 缺省为最近已收盘交易日），实现是 `views/runs/overview.py`。它**只读 `stage_runs`**（一个只读事务，不读别的表、不调用外部数据源），每个阶段返回与行逐字段相同的数字（`input_count`、`output_count`、`skips`、`failures`、`degradations`、`reason`、`duration_ms`），另加后端按模板拼好的一句话 `sentence`、原因文案（`reason_text`、`skips[].text`、`degradations[].text`）、状态文案 `status_text` 和该阶段的概念卡 `concepts`；整次运行另有 `headline`（如「定时运行 · 11:30 开始 · 用时 3 分 12 秒 · 11 个阶段：成功 9 · 降级 1 · 跳过 1」，时间为北京时间；运行失败时改为「10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：<原因>；其后 9 个节点未执行」，续跑后另加「（第 2 次执行，从「数据采集」续跑）」）。`sec_monitor` 的句子是「扫描 n 只，新归档 k 份申报，通知 m 条」（下载器模式「下载器模式：新下载 k 份申报」，目标失败时后缀「；f 只失败」）。`retro` 的句子在下面两种之后加「；周度复盘：已推送 / 已生成未推送 / 未到期；月度：…」（休市日没有复盘卡检测，只有这半句），`not_due` 整句「今天没有到期的复盘」；原来的两种：有事件或起草时「新结束 {events} 笔（平仓 a · 止损 b · 到 T1 c · 过期 d · 作废 e，只列非零项），新建复盘卡 {new_cards} 张；起草 {ok}/{attempted} 张；待审定 {to_review} 张」（`attempted` = 本次真正起草的张数，即成功 + 作废 + 出错，被跳过的不算；旧行没有 `detail.drafts` 时退回输入数），都为 0 时「没有新结束的计划或平仓；待审定 {to_review} 张」，其概念卡是 `review.retro_card`、`review.retro_end`。
 
 - **同一天多次运行**：默认显示该交易日最后开始的、**不是休市空跑**的那次（休市空跑 = `push` 之前的阶段全部 `skipped` 且原因为 `not_trading_day`）；只有休市空跑时才显示它，`headline` 写「纽约休市，未运行（只推送一行休市说明）」。`runs` 列出同日全部运行（`run_id`、`trigger`、`trigger_text`：定时 / 手动 / 休市、`stages_version`、开始与结束时间、行数、`closed`），`run_id` 指定其中一次；不属于该日 → 404，日期非法 → 400，数据库不可用 → 503。
 - **边界**：`stage_runs` 表不存在 → `ready: false`、`note`「迁移 025 未执行，暂无阶段证据」；这一天没有任何行 → `note`「这一天没有阶段证据：当天没有运行，或运行早于 v2.4（2026-10-27 起才记录）」；`stages-1` 运行在 `review` 与 `retro` 处、`stages-2` 运行在 `retro` 处补一行 `not_recorded` 占位（计数为 `null`；旧运行按 v2.7 的九个阶段画，`retro` 仍叫「复盘卡」）；同一节点有几行（续跑）时取最大 `attempt` 的那行；缺某个阶段行 → `missing`「这一阶段没有证据行（记账失败，见运行报告）」；但所选运行没有它那个版本最后一个阶段（`stages-4` / `stages-5` 是 `retro`，更早的版本是 `push`）的行、且缺的阶段都排在最后一个已记录阶段之后时（批处理还在跑，或中途被终止），缺的阶段改写「还没有这一阶段的记录：运行可能仍在进行，或中途被终止」，摘要末尾加「（可能仍在运行）」，状态仍是 `missing`；注册表之外的阶段排在最后，句子「未知阶段」。
 - **原因文案**：先查 `run_overview.REASON_TEXT`（只放 `agent.REASON_TEXT` 没有的代码，含降级 kind 与规则跳过原因），再查 `agent.REASON_TEXT`，不认识的代码原样显示；带参数的 `agent_unavailable: <x>`、`aborted: <x>`、`<规则 id>:<原因>` 按规则拼，其中的参数 `<x>` / `<原因>` 是已知代码时也翻译（如 `agent_unavailable: not_configured` →「Agent 不可用：未配置」，`trend_reclaim:insufficient_history` →「趋势回踩修复：日线不足 200 根」），`aborted:` 后的异常摘要原样显示。
-- **命令行（只读）**：`python -m investment_assistant.workbench.run_overview --session YYYY-MM-DD [--run-id ID]`，先打印 `headline`，再逐行打印 `阶段 · 状态 · 句子 · 输入/产出`；没有阶段证据（打印说明）退出码 1，参数错误、`--run-id` 不属于该日或数据库不可用退出码 2。
+- **命令行（只读）**：`python -m investment_assistant.views.runs.overview --session YYYY-MM-DD [--run-id ID]`，先打印 `headline`，再逐行打印 `阶段 · 状态 · 句子 · 输入/产出`；没有阶段证据（打印说明）退出码 1，参数错误、`--run-id` 不属于该日或数据库不可用退出码 2。
 
 ## 通知
 

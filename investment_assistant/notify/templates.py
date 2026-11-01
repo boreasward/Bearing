@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from investment_assistant.notify.message import Notification, NotifyField
-from investment_assistant.workbench.regime import LABEL_TEXT
+from investment_assistant.analysis.regime import LABEL_TEXT
 
 MAX_FIELD = 1024
 MAX_MESSAGE = 6000
@@ -263,7 +263,7 @@ def _plan_update_text(u: dict) -> str:
 
 def _retrigger_phrase(retrigger: dict | None) -> str:
     """「再次触发（<规则>，<信号日>）」 from a review row's ``detail.retrigger`` (the newest merge)."""
-    from investment_assistant.workbench import labels
+    from investment_assistant.core import texts as labels
 
     retrigger = retrigger or {}
     rules = '、'.join(labels.RULE_TEXT.get(r, r) for r in retrigger.get('rule_ids') or [])
@@ -280,7 +280,7 @@ def _signed(value, digits: int = 2, suffix: str = '') -> str:
 def _holding_status_line(h: dict) -> str:
     """「MU 持有 4/10 天 · 距止损 −5.20% · 距 T1 +8.10% · 现 +0.6R · 继续持有：<维持理由>」 (spec §7.3, §11); an exit
     instruction gets a ⚠ in front. Quiet days are pushed too."""
-    from investment_assistant.workbench import timeline
+    from investment_assistant.execution import timeline
 
     held = f"持有 {h['held_sessions']}/{h['max_hold_sessions']} 天" if h.get('max_hold_sessions') \
         else f"持有 {h['held_sessions']} 天"
@@ -422,7 +422,7 @@ def _merged_lines(merged: list[dict] | None) -> list[str]:
 def _baseline_view(p: dict) -> dict | None:
     """A ``plan-2`` rule baseline in the shape ``_executable_lines`` reads (label 「规则基线」, the rules' names where
     an Agent plan has its summary); None for a plan without the execution fields (``plan-1``) or without a band."""
-    from investment_assistant.workbench import labels
+    from investment_assistant.core import texts as labels
 
     if p.get('plan_version') != 'plan-2' or p.get('entry_low') is None or not p.get('entry_type'):
         return None
@@ -437,7 +437,7 @@ def _baseline_view(p: dict) -> dict | None:
 def _executable_lines(agent: dict, ticker: str | None) -> str:
     """The three lines of an agent-3 version (v2.9 spec §11): the plan, the open scenarios, the max hold with the
     summary and the first counter."""
-    from investment_assistant.workbench import entry_rules
+    from investment_assistant.execution import entry_rules
 
     shares = (f"{agent['shares']} 股" if agent.get('shares') is not None else '缺资金快照，无法计算')
     low, high, stop = _num(agent['entry_low']), _num(agent['entry_high']), _num(agent['stop'])
@@ -467,7 +467,7 @@ def _agent_line(agent: dict | None, ticker: str | None = None) -> str:
     · 首条反证」 (v2.5 §10.3); agent-1 units keep their P3 §10.2 line, marked as the old version."""
     if not agent:
         return ''
-    from investment_assistant.workbench.agent import REASON_TEXT
+    from investment_assistant.analysis.agent import REASON_TEXT
     legacy = agent.get('legacy')
     if agent['status'] == 'ok' and not legacy and agent.get('chain_state') == 'invalidated':
         return f"Agent 已作废此计划（第 {agent.get('version_no')} 版）：{agent.get('invalidated_reason') or '—'}"

@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2, agent-1]
 summary: "反方是另一轮模型调用，逐条对论点找反证并列出其他风险；丢弃无效条目并计数，没有反证的论点会被标出，反方不能改价位和动作。"
 related: [agent.thesis, agent.citation, agent.brief, agent.action_levels]
-sources: [investment_assistant/workbench/agent/plan_check.py, investment_assistant/workbench/agent/citations.py, investment_assistant/workbench/agent/graph.py]
+sources: [investment_assistant/execution/plan_check.py, investment_assistant/execution/citations.py, investment_assistant/analysis/agent/graph.py]
 ---
 
 ## 是什么

@@ -3,14 +3,22 @@
 The front end keeps its own copies of the backend wordings in `web/src/lib/workbench.ts`: the opening-case sentences,
 the instruction and execution texts, the five new void reasons, the 409 / 410 / 400 sentences and the labels.
 Offline: reads source files and imports the pure modules, no database."""
+from investment_assistant.execution import trades as execution_trades
 import inspect
 import re
 from pathlib import Path
 
 from investment_assistant.api.routes import workbench as workbench_routes
 from investment_assistant.notify import templates
-from investment_assistant.workbench import (agent, entry_rules, execution, ledger, plan_review, retro, retro_cards,
-                                            service, timeline)
+from investment_assistant.analysis import agent
+import investment_assistant.workflow.nodes.review as plan_review
+from investment_assistant.review import retro
+from investment_assistant.review import retro_cards
+import investment_assistant.core.tx as service
+from investment_assistant.execution import timeline
+from investment_assistant.execution import entry_rules
+from investment_assistant.execution import adoption as execution
+from investment_assistant.execution import ledger
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKBENCH_TS = ROOT / 'web' / 'src' / 'lib' / 'workbench.ts'
@@ -107,7 +115,7 @@ def test_conflict_texts_match():
 def test_retired_endpoint_and_link_sentences_match():
     text = _ts()
     sentence = _ts_string(text, 'DECISIONS_RETIRED_SENTENCE')
-    assert service.DECISIONS_RETIRED == f'decisions_retired: {sentence}'
+    assert execution_trades.DECISIONS_RETIRED == f'decisions_retired: {sentence}'
     assert re.search(r'DECISIONS_RETIRED_TEXT\s*=\s*`decisions_retired: \$\{DECISIONS_RETIRED_SENTENCE\}`', text)
     assert _ts_string(text, 'DECISION_LINK_RETIRED_TEXT') == ledger.DECISION_LINK_RETIRED.split(': ', 1)[1]
     assert ledger.DECISION_LINK_RETIRED.startswith('decision_link_retired: ')

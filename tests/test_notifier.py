@@ -243,7 +243,7 @@ def test_plan_updates_respect_field_and_message_limits():
 # --- v2.7 §10: the weekly learning field goes out inside the 1024-char Discord limit ---
 
 def _weekly_with_learning(cards):
-    from investment_assistant.workbench import review_digest
+    from investment_assistant.review import period_digest as review_digest
 
     learning = {'discipline': {'cards': len(cards), 'chase': 0, 'early_take': 0, 'held_loser': 0, 'unplanned': 0,
                                'pending': 0},
@@ -312,7 +312,7 @@ def test_weekly_learning_all_empty_one_line():
 
 
 def test_old_snapshot_has_no_learning_field():
-    from investment_assistant.workbench import review_digest
+    from investment_assistant.review import period_digest as review_digest
 
     review = {'id': 1, 'week_start': date(2026, 10, 12), 'calc_version': 'review-6',
               'stats': {'units': {'decided': 0, 'undecided': 0}, 'unsignaled_trades': [], 'closed_trades': [],

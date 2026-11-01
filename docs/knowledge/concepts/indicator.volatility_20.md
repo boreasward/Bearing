@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "最近 20 个日收益的标准差（不含当天）；当日涨跌幅绝对值达到它的 2.5 倍，就触发「异常波动」。"
 related: [rule.abnormal_move, indicator.gap, indicator.atr14]
-sources: [investment_assistant/workbench/rules.py]
+sources: [investment_assistant/analysis/rules.py]
 ---
 
 ## 是什么

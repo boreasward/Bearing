@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from investment_assistant.workbench.agent.citations import LEVEL_BAND, Rejected, check_proposal, filter_counter
+from investment_assistant.execution.citations import LEVEL_BAND, Rejected, check_proposal, filter_counter
 
 LAST_CLOSE = Decimal('100')
 REFS = {'call:1', 'call:2', 'call:3'}
@@ -150,7 +150,7 @@ def _interpret(**overrides):
 
 
 def check_interpret(text, *, refs=REFS):
-    from investment_assistant.workbench.agent.citations import check_interpretation
+    from investment_assistant.execution.citations import check_interpretation
     return check_interpretation(text, refs=refs)
 
 

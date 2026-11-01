@@ -2,6 +2,7 @@
 
 The ChatGPT request / stream / error behaviour is in ``test_agent_responses_model``; the connection itself in
 ``test_agent_connection``. No network, no database."""
+import investment_assistant.analysis.agent.runner as analysis_agent_runner
 import dataclasses
 import re
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from investment_assistant.workbench.agent import chatgpt, model
+from investment_assistant.core.llm import chatgpt, model
 
 CONNECTED = {'status': 'connected', 'scopes_ok': True, 'model': 'gpt-test', 'secret': 'test-access-9999'}
 
@@ -132,8 +133,8 @@ def test_cli_dispatch(monkeypatch, capsys):
     import json as _json
     import uuid as _uuid
     from datetime import UTC, date, datetime
-    from investment_assistant.workbench.agent import __main__ as cli
-    from investment_assistant.workbench import service
+    from investment_assistant.analysis.agent import __main__ as cli
+    import investment_assistant.core.tx as service
 
     monkeypatch.setenv('INVESTMENT_ASSISTANT_DATABASE_URL', 'postgresql://agent.test/db')
     seen = {}
@@ -146,7 +147,7 @@ def test_cli_dispatch(monkeypatch, capsys):
         seen['run'] = (ticker, signal_date, isinstance(now, datetime))
         return {'id': _uuid.uuid4(), 'status': 'ok', 'reason': None}
 
-    monkeypatch.setattr(service, 'run_agent', fake_run_agent)
+    monkeypatch.setattr(analysis_agent_runner, 'run_agent', fake_run_agent)
     assert cli.main(['run', '--ticker', 'nvda', '--date', '2026-10-21']) == 0
     assert seen['run'] == ('NVDA', date(2026, 10, 21), True)
     out = _json.loads(capsys.readouterr().out.strip())

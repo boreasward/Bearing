@@ -6,7 +6,7 @@ version: 1
 applies_to: [regime-2]
 summary: "来自 FRED 的两条宏观序列 BAMLH0A0HYM2 与 T10Y2Y，各取 120 天；只作背景，未配置时如实记录。"
 related: [indicator.hy_oas, indicator.t10y2y, indicator.regime, system.append_only]
-sources: [investment_assistant/workbench/macro.py, investment_assistant/workbench/regime.py, investment_assistant/workbench/families.py, docs/features/pool-and-context.md]
+sources: [investment_assistant/data/adapters/fred.py, investment_assistant/analysis/regime.py, investment_assistant/data/families.py, docs/features/pool-and-context.md]
 ---
 
 ## 是什么

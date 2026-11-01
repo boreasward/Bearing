@@ -1,4 +1,4 @@
-from investment_assistant.filings.report import build_filing_report
+from investment_assistant.data.sec.report import build_filing_report
 
 
 def test_report_keeps_source_and_does_not_invent_numbers():

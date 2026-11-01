@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-discuss-1]
 summary: "在计划卡或复盘卡上向 Agent 追问：它只能读，用十三个只读工具回答，只写你的提问、回答、运行记录和可选的经验草稿；截止时间是你提问的那一刻。"
 related: [system.my_knowledge, agent.tool_calls, agent.knowledge_citation, system.cutoff, agent.user_input, agent.citation, review.retro_card, plan.derivation]
-sources: [investment_assistant/workbench/agent/discuss_tools.py, investment_assistant/workbench/agent/growth_check.py, investment_assistant/workbench/agent/graph.py]
+sources: [investment_assistant/review/discuss_tools.py, investment_assistant/review/agent_runs.py, investment_assistant/analysis/agent/graph.py]
 ---
 
 ## 是什么

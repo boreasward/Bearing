@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import discipline
+from investment_assistant.review import discipline
 
 NY = ZoneInfo('America/New_York')
 D0, D1, D2, D3, D4 = (date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 22), date(2026, 10, 23),

@@ -15,8 +15,11 @@ import pytest
 from investment_assistant.core import tx as core_tx
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import collect, data_view, families, service
-from investment_assistant.workbench.universe import Universe, UniverseError
+import investment_assistant.data.collect as collect
+import investment_assistant.views.data as data_view
+import investment_assistant.workflow.targets as families
+import investment_assistant.core.tx as service
+from investment_assistant.data.adapters.universe import Universe, UniverseError
 
 SESSION = date(2026, 10, 22)                         # Thursday
 NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)     # 18:30 New York
@@ -192,7 +195,7 @@ def test_busy_lock_returns_busy(db):
 
 
 def test_lock_released_when_connection_closes(db, monkeypatch):
-    from investment_assistant.tasks import runner
+    from investment_assistant.core import runner
 
     submitted = []
 
@@ -219,7 +222,7 @@ def test_start_fetch_checks_workbench_tables_before_submit(db, monkeypatch):
     """提交前安全检查工作台表：缺 price_bars 时 503 且不提交后台任务（I06）。"""
     db.execute('DROP TABLE price_bars')
     submitted = []
-    monkeypatch.setattr('investment_assistant.tasks.runner.submit',
+    monkeypatch.setattr('investment_assistant.core.runner.submit',
                         lambda *a, **k: submitted.append(a) or 'r')
     with pytest.raises(service.Unavailable, match='price_bars'):
         data_view.start_fetch('bars', None, now_fn=lambda: NOW, deps=deps(Sources()))

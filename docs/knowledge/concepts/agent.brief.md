@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-brief-1]
 summary: "卖出、观察和冲突单元由 Agent 单独写一份只解读不给动作的摘要，带支持、反证和矛盾处；失败时退回规则版摘要。"
 related: [agent.counter, agent.citation, agent.tool_calls, system.decision_unit, system.conflict]
-sources: [investment_assistant/workbench/briefs.py, investment_assistant/workbench/agent/graph.py, investment_assistant/workbench/agent/citations.py]
+sources: [investment_assistant/analysis/briefs.py, investment_assistant/analysis/agent/graph.py, investment_assistant/execution/citations.py]
 ---
 
 ## 是什么

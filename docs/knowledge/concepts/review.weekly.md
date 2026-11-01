@@ -6,7 +6,7 @@ version: 3
 applies_to: [review-6, review-7, review-8]
 summary: "每周冻结一份快照：按规则、按执行、执行偏差、计划外成交、计划影子、纪律、分池多个视角统计，并冻结当期三方对比；更正要重新生成。"
 related: [review.control_group, review.tracks, review.first_latest, review.monthly_return, system.push, review.weekly_learning]
-sources: [investment_assistant/workbench/review.py, investment_assistant/workbench/review_digest.py, investment_assistant/tasks/daily.py]
+sources: [investment_assistant/review/outcomes.py, investment_assistant/review/period_digest.py, investment_assistant/tasks/daily.py]
 ---
 
 ## 是什么

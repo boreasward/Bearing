@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "参考价上下各 0.5 个 ATR14，价位四舍五入到分；成交价高出上沿会被复盘记为「追高进场」。"
 related: [plan.ref_price, indicator.atr14, review.discipline_chase, review.plan_shadow]
-sources: [investment_assistant/workbench/plans.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/plan_levels.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

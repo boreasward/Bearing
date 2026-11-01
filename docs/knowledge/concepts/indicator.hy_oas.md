@@ -6,7 +6,7 @@ version: 1
 applies_to: [regime-2]
 summary: "FRED 序列 BAMLH0A0HYM2，高收益债相对国债的期权调整利差；只作背景信息，附 20 个观测前的变化。"
 related: [family.fred, indicator.t10y2y, indicator.regime]
-sources: [investment_assistant/workbench/macro.py, investment_assistant/workbench/regime.py]
+sources: [investment_assistant/data/adapters/fred.py, investment_assistant/derivation/indicators/breadth.py]
 ---
 
 ## 是什么

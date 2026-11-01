@@ -1,6 +1,6 @@
 """The in-process background runner for API-submitted jobs (was ``tasks/runner.py``).
 
-Cut verbatim in Task 0; ``tasks/runner.py`` re-exports until Task 1."""
+Shared by edge callers and upper-layer use cases; the old task module is removed."""
 from __future__ import annotations
 
 import threading

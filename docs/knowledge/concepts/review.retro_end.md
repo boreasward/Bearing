@@ -6,7 +6,7 @@ version: 1
 applies_to: [retro-1, retro-2]
 summary: "判定何时出复盘卡：有持仓只在全部平仓时结束；没持仓取作废、止损、到 T1、过期里最早的；只看最近 5 个交易日；同一事件只出一张。"
 related: [review.retro_card, review.plan_shadow, agent.review_outcome, rule.plan_stop, rule.plan_target]
-sources: [investment_assistant/workbench/retro.py]
+sources: [investment_assistant/review/retro.py]
 ---
 
 ## 是什么

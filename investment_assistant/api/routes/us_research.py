@@ -1,25 +1,23 @@
+import investment_assistant.analysis.fundamentals as analysis_fundamentals
 from typing import Any
 
 from fastapi import APIRouter, Body
 
-from investment_assistant.us_research import service, guidance
-from investment_assistant.tasks import runner
+from fastapi.responses import JSONResponse
+
+from investment_assistant.analysis import fundamentals as guidance
 
 router = APIRouter()
 
 
 @router.post('/api/us-research/sync')
 def sync(payload: dict[str, Any] = Body(default_factory=dict)):
-    from investment_assistant.tasks.us_research import run
-    symbols, datasets = service.validate_request(payload.get('symbols'), payload.get('datasets'), payload.get('retry_failed', False))
-    run_id = runner.submit('us-research', lambda: run(symbols=symbols, datasets=datasets,
-                                                    retry_failed=payload.get('retry_failed', False)))
-    return {'run_id': run_id, 'status': 'pending'}
+    return JSONResponse(status_code=410, content={'error': 'use_data_menu'})
 
 
 @router.get('/api/us-research/{ticker}')
 def view(ticker: str, as_of: str | None = None):
-    return service.view(ticker, as_of=as_of)
+    return analysis_fundamentals.view(ticker, as_of=as_of)
 
 
 @router.get('/api/us-research/{ticker}/guidance')

@@ -6,7 +6,7 @@ version: 1
 applies_to: []
 summary: "Phase 0 Gate 的结论是 HOLD：所有规则和 Agent 都未经验证；推导一致、Agent 默认展示、数据完整都不等于有效。"
 related: [system.cutoff, review.backcheck, review.tracks, plan.derivation]
-sources: [investment_assistant/workbench/families.py, investment_assistant/workbench/derivation.py, investment_assistant/workbench/digest.py]
+sources: [investment_assistant/data/families.py, investment_assistant/derivation/chain.py, investment_assistant/review/push_digest.py]
 ---
 
 ## 是什么

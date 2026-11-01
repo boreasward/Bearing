@@ -15,6 +15,7 @@ SH = ZoneInfo('Asia/Shanghai')
 BENCHMARK = 'SPY'
 HISTORY_DAYS = 420          # calendar days fetched; covers MA200 plus look-backs
 NEWS_LOOKBACK_DAYS = 7
+FILING_LOOKBACK_DAYS = 10
 OPEN_UNIT_DAYS = 14
 SEC_EVIDENCE_DIR = Path(__file__).resolve().parents[2] / '.local/us-workbench/sec-evidence'
 CONNECTION_LOST = ('not_connected', 'model_unavailable')    # a unit proving the connection / model unusable stops the node (§8.8)

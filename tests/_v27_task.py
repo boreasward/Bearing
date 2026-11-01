@@ -4,21 +4,27 @@ The v2.7 batch tests (stage evidence, ``derivation stages``, ``job_reports`` row
 through this wrapper: a ``stages-3`` recorder, ``service.run_batch`` and the push stage after it. The product now runs
 the ``daily`` graph (``tasks/daily.py``), whose own tests are ``test_daily_*.py``."""
 from __future__ import annotations
+import investment_assistant.workflow.batch as d_workflow_batch
+import investment_assistant.workflow.nodes.push as d_workflow_nodes_push
+from investment_assistant.tasks import ports
+import investment_assistant.core.schema as core_schema
 
 from datetime import UTC, datetime
 from typing import Any
 
 from investment_assistant.config import AssistantConfig, load_config
 from investment_assistant.tasks._harness import run_task
-from investment_assistant.workbench import bars, repository, service
-from investment_assistant.workbench import stages as stages_module
+import investment_assistant.core.tx as service
+from investment_assistant.data.adapters import bars
+import investment_assistant.workflow.recorder as stages_module
+from investment_assistant.core import stages
 
 
 def _timeline_ready() -> bool:
     """Migration 026 present (v2.5 D22), read on a read-only transaction; any failure counts as not ready."""
     try:
         with service.read_only_tx() as conn:
-            return repository.timeline_ready(conn)
+            return core_schema.timeline_ready(conn)
     except Exception:  # noqa: BLE001 - an unreadable database is booked as stages-1; the batch reports it
         return False
 
@@ -27,7 +33,7 @@ def _growth_ready() -> bool:
     """Migration 027 present (v2.7 D29), read on a read-only transaction; any failure counts as not ready."""
     try:
         with service.read_only_tx() as conn:
-            return repository.growth_ready(conn)
+            return core_schema.growth_ready(conn)
     except Exception:  # noqa: BLE001 - an unreadable database is booked as the older version; the batch reports it
         return False
 
@@ -46,15 +52,15 @@ def run(config: AssistantConfig | None = None, *, trigger_source: str = 'schedul
         growth = ready and _growth_ready()
         recorder = stages_module.StageRecorder(run_id, 'scheduled' if scheduled else 'manual_batch',
                                                bars.latest_closed_session(moment),
-                                               version=stages_module.STAGES_VERSION_V3 if growth
-                                               else stages_module.STAGES_VERSION_V2 if ready
-                                               else stages_module.STAGES_VERSION_V1)
+                                               version=stages.STAGES_VERSION_V3 if growth
+                                               else stages.STAGES_VERSION_V2 if ready
+                                               else stages.STAGES_VERSION_V1)
         failure: BaseException | None = None
         summary: dict | None = None
         try:
             # The batch reads its tiered pool from the watchlist table; the config watchlist stays for other tasks.
             # run_id 来自任务外壳，data_fetch_runs / screen_runs / signal_candidates 与 job_reports 同源（v2.4 §6.1）。
-            summary = service.run_batch(now=moment, deps=deps, run_id=run_id,
+            summary = d_workflow_batch.run_batch(now=moment, deps=deps, run_id=run_id,
                                         skip_non_trading=scheduled,
                                         record_trigger='scheduled' if scheduled else 'manual_batch',
                                         stages=recorder, timeline_ready=ready, growth_ready=growth)
@@ -70,14 +76,14 @@ def run(config: AssistantConfig | None = None, *, trigger_source: str = 'schedul
             try:
                 with acc.timing():
                     if closed:
-                        summary['push'] = service.push_closed(now=moment, notify_cfg=notify_cfg)
+                        summary['push'] = d_workflow_nodes_push.push_closed(now=moment, notify_cfg=notify_cfg, send=ports.send)
                     else:
-                        summary['push'] = service.push(now=moment, force=False, summary=summary,
+                        summary['push'] = d_workflow_nodes_push.push(now=moment, force=False, summary=summary, send=ports.send,
                                                        notify_cfg=notify_cfg)
             except BaseException as exc:
                 recorder.finish('push', failed=f'aborted: {exc}')
                 raise
-            service.account_push(recorder, acc, summary['push'])
+            d_workflow_nodes_push.account_push(recorder, acc, summary['push'])
             return summary
         except BaseException as exc:
             failure = exc

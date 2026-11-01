@@ -6,8 +6,8 @@ import pytest
 import requests
 
 from investment_assistant.config import AssistantConfig, FilingsConfig, NotifyConfig, SecMonitorConfig, load_config
-from investment_assistant.filings.monitor import scan_and_notify
-from investment_assistant.filings.monitor_source import EdgarSource, read_watchlist
+from investment_assistant.tasks.filings import scan_and_notify
+from investment_assistant.data.sources.edgar import EdgarSource, read_watchlist
 from investment_assistant.notify.discord_bot import DeliveryError, DiscordBotClient
 
 
@@ -190,7 +190,7 @@ def test_http_errors_follow_the_retry_policy_and_missing_agent_is_an_error(tmp_p
             return type("Response", (), {"status_code": self.status, "headers": self.headers})()
     waits = []
     monkeypatch.setenv("SEC_USER_AGENT", "Research test@example.com")
-    monkeypatch.setattr("investment_assistant.filings.monitor_source.time.sleep", lambda _s: None)   # the throttle
+    monkeypatch.setattr("investment_assistant.data.sources.edgar.time.sleep", lambda _s: None)   # the throttle
     session = Session(429, {"Retry-After": "60"})
     source = EdgarSource(tmp_path, session=session, sleep=waits.append)
     with pytest.raises(RuntimeError, match="HTTP 429"):
@@ -217,7 +217,7 @@ def test_network_failures_are_classified_without_leaking_details(tmp_path, monke
     class Session:
         def get(self, *args, **kwargs):
             raise exception
-    monkeypatch.setattr("investment_assistant.filings.monitor_source.time.sleep", lambda _s: None)   # the throttle
+    monkeypatch.setattr("investment_assistant.data.sources.edgar.time.sleep", lambda _s: None)   # the throttle
     with pytest.raises(RuntimeError) as caught:
         EdgarSource(tmp_path, session=Session(), sleep=lambda _s: None).get("https://data.sec.gov/test")
     assert reason in str(caught.value) and "secret" not in str(caught.value)
@@ -294,7 +294,7 @@ def test_monitor_config_loads_and_routes_filings_task(tmp_path, monkeypatch):
     configured start date to New York today)."""
     from datetime import date
 
-    from investment_assistant.filings import monitor
+    from investment_assistant.tasks import filings as monitor
     from investment_assistant.tasks import filings
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"sec_monitor": {"enabled": True, "start_date": "2026-10-01"}}))

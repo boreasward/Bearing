@@ -6,7 +6,7 @@ version: 1
 applies_to: []
 summary: "公司向 SEC 提交的 8-K / 10-Q / 10-K 列表，含受理时间（UTC）与 Item；无申报不等于缺数据。"
 related: [rule.new_filing, rule.earnings_gap_up, family.news, system.cutoff]
-sources: [investment_assistant/workbench/families.py, investment_assistant/workbench/collect.py, investment_assistant/workbench/rules.py, docs/features/sec-filings.md, docs/features/data-menu.md]
+sources: [investment_assistant/data/families.py, investment_assistant/data/collect.py, investment_assistant/analysis/rules.py, docs/features/sec-filings.md, docs/features/data-menu.md]
 ---
 
 ## 是什么

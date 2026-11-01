@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-1]
 summary: "v2.5 之前生成的 agent-1 计划原样只读保留，仍做影子跟踪和三方对比，但没有失效条件、复查条件和版本链，不参与每日复查。"
 related: [agent.version_chain, agent.action_levels, agent.counter, review.chain_state]
-sources: [investment_assistant/workbench/timeline.py, investment_assistant/workbench/plans.py, investment_assistant/workbench/agent/graph.py]
+sources: [investment_assistant/execution/timeline.py, investment_assistant/execution/plan_levels.py, investment_assistant/analysis/agent/graph.py]
 ---
 
 ## 是什么

@@ -3,6 +3,8 @@ family detail and raw browse. All market data below is synthetic. The reads neve
 collect: a never-collected ticker is an empty 200, not an error and not a fetch
 (test_browse_unknown_ticker_is_empty_not_error), and every GET leaves the business
 tables untouched (test_reads_are_read_only)."""
+import investment_assistant.core.dbutil as core_dbutil
+import investment_assistant.data.repo as data_repo
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -13,11 +15,17 @@ import pytest
 from investment_assistant.core import tx as core_tx
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import bars as bars_module
-from investment_assistant.workbench import collect, data_view, families, plans, repository, service
-from investment_assistant.workbench import macro as macro_module
-from investment_assistant.workbench import news as news_module
-from investment_assistant.workbench import universe as universe_module
+from investment_assistant.data.adapters import bars as bars_module
+from investment_assistant.derivation.indicators import price
+import investment_assistant.data.collect as collect
+import investment_assistant.views.data as data_view
+import investment_assistant.workflow.targets as families
+import investment_assistant.core.tx as service
+from investment_assistant.data import families as data_families
+from investment_assistant.execution import plan_levels as plans
+from investment_assistant.data.adapters import fred as macro_module
+from investment_assistant.data.adapters import news as news_module
+from investment_assistant.data.adapters import universe as universe_module
 
 SESSION = date(2026, 10, 22)                         # Thursday
 NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)     # 18:30 New York
@@ -25,7 +33,7 @@ NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)     # 18:30 New York
 CARD_KEYS = {'id', 'title', 'purpose', 'kind', 'fetch_via', 'per_ticker', 'job', 'coverage',
              'latest_at', 'coverage_note', 'last_run', 'last_ticker_run', 'last_success_at',
              'evidence', 'notes', 'current_error', 'fetch_runs_ready'}
-BUSINESS_TABLES = repository.WORKBENCH_TABLES + ('data_fetch_runs',)
+BUSINESS_TABLES = core_dbutil.WORKBENCH_TABLES + ('data_fetch_runs',)
 
 
 @pytest.fixture
@@ -52,7 +60,7 @@ def _run(db, **overrides):
            'target_count': 2, 'ok_count': 2, 'failures': [], 'detail': {},
            'started_at': NOW, 'finished_at': NOW}
     row.update(overrides)
-    repository.insert_fetch_run(db, row)
+    data_repo.insert_fetch_run(db, row)
 
 
 def test_overview_has_six_cards_and_evidence(db):
@@ -64,7 +72,7 @@ def test_overview_has_six_cards_and_evidence(db):
     cards = {card['id']: card for card in out['families']}
     assert [card['id'] for card in out['families']] == \
         ['bars', 'sec_filings', 'news', 'atr', 'fred', 'universe']
-    assert out['evidence'] == families.EVIDENCE
+    assert out['evidence'] == data_families.EVIDENCE
     assert out['session'] == SESSION and out['fetch_runs_ready'] is True
 
     bars_card = cards['bars']
@@ -80,14 +88,14 @@ def test_overview_has_six_cards_and_evidence(db):
                                      'ok_count': 2, 'target_count': 2, 'failures': []}
     assert bars_card['last_success_at'] == NOW + timedelta(hours=1)
     assert bars_card['fetch_runs_ready'] is True and bars_card['current_error'] is None
-    assert bars_card['coverage_note'] == families.COVERAGE_NOTES['bars']
+    assert bars_card['coverage_note'] == data_families.COVERAGE_NOTES['bars']
 
     assert {card['job']['name'] for card in cards.values()} == {'daily'}
-    assert {family.job for family in families.FAMILIES} == {'daily'}
+    assert {family.job for family in data_families.FAMILIES} == {'daily'}
     assert 'no_filing_is_not_missing' in cards['sec_filings']['notes']
     assert 'pool_empty' in cards['news']['notes']
 
-    assert cards['atr']['evidence'] == families.EVIDENCE + ' ' + families.ATR_EVIDENCE
+    assert cards['atr']['evidence'] == data_families.EVIDENCE + ' ' + data_families.ATR_EVIDENCE
     assert cards['atr']['last_run'] == bars_card['last_run']      # ATR 取 bars 的拉取记录
     assert cards['atr']['last_success_at'] == bars_card['last_success_at']
     assert cards['news']['last_run'] is None
@@ -303,7 +311,7 @@ def test_browse_bars_latest_revision_and_counts(db):
 
 
 def test_browse_atr_matches_plans_atr14(db):
-    for i in range(60 + plans.MIN_BARS):
+    for i in range(60 + price.MIN_BARS):
         day = add_trading_days(SESSION, -(74 - i))
         close = 100 + (i % 9)
         _bar(db, price_date=day, open=close - 1, high=close + 2, low=close - 2,
@@ -312,11 +320,11 @@ def test_browse_atr_matches_plans_atr14(db):
 
     out = data_view.browse('atr', now=NOW, ticker='NVDA')
     assert len(out['rows']) == 60
-    window = repository.read_bars(db, 'NVDA', SESSION, cutoff_at=NOW, limit=60 + plans.MIN_BARS)
+    window = data_repo.read_bars(db, 'NVDA', SESSION, cutoff_at=NOW, limit=60 + price.MIN_BARS)
     last = out['rows'][-1]
     assert set(last) == {'price_date', 'close', 'atr', 'atr_pct'}
     assert last['price_date'] == SESSION
-    assert last['atr'] == float(plans.atr14(window))
+    assert last['atr'] == float(price.atr14(window))
     assert last['atr_pct'] == last['atr'] / last['close']
 
 
@@ -358,14 +366,14 @@ def test_browse_validation():
 def test_reads_are_read_only(db):
     _bar(db, close=104)
     _bar(db, close=105, revision=2, fetched_at=NOW - timedelta(hours=1))
-    repository.store_news(db, [({'source': 'sec_8k', 'title': 'NVDA 8-K',
+    data_repo.store_news(db, [({'source': 'sec_8k', 'title': 'NVDA 8-K',
                                  'url': 'https://sec.example/x', 'publisher': 'SEC EDGAR',
                                  'published_at': datetime(2026, 10, 20, 14, tzinfo=UTC)}, ['NVDA'])],
                           now=NOW)
     db.execute('INSERT INTO filings (ticker, form, filing_date, accession_number, primary_document, '
                'file_path, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s)',
                ['NVDA', '10-Q', SESSION, '0001045810-26-000001', 'd.htm', '/x', NOW])
-    repository.store_macro(db, 'BAMLH0A0HYM2',
+    data_repo.store_macro(db, 'BAMLH0A0HYM2',
                            [{'obs_date': date(2026, 10, 21), 'value': Decimal('3.2')}], now=NOW)
     _run(db)
     db.commit()
@@ -397,7 +405,7 @@ def test_reads_are_read_only(db):
 
 
 def _news(conn, ticker, source, url, published_at, fetched_at=NOW):
-    repository.store_news(conn, [({'source': source, 'title': f'{ticker} {url}', 'url': url,
+    data_repo.store_news(conn, [({'source': source, 'title': f'{ticker} {url}', 'url': url,
                                    'publisher': 'p', 'published_at': published_at}, [ticker])],
                           now=fetched_at)
 

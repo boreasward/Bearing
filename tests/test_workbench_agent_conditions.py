@@ -5,9 +5,9 @@ from decimal import Decimal
 
 import pytest
 
-from investment_assistant.workbench.agent import conditions
-from investment_assistant.workbench.agent.citations import Rejected
-from investment_assistant.workbench.agent.conditions import (CONDITIONS, CONDITIONS_ALL, CONDITIONS_VERSION, ConditionDef, Facts,
+from investment_assistant.execution import conditions
+from investment_assistant.execution.citations import Rejected
+from investment_assistant.execution.conditions import (CONDITIONS, CONDITIONS_ALL, CONDITIONS_VERSION, ConditionDef, Facts,
                                                              describe, evaluate, validate)
 
 AS_OF = date(2026, 10, 20)        # version generated on this session (Tuesday)
@@ -362,6 +362,6 @@ def test_max_hold_condition_shape():
 
 def test_agent2_prompt_does_not_mention_held_sessions():
     """R8 guard: the live agent-2 prompt renders the condition-1 view, so the condition-2 kind never shows up."""
-    from investment_assistant.workbench.agent import graph
+    from investment_assistant.analysis.agent import graph
     assert 'held_sessions_reached' not in graph.PROPOSE_PROMPT_V2
     assert graph._conditions_table().count('\n') == len(CONDITION1_KINDS) + 1       # header, rule line, eleven rows

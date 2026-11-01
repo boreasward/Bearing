@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "最近 20 / 50 / 200 个交易日收盘价的简单平均；趋势类规则、筛选形态和 K 线图都用它判断趋势方向。"
 related: [rule.trend_reclaim, rule.trend_break, rule.volume_breakout, indicator.breadth]
-sources: [investment_assistant/workbench/rules.py, investment_assistant/workbench/chart.py, investment_assistant/workbench/agent/tools.py, investment_assistant/workbench/regime.py]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/views/chart.py, investment_assistant/analysis/agent/tools.py, investment_assistant/analysis/regime.py]
 ---
 
 ## 是什么

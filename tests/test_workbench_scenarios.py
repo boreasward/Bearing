@@ -1,4 +1,13 @@
 """End-to-end workbench flow, offline. Tickers SYNTH/SYNB and every price are fabricated test data."""
+import investment_assistant.optimize.backcheck as optimize_backcheck
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.review.shadow as review_shadow
+from investment_assistant.execution import trades as execution_trades
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.optimize.repo as optimize_repo
+import investment_assistant.review.repo as review_repo
 import json
 import socket
 import uuid
@@ -14,8 +23,15 @@ import pytest
 from investment_assistant.core import tx as core_tx
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import ledger, service
-from investment_assistant.workbench.universe import Universe
+import investment_assistant.workflow.batch as service
+from investment_assistant.views.today import unit_cards
+from investment_assistant.views.instrument import instrument
+from investment_assistant.views.agent_runs import agent_runs
+from investment_assistant.workflow.nodes.push import push
+from investment_assistant.workflow.nodes.retro import review_tick
+from investment_assistant.tasks import ports
+from investment_assistant.execution import ledger
+from investment_assistant.data.adapters.universe import Universe
 
 NY = ZoneInfo('America/New_York')
 S1 = add_trading_days(datetime(2026, 9, 1).date(), 0)          # buy signal session (Tuesday)
@@ -109,7 +125,7 @@ def test_signal_to_weekly_review_end_to_end(offline):
     assert summary['errors'] == []
     assert summary['briefs'] == {'SYNTH': 'fallback', 'SYNB': 'fallback'}   # no key: rule-only briefs
 
-    today = service.unit_cards(now=now1)
+    today = unit_cards(now=now1)
     synth, synb = unit_for(today, 'SYNTH'), unit_for(today, 'SYNB')
     assert synth['proposed_action'] == 'buy' and 'trend_reclaim' in synth['rule_ids']
     assert synb['proposed_action'] == 'watch' and synb['rule_ids'] == ['new_filing']
@@ -124,7 +140,7 @@ def test_signal_to_weekly_review_end_to_end(offline):
 
     now2 = evening(S2)
     service.run_batch(tickers=['SYNTH', 'SYNB'], now=now2, deps=deps())
-    sell_unit = unit_for(service.unit_cards(now=now2), 'SYNTH')
+    sell_unit = unit_for(unit_cards(now=now2), 'SYNTH')
     assert sell_unit['proposed_action'] == 'sell' and 'trend_break' in sell_unit['rule_ids']
     assert sell_unit['labels'] == []                                        # held, so not "avoid"
     sell_decision = decide(sell_unit, 'accept', 'sell', '合成样例：跌破 MA50', now2)
@@ -135,11 +151,11 @@ def test_signal_to_weekly_review_end_to_end(offline):
                        'decision_id': str(sell_decision['id'])}, now=evening(exit_day))
 
     later = evening(add_trading_days(S2, 5))
-    trades = service.trade_review(now=later)
+    trades = review_weekly.trade_review(now=later)
     assert len(trades['closed']) == 1 and trades['open'] == []
     assert trades['closed'][0]['realized_pnl'] == pytest.approx(10 * PATH[exit_day] - (10 * PATH[entry_day] + 1))
 
-    control = service.shadow(now=later, since=S1)
+    control = review_shadow.shadow(now=later, since=S1)
     assert control['calc_version'] == 'review-8'
     shadow = {u['id']: u for u in control['units']}
     watch_id = f"SYNB:{S1.isoformat()}"                                      # every unit is in the control group (D26)
@@ -147,7 +163,7 @@ def test_signal_to_weekly_review_end_to_end(offline):
     assert 'move' in shadow[watch_id]['outcome']['windows']['5']
 
     week = S1 - timedelta(days=S1.weekday())
-    frozen = service.generate_weekly(week, notes='合成笔记', now=later)
+    frozen = review_weekly.generate_weekly(week, notes='合成笔记', now=later)
     assert frozen['stats']['units'] == {'executed': 1, 'not_executed': 0}    # the watch unit nobody traded: not applicable
     assert 'not_executed' not in frozen['stats']['by_execution'] or \
         frozen['stats']['by_execution']['not_executed']['5']['count'] == 0
@@ -159,10 +175,10 @@ def test_signal_to_weekly_review_end_to_end(offline):
     decide(synb, 'accept', 'watch', '合成样例：改为观察', later, supersedes=rejected['id'])
     with pytest.raises(ledger.Conflict):
         decide(synb, 'accept', 'watch', '过期更正', later, supersedes=rejected['id'])
-    stored = service.list_weekly()[0]
+    stored = review_weekly.list_weekly()[0]
     assert stored['id'] == frozen['id'] and stored['stats'] == frozen['stats']
 
-    timeline = service.instrument('SYNTH', now=later)
+    timeline = instrument('SYNTH', now=later)
     assert timeline['chart']['bars'][-1]['price_date'] == timeline['bars'][-1]['price_date']
     assert {c['rule_id'] for c in timeline['candidates']} >= {'trend_reclaim', 'trend_break'}
     assert len(timeline['trades']) == 2 and timeline['position'] is None
@@ -172,8 +188,8 @@ def test_rerunning_a_past_session_never_uses_later_data(offline):
     service.run_batch(tickers=['SYNTH'], now=evening(S1), deps=deps())
     service.run_batch(tickers=['SYNTH'], now=evening(S2), deps=deps())
     # Re-reading S1 with S1's cutoff sees only bars fetched by then.
-    from investment_assistant.workbench import repository
-    bars = repository.read_bars(offline, 'SYNTH', S2, cutoff_at=evening(S1))
+    # Repository consumers use their owning layers below.
+    bars = data_repo.read_bars(offline, 'SYNTH', S2, cutoff_at=evening(S1))
     assert bars[-1]['price_date'] == S1
 
 
@@ -231,19 +247,19 @@ def _trade_payload(number, side, quantity, price, day, decision_id=None):
 
 def test_plan_to_monthly_review_end_to_end(offline):
     from investment_assistant.config import NotifyConfig
-    from investment_assistant.workbench import repository
+    # Repository consumers use their owning layers below.
 
     # 1. 批处理生成规则计划
     batch = service.run_batch(tickers=['SYNTH'], now=evening(S1), deps=p1_deps())
     assert batch['plans']['SYNTH'] == 'inserted' and batch['errors'] == []
-    unit = unit_for(service.unit_cards(now=evening(S1)), 'SYNTH')
+    unit = unit_for(unit_cards(now=evening(S1)), 'SYNTH')
     rule_plan = unit['plan']
     assert rule_plan['kind'] == 'rule' and rule_plan['status'] == 'ok'
     assert rule_plan['sizing']['status'] == 'no_equity'
 
     # 2. 推送（替身客户端）：四条消息，含价位与证据状态
     spy = PushSpy()
-    push_out = service.push(now=evening(S1), force=False, summary=batch, notify_cfg=NotifyConfig(), client=spy)
+    push_out = push(now=evening(S1), force=False, summary=batch, notify_cfg=NotifyConfig(), send=ports.send, client=spy)
     assert push_out['sent'] is True and push_out['messages'] == 5
     pushed_text = json.dumps(spy.payloads, ensure_ascii=False)
     assert '证据：未验证' in pushed_text and 'SYNTH' in pushed_text
@@ -255,14 +271,14 @@ def test_plan_to_monthly_review_end_to_end(offline):
         'decision': 'accept', 'reason': '自定价位：收紧止损',
         'own_plan': {'request_id': str(uuid.uuid4()), 'entry_low': '123.5', 'entry_high': '126.5',
                      'stop': '118', 'target1': '136'}}, now=evening(S1))['record']
-    own_plan = repository.plan_by_id(offline, decision['plan_id'])
+    own_plan = execution_repo.plan_by_id(offline, decision['plan_id'])
     assert own_plan['kind'] == 'own' and own_plan['based_on_id'] == rule_plan['id']
     assert float(own_plan['stop']) == 118.0
 
     # 4. 录入买入（E1 开盘 125，位于自定入场区间内）
     entry_day = add_trading_days(S1, 1)
     legacy_decisions.add_trade(_trade_payload(101, 'buy', '10', '125', entry_day, decision['id']), now=evening(entry_day))
-    held = service.unit_cards(now=evening(entry_day))['holdings'][0]
+    held = unit_cards(now=evening(entry_day))['holdings'][0]
     assert held['plan_id'] == own_plan['id'] and held['stop'] == 118.0 and held['mode'] == 'initial'
 
     # 5. T1 触及：plan_target 候选 + 卖出一半
@@ -271,39 +287,39 @@ def test_plan_to_monthly_review_end_to_end(offline):
     assert 'plan_target' in t1_batch['tickers']['SYNTH']['candidates']
     legacy_decisions.add_trade(_trade_payload(102, 'sell', '5', '136', t1_day), now=evening(t1_day))
     # t1_reached 只看 T 日之前的 bars：触及当晚仍按初始止损展示
-    held_t1 = service.unit_cards(now=evening(t1_day))['holdings'][0]
+    held_t1 = unit_cards(now=evening(t1_day))['holdings'][0]
     assert held_t1['mode'] == 'initial' and held_t1['t1_reached'] is False
 
     # 6. 移动止损触发：plan_stop 候选（不再跑 position_drawdown）+ 清仓
     stop_day = add_trading_days(S1, 6)
     stop_batch = service.run_batch(tickers=['SYNTH'], now=evening(stop_day), deps=p1_deps())
-    trailing = service.unit_cards(now=evening(stop_day))['holdings'][0]
+    trailing = unit_cards(now=evening(stop_day))['holdings'][0]
     assert trailing['mode'] == 'trailing' and trailing['t1_reached'] is True
     assert float(trailing['stop']) == pytest.approx(140.0 - 3 * float(own_plan['atr']))
     candidates = stop_batch['tickers']['SYNTH']['candidates']
     assert 'plan_stop' in candidates and 'position_drawdown' not in candidates
     legacy_decisions.add_trade(_trade_payload(103, 'sell', '5', '127', stop_day), now=evening(stop_day))
-    assert service.unit_cards(now=evening(stop_day))['holdings'] == []
+    assert unit_cards(now=evening(stop_day))['holdings'] == []
 
     # 7. 计划影子：rule 与 own 两份计划都走完两段腿
     after = evening(add_trading_days(S1, 7))
-    shadow = service.plan_shadow(now=after, since=S1)
+    shadow = review_shadow.plan_shadow(now=after, since=S1)
     assert {p['kind'] for p in shadow['plans']} == {'rule', 'own'}
     for p in shadow['plans']:
         assert p['outcome']['status'] == 'closed'
         assert [leg['reason'] for leg in p['outcome']['legs']] == ['target1', 'trail']
 
     # 8. 纪律：计划内买入、无违规、实际 R 按计划止损计
-    disc = service.discipline(now=after)
+    disc = review_weekly.discipline(now=after)
     entry = disc['trades'][0]
     assert entry['track'] == 'own' and entry['flags'] == []
     assert disc['planned_buys'] == 1 and disc['compliance_rate'] == 1.0
     assert entry['r'] == pytest.approx(((136 - 125) + (127 - 125)) / 2 / (125 - 118), rel=1e-3)
 
     # 9. 资金快照 → 月度复盘
-    service.add_snapshot({'request_id': str(uuid.uuid4()), 'as_of': '2026-08-31', 'equity': '100000'}, now=after)
-    service.add_snapshot({'request_id': str(uuid.uuid4()), 'as_of': '2026-09-30', 'equity': '105000'}, now=after)
-    review = service.generate_monthly(date(2026, 9, 1), notes='合成月度复盘', now=after)
+    execution_trades.add_snapshot({'request_id': str(uuid.uuid4()), 'as_of': '2026-08-31', 'equity': '100000'}, now=after)
+    execution_trades.add_snapshot({'request_id': str(uuid.uuid4()), 'as_of': '2026-09-30', 'equity': '105000'}, now=after)
+    review = review_weekly.generate_monthly(date(2026, 9, 1), notes='合成月度复盘', now=after)
     stats = review['stats']
     assert stats['return']['status'] == 'ok' and stats['return']['return'] == pytest.approx(0.05)
     assert stats['tier'] == 'viable' and stats['review_flag'] == 'insufficient'
@@ -312,7 +328,7 @@ def test_plan_to_monthly_review_end_to_end(offline):
 
 def test_pool_and_context_end_to_end(offline, monkeypatch):
     from investment_assistant.config import NotifyConfig
-    from investment_assistant.workbench import repository
+    # Repository consumers use their owning layers below.
 
     # 观察名单：2 只核心（SYNTH 带 sector:SMH）+ 25 只扩展
     core = [('SYNTH', ['core', 'sector:SMH']), ('SYNB', ['core'])]
@@ -345,7 +361,7 @@ def test_pool_and_context_end_to_end(offline, monkeypatch):
     assert offline.execute('SELECT count(*) FROM market_regimes').fetchone()[0] == 1
     assert offline.execute('SELECT count(*) FROM pool_tiers').fetchone()[0] == 27
 
-    view = service.unit_cards(now=evening(S1))
+    view = unit_cards(now=evening(S1))
     assert [u['ticker'] for u in view['units']] == ['SYNB', 'SYNTH']
     assert len(view['extended_units']) == 25 and view['extended_units'][0]['plan'] is not None
     assert view['market']['label'] == 'risk_on'
@@ -359,7 +375,7 @@ def test_pool_and_context_end_to_end(offline, monkeypatch):
 
     # 推送（替身客户端）：只有核心计划，概览带市场环境与扩展池计数
     spy = PushSpy()
-    push_out = service.push(now=evening(S1), force=False, summary=batch, notify_cfg=NotifyConfig(), client=spy)
+    push_out = push(now=evening(S1), force=False, summary=batch, notify_cfg=NotifyConfig(), send=ports.send, client=spy)
     assert push_out['sent'] is True
     pushed = json.dumps(spy.payloads, ensure_ascii=False)
     assert 'SYNTH' in pushed and 'X01' not in pushed
@@ -370,21 +386,21 @@ def test_pool_and_context_end_to_end(offline, monkeypatch):
     wednesday = add_trading_days(S1, 1)
     offline.execute("UPDATE watchlist_items SET tags = ARRAY['core'] WHERE ticker = 'X01'")
     service.run_batch(now=evening(wednesday), deps=p2_deps)
-    assert repository.pool_entry_at(offline, 'X01', S1, cutoff_at=evening(wednesday)) == \
+    assert data_repo.pool_entry_at(offline, 'X01', S1, cutoff_at=evening(wednesday)) == \
         {'tier': 'extended', 'sector_etf': None, 'source': 'watchlist'}
-    assert repository.pool_entry_at(offline, 'X01', wednesday, cutoff_at=evening(wednesday))['tier'] == 'core'
+    assert data_repo.pool_entry_at(offline, 'X01', wednesday, cutoff_at=evening(wednesday))['tier'] == 'core'
 
     week_start = add_trading_days(S1, -1)                               # Monday of the signal week
-    weekly = service.generate_weekly(week_start, now=evening(add_trading_days(S1, 2)))
+    weekly = review_weekly.generate_weekly(week_start, now=evening(add_trading_days(S1, 2)))
     assert weekly['calc_version'] == 'review-8'
     by_pool = weekly['stats']['by_pool']
     assert by_pool['extended']['trend_reclaim']['triggers'] == 25
     assert by_pool['core']['trend_reclaim']['triggers'] == 1            # SYNTH；X01 仍归扩展池
 
     # 历史检查：读库重放，可列出，不联网
-    record = service.run_backcheck(now=evening(S1))
+    record = optimize_backcheck.run_backcheck(now=evening(S1))
     assert record['calc_version'] == 'backcheck-2' and record['params']['tickers'][0] == 'SYNB'
-    assert len(repository.list_backchecks(offline, 10)) == 1
+    assert len(optimize_repo.list_backchecks(offline, 10)) == 1
 
 
 def test_agent_track_end_to_end(offline, scripted_model):
@@ -394,8 +410,8 @@ def test_agent_track_end_to_end(offline, scripted_model):
     from langgraph.checkpoint.memory import InMemorySaver
 
     from investment_assistant.config import NotifyConfig
-    from investment_assistant.workbench import repository
-    from investment_assistant.workbench.agent import model as agent_model_module
+    # Repository consumers use their owning layers below.
+    from investment_assistant.core.llm import model as agent_model_module
 
     # 观察名单：2 只核心 + 1 只扩展（无 core 标签即扩展），三者同日触发 trend_reclaim 买入
     for ticker, tags in (('SYNTH', ['core']), ('SYNC', ['core']), ('SYNE', [])):
@@ -443,15 +459,15 @@ def test_agent_track_end_to_end(offline, scripted_model):
     ]))
     assert batch['errors'] == []
     assert batch['agent']['runs'] == {'SYNTH': 'ok', 'SYNC': 'rejected: invalid_citation', 'SYNE': 'pass'}
-    runs = {t: repository.agent_runs_for(offline, t, S1) for t in ('SYNTH', 'SYNC', 'SYNE')}
+    runs = {t: analysis_repo.agent_runs_for(offline, t, S1) for t in ('SYNTH', 'SYNC', 'SYNE')}
     assert all(len(v) == 1 for v in runs.values())                       # agent_runs 三行
-    agent_plan = repository.agent_plan(offline, 'SYNTH', S1)
+    agent_plan = execution_repo.agent_plan(offline, 'SYNTH', S1)
     assert agent_plan['kind'] == 'agent' and agent_plan['plan_version'] == 'agent-3'
     assert str(runs['SYNTH'][0]['plan_id']) == str(agent_plan['id'])
 
     # 推送（替身客户端）：只有主列表单元；作废建议只写原因，不写内容
     spy = PushSpy()
-    push_out = service.push(now=evening(S1), force=True, summary=batch, notify_cfg=NotifyConfig(), client=spy)
+    push_out = push(now=evening(S1), force=True, summary=batch, notify_cfg=NotifyConfig(), send=ports.send, client=spy)
     assert push_out['sent'] is True
     pushed_text = json.dumps(spy.payloads, ensure_ascii=False)
     assert 'SYNTH 09-01 第 0 版：区间限价 120–128 · 止损 115 · T1 140' in pushed_text        # v2.9 §11
@@ -460,7 +476,7 @@ def test_agent_track_end_to_end(offline, scripted_model):
     assert 'Agent 建议 1 · 不建议 0 · 未给出 1' in pushed_text
 
     # 「今日」：作废的 SYNC 不含建议内容
-    view = service.unit_cards(now=evening(S1))
+    view = unit_cards(now=evening(S1))
     assert set(unit_for(view, 'SYNC')['agent']) == {'id', 'status', 'reason', 'created_at'}
     synth = unit_for(view, 'SYNTH')
     assert synth['agent']['status'] == 'ok' and synth['agent']['plan']['id'] == agent_plan['id']
@@ -477,13 +493,13 @@ def test_agent_track_end_to_end(offline, scripted_model):
 
     # 纪律轨道为 agent；计划影子含 rule 与 agent 两份计划
     after = evening(add_trading_days(S1, 7))
-    disc = service.discipline(now=after)
+    disc = review_weekly.discipline(now=after)
     assert disc['trades'][0]['track'] == 'agent' and disc['trades'][0]['flags'] == []
-    shadow = service.plan_shadow(now=after, since=S1)
+    shadow = review_shadow.plan_shadow(now=after, since=S1)
     assert {p['kind'] for p in shadow['plans']} == {'rule', 'agent'}
 
     # 覆盖率 3/3：每个买入单元都有 Agent 建议或明确原因
-    assert service.agent_runs(now=after)['coverage'] == {'units': 3, 'covered': 3, 'merged': 0, 'merged_units': [],
+    assert agent_runs(now=after)['coverage'] == {'units': 3, 'covered': 3, 'merged': 0, 'merged_units': [],
                                                            'missing': []}
 
     # 同日重跑：ok/pass 单元不再运行，agent 计划不新增（失败的 SYNC 按 §8.1 重试）
@@ -492,8 +508,8 @@ def test_agent_track_end_to_end(offline, scripted_model):
         AIMessage(content=buy_json('call:99')),
     ]))
     assert again['agent']['runs'] == {'SYNC': 'rejected: invalid_citation'}
-    assert len(repository.agent_runs_for(offline, 'SYNTH', S1)) == 1
-    assert len(repository.agent_runs_for(offline, 'SYNE', S1)) == 1
+    assert len(analysis_repo.agent_runs_for(offline, 'SYNTH', S1)) == 1
+    assert len(analysis_repo.agent_runs_for(offline, 'SYNE', S1)) == 1
     assert offline.execute("SELECT count(*) FROM trade_plans WHERE kind = 'agent'").fetchone()[0] == 1
 
 
@@ -506,8 +522,8 @@ def test_signal_day_creates_agent2_version_zero(offline, scripted_model, monkeyp
     from langchain_core.messages import AIMessage
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from investment_assistant.workbench import repository
-    from investment_assistant.workbench.agent import model as agent_model_module
+    # Repository consumers use their owning layers below.
+    from investment_assistant.core.llm import model as agent_model_module
 
     for ticker in ('SYNC', 'SYNTH'):
         offline.execute("INSERT INTO watchlist_items (ticker, status, tags) VALUES (%s, 'active', %s)",
@@ -529,13 +545,13 @@ def test_signal_day_creates_agent2_version_zero(offline, scripted_model, monkeyp
         return [tool_reply('get_indicators', {'ticker': ticker}, 't1'), AIMessage(content=plan_json),
                 tool_reply('get_news', {'days': 7}, 't2'), AIMessage(content=counter_json)]
 
-    real_insert = repository.insert_plan_version
+    real_insert = execution_repo.insert_plan_version
 
     def failing_insert(conn, row):          # SYNC's version row fails; SYNTH's goes through
         if row['ticker'] == 'SYNC':
             raise RuntimeError('version row write failed')
         return real_insert(conn, row)
-    monkeypatch.setattr(repository, 'insert_plan_version', failing_insert)
+    monkeypatch.setattr(execution_repo, 'insert_plan_version', failing_insert)
 
     d = p1_deps()
     d.agent_model = scripted_model(unit_replies('SYNC') + unit_replies('SYNTH'))
@@ -546,32 +562,32 @@ def test_signal_day_creates_agent2_version_zero(offline, scripted_model, monkeyp
     assert batch['agent']['runs'] == {'SYNC': 'error: model_error', 'SYNTH': 'ok'}
 
     # SYNTH: plan → run → version 0 → brief
-    [plan] = [p for p in repository.plans_for_unit(offline, 'SYNTH', S1) if p['kind'] == 'agent']
+    [plan] = [p for p in execution_repo.plans_for_unit(offline, 'SYNTH', S1) if p['kind'] == 'agent']
     assert plan['plan_version'] == 'agent-3'
     assert plan['inputs']['version_no'] == 0 and plan['inputs']['as_of_session'] == S1.isoformat()
-    [run] = repository.agent_runs_for(offline, 'SYNTH', S1)
+    [run] = analysis_repo.agent_runs_for(offline, 'SYNTH', S1)
     assert run['agent_version'] == 'agent-3' and run['mode'] == 'propose' and run['status'] == 'ok'
     assert str(run['plan_id']) == str(plan['id'])
-    assert [c['phase'] for c in repository.agent_tool_calls(offline, run['id'])] == ['propose', 'counter']
-    [version] = repository.chain_versions(offline, 'SYNTH', S1)
+    assert [c['phase'] for c in analysis_repo.agent_tool_calls(offline, run['id'])] == ['propose', 'counter']
+    [version] = execution_repo.chain_versions(offline, 'SYNTH', S1)
     assert (version['version_no'], version['origin'], version['supersedes_plan_id'], version['diff']) == \
         (0, 'signal', None, None)
     assert str(version['plan_id']) == str(plan['id']) and str(version['agent_run_id']) == str(run['id'])
     assert version['cutoff_at'] == run['cutoff_at'] == evening(S1)
     assert version['as_of_session'] == S1 and version['schema_version'] == 'agent-3'
-    brief = repository.latest_brief(offline, 'SYNTH', S1)
+    brief = analysis_repo.latest_brief(offline, 'SYNTH', S1)
     assert brief['agent_run_id'] == run['id'] and brief['prompt_version'] == 'agent-3'
     assert brief['output']['summary'] == '回踩修复放量'
     assert brief['output']['contra'] == [{'thesis': 1, 'text': '突破量能不足', 'refs': ['call:2']}]
-    head = repository.chain_head(offline, 'SYNTH', S1)
+    head = execution_repo.chain_head(offline, 'SYNTH', S1)
     assert str(head['plan']['id']) == str(plan['id'])
 
     # SYNC: the version row failed, so neither the plan nor the ok run exists; the run is an error row
-    assert [p for p in repository.plans_for_unit(offline, 'SYNC', S1) if p['kind'] == 'agent'] == []
-    assert repository.chain_versions(offline, 'SYNC', S1) == []
-    [failed] = repository.agent_runs_for(offline, 'SYNC', S1)
+    assert [p for p in execution_repo.plans_for_unit(offline, 'SYNC', S1) if p['kind'] == 'agent'] == []
+    assert execution_repo.chain_versions(offline, 'SYNC', S1) == []
+    [failed] = analysis_repo.agent_runs_for(offline, 'SYNC', S1)
     assert failed['status'] == 'error' and failed['plan_id'] is None
-    assert repository.latest_brief(offline, 'SYNC', S1)['status'] == 'fallback'
+    assert analysis_repo.latest_brief(offline, 'SYNC', S1)['status'] == 'fallback'
     assert offline.execute("SELECT count(*) FROM trade_plans WHERE kind = 'agent'").fetchone()[0] == 1
 
 
@@ -619,8 +635,8 @@ def test_review_expansion_end_to_end(offline, scripted_model):
     from langchain_core.messages import AIMessage
     from langgraph.checkpoint.memory import InMemorySaver
     from investment_assistant.config import NotifyConfig
-    from investment_assistant.workbench import repository, service
-    from investment_assistant.workbench.agent import model as agent_model
+    import investment_assistant.workflow.batch as service
+    from investment_assistant.core.llm import model as agent_model
 
     D1, D2, D3 = add_trading_days(S1, 1), add_trading_days(S1, 2), add_trading_days(S1, 3)
     bars = _e2e_bars(D1, D2, D3)
@@ -674,14 +690,14 @@ def test_review_expansion_end_to_end(offline, scripted_model):
     batch = service.run_batch(tickers=['ALPHA', 'BETA', 'POSN'], now=evening(S1), deps=deps)
     assert batch['errors'] == []
     assert batch['agent']['runs'] == {'ALPHA': 'ok', 'BETA': 'pass'}
-    assert repository.latest_brief(offline, 'POSN', S1)['prompt_version'] == 'agent-brief-1'   # 持仓解读由 Agent 产出
+    assert analysis_repo.latest_brief(offline, 'POSN', S1)['prompt_version'] == 'agent-brief-1'   # 持仓解读由 Agent 产出
     prompt_versions = [r[0] for r in offline.execute('SELECT prompt_version FROM signal_briefs').fetchall()]
     assert set(prompt_versions) <= {'agent-2', 'agent-3', 'agent-brief-1'}                               # 不再有 Codex
 
-    view = service.unit_cards(now=evening(S1))
+    view = unit_cards(now=evening(S1))
     alpha_unit = next(u for u in view['units'] if u['ticker'] == 'ALPHA')
     beta_unit = next(u for u in view['units'] if u['ticker'] == 'BETA')
-    agent_plan = repository.agent_plan(offline, 'ALPHA', S1)
+    agent_plan = execution_repo.agent_plan(offline, 'ALPHA', S1)
     alpha_decision = _e2e_decide(alpha_unit, 'buy', '照 Agent 计划执行', evening(S1), plan_id=agent_plan['id'])
     _e2e_decide(beta_unit, 'ignore', '趋势不明', evening(S1))
     legacy_decisions.add_trade({'request_id': '00000000-0000-4000-8000-0000000000a2', 'ticker': 'ALPHA', 'side': 'buy',
@@ -705,37 +721,37 @@ def test_review_expansion_end_to_end(offline, scripted_model):
     client = FakeClient()
     notify = NotifyConfig(task_channels={'workbench_review': 'signals'}, task_enabled={'workbench_review': True})
     saturday = datetime(2026, 9, 5, 0, 0, tzinfo=UTC)            # 北京周六 08:00
-    tick1 = service.review_tick(now=saturday, notify_cfg=notify, trigger_source='scheduled', client=client)
+    tick1 = review_tick(now=saturday, notify_cfg=notify, send=ports.send, trigger_source='scheduled', client=client)
     assert tick1['weekly']['action'] == 'generated' and tick1['weekly']['push']['sent'] is True
     week_monday = S1 - timedelta(days=S1.weekday())
-    head = repository.weekly_head(offline, week_monday)
+    head = review_repo.weekly_head(offline, week_monday)
     assert head['calc_version'] == 'review-8'
     rows = {row['ticker']: row for row in head['stats']['tracks']['units']}
     alpha, beta = rows['ALPHA'], rows['BETA']
     assert alpha['actual']['r'] == 1.2                            # (131-125)/(125-120)，止损取所选 Agent 计划
     assert alpha['actual']['plan_kind'] == 'agent'
-    assert alpha['rule']['plan_id'] == str(repository.rule_plan(offline, 'ALPHA', S1)['id'])
+    assert alpha['rule']['plan_id'] == str(execution_repo.rule_plan(offline, 'ALPHA', S1)['id'])
     assert alpha['agent']['plan_id'] == str(agent_plan['id'])
     assert alpha['actual']['decision_id'] == str(alpha_decision['id'])
     assert alpha['actual']['buy_trade_ids']
     assert beta['actual']['status'] == 'not_executed' and beta['actual']['r'] == 0.0
     assert len([s for s in client.sent if '周度复盘' in str(s[1])]) == 1
 
-    tick2 = service.review_tick(now=saturday + timedelta(hours=1), notify_cfg=notify,
+    tick2 = review_tick(now=saturday + timedelta(hours=1), notify_cfg=notify, send=ports.send,
                                 trigger_source='scheduled', client=client)
     assert tick2['weekly']['action'] == 'already_sent'
     assert len([s for s in client.sent if '周度复盘' in str(s[1])]) == 1
 
-    repository.insert_snapshot(offline, {'request_id': '00000000-0000-4000-8000-0000000000b1',
+    execution_repo.insert_snapshot(offline, {'request_id': '00000000-0000-4000-8000-0000000000b1',
                                          'as_of': '2026-07-31', 'equity': '100000', 'note': None,
                                          'supersedes_id': None}, 'h', recorded_at=datetime(2026, 8, 1, 12, tzinfo=UTC))
-    repository.insert_snapshot(offline, {'request_id': '00000000-0000-4000-8000-0000000000b2',
+    execution_repo.insert_snapshot(offline, {'request_id': '00000000-0000-4000-8000-0000000000b2',
                                          'as_of': '2026-08-31', 'equity': '110000', 'note': None,
                                          'supersedes_id': None}, 'h', recorded_at=datetime(2026, 9, 1, 12, tzinfo=UTC))
     sunday = datetime(2026, 9, 6, 0, 0, tzinfo=UTC)
-    tick3 = service.review_tick(now=sunday, notify_cfg=notify, trigger_source='scheduled', client=client)
+    tick3 = review_tick(now=sunday, notify_cfg=notify, send=ports.send, trigger_source='scheduled', client=client)
     assert tick3['monthly']['action'] == 'generated' and tick3['monthly']['push']['sent'] is True
-    monthly_head = repository.monthly_head(offline, date(2026, 8, 1))
+    monthly_head = review_repo.monthly_head(offline, date(2026, 8, 1))
     assert monthly_head['calc_version'] == 'monthly-5'
     monthly_return = monthly_head['stats']['return']
     assert monthly_return['status'] == 'ok' and monthly_return['source'] == 'snapshot'
@@ -745,5 +761,5 @@ def test_review_expansion_end_to_end(offline, scripted_model):
     assert monthly_return['return'] == pytest.approx(0.1)
     assert len([s for s in client.sent if '月度复盘 · 2026-08' in str(s[1])]) == 1
 
-    live = service.tracks(now=sunday, since=week_monday, until=week_monday + timedelta(days=6))
+    live = review_weekly.tracks(now=sunday, since=week_monday, until=week_monday + timedelta(days=6))
     assert live['units'] == head['stats']['tracks']['units']

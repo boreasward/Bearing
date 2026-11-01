@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2, timeline-1]
 summary: "同一单元（标的加信号日）的全部 agent-2 版本组成一条链：第 0 版来自信号日批处理，之后只由复查生成，每版有自己的截止时间、有效期和影子。"
 related: [review.chain_state, agent.review_outcome, agent.changes, agent.legacy, system.cutoff]
-sources: [investment_assistant/workbench/timeline.py, investment_assistant/workbench/plan_review.py]
+sources: [investment_assistant/execution/timeline.py, investment_assistant/execution/chains.py]
 ---
 
 ## 是什么

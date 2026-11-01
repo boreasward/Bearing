@@ -68,7 +68,7 @@ def test_allow_list_is_exactly_the_spec_list():
                  'docs/specs/2026-10-29-v2.8-daily-workflow-design.md', 'docs/plans/2026-10-29-v2.8-daily-workflow.md'):
         assert _allowed(name), name
     for name in ('README.md', 'docs/features/agent-track.md', 'docs/architecture.md', 'docs/knowledge/principles.md',
-                 'docs/operations/local-service.md', 'investment_assistant/workbench/agent/model.py',
+                 'docs/operations/local-service.md', 'investment_assistant/core/llm/model.py',
                  'tests/test_workbench_service.py', 'web/src/routes/Today.test.ts',
                  'docs/specs/2026-10-29-another-topic-design.md', 'docs/roadmap/v2.8-acceptance-notes.md'):
         assert not _allowed(name), name

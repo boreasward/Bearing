@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "由日线现算、不入库的波动尺子，与 plan-1 用同一个函数；它是止损、目标和仓位的计算输入。"
 related: [indicator.atr14, family.bars, plan.stop, plan.sizing]
-sources: [investment_assistant/workbench/families.py, investment_assistant/workbench/plans.py, docs/features/data-menu.md]
+sources: [investment_assistant/data/families.py, investment_assistant/derivation/indicators/price.py, docs/features/data-menu.md]
 ---
 
 ## 是什么

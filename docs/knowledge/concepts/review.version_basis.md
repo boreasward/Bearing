@@ -6,7 +6,7 @@ version: 1
 applies_to: [tracks-1, tracks-2]
 summary: "三方对比的 Agent 轨道取你照着做时看到的那一版：旧决定记了版本取 decision，v2.9 起取第一笔关联买入所关联的版本（fill），都没有取首版（first），被并入其他链的单元记 merged；不拿事后修订美化结果。"
 related: [review.tracks, agent.version_chain, system.decision, review.first_latest]
-sources: [investment_assistant/workbench/tracks.py, investment_assistant/workbench/service.py]
+sources: [investment_assistant/review/tracks.py, investment_assistant/review/weekly.py]
 ---
 
 ## 是什么

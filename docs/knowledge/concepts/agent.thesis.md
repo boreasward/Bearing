@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2]
 summary: "Agent 建议背后的理由，1 到 3 条，每条带引用，系统按顺序编号为 T1 到 T3；条数不对整版作废。"
 related: [agent.counter, agent.citation, agent.action_levels, agent.reject_reasons]
-sources: [investment_assistant/workbench/agent/plan_check.py, investment_assistant/workbench/agent/citations.py]
+sources: [investment_assistant/execution/plan_check.py, investment_assistant/execution/citations.py]
 ---
 
 ## 是什么

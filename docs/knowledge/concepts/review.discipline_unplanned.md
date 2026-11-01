@@ -6,7 +6,7 @@ version: 1
 applies_to: [review-6, discipline-2]
 summary: "买入成交没有关联任何计划，或成交日在所关联版本的有效期之外，记为计划外交易；它不进入遵守率的分母。"
 related: [review.discipline_chase, review.position, system.decision, review.retro_card]
-sources: [investment_assistant/workbench/discipline.py, investment_assistant/workbench/ledger.py]
+sources: [investment_assistant/review/discipline.py, investment_assistant/execution/ledger.py]
 ---
 
 ## 是什么

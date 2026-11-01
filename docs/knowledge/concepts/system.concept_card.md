@@ -6,7 +6,7 @@ version: 1
 applies_to: [knowledge-1]
 summary: "系统里每个概念的解释随代码版本存在仓库里；引用形式 concept:id@版本，改口径才加版本；Agent 读卡不受截止时间约束。"
 related: [agent.tool_calls, system.cutoff, system.versions, system.gate_hold]
-sources: [investment_assistant/workbench/knowledge.py, investment_assistant/workbench/agent/tools.py]
+sources: [investment_assistant/core/knowledge.py, investment_assistant/analysis/agent/tools.py]
 ---
 
 ## 是什么

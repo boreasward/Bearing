@@ -5,6 +5,10 @@ test_workbench_plan_review); every price is synthetic test data. ``user_inputs.c
 database clock, so tests that need an input before a 2026-09 cutoff move its ``created_at`` back
 with an UPDATE (test data only; the code never updates these rows).
 """
+import investment_assistant.analysis.agent.runner as analysis_agent_runner
+import investment_assistant.core.schema as core_schema
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
 import os
 import re
 import uuid
@@ -22,9 +26,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from test_workbench_service import db   # noqa: F401  (fixture: service wired to the disposable schema)
 from test_workbench_plan_review import (QUIET, S1, Market, counter, day, evening, make_model, proposal,
                                         reviews, run, settings, signal_day, skips, tool, verdict)
-from investment_assistant.workbench import ledger, plan_review, repository, service, user_inputs
+import investment_assistant.workflow.nodes.review as plan_review
+import investment_assistant.core.tx as service
+from investment_assistant.execution import ledger
+from investment_assistant.execution import user_inputs
 
-REAL_LOCK_CONNECTION = plan_review._lock_connection      # before the db fixture points it at the test database
+REAL_LOCK_CONNECTION = analysis_agent_runner._lock_connection      # before the db fixture points it at the test database
 
 
 def payload(**overrides):
@@ -44,7 +51,7 @@ def backdate(db, input_id, when):
 
 def connection_is(monkeypatch, status='connected'):
     """The agent connection as ``settings_from_env`` reads it (v2.8: the ChatGPT connection, not an API key)."""
-    from investment_assistant.workbench import agent_connection
+    from investment_assistant.core.llm import connection as agent_connection
 
     info = {'status': status, 'scopes_ok': status == 'connected', 'model': 'gpt-test' if status == 'connected' else None,
             'secret': 'test-access-token' if status == 'connected' else None}
@@ -92,7 +99,7 @@ def test_add_validates(db):
 
 
 def test_add_without_migration_026_is_unavailable(db, monkeypatch):
-    monkeypatch.setattr(repository, 'timeline_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'timeline_ready', lambda conn: False)
     with pytest.raises(service.Unavailable, match='迁移 026 未执行'):
         user_inputs.add(payload(), now=evening(day(1)))
     with pytest.raises(service.Unavailable, match='迁移 026 未执行'):
@@ -104,7 +111,7 @@ def test_request_id_reused_concurrently_is_conflict(db, monkeypatch):
     unique index decides, and the loser is a 409, not a 500."""
     request_id = str(uuid.uuid4())
     user_inputs.add(payload(request_id=request_id), now=evening(day(1)))
-    monkeypatch.setattr(repository, 'user_input_by_request', lambda conn, rid: None)   # 另一请求还没提交时的视角
+    monkeypatch.setattr(execution_repo, 'user_input_by_request', lambda conn, rid: None)   # 另一请求还没提交时的视角
     with pytest.raises(ledger.Conflict):
         user_inputs.add(payload(request_id=request_id, ticker='SYNA'), now=evening(day(1)))
     assert db.execute('SELECT count(*) FROM user_inputs').fetchone()[0] == 1
@@ -152,8 +159,8 @@ def test_correction_and_retract_visible_to_new_reviews_only(db):
     prompt = next(m for route, m in model.seen if route == 'review')[1].content
     assert user_block(prompt) == {f"user:{b['id']}"}                   # 旧行、撤回的行、撤回行本身都不在
 
-    v1 = repository.chain_head(db, 'SYNTH', S1)
-    v1_run = repository.agent_run_by_id(db, v1['version']['agent_run_id'])
+    v1 = execution_repo.chain_head(db, 'SYNTH', S1)
+    v1_run = data_repo.agent_run_by_id(db, v1['version']['agent_run_id'])
     assert v1_run['output']['changes'][0]['refs'] == [f"user:{a['id']}"]
     listed = {row['id']: row for row in user_inputs.list_for('SYNTH', S1)}
     assert listed[a['id']]['body'] == '研报：毛利率上行'                 # 第 1 版引用的旧行仍可读
@@ -183,13 +190,13 @@ def test_recheck_cutoff_is_request_time(db):
     assert (row['trigger'], row['session'], row['cutoff_at'], row['run_id']) == ('recheck', day(1), t0,
                                                                                  'plan_recheck-t0')
     assert (row['outcome'], row['decided_by'], row['attempt']) == ('revise', 'agent', 1)
-    new = repository.chain_head(db, 'SYNTH', S1)
+    new = execution_repo.chain_head(db, 'SYNTH', S1)
     assert str(new['plan']['id']) == str(row['new_plan_id'])
     assert (new['version']['origin'], new['version']['cutoff_at'], new['version']['as_of_session']) == \
         ('recheck', t0, day(1))
     assert str(new['version']['supersedes_plan_id']) == str(v0['plan']['id'])
     for run_id in (row['review_agent_run_id'], row['revision_agent_run_id']):
-        assert repository.agent_run_by_id(db, run_id)['cutoff_at'] == t0
+        assert data_repo.agent_run_by_id(db, run_id)['cutoff_at'] == t0
 
 
 def test_recheck_skips_quiet_day_shortcut(db):
@@ -222,7 +229,7 @@ def test_recheck_preconditions(db, monkeypatch):
     with pytest.raises(ValueError):
         plan_review.recheck_check('mu!', S1, now=now)
 
-    repository.insert_plan_review(db, {
+    execution_repo.insert_plan_review(db, {
         'ticker': 'SYNA', 'signal_date': S1, 'head_plan_id': heads['SYNA']['plan']['id'], 'session': day(1),
         'trigger': 'batch', 'run_id': 'run-x', 'mode': 'entry', 'timeline_version': 'timeline-1',
         'outcome': 'invalidate', 'decided_by': 'host', 'reason': '失效条件成立：收盘跌破 112.00', 'attempt': 1,
@@ -244,7 +251,7 @@ def test_recheck_preconditions(db, monkeypatch):
     with pytest.raises(plan_review.RecheckConflict, match='agent_unavailable: not_connected'):
         plan_review.recheck('SYNTH', S1, now=now, deps=deps_for(make_model(), agent=settings(connection='disconnected')))
 
-    monkeypatch.setattr(repository, 'timeline_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'timeline_ready', lambda conn: False)
     with pytest.raises(service.Unavailable, match='迁移 026 未执行'):
         plan_review.recheck_check('SYNTH', S1, now=now)
     assert [r['outcome'] for r in reviews(db, 'SYNTH')] == []          # 前置检查不写行
@@ -318,8 +325,8 @@ def test_run_lock_connection_is_dedicated_and_closed(db, monkeypatch, unlock_fai
         opened.append(conn)
         return Conn(conn)
 
-    monkeypatch.setattr(plan_review, '_lock_connection', spy)
-    with plan_review._run_lock('SYNTH', S1) as got:
+    monkeypatch.setattr(analysis_agent_runner, '_lock_connection', spy)
+    with analysis_agent_runner._run_lock('SYNTH', S1) as got:
         assert got and opened[0].autocommit
     assert opened[0].closed
     with psycopg.connect(url) as probe:                                 # 锁已释放
@@ -332,7 +339,7 @@ def test_recheck_on_a_held_chain_reviews_in_holding_mode(db):
     """A holding chain is reviewable by recheck too (mode holding); the review tool sees session S."""
     market = Market()
     v0 = signal_day(db, market, ['SYNTH'], review_when={'SYNTH': QUIET})[0]['SYNTH']
-    cands = repository.unit_candidates(db, 'SYNTH', S1)
+    cands = data_repo.unit_candidates(db, 'SYNTH', S1)
     decision = legacy_decisions.decide({'request_id': str(uuid.uuid4()), 'ticker': 'SYNTH', 'signal_date': S1.isoformat(),
                                'candidate_ids': [str(c['id']) for c in cands], 'proposed_action': 'buy',
                                'final_action': 'buy', 'decision': 'accept', 'reason': '合成样例',
@@ -394,7 +401,7 @@ def test_second_recheck_is_409(db, agent_env):
 def test_ticker_chains_lists_every_chain_newest_first(db):
     market = Market()
     heads = signal_day(db, market, ['SYNA', 'SYNTH'])[0]
-    repository.insert_plan_review(db, {
+    execution_repo.insert_plan_review(db, {
         'ticker': 'SYNA', 'signal_date': S1, 'head_plan_id': heads['SYNA']['plan']['id'], 'session': day(1),
         'trigger': 'batch', 'run_id': 'run-x', 'mode': 'entry', 'timeline_version': 'timeline-1',
         'outcome': 'invalidate', 'decided_by': 'host', 'reason': '失效条件成立：收盘跌破 112.00', 'attempt': 1,

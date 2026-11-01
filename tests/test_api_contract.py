@@ -1,4 +1,6 @@
 """Pin API routing and no-DB fallback behaviour before layering refactor."""
+import investment_assistant.analysis.agent.runner as analysis_agent_runner
+from investment_assistant.execution import trades as execution_trades
 import pytest
 
 
@@ -63,7 +65,7 @@ def test_derivation_and_stage_runs_routes_in_openapi(client):
 
 
 def test_plan_derivation_response_top_level_keys(client, monkeypatch):
-    from investment_assistant.workbench import derivation_view
+    import investment_assistant.views.derivation as derivation_view
     use_case = {"derivation_version": "derivation-1", "plan": {"id": "p1"}, "trigger": [],
                 "inputs": {}, "steps": [], "checks": [], "consistency": {"status": "consistent"},
                 "evidence": "evidence", "trigger_note": "note", "run": {"ready": True}}
@@ -91,7 +93,7 @@ def test_plan_timeline_routes_in_openapi(client):
 
 
 def test_chain_view_response_top_level_keys(client, monkeypatch):
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
     use_case = {"ticker": "SYNTH", "signal_date": "2026-09-01", "session": "2026-09-02",
                 "state": {"state": "entry", "mode": "entry", "basis": "未决定"},
                 "head_plan_id": "p1", "version_no": 0, "latest_review": None,
@@ -113,7 +115,7 @@ def test_timeline_routes_without_db_are_503(client):
 
 
 def test_ticker_chains_response_shape(client, monkeypatch):
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
     use_case = {"ticker": "SYNTH", "chains": [{"signal_date": "2026-09-01", "state": "entry", "mode": "entry",
                                                "version_no": 1, "head_plan_id": "p1", "latest_review": None}]}
     monkeypatch.setattr(plan_review, "ticker_chains", lambda ticker, *, now: use_case)
@@ -238,7 +240,9 @@ def test_growth_routes_without_db_are_503(client):
 
 
 def test_growth_response_shapes_stay_stable(client, monkeypatch):
-    from investment_assistant.workbench import discussion, my_knowledge, retro_cards
+    from investment_assistant.review import discussion
+    from investment_assistant.review.knowledge import my_knowledge
+    from investment_assistant.review import retro_cards
     monkeypatch.setattr(retro_cards, "list_view", lambda **kw: {"cards": [], "counts": {}})
     monkeypatch.setattr(retro_cards, "card_view", lambda card_id, *, now: {
         "card": {}, "facts": {}, "status": "to_review", "drafts": [], "lesson_drafts": [], "verdict": None,
@@ -327,8 +331,12 @@ def test_v28_request_errors_use_the_error_envelope(client):
 
 def test_v28_response_shapes(client, monkeypatch):
     from investment_assistant.services import jobs
-    from investment_assistant.tasks import daily, runner
-    from investment_assistant.workbench import agent_connection, run_detail, service, workflow
+    from investment_assistant.tasks import daily
+    from investment_assistant.core import runner
+    import investment_assistant.views.runs.detail as run_detail
+    import investment_assistant.core.tx as service
+    import investment_assistant.workflow.graph as workflow
+    from investment_assistant.core.llm import connection as agent_connection
     from investment_assistant.api.routes import settings as settings_routes
 
     detail_keys = {"run_id", "task", "kind", "graph_version", "stages_version", "session", "cutoff_at", "trigger",
@@ -337,14 +345,15 @@ def test_v28_response_shapes(client, monkeypatch):
     assert set(client.get(f"/api/runs/{RUN_ID}/detail").json()) == detail_keys
 
     monkeypatch.setattr(workflow, "resume_check", lambda run_id, node, *, now, checkpointer_factory=None: {"attempt": 2})
-    monkeypatch.setattr(daily, "is_running", lambda: False)
+    from investment_assistant.core import locks
+    monkeypatch.setattr(locks, "is_running", lambda: False)
     monkeypatch.setattr(runner, "submit", lambda kind, fn: f"{kind}-20261030050102-9f8e7d6c")
     resp = client.post("/api/jobs/daily/resume", json={"run_id": RUN_ID, "node": "collect"})
     assert resp.status_code == 202 and set(resp.json()) == {"run_id", "node", "status", "attempt", "runner_id"}
     monkeypatch.setattr(jobs, "load_config", lambda: object())
     for path in ("/api/jobs/daily/run", "/api/workbench/run"):
         assert set(client.post(path, json={}).json()) == {"run_id", "daily_run_id", "status"}, path
-    monkeypatch.setattr(service, "rerun_agent", lambda *a, **k: {"reset_id": 1, "run_id": None, "replayed": False})
+    monkeypatch.setattr(analysis_agent_runner, "rerun_agent", lambda *a, **k: {"reset_id": 1, "run_id": None, "replayed": False})
     rerun = client.post("/api/workbench/agent-runs/rerun", json={"ticker": "NVDA", "signal_date": "2026-10-22",
                                                                   "mode": "interpret", "request_id": REQUEST_ID})
     assert set(rerun.json()) == {"reset_id", "run_id", "replayed"}
@@ -440,7 +449,8 @@ def test_decisions_post_410(client):
 
 
 def test_v29_response_shapes(client, monkeypatch):
-    from investment_assistant.workbench import plan_views, service
+    import investment_assistant.views.plan_table as plan_views
+    import investment_assistant.core.tx as service
 
     table = {"session": "2026-10-30", "groups": {"entry": [], "holding": [], "ended": []}, "other_units": [],
              "counts": {"entry": 0, "holding": 0, "ended": 0}, "errors": {}}
@@ -470,7 +480,7 @@ def test_v29_response_shapes(client, monkeypatch):
     body = client.get("/api/workbench/trades/linkable-plans?ticker=mu&executed_at=2026-10-30T14:00:00Z").json()
     assert set(body) >= {"plans", "default_plan_id"} and body["at"] == "2026-10-30T14:00:00+00:00"
 
-    monkeypatch.setattr(service, "add_plan_note", lambda payload, *, now: {"status": "created", "record": {"id": 3}})
+    monkeypatch.setattr(execution_trades, "add_plan_note", lambda payload, *, now: {"status": "created", "record": {"id": 3}})
     assert client.post("/api/workbench/plan-notes", json={"body": "x"}).json() == {
         "status": "created", "record": {"id": 3}}
     monkeypatch.setattr(plan_views, "notes_view", lambda *, ticker, chain_signal_date, plan_id: {"notes": []})
@@ -481,37 +491,40 @@ def test_v29_error_codes_reach_the_page(client, monkeypatch):
     """409 / 400 / 503 bodies carry `code: sentence` the page splits on (spec §6.1, §6.4, §21.4)."""
     from datetime import date
 
-    from investment_assistant.workbench import ledger, plan_review, plan_views, service
+    import investment_assistant.workflow.nodes.review as plan_review
+    import investment_assistant.views.plan_table as plan_views
+    import investment_assistant.core.tx as service
+    from investment_assistant.execution import ledger
 
     def raises(exc):
         def fn(*args, **kwargs):
             raise exc
         return fn
-    monkeypatch.setattr(service, "add_trade", raises(ledger.Conflict("plan_stale: 成交时这条链已是第 3 版，请关联第 3 版")))
+    monkeypatch.setattr(execution_trades, "add_trade", raises(ledger.Conflict("plan_stale: 成交时这条链已是第 3 版，请关联第 3 版")))
     resp = client.post("/api/workbench/trades", json={})
     assert resp.status_code == 409 and resp.json() == {"error": "plan_stale: 成交时这条链已是第 3 版，请关联第 3 版"}
-    monkeypatch.setattr(service, "add_trade", raises(ledger.LedgerError(ledger.DECISION_LINK_RETIRED)))
+    monkeypatch.setattr(execution_trades, "add_trade", raises(ledger.LedgerError(ledger.DECISION_LINK_RETIRED)))
     resp = client.post("/api/workbench/trades", json={})
     assert resp.status_code == 400
     assert resp.json() == {"error": "decision_link_retired: v2.9 起成交不再关联决定，请改为关联计划"}
-    monkeypatch.setattr(service, "add_trade", raises(service.Unavailable("migration_029_missing")))
+    monkeypatch.setattr(execution_trades, "add_trade", raises(service.Unavailable("migration_029_missing")))
     assert client.post("/api/workbench/trades", json={}).json() == {"error": "migration_029_missing"}
     monkeypatch.setattr(plan_views, "table_view", raises(plan_views.NotReady()))
     resp = client.get("/api/workbench/plan-table")
     assert resp.status_code == 503 and resp.json() == {"error": "migration_029_missing"}
     # a manual run on a ticker that already has an active chain: the sentence is filled from the exception
-    monkeypatch.setattr(service, "run_agent", raises(service.AgentConflict(
+    monkeypatch.setattr(analysis_agent_runner, "run_agent", raises(analysis_agent_runner.AgentConflict(
         "active_chain", chain_signal_date=date(2026, 10, 29), version_no=2)))
     resp = client.post("/api/workbench/agent-runs", json={"ticker": "mu", "signal_date": "2026-10-30"})
     assert resp.status_code == 409
     assert resp.json() == {"error": "active_chain: MU 已有进行中的计划链（10-29 第 2 版），这次触发已并入"}
-    monkeypatch.setattr(service, "rerun_agent", raises(service.AgentConflict(
+    monkeypatch.setattr(analysis_agent_runner, "rerun_agent", raises(analysis_agent_runner.AgentConflict(
         "active_chain", chain_signal_date=date(2026, 10, 29), version_no=2)))
     resp = client.post("/api/workbench/agent-runs/rerun", json={"ticker": "mu", "signal_date": "2026-10-30",
                                                                  "mode": "propose", "request_id": REQUEST_ID})
     assert resp.json() == {"error": "active_chain: MU 已有进行中的计划链（10-29 第 2 版），这次触发已并入"}
     # the other conflict keeps its plain reason
-    monkeypatch.setattr(service, "run_agent", raises(service.AgentConflict("already_completed")))
+    monkeypatch.setattr(analysis_agent_runner, "run_agent", raises(analysis_agent_runner.AgentConflict("already_completed")))
     assert client.post("/api/workbench/agent-runs", json={"ticker": "mu", "signal_date": "2026-10-30"}).json() == {
         "error": "already_completed"}
     # a recheck of an exiting chain

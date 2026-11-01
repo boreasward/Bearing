@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "卖出候选，仅限有计划的持仓：开仓以来第一次最高价触及 T1，建议卖出一半，只触发一次。"
 related: [plan.target1, plan.trailing_stop, rule.plan_stop, rule.position_drawdown]
-sources: [investment_assistant/workbench/rules.py, investment_assistant/workbench/exits.py, docs/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/execution/exits.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

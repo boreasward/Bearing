@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2]
 summary: "修订版必须写明和上一版相比变了什么：模型的说明 changes 与系统算出的差异 diff 并列显示，字段集合必须相等。"
 related: [agent.version_chain, agent.review_outcome, agent.reject_reasons, agent.citation]
-sources: [investment_assistant/workbench/agent/plan_check.py, investment_assistant/workbench/timeline.py]
+sources: [investment_assistant/execution/plan_check.py, investment_assistant/execution/timeline.py]
 ---
 
 ## 是什么

@@ -6,7 +6,7 @@ version: 1
 applies_to: [backcheck-2]
 summary: "新规则上线前手动运行，用库内已有数据回看触发频率、止损是否总被扫掉、信号后超额等，只是描述性检查，不代表规则有效。"
 related: [review.plan_shadow, review.r_multiple, system.gate_hold, rule.trend_reclaim]
-sources: [investment_assistant/workbench/backcheck.py]
+sources: [investment_assistant/optimize/backcheck.py]
 ---
 
 ## 是什么
@@ -21,7 +21,7 @@ sources: [investment_assistant/workbench/backcheck.py]
 结果冻结进记录；`backcheck-1` 的旧记录保留，超额列显示"—"。
 
 ## 在系统里哪里看到
-「复盘 → 上线前检查」；也可用命令行 `python -m investment_assistant.workbench.backcheck` 运行。
+「复盘 → 上线前检查」；也可用命令行 `python -m investment_assistant.optimize.backcheck` 运行。
 
 ## 注意
 这只是描述性检查，不调参，也不代表规则有效；超额是信号日收盘到第 h 日收盘，不等于可成交。当前观察池成交样本太少，常被标为 `insufficient`，属于正常现象。

@@ -1,8 +1,10 @@
+import investment_assistant.data.repo as data_repo
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from investment_assistant.workbench import news, repository
+# Repository consumers use their owning layers below.
+from investment_assistant.data.adapters import news
 
 T0 = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)
 
@@ -67,8 +69,8 @@ def item(url, title='t', published=T0 - timedelta(hours=3)):
 
 
 def test_store_dedupes_by_source_and_url_and_links_tickers(workbench_db):
-    first = repository.store_news(workbench_db, [(item('https://a'), ['NVDA'])], now=T0)
-    again = repository.store_news(workbench_db, [(item('https://a', title='edited'), ['NVDA', 'MU'])],
+    first = data_repo.store_news(workbench_db, [(item('https://a'), ['NVDA'])], now=T0)
+    again = data_repo.store_news(workbench_db, [(item('https://a', title='edited'), ['NVDA', 'MU'])],
                                   now=T0 + timedelta(hours=1))
     assert first == {'inserted': 1, 'existing': 0} and again == {'inserted': 0, 'existing': 1}
     rows = workbench_db.execute('SELECT title, fetched_at FROM news_items').fetchall()
@@ -78,20 +80,20 @@ def test_store_dedupes_by_source_and_url_and_links_tickers(workbench_db):
 
 
 def test_read_news_respects_cutoff_on_fetch_and_publish(workbench_db):
-    repository.store_news(workbench_db, [(item('https://old'), ['NVDA'])], now=T0)
-    repository.store_news(workbench_db, [(item('https://undated', published=None), ['NVDA'])], now=T0)
-    repository.store_news(workbench_db, [(item('https://future', published=T0 + timedelta(hours=2)), ['NVDA'])], now=T0)
-    repository.store_news(workbench_db, [(item('https://late-fetch'), ['NVDA'])], now=T0 + timedelta(hours=3))
-    repository.store_news(workbench_db, [(item('https://other'), ['MU'])], now=T0)
-    got = repository.read_news(workbench_db, 'nvda', cutoff_at=T0 + timedelta(hours=1))
+    data_repo.store_news(workbench_db, [(item('https://old'), ['NVDA'])], now=T0)
+    data_repo.store_news(workbench_db, [(item('https://undated', published=None), ['NVDA'])], now=T0)
+    data_repo.store_news(workbench_db, [(item('https://future', published=T0 + timedelta(hours=2)), ['NVDA'])], now=T0)
+    data_repo.store_news(workbench_db, [(item('https://late-fetch'), ['NVDA'])], now=T0 + timedelta(hours=3))
+    data_repo.store_news(workbench_db, [(item('https://other'), ['MU'])], now=T0)
+    got = data_repo.read_news(workbench_db, 'nvda', cutoff_at=T0 + timedelta(hours=1))
     assert {g['url'] for g in got} == {'https://old', 'https://undated'}
     assert all(isinstance(g['id'], int) for g in got)
 
 
 def test_read_news_since_filters_by_publish_or_fetch_time(workbench_db):
-    repository.store_news(workbench_db, [(item('https://old', published=T0 - timedelta(days=9)), ['NVDA'])], now=T0)
-    repository.store_news(workbench_db, [(item('https://new'), ['NVDA'])], now=T0)
-    got = repository.read_news(workbench_db, 'NVDA', cutoff_at=T0, since=T0 - timedelta(days=2))
+    data_repo.store_news(workbench_db, [(item('https://old', published=T0 - timedelta(days=9)), ['NVDA'])], now=T0)
+    data_repo.store_news(workbench_db, [(item('https://new'), ['NVDA'])], now=T0)
+    got = data_repo.read_news(workbench_db, 'NVDA', cutoff_at=T0, since=T0 - timedelta(days=2))
     assert [g['url'] for g in got] == ['https://new']
 
 
@@ -99,7 +101,7 @@ def test_read_news_since_filters_by_publish_or_fetch_time(workbench_db):
 def test_store_rejects_unknown_source(workbench_db, bad):
     import psycopg
     with pytest.raises(psycopg.errors.CheckViolation):
-        repository.store_news(workbench_db, [({**item('https://x'), **bad}, ['NVDA'])], now=T0)
+        data_repo.store_news(workbench_db, [({**item('https://x'), **bad}, ['NVDA'])], now=T0)
 
 
 def test_search_results_are_kept_only_when_related_to_the_ticker():

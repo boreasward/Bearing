@@ -8,7 +8,7 @@ from investment_assistant.data import fetch_policy
 from investment_assistant.data.fetch_policy import FetchError, FetchPolicy
 
 logger = logging.getLogger(__name__)
-# Kept for us_research.sources, which runs its own retry loop over these.
+# Used by data.sources.fundamentals, which runs its own retry loop over these.
 _RETRYABLE = set(fetch_policy.RETRY_STATUSES)
 
 

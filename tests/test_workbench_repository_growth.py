@@ -1,4 +1,12 @@
 """Repository helpers for the v2.7 growth-loop tables (SQL; throwaway schema via the workbench_db fixture)."""
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.core.dbutil as core_dbutil
+import investment_assistant.core.locks as core_locks
+import investment_assistant.core.schema as core_schema
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.execution.repo_legacy as execution_repo_legacy
+import investment_assistant.review.repo as review_repo
 import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -6,7 +14,8 @@ from datetime import UTC, date, datetime, timedelta
 import psycopg
 import pytest
 
-from investment_assistant.workbench import knowledge_items, repository
+from investment_assistant.review.knowledge import items as knowledge_items
+from investment_assistant.core import knowledge
 
 NOW = datetime(2026, 10, 28, 22, 30, tzinfo=UTC)
 DAY = date(2026, 10, 20)
@@ -15,14 +24,14 @@ DAY = date(2026, 10, 20)
 def decision(conn, ticker='NVDA', signal_date=DAY, *, decision='accept', action='buy', supersedes_id=None,
              plan_id=None, decided_at=NOW):
     final = {'accept': action, 'reject': 'ignore', 'downgrade': 'watch'}[decision]
-    return repository._insert_decision_for_tests(conn, {
+    return execution_repo_legacy._insert_decision_for_tests(conn, {
         'request_id': uuid.uuid4(), 'ticker': ticker, 'signal_date': signal_date, 'candidate_ids': [uuid.uuid4()],
         'brief_id': None, 'proposed_action': action, 'final_action': final, 'decision': decision,
         'reason': 'because', 'supersedes_id': supersedes_id, 'plan_id': plan_id}, 'h', decided_at=decided_at)
 
 
 def trade(conn, ticker='NVDA', side='buy', decision_id=None, executed_at=NOW, quantity=10):
-    return repository.insert_trade(conn, {
+    return execution_repo.insert_trade(conn, {
         'request_id': uuid.uuid4(), 'ticker': ticker, 'side': side, 'quantity': quantity, 'price': 100, 'fee': 0,
         'executed_at': executed_at, 'decision_id': decision_id, 'note': None}, 'h', recorded_at=NOW)
 
@@ -32,15 +41,15 @@ def card(conn, key='unit:NVDA:2026-10-20:ended', **overrides):
            'end_kind': 'stop', 'end_session': date(2026, 10, 23), 'retro_version': 'retro-1',
            'facts': {'subject': {'kind': 'unit'}, 'plans': []}, 'detected_run_id': 'run-1'}
     row.update(overrides)
-    return repository.insert_review_card(conn, row)
+    return review_repo.insert_review_card(conn, row)
 
 
 def item_with_versions(conn, specs, *, request_prefix=''):
     """specs: [(created_at, tickers, concepts), ...] - successive versions of one new item."""
-    item_id = repository.insert_knowledge_item(conn, {'origin': 'manual'})
+    item_id = review_repo.insert_knowledge_item(conn, {'origin': 'manual'})
     previous = None
     for number, (created_at, tickers, concepts) in enumerate(specs, start=1):
-        previous = repository.insert_knowledge_version(conn, {
+        previous = review_repo.insert_knowledge_version(conn, {
             'knowledge_id': item_id, 'version': number, 'supersedes_id': previous, 'request_id': uuid.uuid4(),
             'request_hash': 'h', 'draft_id': None, 'title': f't{number}', 'body': 'b', 'scope': 's',
             'counter_examples': '', 'concepts': concepts, 'tickers': tickers, 'schema_version': 'my-knowledge-1'})
@@ -50,10 +59,10 @@ def item_with_versions(conn, specs, *, request_prefix=''):
 
 def test_growth_ready_false_without_tables(workbench_db):
     conn = workbench_db
-    assert repository.growth_ready(conn) is True
-    assert len(repository.GROWTH_TABLES) == 11
+    assert core_schema.growth_ready(conn) is True
+    assert len(core_dbutil.GROWTH_TABLES) == 11
     conn.execute('DROP TABLE knowledge_citations')
-    assert repository.growth_ready(conn) is False
+    assert core_schema.growth_ready(conn) is False
     conn.execute('SELECT 1')                                            # the transaction stays usable
 
 
@@ -63,12 +72,12 @@ def test_insert_card_on_conflict_returns_none(workbench_db):
     assert isinstance(first, int)
     assert card(conn) is None                                           # same event key: DO NOTHING
     assert card(conn, 'unit:NVDA:2026-10-20:closed:s1', end_kind='position_closed') is not None
-    stored = repository.review_card(conn, first)
+    stored = review_repo.review_card(conn, first)
     assert stored['event_key'] == 'unit:NVDA:2026-10-20:ended' and stored['facts']['subject'] == {'kind': 'unit'}
     assert stored['signal_date'] == DAY and stored['end_session'] == date(2026, 10, 23)
-    assert repository.review_card_by_key(conn, 'unit:NVDA:2026-10-20:ended')['id'] == first
-    assert repository.review_card_by_key(conn, 'nope') is None
-    assert repository.review_card(conn, 999999) is None
+    assert review_repo.review_card_by_key(conn, 'unit:NVDA:2026-10-20:ended')['id'] == first
+    assert review_repo.review_card_by_key(conn, 'nope') is None
+    assert review_repo.review_card(conn, 999999) is None
     # a trade card
     buy = trade(conn)
     trade_card = card(conn, f"trade:{buy['id']}", subject='trade', signal_date=None, buy_trade_id=buy['id'],
@@ -81,9 +90,9 @@ def test_review_cards_listing(workbench_db):
     a = card(conn, 'k1', end_session=date(2026, 10, 22))
     b = card(conn, 'k2', ticker='AMD', end_session=date(2026, 10, 26))
     c = card(conn, 'k3', end_session=date(2026, 10, 27))
-    assert [r['id'] for r in repository.review_cards(conn)] == [c, b, a]    # newest end first
-    assert [r['id'] for r in repository.review_cards(conn, ticker='nvda')] == [c, a]
-    assert [r['id'] for r in repository.review_cards(conn, since=date(2026, 10, 26))] == [c, b]
+    assert [r['id'] for r in review_repo.review_cards(conn)] == [c, b, a]    # newest end first
+    assert [r['id'] for r in review_repo.review_cards(conn, ticker='nvda')] == [c, a]
+    assert [r['id'] for r in review_repo.review_cards(conn, since=date(2026, 10, 26))] == [c, b]
 
 
 def test_card_drafts_and_verdict(workbench_db):
@@ -94,21 +103,21 @@ def test_card_drafts_and_verdict(workbench_db):
         "INSERT INTO agent_runs (id, ticker, signal_date, pool, attempt, mode, agent_version, provider, model, "
         "cutoff_at, status, reason, started_at, finished_at) VALUES (%s, 'NVDA', %s, 'main', 1, 'retro', "
         "'agent-retro-1', 'chatgpt', 'gpt-test', %s, 'ok', NULL, %s, %s)", (run, DAY, NOW, NOW, NOW))
-    d1 = repository.insert_card_draft(conn, {'card_id': cid, 'attempt': 1, 'trigger': 'batch', 'agent_run_id': None,
+    d1 = review_repo.insert_card_draft(conn, {'card_id': cid, 'attempt': 1, 'trigger': 'batch', 'agent_run_id': None,
                                               'status': 'skipped', 'reason': 'stage_budget', 'output': None})
-    d2 = repository.insert_card_draft(conn, {'card_id': cid, 'attempt': 2, 'trigger': 'manual', 'agent_run_id': run,
+    d2 = review_repo.insert_card_draft(conn, {'card_id': cid, 'attempt': 2, 'trigger': 'manual', 'agent_run_id': run,
                                               'status': 'ok', 'reason': None, 'output': {'headline': '一句话'}})
-    drafts = repository.card_drafts(conn, cid)
+    drafts = review_repo.card_drafts(conn, cid)
     assert [d['id'] for d in drafts] == [d1, d2] and drafts[1]['output'] == {'headline': '一句话'}
-    assert repository.card_drafts(conn, 999999) == []
-    assert repository.card_verdict(conn, cid) is None
-    vid = repository.insert_card_verdict(conn, {'card_id': cid, 'request_id': uuid.uuid4(), 'request_hash': 'h',
+    assert review_repo.card_drafts(conn, 999999) == []
+    assert review_repo.card_verdict(conn, cid) is None
+    vid = review_repo.insert_card_verdict(conn, {'card_id': cid, 'request_id': uuid.uuid4(), 'request_hash': 'h',
                                                 'draft_id': d2, 'note': '我的复盘'})
-    verdict = repository.card_verdict(conn, cid)
+    verdict = review_repo.card_verdict(conn, cid)
     assert verdict['id'] == vid and verdict['note'] == '我的复盘' and verdict['draft_id'] == d2
     with pytest.raises(psycopg.errors.UniqueViolation):
         with conn.transaction():
-            repository.insert_card_verdict(conn, {'card_id': cid, 'request_id': uuid.uuid4(), 'request_hash': 'h',
+            review_repo.insert_card_verdict(conn, {'card_id': cid, 'request_id': uuid.uuid4(), 'request_hash': 'h',
                                                   'draft_id': None, 'note': ''})
 
 
@@ -123,10 +132,10 @@ def test_knowledge_rows_cutoff_and_filters(workbench_db):
     b = item_with_versions(conn, [(t0, ['AMD'], []), (t0 + timedelta(hours=1), ['NVDA'], ['concept:plan_stop@1'])])
     # item C: written only after the cutoff
     c = item_with_versions(conn, [(cutoff + timedelta(hours=2), ['NVDA'], [])])
-    repository.insert_knowledge_status(conn, {'knowledge_id': b, 'status': 'archived', 'reason': 'old',
+    review_repo.insert_knowledge_status(conn, {'knowledge_id': b, 'status': 'archived', 'reason': 'old',
                                               'request_id': uuid.uuid4(), 'request_hash': 'h'})
     conn.execute("UPDATE knowledge_status SET created_at = %s WHERE knowledge_id = %s", (t0 + timedelta(hours=3), b))
-    repository.insert_knowledge_status(conn, {'knowledge_id': b, 'status': 'active', 'reason': '',
+    review_repo.insert_knowledge_status(conn, {'knowledge_id': b, 'status': 'active', 'reason': '',
                                               'request_id': uuid.uuid4(), 'request_hash': 'h'})
     conn.execute("UPDATE knowledge_status SET created_at = %s WHERE knowledge_id = %s AND status = 'active'",
                  (cutoff + timedelta(hours=5), b))
@@ -134,45 +143,45 @@ def test_knowledge_rows_cutoff_and_filters(workbench_db):
     def ids(rows):
         return sorted({(r['knowledge_id'], r['version']) for r in rows})
 
-    versions, statuses = repository.knowledge_rows(conn, cutoff=cutoff)
+    versions, statuses = data_repo.knowledge_rows(conn, cutoff=cutoff)
     assert ids(versions) == [(a, 1), (b, 1), (b, 2)]                    # C and A.v2 were written after the cutoff
     assert [(s['knowledge_id'], s['status']) for s in statuses] == [(b, 'archived')]   # the restore is later too
-    visible = knowledge_items.visible(versions, statuses, cutoff=cutoff)
+    visible = knowledge.visible(versions, statuses, cutoff=cutoff)
     assert [(r['knowledge_id'], r['version']) for r in visible] == [(a, 1)]            # B is archived at the cutoff
 
-    now_versions, now_statuses = repository.knowledge_rows(conn, cutoff=None)
+    now_versions, now_statuses = data_repo.knowledge_rows(conn, cutoff=None)
     assert ids(now_versions) == [(a, 1), (a, 2), (b, 1), (b, 2), (c, 1)]
     assert [(r['knowledge_id'], r['version']) for r in
-            knowledge_items.visible(now_versions, now_statuses, cutoff=None)] == [(a, 2), (b, 2), (c, 1)]
+            knowledge.visible(now_versions, now_statuses, cutoff=None)] == [(a, 2), (b, 2), (c, 1)]
 
     # filters look at the item's highest version visible at the cutoff, and still return its whole history
-    by_nvda, _ = repository.knowledge_rows(conn, cutoff=cutoff, ticker='NVDA')
+    by_nvda, _ = data_repo.knowledge_rows(conn, cutoff=cutoff, ticker='NVDA')
     assert ids(by_nvda) == [(a, 1), (b, 1), (b, 2)]                     # A.v1 (NVDA) and B.v2 (NVDA)
-    by_amd, _ = repository.knowledge_rows(conn, cutoff=cutoff, ticker='AMD')
+    by_amd, _ = data_repo.knowledge_rows(conn, cutoff=cutoff, ticker='AMD')
     assert ids(by_amd) == []                                            # AMD only in A.v2 (later) and B.v1 (superseded)
-    by_amd_now, _ = repository.knowledge_rows(conn, cutoff=None, ticker='AMD')
+    by_amd_now, _ = data_repo.knowledge_rows(conn, cutoff=None, ticker='AMD')
     assert ids(by_amd_now) == [(a, 1), (a, 2)]
-    by_concept, _ = repository.knowledge_rows(conn, cutoff=cutoff, concept='plan.stop')
+    by_concept, _ = data_repo.knowledge_rows(conn, cutoff=cutoff, concept='plan.stop')
     assert ids(by_concept) == [(a, 1)]                                  # matched by id, not by LIKE wildcard (plan_stop)
-    by_prefix, _ = repository.knowledge_rows(conn, cutoff=cutoff, concept='plan')
+    by_prefix, _ = data_repo.knowledge_rows(conn, cutoff=cutoff, concept='plan')
     assert ids(by_prefix) == []                                         # the id must match whole
-    by_id, by_id_statuses = repository.knowledge_rows(conn, cutoff=cutoff, knowledge_id=b)
+    by_id, by_id_statuses = data_repo.knowledge_rows(conn, cutoff=cutoff, knowledge_id=b)
     assert ids(by_id) == [(b, 1), (b, 2)] and [s['status'] for s in by_id_statuses] == ['archived']
-    both, _ = repository.knowledge_rows(conn, cutoff=cutoff, ticker='NVDA', concept='plan.stop')
+    both, _ = data_repo.knowledge_rows(conn, cutoff=cutoff, ticker='NVDA', concept='plan.stop')
     assert ids(both) == [(a, 1)]
-    assert repository.knowledge_item(conn, a)['origin'] == 'manual' and repository.knowledge_item(conn, 99999) is None
+    assert review_repo.knowledge_item(conn, a)['origin'] == 'manual' and review_repo.knowledge_item(conn, 99999) is None
 
 
 def test_try_advisory_lock_mutual_exclusion(workbench_db):
     key = f'retro-test:{uuid.uuid4()}'
     url = os.environ['INVESTMENT_ASSISTANT_TEST_DATABASE_URL']                 # the fixture skipped without it
     with psycopg.connect(url) as first, psycopg.connect(url) as second:
-        assert repository.try_advisory_lock(first, key) is True
-        assert repository.try_advisory_lock(second, key) is False              # held by the open transaction
-        assert repository.try_advisory_lock(second, key + ':other') is True    # another key is free
+        assert core_locks.try_advisory_lock(first, key) is True
+        assert core_locks.try_advisory_lock(second, key) is False              # held by the open transaction
+        assert core_locks.try_advisory_lock(second, key + ':other') is True    # another key is free
         second.rollback()
         first.commit()                                                         # transaction scope: released here
-        assert repository.try_advisory_lock(second, key) is True
+        assert core_locks.try_advisory_lock(second, key) is True
         second.rollback()
 
 
@@ -183,7 +192,7 @@ def test_retro_subjects_scope(workbench_db):
     a_dec = decision(conn, 'NVDA', DAY, decided_at=t)
     a_buy = trade(conn, 'NVDA', decision_id=a_dec['id'], executed_at=t)
     a_void = trade(conn, 'NVDA', decision_id=a_dec['id'], executed_at=t + timedelta(hours=1))
-    repository.mark_trade_voided(conn, a_void['id'], 'typo', voided_at=NOW)
+    execution_repo.mark_trade_voided(conn, a_void['id'], 'typo', voided_at=NOW)
     a_sell = trade(conn, 'NVDA', side='sell', decision_id=a_dec['id'], executed_at=t + timedelta(days=2))
     b_dec = decision(conn, 'AMD', DAY, decision='reject', decided_at=t)
     decision(conn, 'MSFT', DAY, action='sell', decided_at=t)
@@ -212,7 +221,7 @@ def test_retro_subjects_scope(workbench_db):
     # unplanned buys: one live, one voided, one sell, one outside the window
     free_buy = trade(conn, 'IBM', executed_at=t)
     voided_free = trade(conn, 'KO', executed_at=t)
-    repository.mark_trade_voided(conn, voided_free['id'], 'typo', voided_at=NOW)
+    execution_repo.mark_trade_voided(conn, voided_free['id'], 'typo', voided_at=NOW)
     trade(conn, 'PEP', side='sell', executed_at=t)
     # unplanned buys bought long before `since`: closed inside the window -> returned; closed before it -> out
     low_buy = trade(conn, 'LOW', executed_at=old_t)
@@ -224,7 +233,7 @@ def test_retro_subjects_scope(workbench_db):
     conn.execute("INSERT INTO signal_candidates (ticker, signal_date, action, rule_id, rule_version, inputs) "
                  "VALUES ('ORCL', %s, 'buy', 'trend_reclaim', 'rules-1', '{}'::jsonb)", (DAY,))
 
-    subjects = repository.retro_subjects(conn, since=date(2026, 10, 1), until=date(2026, 10, 28))
+    subjects = review_repo.retro_subjects(conn, since=date(2026, 10, 1), until=date(2026, 10, 28))
     units = {(s['ticker'], s['signal_date']): s for s in subjects if s['kind'] == 'unit'}
     trades = {s['buy_trade_id']: s for s in subjects if s['kind'] == 'trade'}
     # no sell unit, no ORCL, no carded old unit (AAPL), no unit closed before `since` (GE)
@@ -256,17 +265,17 @@ def test_retro_subjects_scope(workbench_db):
         ('AMZN', old_day), ('F', old_day), ('HD', old_day), ('AMD', DAY), ('NVDA', DAY), ('TSLA', DAY)]
     assert [s['ticker'] for s in subjects if s['kind'] == 'trade'] == ['LOW', 'IBM']     # by execution time
     # since/until are the END-session window: NVDA sold on 10-23, so it is out once `since` is after that
-    later = repository.retro_subjects(conn, since=date(2026, 10, 24), until=date(2026, 10, 28))
+    later = review_repo.retro_subjects(conn, since=date(2026, 10, 24), until=date(2026, 10, 28))
     assert {s['ticker'] for s in later if s['kind'] == 'unit'} == {'AMD', 'TSLA', 'F', 'HD', 'AMZN'}
     assert {s['ticker'] for s in later if s['kind'] == 'trade'} == {'IBM', 'LOW'}        # IBM still open, LOW closes 10-28
     # a window before everything closed: `until` caps the signal date and the buy date
-    early = repository.retro_subjects(conn, since=date(2026, 10, 1), until=date(2026, 10, 19))
+    early = review_repo.retro_subjects(conn, since=date(2026, 10, 1), until=date(2026, 10, 19))
     assert {s['ticker'] for s in early if s['kind'] == 'unit'} == {'F', 'HD', 'AMZN'}    # signals of 10-20 are later
     assert {s['ticker'] for s in early if s['kind'] == 'trade'} == {'LOW'}               # IBM was bought on 10-21
 
 
 def _split_bar(conn, ticker, day, factor):
-    repository.store_bars(conn, ticker, [{'price_date': day, 'open': 10, 'high': 11, 'low': 9, 'close': 10,
+    data_repo.store_bars(conn, ticker, [{'price_date': day, 'open': 10, 'high': 11, 'low': 9, 'close': 10,
                                           'adj_close': 10, 'volume': 1000, 'split_factor': factor}], now=NOW)
 
 
@@ -294,7 +303,7 @@ def test_open_before_applies_splits_the_way_positions_do(workbench_db):
     trade(conn, 'SPD', executed_at=at(1))
     _split_bar(conn, 'SPD', date(2026, 10, 12), 2)
 
-    open_before = repository._open_before
+    open_before = review_repo._open_before
     assert open_before(conn, 'SPA', date(2026, 10, 8)) is True          # 20 - 15 = 5 left (a naive 10 - 15 would say flat)
     assert open_before(conn, 'SPA', date(2026, 10, 3)) is True          # before the split, only the buy counts
     assert open_before(conn, 'SPB', date(2026, 10, 8)) is False         # 20 - 20 = 0
@@ -311,34 +320,34 @@ def test_knowledge_drafts_citations_discussions(workbench_db):
         "INSERT INTO agent_runs (id, ticker, signal_date, pool, attempt, mode, agent_version, provider, model, "
         "cutoff_at, status, reason, started_at, finished_at) VALUES (%s, 'NVDA', %s, 'main', 1, 'retro', "
         "'agent-retro-1', 'chatgpt', 'gpt-test', %s, 'ok', NULL, %s, %s)", (run, DAY, NOW, NOW, NOW))
-    draft = repository.insert_card_draft(conn, {'card_id': cid, 'attempt': 1, 'trigger': 'batch',
+    draft = review_repo.insert_card_draft(conn, {'card_id': cid, 'attempt': 1, 'trigger': 'batch',
                                                 'agent_run_id': run, 'status': 'ok', 'reason': None,
                                                 'output': {'headline': 'x'}})
     lesson = {'origin': 'review_card', 'card_draft_id': draft, 'lesson_index': 0, 'discussion_turn_id': None,
               'target_knowledge_id': None, 'target_version': None, 'title': 't', 'body': 'b', 'scope': 's',
               'counter_examples': 'c', 'concepts': [], 'tickers': ['NVDA'], 'refs': ['fact:plans']}
-    d0 = repository.insert_knowledge_draft(conn, lesson)
-    d1 = repository.insert_knowledge_draft(conn, {**lesson, 'lesson_index': 1, 'title': 't2'})
-    assert [d['id'] for d in repository.knowledge_drafts(conn, open_only=True)] == [d0, d1]
-    assert [d['id'] for d in repository.knowledge_drafts(conn, open_only=True, card_draft_id=draft)] == [d0, d1]
-    assert [d['id'] for d in repository.knowledge_drafts(conn, open_only=False, ids=[d1])] == [d1]
-    assert repository.knowledge_drafts(conn, open_only=True, card_draft_id=999999) == []
-    first = repository.knowledge_drafts(conn, open_only=False, ids=[d0])[0]
+    d0 = review_repo.insert_knowledge_draft(conn, lesson)
+    d1 = review_repo.insert_knowledge_draft(conn, {**lesson, 'lesson_index': 1, 'title': 't2'})
+    assert [d['id'] for d in review_repo.knowledge_drafts(conn, open_only=True)] == [d0, d1]
+    assert [d['id'] for d in review_repo.knowledge_drafts(conn, open_only=True, card_draft_id=draft)] == [d0, d1]
+    assert [d['id'] for d in review_repo.knowledge_drafts(conn, open_only=False, ids=[d1])] == [d1]
+    assert review_repo.knowledge_drafts(conn, open_only=True, card_draft_id=999999) == []
+    first = review_repo.knowledge_drafts(conn, open_only=False, ids=[d0])[0]
     assert first['refs'] == ['fact:plans'] and first['tickers'] == ['NVDA'] and first['counter_examples'] == 'c'
 
-    item = repository.insert_knowledge_item(conn, {'origin': 'review_card', 'source_card_id': cid})
-    version = repository.insert_knowledge_version(conn, {
+    item = review_repo.insert_knowledge_item(conn, {'origin': 'review_card', 'source_card_id': cid})
+    version = review_repo.insert_knowledge_version(conn, {
         'knowledge_id': item, 'version': 1, 'supersedes_id': None, 'request_id': uuid.uuid4(), 'request_hash': 'h',
         'draft_id': d0, 'title': 't', 'body': 'b', 'scope': 's', 'counter_examples': 'c', 'concepts': [],
         'tickers': ['NVDA'], 'schema_version': 'my-knowledge-1'})
-    repository.insert_draft_verdict(conn, {'draft_id': d0, 'action': 'approve', 'knowledge_version_id': version,
+    review_repo.insert_draft_verdict(conn, {'draft_id': d0, 'action': 'approve', 'knowledge_version_id': version,
                                            'request_id': uuid.uuid4()})
-    repository.insert_draft_verdict(conn, {'draft_id': d1, 'action': 'dismiss', 'knowledge_version_id': None,
+    review_repo.insert_draft_verdict(conn, {'draft_id': d1, 'action': 'dismiss', 'knowledge_version_id': None,
                                            'request_id': uuid.uuid4()})
-    assert repository.knowledge_drafts(conn, open_only=True) == []          # both decided
-    assert len(repository.knowledge_drafts(conn, open_only=False)) == 2
+    assert review_repo.knowledge_drafts(conn, open_only=True) == []          # both decided
+    assert len(review_repo.knowledge_drafts(conn, open_only=False)) == 2
 
-    plan = repository.insert_plan(conn, {
+    plan = execution_repo.insert_plan(conn, {
         'ticker': 'NVDA', 'signal_date': DAY, 'kind': 'agent', 'plan_version': 'agent-2', 'ref_price': 100, 'atr': 2,
         'entry_low': 99, 'entry_high': 101, 'stop': 96, 'target1': 108, 'trail_atr_multiple': 2,
         'valid_from': date(2026, 10, 21), 'valid_until': date(2026, 10, 28), 'sizing': {}, 'status': 'ok',
@@ -347,32 +356,32 @@ def test_knowledge_drafts_citations_discussions(workbench_db):
              'field': 'thesis', 'call_seq': 1},
             {'agent_run_id': run, 'plan_id': plan['id'], 'review_id': None, 'knowledge_id': item, 'version': 1,
              'field': 'counter', 'call_seq': 1}]
-    assert repository.insert_knowledge_citations(conn, rows) == 2
-    assert repository.insert_knowledge_citations(conn, []) == 0
-    assert [c['field'] for c in repository.citations_of(conn, item)] == ['thesis', 'counter']
-    assert len(repository.citations_for_plans(conn, [plan['id']])) == 2
-    assert repository.citations_for_plans(conn, []) == []
-    assert repository.citations_of(conn, item + 1) == []
+    assert analysis_repo.insert_knowledge_citations(conn, rows) == 2
+    assert analysis_repo.insert_knowledge_citations(conn, []) == 0
+    assert [c['field'] for c in review_repo.citations_of(conn, item)] == ['thesis', 'counter']
+    assert len(review_repo.citations_for_plans(conn, [plan['id']])) == 2
+    assert review_repo.citations_for_plans(conn, []) == []
+    assert review_repo.citations_of(conn, item + 1) == []
 
-    discussion = repository.insert_discussion(conn, {
+    discussion = review_repo.insert_discussion(conn, {
         'request_id': uuid.uuid4(), 'request_hash': 'h', 'context_kind': 'plan', 'ticker': 'NVDA',
         'signal_date': DAY, 'plan_id': plan['id'], 'card_id': None})
-    assert repository.discussion(conn, discussion['id'])['plan_id'] == plan['id']
-    assert [d['id'] for d in repository.discussions_for(conn, plan_id=plan['id'])] == [discussion['id']]
-    assert repository.discussions_for(conn, card_id=cid) == []
-    question = repository.insert_turn(conn, {
+    assert review_repo.discussion(conn, discussion['id'])['plan_id'] == plan['id']
+    assert [d['id'] for d in review_repo.discussions_for(conn, plan_id=plan['id'])] == [discussion['id']]
+    assert review_repo.discussions_for(conn, card_id=cid) == []
+    question = review_repo.insert_turn(conn, {
         'discussion_id': discussion['id'], 'seq': 1, 'role': 'user', 'request_id': uuid.uuid4(), 'request_hash': 'h',
         'body': '为什么是这个止损？', 'attachment': None})
-    answer = repository.insert_turn(conn, {
+    answer = review_repo.insert_turn(conn, {
         'discussion_id': discussion['id'], 'seq': 2, 'role': 'assistant', 'body': '因为…', 'reply_to': question['id'],
         'status': 'ok', 'reason': None, 'refs': ['call:1'], 'detail': {'draft_dropped': False},
         'agent_run_id': run, 'cutoff_at': NOW, 'run_id': 'r-1'})
-    turns = repository.turns(conn, discussion['id'])
+    turns = review_repo.turns(conn, discussion['id'])
     assert [t['seq'] for t in turns] == [1, 2] and turns[1]['refs'] == ['call:1'] and turns[1]['id'] == answer['id']
     assert turns[0]['attachment'] is None
 
 
 def test_try_advisory_lock(workbench_db):
     conn = workbench_db
-    assert repository.try_advisory_lock(conn, 'retro:2026-10-28') is True
-    assert repository.try_advisory_lock(conn, 'retro:2026-10-28') is True      # re-entrant within the transaction
+    assert core_locks.try_advisory_lock(conn, 'retro:2026-10-28') is True
+    assert core_locks.try_advisory_lock(conn, 'retro:2026-10-28') is True      # re-entrant within the transaction

@@ -3,6 +3,7 @@
 The offline part feeds `build` / `describe` with rows written by the real StageRecorder (an injected writer
 collects them), so the counts are compared with what the recorder actually produced. The SQL part reads a
 disposable schema and pins the read-only behaviour and the CLI."""
+import investment_assistant.workflow.repo as workflow_repo
 import inspect
 import re
 from datetime import UTC, date, datetime, timedelta
@@ -10,9 +11,16 @@ from datetime import UTC, date, datetime, timedelta
 import psycopg
 import pytest
 
-from investment_assistant.workbench import labels, repository, rules, run_overview, service
-from investment_assistant.workbench import stages as stages_module
-from investment_assistant.workbench.agent import REASON_TEXT as AGENT_REASON_TEXT
+import investment_assistant.core.texts as labels
+
+from investment_assistant.analysis import rules
+
+import investment_assistant.views.runs.overview as run_overview
+
+import investment_assistant.core.tx as service
+import investment_assistant.core.stages as stages_module
+from investment_assistant.workflow.recorder import StageRecorder
+from investment_assistant.analysis.agent import REASON_TEXT as AGENT_REASON_TEXT
 
 SESSION = date(2026, 10, 27)
 T0 = datetime(2026, 10, 27, 22, 30, tzinfo=UTC)          # 06:30 Beijing on the 28th
@@ -227,7 +235,7 @@ def _recorded_rows(version='stages-3', run_id='run-rec', trigger='scheduled'):
     rows: list[dict] = []
     tick = iter(range(1000))
     wall = lambda: T0 + timedelta(seconds=next(tick))          # noqa: E731
-    rec = stages_module.StageRecorder(run_id, trigger, SESSION, writer=rows.append, wall_now=wall,
+    rec = StageRecorder(run_id, trigger, SESSION, writer=rows.append, wall_now=wall,
                                       version=version)
     acc = rec.open('collect')
     acc.input(10)
@@ -467,7 +475,7 @@ from test_workbench_service import NOW, db  # noqa: E402,F401  (fixture)
 
 def _insert(db, rows):
     for r in rows:
-        repository.insert_stage_run(db, r)
+        workflow_repo.insert_stage_run(db, r)
     db.commit()
 
 

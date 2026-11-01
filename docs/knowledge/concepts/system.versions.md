@@ -6,7 +6,7 @@ version: 4
 applies_to: [plan-2, plan-shadow-2, agent-3, timeline-2, condition-2, entry-1, execution-1, discipline-2, tracks-2, retro-2, agent-retro-2, review-8, monthly-4]
 summary: "plan-1、agent-2 这类标签标识每个口径的版本：改口径就发新版本，旧记录保留当时的版本，所以新旧口径的结果不会被悄悄混在一起。"
 related: [system.concept_card, system.append_only, system.stages, agent.version_chain, system.my_knowledge]
-sources: [investment_assistant/workbench/plans.py, investment_assistant/workbench/entry_rules.py, investment_assistant/workbench/execution.py, investment_assistant/workbench/discipline.py, investment_assistant/workbench/tracks.py, investment_assistant/workbench/rules.py, investment_assistant/workbench/timeline.py, investment_assistant/workbench/stages.py, investment_assistant/workbench/workflow.py, investment_assistant/workbench/retro.py]
+sources: [investment_assistant/execution/plan_levels.py, investment_assistant/execution/entry_rules.py, investment_assistant/execution/adoption.py, investment_assistant/review/discipline.py, investment_assistant/review/tracks.py, investment_assistant/analysis/rules.py, investment_assistant/execution/timeline.py, investment_assistant/core/stages.py, investment_assistant/workflow/graph.py, investment_assistant/review/retro.py]
 ---
 
 ## 是什么

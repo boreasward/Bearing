@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-shadow-1, plan-shadow-2]
 summary: "不管你实际做了什么，按计划的价位逐日模拟入场和出场，得出这份计划本来会是几 R。v2.9 起带执行字段的计划按开盘情形与时间止损回放，并列旧口径作反事实。"
 related: [review.r_multiple, review.tracks, plan.trailing_stop, agent.version_chain]
-sources: [investment_assistant/workbench/plan_shadow.py]
+sources: [investment_assistant/execution/simulation.py]
 ---
 
 ## 是什么

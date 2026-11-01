@@ -13,8 +13,9 @@ import pandas as pd
 
 from test_workbench_service import NOW, SESSION, Sources, db, deps, seed_watchlist
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import service
-from investment_assistant.workbench import universe as universe_module
+import investment_assistant.core.tx as service
+import investment_assistant.workflow.batch as d_workflow_batch
+from investment_assistant.data.adapters import universe as universe_module
 
 HISTORY = 299
 DAYS_BACK = [add_trading_days(SESSION, -(HISTORY - i)) for i in range(HISTORY + 1)]
@@ -168,12 +169,12 @@ EXPLICIT_EXPECTED = {
 
 def test_characterization_watchlist_and_screen(db):
     seed_watchlist(db, [('AAA', ['core']), ('BBB', []), ('CCC', [])])
-    actual = _reduced(service.run_batch(now=NOW, deps=batch_deps()))
+    actual = _reduced(d_workflow_batch.run_batch(now=NOW, deps=batch_deps()))
     assert actual == WATCHLIST_EXPECTED
 
 
 def test_characterization_explicit_tickers(db):
-    actual = _reduced(service.run_batch(tickers=['NVDA'], now=NOW, deps=batch_deps()))
+    actual = _reduced(d_workflow_batch.run_batch(tickers=['NVDA'], now=NOW, deps=batch_deps()))
     assert actual == EXPLICIT_EXPECTED
 
 
@@ -183,7 +184,7 @@ def test_characterization_spy_failure(db):
     the denominator stays the real target set, '*' never appears. The screen's
     benchmark is QQQ, so screening itself still succeeds here."""
     seed_watchlist(db, [('AAA', ['core']), ('BBB', []), ('CCC', [])])
-    summary = service.run_batch(now=NOW, deps=batch_deps(fail={'SPY', 'SMH', 'BBB'}),
+    summary = d_workflow_batch.run_batch(now=NOW, deps=batch_deps(fail={'SPY', 'SMH', 'BBB'}),
                                 record_trigger='scheduled')
     assert {k: summary[k] for k in ('benchmark', 'etfs', 'sources', 'errors')} == {
         'benchmark': {'bars': None, 'skipped_bars': [], 'news': None, 'candidates': [],
@@ -216,21 +217,21 @@ def test_characterization_spy_failure(db):
 
 
 def _stage_recorder(rows, run_id):
-    from investment_assistant.workbench import stages
+    import investment_assistant.workflow.recorder as stages
     return stages.StageRecorder(run_id, 'manual_batch', SESSION, writer=rows.append)
 
 
 def test_characterization_watchlist_and_screen_with_stages(db):
     seed_watchlist(db, [('AAA', ['core']), ('BBB', []), ('CCC', [])])
     rows = []
-    actual = _reduced(service.run_batch(now=NOW, deps=batch_deps(),
+    actual = _reduced(d_workflow_batch.run_batch(now=NOW, deps=batch_deps(),
                                         stages=_stage_recorder(rows, 'run-ch-a')))
     assert actual == WATCHLIST_EXPECTED
 
 
 def test_characterization_explicit_tickers_with_stages(db):
     rows = []
-    actual = _reduced(service.run_batch(tickers=['NVDA'], now=NOW, deps=batch_deps(),
+    actual = _reduced(d_workflow_batch.run_batch(tickers=['NVDA'], now=NOW, deps=batch_deps(),
                                         stages=_stage_recorder(rows, 'run-ch-b')))
     assert actual == EXPLICIT_EXPECTED
 
@@ -238,7 +239,7 @@ def test_characterization_explicit_tickers_with_stages(db):
 def test_characterization_spy_failure_with_stages(db):
     seed_watchlist(db, [('AAA', ['core']), ('BBB', []), ('CCC', [])])
     rows = []
-    summary = service.run_batch(now=NOW, deps=batch_deps(fail={'SPY', 'SMH', 'BBB'}),
+    summary = d_workflow_batch.run_batch(now=NOW, deps=batch_deps(fail={'SPY', 'SMH', 'BBB'}),
                                 record_trigger='scheduled', stages=_stage_recorder(rows, 'run-ch-c'))
     assert {k: summary[k] for k in ('benchmark', 'etfs', 'sources', 'errors')} == {
         'benchmark': {'bars': None, 'skipped_bars': [], 'news': None, 'candidates': [],
@@ -276,13 +277,13 @@ EMPTY_RETRO = {'new_cards': 0, 'drafts': 0, 'to_review': 0}
 def test_batch_characterization(db):
     seed_watchlist(db, [('AAA', ['core']), ('BBB', []), ('CCC', [])])
     rows = []
-    summary = service.run_batch(now=NOW, deps=batch_deps(), stages=_stage_recorder(rows, 'run-ch-review'))
+    summary = d_workflow_batch.run_batch(now=NOW, deps=batch_deps(), stages=_stage_recorder(rows, 'run-ch-review'))
     assert set(summary) == SUMMARY_KEYS_V24 | {'review', 'retro'}
     assert set(summary['pool']) == {'core', 'extended', 'holdings', 'screen', 'changes', 'chains'}
     assert _reduced(summary) == WATCHLIST_EXPECTED
     assert summary['review'] == EMPTY_REVIEW and summary['retro'] == EMPTY_RETRO
     assert set(summary['timings']) == {'collect', 'regime', 'rules', 'agent', 'total'}
-    plain = service.run_batch(tickers=['NVDA'], now=NOW, deps=batch_deps())     # 不记阶段：键集合相同
+    plain = d_workflow_batch.run_batch(tickers=['NVDA'], now=NOW, deps=batch_deps())     # 不记阶段：键集合相同
     assert set(plain) == SUMMARY_KEYS_V24 | {'review', 'retro'} and plain['review'] == EMPTY_REVIEW
     assert plain['retro'] == EMPTY_RETRO
     assert plain['pool'] == EXPLICIT_EXPECTED['pool']

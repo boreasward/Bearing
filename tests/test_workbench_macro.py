@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from investment_assistant.workbench import macro
+from investment_assistant.data.adapters import fred as macro
 
 START, END = date(2026, 6, 25), date(2026, 10, 23)
 

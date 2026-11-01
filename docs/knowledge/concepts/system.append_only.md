@@ -6,7 +6,7 @@ version: 1
 applies_to: []
 summary: "业务记录写入后不改不删：数据修订追加新版本，计划不覆盖，决定、输入、快照的更正都是新记录指向旧记录；录错的成交只能作废。"
 related: [system.cutoff, agent.user_input, system.decision, review.position]
-sources: [investment_assistant/workbench/repository.py, investment_assistant/workbench/ledger.py, investment_assistant/workbench/user_inputs.py]
+sources: [investment_assistant/execution/repo.py, investment_assistant/execution/ledger.py, investment_assistant/execution/user_inputs.py]
 ---
 
 ## 是什么

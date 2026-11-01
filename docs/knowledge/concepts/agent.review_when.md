@@ -6,7 +6,7 @@ version: 2
 applies_to: [agent-2, agent-3, condition-1, condition-2]
 summary: "Agent 计划可以写 0 到 3 条复查条件，满足时当天必须认真复查；留空等于每个交易日都复查。"
 related: [agent.invalidation, agent.review_outcome, agent.signals, agent.changes]
-sources: [investment_assistant/workbench/agent/conditions.py, investment_assistant/workbench/agent/plan_check.py, investment_assistant/workbench/timeline.py]
+sources: [investment_assistant/execution/conditions.py, investment_assistant/execution/plan_check.py, investment_assistant/execution/timeline.py]
 ---
 
 ## 是什么

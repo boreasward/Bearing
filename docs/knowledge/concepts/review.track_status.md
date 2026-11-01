@@ -6,7 +6,7 @@ version: 1
 applies_to: [tracks-1, tracks-2]
 summary: "三方对比里每条轨道的结果状态共九种（tracks-2 另加开盘作废、并入其他链），如缺失、计划作废、待定、已平仓；它们决定该轨道是记 0R、记具体 R，还是暂不计入。"
 related: [review.tracks, review.r_multiple, review.version_basis, review.plan_shadow]
-sources: [investment_assistant/workbench/tracks.py]
+sources: [investment_assistant/review/tracks.py]
 ---
 
 ## 是什么

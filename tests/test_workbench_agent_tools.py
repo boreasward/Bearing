@@ -1,4 +1,11 @@
 """Agent tool layer: recording, bounds, indicator math and cutoff visibility. No network."""
+from investment_assistant.execution import chains as execution_chains
+import investment_assistant.core.schema as core_schema
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.execution.repo_legacy as execution_repo_legacy
+import investment_assistant.review.repo as review_repo
 import json
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -6,10 +13,11 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench.agent import REASON_TEXT, STATUSES
-from investment_assistant.workbench.agent.tools import (MAX_LOOKBACK, PRICE_TOOLS, Recorder, ToolContext,
-                                                        ToolError, call, get_price_bars, get_trigger, indicators,
+from investment_assistant.analysis.agent import REASON_TEXT, STATUSES
+from investment_assistant.analysis.agent.tools import (MAX_LOOKBACK, PRICE_TOOLS, Recorder, ToolContext,
+                                                        ToolError, call, get_price_bars, get_trigger,
                                                         result_hash)
+from investment_assistant.derivation.indicators.price import indicators
 
 S = date(2026, 10, 21)
 CUTOFF = datetime(2026, 10, 21, 22, 30, tzinfo=UTC)
@@ -191,7 +199,7 @@ def test_bars_after_cutoff_invisible(workbench_db):
     _news_row(workbench_db, 'after', fetched_at=after)
 
     sql_ctx = ctx('NVDA', read=lambda fn: fn(workbench_db))
-    from investment_assistant.workbench.agent.tools import get_news
+    from investment_assistant.analysis.agent.tools import get_news
     assert [(b['date'], b['close']) for b in get_price_bars(sql_ctx, 'NVDA', lookback=10)] \
         == [('2026-10-20', 100.0), ('2026-10-21', 101.0)]
     assert [n['title'] for n in get_news(sql_ctx, days=7)] == ['before']
@@ -203,8 +211,8 @@ import hashlib   # noqa: E402
 
 import yaml   # noqa: E402
 
-from investment_assistant.workbench import knowledge   # noqa: E402
-from investment_assistant.workbench.agent import tools as agent_tools   # noqa: E402
+from investment_assistant.core import knowledge   # noqa: E402
+from investment_assistant.analysis.agent import tools as agent_tools   # noqa: E402
 
 CONCEPT_DESCRIPTION = ('读取系统概念卡：不给 id 返回全部 id 与标题；给 id（如 `plan.stop`）返回整张卡。'
                        '概念卡随代码版本走，不受截止时间约束')
@@ -326,7 +334,7 @@ def test_get_concept_not_a_price_tool(cards):
 import inspect   # noqa: E402
 import re   # noqa: E402
 
-from investment_assistant.workbench import repository   # noqa: E402
+# Repository consumers use their owning layers below.
 
 KNOWLEDGE_NOTE_TEXT = '这是用户审定过的经验，是判断不是事实；价位不能只引用它'
 
@@ -342,12 +350,12 @@ def _version(kid, version, *, created_at=None, title=None, tickers=('AMD',), con
 def knowledge_ctx(monkeypatch, versions=(), statuses=(), ready=True):
     """A tool context whose knowledge reads are faked; returns (ctx, the kwargs knowledge_rows was called with)."""
     seen: dict = {}
-    monkeypatch.setattr(repository, 'growth_ready', lambda conn: ready)
+    monkeypatch.setattr(core_schema, 'growth_ready', lambda conn: ready)
 
     def rows(conn, **kwargs):
         seen.update(kwargs)
         return list(versions), list(statuses)
-    monkeypatch.setattr(repository, 'knowledge_rows', rows)
+    monkeypatch.setattr(data_repo, 'knowledge_rows', rows)
     return ToolContext(ticker='AMD', session=S, cutoff_at=CUTOFF, read=lambda fn: fn(object())), seen
 
 
@@ -462,19 +470,25 @@ def test_call_dispatches_in_the_given_table_only():
 
 def test_no_tool_queries_draft_tables():
     """Nothing the agent can call reads the lesson drafts or the card drafts (spec §5.4, D11)."""
-    from investment_assistant.workbench import derivation_view, plan_shadow, reasoning, service
-    from investment_assistant.workbench.agent import discuss_tools
+    import investment_assistant.views.derivation as derivation_view
+    import investment_assistant.views.reasoning as reasoning
+    import investment_assistant.core.tx as service
+    from investment_assistant.execution import simulation as plan_shadow
+    from investment_assistant.review import discuss_tools
 
     banned = ('knowledge_drafts', 'review_card_drafts')
     modules = (agent_tools, discuss_tools)
-    extra = [service.chain_status, service.unit_buys, derivation_view.load_rows, reasoning.view_in,
+    extra = [execution_chains.chain_status, execution_chains.unit_buys, derivation_view.load_rows, reasoning.view_in,
              reasoning._inputs, plan_shadow.simulate]
     sources = [inspect.getsource(m) for m in modules] + [inspect.getsource(f) for f in extra]
-    called = {name for source in sources for name in re.findall(r'repository\.(\w+)', source)
-              if callable(getattr(repository, name))}
-    assert {'knowledge_rows', 'growth_ready', 'review_card', 'card_verdict', 'knowledge_item'} <= called
-    for name in called:
-        source = inspect.getsource(getattr(repository, name))
+    repositories = dict(data_repo=data_repo, execution_repo=execution_repo, execution_repo_legacy=execution_repo_legacy,
+                        analysis_repo=analysis_repo, review_repo=review_repo, core_schema=core_schema)
+    called = {(module, name) for source in sources
+              for module, name in re.findall(r'(\w+)\.(\w+)', source)
+              if module in repositories and callable(getattr(repositories[module], name, None))}
+    assert {'knowledge_rows', 'growth_ready', 'review_card', 'card_verdict', 'knowledge_item'} <= {n for _, n in called}
+    for module, name in called:
+        source = inspect.getsource(getattr(repositories[module], name))
         assert not any(word in source for word in banned), name
     for source in sources:
         assert not any(word in source for word in banned)
@@ -486,7 +500,7 @@ from test_workbench_repository_growth import card as make_card, item_with_versio
 
 
 def _archive(conn, item_id, status, created_at):
-    sid = repository.insert_knowledge_status(conn, {'knowledge_id': item_id, 'status': status, 'reason': '',
+    sid = review_repo.insert_knowledge_status(conn, {'knowledge_id': item_id, 'status': status, 'reason': '',
                                                     'request_id': uuid.uuid4(), 'request_hash': 'h'})
     conn.execute('UPDATE knowledge_status SET created_at = %s WHERE id = %s', (created_at, sid))
 
@@ -533,22 +547,22 @@ def test_get_knowledge_never_reads_drafts(workbench_db):
         "INSERT INTO agent_runs (id, ticker, signal_date, pool, attempt, mode, agent_version, provider, model, "
         "cutoff_at, status, reason, started_at, finished_at) VALUES (%s, 'AMD', %s, 'main', 1, 'retro', "
         "'agent-retro-1', 'chatgpt', 'gpt-test', %s, 'ok', NULL, %s, %s)", (run, S, CUTOFF, CUTOFF, CUTOFF))
-    draft = repository.insert_card_draft(conn, {'card_id': cid, 'attempt': 1, 'trigger': 'batch', 'agent_run_id': run,
+    draft = review_repo.insert_card_draft(conn, {'card_id': cid, 'attempt': 1, 'trigger': 'batch', 'agent_run_id': run,
                                                 'status': 'ok', 'reason': None, 'output': {'headline': '草稿'}})
     base = {'origin': 'review_card', 'card_draft_id': draft, 'discussion_turn_id': None, 'target_knowledge_id': None,
             'target_version': None, 'body': 'b', 'scope': 's', 'counter_examples': 'c', 'concepts': [],
             'tickers': ['AMD'], 'refs': ['fact:plans']}
-    ids = [repository.insert_knowledge_draft(conn, {**base, 'lesson_index': i, 'title': f'草稿{i}'}) for i in range(3)]
-    repository.insert_draft_verdict(conn, {'draft_id': ids[1], 'action': 'dismiss', 'knowledge_version_id': None,
+    ids = [review_repo.insert_knowledge_draft(conn, {**base, 'lesson_index': i, 'title': f'草稿{i}'}) for i in range(3)]
+    review_repo.insert_draft_verdict(conn, {'draft_id': ids[1], 'action': 'dismiss', 'knowledge_version_id': None,
                                            'request_id': uuid.uuid4()})                  # a dismissed one
-    discussion = repository.insert_discussion(conn, {'request_id': uuid.uuid4(), 'request_hash': 'h',
+    discussion = review_repo.insert_discussion(conn, {'request_id': uuid.uuid4(), 'request_hash': 'h',
                                                      'context_kind': 'card', 'ticker': 'AMD', 'signal_date': S,
                                                      'plan_id': None, 'card_id': cid})
-    user = repository.insert_turn(conn, {'discussion_id': discussion['id'], 'seq': 1, 'role': 'user',
+    user = review_repo.insert_turn(conn, {'discussion_id': discussion['id'], 'seq': 1, 'role': 'user',
                                          'request_id': uuid.uuid4(), 'request_hash': 'h', 'body': '问'})
-    answer = repository.insert_turn(conn, {'discussion_id': discussion['id'], 'seq': 2, 'role': 'assistant',
+    answer = review_repo.insert_turn(conn, {'discussion_id': discussion['id'], 'seq': 2, 'role': 'assistant',
                                            'body': '答', 'reply_to': user['id'], 'status': 'ok', 'cutoff_at': CUTOFF})
-    repository.insert_knowledge_draft(conn, {'origin': 'discussion', 'discussion_turn_id': answer['id'],
+    review_repo.insert_knowledge_draft(conn, {'origin': 'discussion', 'discussion_turn_id': answer['id'],
                                              'title': '讨论草稿', 'body': 'b', 'scope': 's', 'counter_examples': 'c',
                                              'concepts': [], 'tickers': ['AMD'], 'refs': ['fact:context'],
                                              'card_draft_id': None, 'lesson_index': None, 'target_knowledge_id': None,
@@ -565,8 +579,8 @@ def test_get_knowledge_never_reads_drafts(workbench_db):
 
 def test_get_position_respects_cutoff(monkeypatch):
     """v2.9 D33: only fills executed and recorded by the cutoff count; a void recorded after it is not applied."""
-    from investment_assistant.workbench import repository
-    from investment_assistant.workbench.agent.tools import get_position
+    # Repository consumers use their owning layers below.
+    from investment_assistant.analysis.agent.tools import get_position
 
     def trade(trade_id, qty, executed, recorded, voided=None, side='buy'):
         return {'id': trade_id, 'ticker': 'AMD', 'side': side, 'quantity': qty, 'price': 100, 'fee': 0,
@@ -588,8 +602,8 @@ def test_get_position_respects_cutoff(monkeypatch):
                        if cutoff is not None else t)
         return out
 
-    monkeypatch.setattr(repository, 'list_trades', list_trades)
-    monkeypatch.setattr(repository, 'split_events', lambda conn, ticker: [])
+    monkeypatch.setattr(execution_repo, 'list_trades', list_trades)
+    monkeypatch.setattr(data_repo, 'split_events', lambda conn, ticker: [])
     position = get_position(ctx(read=lambda fn: fn(object())))
     assert asked == [CUTOFF]
     assert position['quantity'] == '13' or float(position['quantity']) == 13       # 10 + the not-yet-voided 3

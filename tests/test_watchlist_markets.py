@@ -1,4 +1,5 @@
 """Watchlist boundaries: no implicit defaults, identity guessing, or ingestion on listing."""
+import investment_assistant.data.repo as data_repo
 from contextlib import nullcontext
 from datetime import date, timedelta
 from types import SimpleNamespace
@@ -46,14 +47,14 @@ def test_invalid_or_ambiguous_identity_cannot_be_saved(monkeypatch, ticker):
 
 
 def _enrich_env(monkeypatch, *, read_rows, states, latest_earnings):
-    from investment_assistant.us_research import repository as us_repo
-    from investment_assistant.workbench import repository as wb_repo
+    from investment_assistant.data import repo as us_repo
+    # Repository consumers use their owning layers below.
     monkeypatch.setenv('INVESTMENT_ASSISTANT_DATABASE_URL', 'test-only')
     monkeypatch.setattr(wl, 'connect', lambda _: nullcontext(object()))
     monkeypatch.setattr(wl, 'list_watchlist_items', lambda _: [{'ticker': 'MU', 'status': 'active'}])
     monkeypatch.setattr(us_repo, 'read_rows', lambda *a, **kw: read_rows)
     monkeypatch.setattr(us_repo, 'states', lambda *a: states)
-    monkeypatch.setattr(wb_repo, 'latest_earnings', lambda conn, ticker, *, cutoff_at: latest_earnings)
+    monkeypatch.setattr(data_repo, 'latest_earnings', lambda conn, ticker, *, cutoff_at: latest_earnings)
 
 
 def test_us_enrichment_retains_success_identity_and_uses_duration_end_not_later_instant(monkeypatch):

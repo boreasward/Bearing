@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
-from investment_assistant.tasks import runner
-from investment_assistant.workbench import run_detail, service
+from investment_assistant.core import runner, tx as service
+from investment_assistant.views.runs import detail as run_detail
 
 router = APIRouter()
 

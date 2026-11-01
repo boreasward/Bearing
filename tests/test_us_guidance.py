@@ -1,3 +1,4 @@
+import investment_assistant.analysis.fundamentals as analysis_fundamentals
 import os
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -21,13 +22,16 @@ def card_db(monkeypatch):
             conn.execute(Path('migrations', name).read_text().split('-- Manual verification')[0].replace('CREATE TABLE IF NOT EXISTS', 'CREATE TEMP TABLE'))
         conn.execute('CREATE TEMP TABLE filings(id BIGINT,ticker TEXT,form TEXT,filing_date DATE,accession_number TEXT,primary_document TEXT,file_path TEXT,downloaded_at TIMESTAMPTZ,created_at TIMESTAMPTZ)')
         conn.execute('CREATE TEMP TABLE watchlist_items(ticker TEXT,status TEXT)')
+        conn.execute(Path('migrations/016_us_workbench.sql').read_text().split('-- SEC acceptance')[0]
+                     .replace('CREATE TABLE IF NOT EXISTS', 'CREATE TEMP TABLE'))
         conn.commit()
 
         @contextmanager
         def connection():
             yield conn
 
-        from investment_assistant.us_research import guidance, service
+        from investment_assistant.analysis import fundamentals as guidance
+
         monkeypatch.setattr(guidance, 'connection', connection)
         monkeypatch.setattr(core_tx, 'connection', connection)
         yield conn
@@ -35,7 +39,7 @@ def card_db(monkeypatch):
 
 
 def guidance():
-    from investment_assistant.us_research import guidance
+    from investment_assistant.analysis import fundamentals as guidance
     return guidance
 
 
@@ -88,7 +92,7 @@ def test_append_revisions_keep_original_and_security_ownership(card_db,client):
 
 
 def test_cutoff_checks_seen_and_issued_and_comparison_inputs(card_db):
-    from investment_assistant.us_research import repository
+    from investment_assistant.data import repo as repository
     record=repository.store_rows(card_db,'US:stock:MU','guidance',[{'natural_key':'g','payload':guide(),'disclosed_at':'2025-12-01T00:00:00Z'}],now=datetime(2026,4,1,tzinfo=UTC))[0]
     assert guidance().list_records('MU',as_of='2026-03-01T00:00:00Z') == []
     assert guidance().list_records('MU',as_of='2026-04-02T00:00:00Z')[0]['id'] == record['id']
@@ -98,18 +102,18 @@ def test_cutoff_checks_seen_and_issued_and_comparison_inputs(card_db):
 
 def test_read_service_integrates_current_and_cutoff_guidance(card_db,monkeypatch):
     from contextlib import contextmanager
-    from investment_assistant.us_research import repository,service
+    from investment_assistant.data import repo as repository
     @contextmanager
     def connection(): yield card_db
-    monkeypatch.setattr(service,'connection',connection)
+    monkeypatch.setattr(core_tx,'connection',connection)
     repository.store_rows(card_db,'US:stock:MU','guidance',[{'natural_key':'g','payload':guide(),'disclosed_at':'2025-12-01T00:00:00Z'}],now=datetime(2026,4,1,tzinfo=UTC))
     repository.store_rows(card_db,'US:stock:MU','financials',[{'natural_key':'r','payload':{'metric':'revenue','value':105,'unit':'USD','basis':'us-gaap:consolidated','start':'2026-01-01','end':'2026-03-31','filed':'2026-04-01','accession':'a','concept':'Revenues'},'disclosed_at':'2026-04-01T00:00:00Z'}],now=datetime(2026,4,2,tzinfo=UTC))
-    view=service.view('MU')
+    view=analysis_fundamentals.view('MU')
     assert 'card' not in view
     assert view['guidance']['comparisons'][0]['status']=='in_range'
-    historical=service.view('MU',as_of='2026-04-01T00:00:00Z')
+    historical=analysis_fundamentals.view('MU',as_of='2026-04-01T00:00:00Z')
     assert historical['guidance']['comparisons'][0]['status']=='not_comparable'
-    assert service.view('MU',as_of='2026-03-01T00:00:00Z')['guidance']['records']==[]
+    assert analysis_fundamentals.view('MU',as_of='2026-03-01T00:00:00Z')['guidance']['records']==[]
 
 
 @pytest.mark.parametrize('field,value',[('issued_at','2026-04-01T00:00:00Z'),('low',True)])

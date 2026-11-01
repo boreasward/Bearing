@@ -6,7 +6,7 @@ version: 1
 applies_to: []
 summary: "20 日、252 日的最高价与最低价；注意放量突破规则用的是「前 20 日收盘新高」，口径与此不同。"
 related: [rule.volume_breakout, indicator.breadth, family.bars]
-sources: [investment_assistant/workbench/agent/tools.py, investment_assistant/workbench/rules.py, investment_assistant/workbench/regime.py]
+sources: [investment_assistant/analysis/agent/tools.py, investment_assistant/analysis/rules.py, investment_assistant/analysis/regime.py]
 ---
 
 ## 是什么

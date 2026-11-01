@@ -6,7 +6,7 @@ version: 2
 applies_to: [timeline-1, timeline-2]
 summary: "复查时系统自己检查八项信号：新 8-K、异常波动、触及止损或 T1、临近到期、区制变化、新用户输入、再次触发；窗口是上次有效复查之后。"
 related: [agent.review_outcome, agent.review_when, agent.user_input, rule.abnormal_move, review.chain_state]
-sources: [investment_assistant/workbench/timeline.py]
+sources: [investment_assistant/execution/timeline.py]
 ---
 
 ## 是什么

@@ -6,7 +6,7 @@ version: 1
 applies_to: [account-1, follow-plans-1]
 summary: "在现金与仓位上限内，程序对所有可买 Agent 计划按最大允许股数挂单；它为 Agent 的组合选择提供执行参照。"
 related: [account.paper, account.agent_portfolio, account.fill_rules, account.comparison, plan.sizing]
-sources: [investment_assistant/workbench/paper_strategies.py, investment_assistant/workbench/paper_fill.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
+sources: [investment_assistant/execution/paper/strategies.py, investment_assistant/execution/paper/fill.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
 ---
 
 ## 是什么

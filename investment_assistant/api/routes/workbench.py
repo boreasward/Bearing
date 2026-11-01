@@ -1,3 +1,8 @@
+import investment_assistant.optimize.backcheck as optimize_backcheck
+import investment_assistant.review.weekly as review_weekly
+import investment_assistant.review.shadow as review_shadow
+import investment_assistant.analysis.agent.runner as analysis_agent_runner
+from investment_assistant.execution import trades as execution_trades
 import uuid
 from datetime import UTC, date, datetime
 from typing import Any
@@ -5,10 +10,21 @@ from typing import Any
 import psycopg.errors
 from fastapi import APIRouter, Body, HTTPException
 
-from investment_assistant.tasks import daily, runner
-from investment_assistant.workbench import (derivation_view, discussion, ledger, my_knowledge, plan_review, plan_views,
-                                            reasoning, retro_cards, run_overview, service, user_inputs, workflow)
-from investment_assistant.workbench.agent.chatgpt import ChatGPTError
+from investment_assistant.tasks import daily, ports
+from investment_assistant.core import locks, runner
+from investment_assistant.views import derivation as derivation_view
+from investment_assistant.review import discussion
+from investment_assistant.review.knowledge import my_knowledge
+from investment_assistant.workflow.nodes import review as plan_review, push as push_node, retro as retro_node
+from investment_assistant.views import plan_table as plan_views, reasoning, today as today_view, screen as screen_view
+from investment_assistant.views import instrument as instrument_view, account as account_views, agent_runs as agent_views
+from investment_assistant.review import retro_cards
+from investment_assistant.views.runs import overview as run_overview
+from investment_assistant.core import tx as service
+from investment_assistant.workflow import graph as workflow
+from investment_assistant.execution import ledger
+from investment_assistant.execution import user_inputs
+from investment_assistant.core.llm.chatgpt import ChatGPTError
 
 router = APIRouter()
 
@@ -21,7 +37,7 @@ CHAIN_EXITING_TEXT = '这条链已发出退出指令，不再复查'      # spec
 ACTIVE_CHAIN_TEXT = '{ticker} 已有进行中的计划链（{date} 第 {n} 版），这次触发已并入'      # spec §4.7 (409 active_chain)
 
 
-def _agent_conflict_text(exc: service.AgentConflict, ticker: Any) -> str:
+def _agent_conflict_text(exc: analysis_agent_runner.AgentConflict, ticker: Any) -> str:
     """``active_chain`` carries its sentence: the ticker (the call's first argument), the chain's signal date (MM-DD)
     and its newest version number, taken from the exception (Task 3 review M9)."""
     text = str(exc)
@@ -39,13 +55,13 @@ def _call(fn, *args, **kwargs):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except service.Gone as exc:
         raise HTTPException(status_code=410, detail=str(exc)) from exc
-    except service.AgentConflict as exc:
+    except analysis_agent_runner.AgentConflict as exc:
         raise HTTPException(status_code=409, detail=_agent_conflict_text(exc, args[0] if args else '')) from exc
     except plan_review.RecheckConflict as exc:
         text = str(exc)
         raise HTTPException(status_code=409,
                             detail=f'chain_exiting: {CHAIN_EXITING_TEXT}' if text == 'chain_exiting' else text) from exc
-    except daily.DailyBusy as exc:
+    except locks.DailyBusy as exc:
         raise HTTPException(status_code=409, detail='daily_running') from exc
     except workflow.ResumeRejected as exc:
         raise HTTPException(status_code=409, detail=exc.code) from exc     # the code is the text: {"error": "<code>"}
@@ -70,7 +86,7 @@ def _date(value: Any, field: str) -> date | None:
 
 @router.get('/api/workbench/today')
 def today():
-    return _call(service.today, now=_now())
+    return _call(today_view.today, now=_now())
 
 
 @router.get('/api/workbench/plan-table')
@@ -107,7 +123,7 @@ def linkable_plans(ticker: str | None = None, executed_at: str | None = None):
 
 @router.post('/api/workbench/plan-notes')
 def add_plan_note(payload: dict[str, Any] = Body(default_factory=dict)):
-    return _call(service.add_plan_note, payload, now=_now())
+    return _call(execution_trades.add_plan_note, payload, now=_now())
 
 
 @router.get('/api/workbench/plan-notes')
@@ -126,7 +142,7 @@ def plan_notes(ticker: str | None = None, chain_signal_date: str | None = None, 
 @router.get('/api/workbench/screen')
 def screen(session: str | None = None, full: int = 0):
     day = date.fromisoformat(session) if session else None
-    return _call(service.screen_view, now=_now(), session=day, full=bool(full))
+    return _call(screen_view.screen_view, now=_now(), session=day, full=bool(full))
 
 
 @router.post('/api/workbench/screen/replay')
@@ -134,92 +150,92 @@ def screen_replay(payload: dict[str, Any] = Body(default_factory=dict)):
     sessions = payload.get('sessions', 5)
     if not isinstance(sessions, int) or not 1 <= sessions <= 20:
         raise HTTPException(status_code=400, detail='sessions must be an integer in 1..20')
-    return _call(service.replay_screen, now=_now(), sessions=sessions)
+    return _call(screen_view.replay_screen, now=_now(), sessions=sessions)
 
 
 @router.get('/api/workbench/instruments/{ticker}')
 def instrument(ticker: str):
-    return _call(service.instrument, ticker, now=_now())
+    return _call(instrument_view.instrument, ticker, now=_now())
 
 
 @router.get('/api/workbench/backchecks')
 def backchecks(limit: int = 10):
-    return {'backchecks': _call(service.list_backchecks, limit=limit)}
+    return {'backchecks': _call(optimize_backcheck.list_backchecks, limit=limit)}
 
 
 @router.post('/api/workbench/backchecks')
 def run_backcheck(payload: dict[str, Any] = Body(default_factory=dict)):
-    return _call(service.run_backcheck, now=_now(), tickers=payload.get('tickers'))
+    return _call(optimize_backcheck.run_backcheck, now=_now(), tickers=payload.get('tickers'))
 
 
 @router.post('/api/workbench/decisions')
 def decide(payload: dict[str, Any] = Body(default_factory=dict)):
-    return _call(service.decide, payload, now=_now())
+    return _call(execution_trades.decide, payload, now=_now())
 
 
 @router.get('/api/workbench/trades')
 def list_trades(account_id: str | None = None):
-    return {'trades': _call(service.list_trades, **({'account_id': account_id} if account_id else {}))}
+    return {'trades': _call(execution_trades.list_trades, **({'account_id': account_id} if account_id else {}))}
 
 
 @router.post('/api/workbench/trades')
 def add_trade(payload: dict[str, Any] = Body(default_factory=dict)):
-    return _call(service.add_trade, payload, now=_now())
+    return _call(execution_trades.add_trade, payload, now=_now())
 
 
 @router.post('/api/workbench/trades/{trade_id}/void')
 def void_trade(trade_id: str, payload: dict[str, Any] = Body(default_factory=dict)):
-    return _call(service.void_trade, trade_id, payload.get('reason'), now=_now())
+    return _call(execution_trades.void_trade, trade_id, payload.get('reason'), now=_now())
 
 
 @router.get('/api/workbench/account/snapshots')
 def account_view(account_id: str | None = None):
-    return _call(service.account_view, **({'account_id': account_id} if account_id else {}))
+    return _call(account_views.account_view, **({'account_id': account_id} if account_id else {}))
 
 
 @router.post('/api/workbench/account/snapshots')
 def add_snapshot(payload: dict[str, Any] = Body(default_factory=dict)):
-    return _call(service.add_snapshot, payload, now=_now())
+    return _call(execution_trades.add_snapshot, payload, now=_now())
 
 
 @router.get('/api/workbench/account/flows')
 def account_flows(account_id: str | None = None):
-    return _call(service.account_view, **({'account_id': account_id} if account_id else {}))
+    return _call(account_views.account_view, **({'account_id': account_id} if account_id else {}))
 
 
 @router.post('/api/workbench/account/flows')
 def add_flow(payload: dict[str, Any] = Body(default_factory=dict)):
-    return _call(service.add_flow, payload, now=_now())
+    return _call(execution_trades.add_flow, payload, now=_now())
 
 
 @router.post('/api/workbench/account/flows/{flow_id}/void')
 def void_flow(flow_id: str, payload: dict[str, Any] = Body(default_factory=dict)):
-    return _call(service.void_flow, flow_id, payload.get('reason'), now=_now())
+    return _call(execution_trades.void_flow, flow_id, payload.get('reason'), now=_now())
 
 
 @router.get('/api/workbench/plans/shadow')
 def plans_shadow(since: str | None = None):
-    return _call(service.plan_shadow, now=_now(), since=_date(since, 'since'))
+    return _call(review_shadow.plan_shadow, now=_now(), since=_date(since, 'since'))
 
 
 @router.get('/api/workbench/review/shadow')
 def shadow(since: str | None = None):
-    return _call(service.shadow, now=_now(), since=_date(since, 'since'))
+    return _call(review_shadow.shadow, now=_now(), since=_date(since, 'since'))
 
 
 @router.get('/api/workbench/discipline')
 def workbench_discipline(account_id: str | None = None):
-    return _call(service.discipline, now=_now(), **({'account_id': account_id} if account_id else {}))
+    return _call(review_weekly.discipline, now=_now(), **({'account_id': account_id} if account_id else {}))
 
 
 @router.get('/api/workbench/review/trades')
 def trade_review():
-    return _call(service.trade_review, now=_now())
+    return _call(review_weekly.trade_review, now=_now())
 
 
 @router.get('/api/workbench/weekly-reviews')
 def weekly_reviews():
-    return {'reviews': _call(service.list_weekly)}
+    return {'reviews': _call(review_weekly.list_weekly)}
 
 
 @router.post('/api/workbench/weekly-reviews')
@@ -227,7 +243,7 @@ def generate_weekly(payload: dict[str, Any] = Body(default_factory=dict)):
     week_start = _date(payload.get('week_start'), 'week_start')
     if week_start is None:
         raise HTTPException(status_code=400, detail='week_start is required')
-    return _call(service.generate_weekly, week_start, notes=payload.get('notes') or '',
+    return _call(review_weekly.generate_weekly, week_start, notes=payload.get('notes') or '',
                  supersedes_id=payload.get('supersedes_id') or None, now=_now())
 
 
@@ -237,12 +253,12 @@ def review_tracks(since: str | None = None, until: str | None = None, account_id
     until_d = _date(until, 'until')
     if since_d is not None and until_d is not None and since_d > until_d:
         raise HTTPException(status_code=400, detail='since must not be after until')
-    return _call(service.tracks, now=_now(), since=since_d, until=until_d, **({'account_id': account_id} if account_id else {}))
+    return _call(review_weekly.tracks, now=_now(), since=since_d, until=until_d, **({'account_id': account_id} if account_id else {}))
 
 
 @router.get('/api/workbench/monthly-reviews')
 def monthly_reviews():
-    return {'reviews': _call(service.list_monthly)}
+    return {'reviews': _call(review_weekly.list_monthly)}
 
 
 @router.post('/api/workbench/monthly-reviews')
@@ -252,7 +268,7 @@ def generate_monthly(payload: dict[str, Any] = Body(default_factory=dict)):
         raise HTTPException(status_code=400, detail='month is required')
     if month.day != 1:
         raise HTTPException(status_code=400, detail='month must be the first day of the month')
-    return _call(service.generate_monthly, month, notes=payload.get('notes') or '',
+    return _call(review_weekly.generate_monthly, month, notes=payload.get('notes') or '',
                  supersedes_id=payload.get('supersedes_id') or None, now=_now())
 
 
@@ -261,14 +277,14 @@ def push_today():
     from investment_assistant.config import load_config
     from investment_assistant.services.settings import effective_notify_config
 
-    return _call(service.push, now=_now(), force=True,
+    return _call(push_node.push, now=_now(), force=True, send=ports.send,
                  notify_cfg=effective_notify_config(load_config().notify))
 
 
 @router.post('/api/workbench/run')
 def run_now():
     try:
-        busy = daily.is_running()
+        busy = locks.is_running()
     except Exception:   # noqa: BLE001 - no database to ask: the run itself reports what is wrong
         busy = False
     if busy:
@@ -281,12 +297,12 @@ def run_now():
 
 @router.get('/api/workbench/agent-runs')
 def agent_runs(since: str | None = None):
-    return _call(service.agent_runs, now=_now(), since=_date(since, 'since'))
+    return _call(agent_views.agent_runs, now=_now(), since=_date(since, 'since'))
 
 
 @router.get('/api/workbench/agent-runs/{run_id}')
 def agent_run_detail(run_id: str):
-    return _call(service.agent_run_detail, run_id)
+    return _call(agent_views.agent_run_detail, run_id)
 
 
 @router.get('/api/workbench/agent-runs/{run_id}/reasoning')
@@ -301,7 +317,7 @@ def run_agent(payload: dict[str, Any] = Body(default_factory=dict)):
     signal_date = _date(payload.get('signal_date'), 'signal_date')
     if not ticker or signal_date is None:
         raise HTTPException(status_code=400, detail='ticker 与 signal_date 必填')
-    return _call(service.run_agent, ticker.upper(), signal_date, now=_now())
+    return _call(analysis_agent_runner.run_agent, ticker.upper(), signal_date, now=_now())
 
 
 @router.post('/api/workbench/agent-runs/rerun')
@@ -314,7 +330,7 @@ def rerun_agent(payload: dict[str, Any] = Body(default_factory=dict)):
     if not ticker or signal_date is None:
         raise HTTPException(status_code=400, detail='ticker 与 signal_date 必填')
     try:
-        return _call(service.rerun_agent, ticker.upper(), signal_date, str(payload.get('mode') or ''),
+        return _call(analysis_agent_runner.rerun_agent, ticker.upper(), signal_date, str(payload.get('mode') or ''),
                      request_id=str(payload.get('request_id') or ''), origin=str(payload.get('origin') or 'api'),
                      now=_now())
     except psycopg.errors.UndefinedTable:      # the reset table belongs to migration 028
@@ -325,7 +341,7 @@ def rerun_agent(payload: dict[str, Any] = Body(default_factory=dict)):
 def review_pushes(limit: int = 20):
     if not 1 <= limit <= 100:
         raise HTTPException(status_code=400, detail='limit must be between 1 and 100')
-    return {'pushes': _call(service.list_review_pushes, limit=limit)}
+    return {'pushes': _call(retro_node.list_review_pushes, limit=limit)}
 
 
 @router.post('/api/workbench/review-pushes')
@@ -338,7 +354,7 @@ def review_push(payload: dict[str, Any] = Body(default_factory=dict)):
         raise HTTPException(status_code=400, detail='period is required')
     from investment_assistant.config import load_config
     from investment_assistant.services.settings import effective_notify_config
-    return _call(service.push_review, kind, period, now=_now(),
+    return _call(retro_node.push_review, kind, period, now=_now(), send=ports.send,
                  notify_cfg=effective_notify_config(load_config().notify), trigger_source='manual')
 
 
@@ -516,7 +532,8 @@ def discussion_turn(discussion_id: int, payload: dict[str, Any] = Body(default_f
         return {'turn_id': asked['turn_id'], 'run_id': asked['run_id'], 'status': 'replayed'}
     try:
         run_id = runner.submit('discuss', lambda run_id: discussion.answer(discussion_id, asked['turn_id'], now=now,
-                                                                          run_id=run_id), with_run_id=True)
+            run_id=run_id, read_derivation=derivation_view.plan_derivation_in,
+            read_agent_run=reasoning.view_in), with_run_id=True)
     except Exception:
         discussion.release(asked['run_id'])
         raise

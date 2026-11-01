@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2, agent-1]
 summary: "Agent 对买入候选给 buy 或 pass；买入时给入场下沿、上沿、止损、T1 四个价位，每个都要引用价格类工具，并过顺序与 ±50% 校验。"
 related: [agent.citation, agent.thesis, agent.reject_reasons, plan.entry_zone, plan.stop, plan.target1]
-sources: [investment_assistant/workbench/agent/citations.py, investment_assistant/workbench/agent/graph.py]
+sources: [investment_assistant/execution/citations.py, investment_assistant/analysis/agent/graph.py]
 ---
 
 ## 是什么

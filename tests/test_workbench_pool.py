@@ -3,7 +3,7 @@
 
 import pytest
 
-from investment_assistant.workbench import pool
+from investment_assistant.analysis import pool
 
 
 def _rows(tickers, *, status='active', tags=()):

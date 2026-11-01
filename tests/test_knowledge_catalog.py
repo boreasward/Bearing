@@ -2,17 +2,43 @@
 
 Reads the committed cards, so a code change that adds a rule / reason / state / tool / version number without
 updating the cards fails here. Offline: no database."""
+from investment_assistant.data import families as data_families
+import investment_assistant.review.agent_runs as review_agent_runs
 import pytest
 
 from investment_assistant.data import fetch_policy
-from investment_assistant.workbench import (
-    accounts, backcheck, derivation, discipline, entry_rules, execution, families, knowledge, knowledge_items,
-    knowledge_perf, labels, monthly, paper_fill, paper_strategies, plan_shadow, plans, regime, retro, review, rules,
-    screen, stages, timeline, tracks, workflow,
-)
-from investment_assistant.workbench.agent import REASON_TEXT, chatgpt, conditions, graph, tools
-from investment_assistant.workbench.agent.discuss_tools import DISCUSS_TOOLS
-from investment_assistant.workbench.knowledge import DEFAULT_ROOT, load
+from investment_assistant.optimize import backcheck
+from investment_assistant.review import discipline
+import investment_assistant.workflow.targets as families
+from investment_assistant.review.knowledge import items as knowledge_items
+from investment_assistant.review.knowledge import perf as knowledge_perf
+import investment_assistant.core.texts as labels
+from investment_assistant.review import monthly
+from investment_assistant.analysis import regime
+from investment_assistant.review import retro
+from investment_assistant.review import outcomes as review
+from investment_assistant.analysis import rules
+from investment_assistant.analysis import screen_rules as screen
+import investment_assistant.core.stages as stages
+from investment_assistant.review import tracks
+import investment_assistant.workflow.graph as workflow
+from investment_assistant.execution import simulation as plan_shadow
+from investment_assistant.execution import timeline
+from investment_assistant.execution import accounts
+from investment_assistant.execution import entry_rules
+from investment_assistant.execution import adoption as execution
+from investment_assistant.execution.paper import fill as paper_fill
+from investment_assistant.execution.paper import strategies as paper_strategies
+from investment_assistant.execution import plan_levels as plans
+from investment_assistant.core import knowledge
+from investment_assistant.derivation import chain as derivation
+from investment_assistant.analysis.agent import REASON_TEXT
+from investment_assistant.analysis.agent import graph
+from investment_assistant.analysis.agent import tools
+from investment_assistant.execution import conditions
+from investment_assistant.core.llm import chatgpt
+from investment_assistant.review.discuss_tools import DISCUSS_TOOLS
+from investment_assistant.core.knowledge import DEFAULT_ROOT, load
 
 REQUIRED_IDS = (
     # family (6)
@@ -65,8 +91,8 @@ CURRENT_VERSIONS = {
     'timeline.AGENT_V2': timeline.AGENT_V2,
     'graph.REVIEW_VERSION': graph.REVIEW_VERSION,
     'graph.INTERPRET_VERSION': graph.INTERPRET_VERSION,
-    'graph.RETRO_AGENT_VERSION': graph.RETRO_AGENT_VERSION,
-    'graph.DISCUSS_AGENT_VERSION': graph.DISCUSS_AGENT_VERSION,
+    'review_agent_runs.RETRO_AGENT_VERSION': review_agent_runs.RETRO_AGENT_VERSION,
+    'review_agent_runs.DISCUSS_AGENT_VERSION': review_agent_runs.DISCUSS_AGENT_VERSION,
     'conditions.CONDITIONS_VERSION': conditions.CONDITIONS_VERSION,
     'timeline.TIMELINE_VERSION': timeline.TIMELINE_VERSION,
     'plans.CONTEXT_VERSION': plans.CONTEXT_VERSION,
@@ -120,7 +146,7 @@ def test_catalog_loads_and_matches_required_ids(catalog):
 
 
 def test_families_and_rules_have_cards(catalog):
-    for family in families.FAMILIES:
+    for family in data_families.FAMILIES:
         assert f'family.{family.id}' in catalog.concepts, family.id
     assert set(labels.RULE_TEXT) == set(rules.PRICE_RULES) | {'new_filing'} and len(labels.RULE_TEXT) == 10
     for rule_id, text in labels.RULE_TEXT.items():

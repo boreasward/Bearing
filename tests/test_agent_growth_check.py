@@ -5,10 +5,11 @@ import json
 
 import pytest
 
-from investment_assistant.workbench.agent import growth_check
-from investment_assistant.workbench.agent.citations import Rejected
-from investment_assistant.workbench.agent.plan_check import filter_counter_v2
-from investment_assistant.workbench.retro import FACT_KEYS
+from investment_assistant.review import agent_runs as growth_check
+from investment_assistant.core import knowledge
+from investment_assistant.execution.citations import Rejected
+from investment_assistant.execution.plan_check import filter_counter_v2
+from investment_assistant.review.retro import FACT_KEYS
 
 REFS = {'call:1', 'call:2', 'concept:plan.stop@1', 'know:3@2'}
 CONCEPTS = {'plan.stop', 'review.discipline_early_take'}
@@ -55,7 +56,7 @@ def test_check_draft_ok():
 
 def test_check_draft_allows_only_the_cards_own_fact_keys():
     """M5: a retro-1 draft cannot cite fact:execution / fact:holding, a retro-2 draft cannot cite fact:decision."""
-    from investment_assistant.workbench.retro import FACT_KEYS_V2
+    from investment_assistant.review.retro import FACT_KEYS_V2
 
     def with_keys(key, keys):
         refs = [f'fact:{key}']
@@ -306,7 +307,7 @@ def other_call(seq, tool='get_price_bars'):
 
 
 def rows(**kwargs):
-    return sorted(growth_check.knowledge_citations(**kwargs), key=lambda r: (r['field'], r['knowledge_id'], r['version']))
+    return sorted(knowledge.knowledge_citations(**kwargs), key=lambda r: (r['field'], r['knowledge_id'], r['version']))
 
 
 def test_knowledge_citations_fields():

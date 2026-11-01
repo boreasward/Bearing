@@ -6,7 +6,7 @@ version: 4
 applies_to: [stages-5, stages-4, stages-3, stages-2, stages-1]
 summary: "daily 按固定顺序跑十一个节点，每个节点各写运行证据；stages-5 在每日复查后、推送前加入 accounts，结算账户并作模拟决策。"
 related: [system.daily_workflow, system.stage_status, system.screen, agent.review_outcome, account.paper, system.push, review.retro_card]
-sources: [investment_assistant/workbench/stages.py, investment_assistant/workbench/workflow.py, investment_assistant/tasks/daily.py, docs/operations/scheduling-and-notifications.md]
+sources: [investment_assistant/core/stages.py, investment_assistant/workflow/graph.py, investment_assistant/tasks/daily.py, docs/operations/scheduling-and-notifications.md]
 ---
 
 ## 是什么

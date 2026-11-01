@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-3, agent-2, agent-1, agent-review-2, agent-review-1, agent-retro-1, agent-discuss-1]
 summary: "Agent 一份建议为什么被作废、跳过或出错，共 33 个原因代码，每个有固定的中文文案；被作废的建议只显示原因、不显示内容。"
 related: [agent.action_levels, agent.citation, agent.review_outcome, agent.invalidation]
-sources: [investment_assistant/workbench/agent/__init__.py, investment_assistant/workbench/agent/model.py, investment_assistant/workbench/plan_review.py]
+sources: [investment_assistant/analysis/agent/__init__.py, investment_assistant/core/llm/model.py, investment_assistant/analysis/agent/runner.py]
 ---
 
 ## 是什么

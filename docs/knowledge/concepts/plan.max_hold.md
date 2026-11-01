@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-2, agent-3, condition-2]
 summary: "计划写明最长持有的交易日数（规则基线 10 天，Agent 5–20 天）；持有满该天数仍没有一个收盘价到过成本加 1R，就给出次日开盘卖出的退出指令。"
 related: [plan.entry_type, review.holding_status, review.r_multiple, agent.review_when, plan.target1]
-sources: [investment_assistant/workbench/agent/conditions.py, investment_assistant/workbench/plans.py, investment_assistant/workbench/timeline.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/conditions.py, investment_assistant/execution/plan_levels.py, investment_assistant/execution/timeline.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

@@ -6,7 +6,7 @@ version: 1
 applies_to: [paper-fill-1, entry-1, plan-shadow-2]
 summary: "模拟账户复用计划影子的入场和逐日退出规则：日线成交、同日先止损、T1 卖半、移动止损与时间止损；默认无滑点。"
 related: [account.paper, plan.entry_type, plan.open_scenarios, plan.max_hold, review.plan_shadow]
-sources: [investment_assistant/workbench/paper_fill.py, investment_assistant/workbench/entry_rules.py, investment_assistant/workbench/plan_shadow.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
+sources: [investment_assistant/execution/paper/fill.py, investment_assistant/execution/entry_rules.py, investment_assistant/execution/simulation.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
 ---
 
 ## 是什么

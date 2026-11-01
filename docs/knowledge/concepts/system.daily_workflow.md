@@ -6,7 +6,7 @@ version: 2
 applies_to: [daily-2, stages-5, daily-1, stages-4]
 summary: "daily-2 把十一个节点串成一条链，每节点结束落检查点，出错 60 秒后重试一次，再失败停链；账户结算在每日复查后、推送前。"
 related: [system.stages, system.stage_status, account.paper, system.push, system.fetch_policy, system.cutoff, system.append_only]
-sources: [investment_assistant/workbench/workflow.py, investment_assistant/tasks/daily.py, investment_assistant/workbench/service.py, investment_assistant/workbench/paper_accounts.py]
+sources: [investment_assistant/workflow/graph.py, investment_assistant/tasks/daily.py, investment_assistant/workflow/batch.py, investment_assistant/execution/paper/accounts.py]
 ---
 
 ## 是什么

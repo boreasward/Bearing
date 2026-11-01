@@ -2,6 +2,9 @@
 
 SQL tests on the disposable database (``daily_db``: the workbench schema plus migration 028). Fetchers, the model,
 the checkpointer, ``sleep``, the clocks, the notifier and ``job_reports`` are fakes; nothing leaves the process."""
+from investment_assistant.execution import plan_context as execution_plan_context
+import investment_assistant.review.repo as review_repo
+import investment_assistant.workflow.repo as workflow_repo
 import json
 from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
@@ -15,8 +18,14 @@ from _daily_db import (FakeClock, NotifyCfg, Notices, clock, daily_config, daily
 from test_workbench_service import (NOW, SESSION, Sources, _agent_settings, _ok_responses, _universe_deps, agent_deps,
                                     deps, seed_watchlist)
 
-from investment_assistant.tasks import filings
-from investment_assistant.workbench import repository, service, stages, workflow
+from investment_assistant.tasks import filings, ports
+from investment_assistant.core import locks
+import investment_assistant.core.tx as service
+import investment_assistant.core.stages as stages
+import investment_assistant.workflow.graph as workflow
+import investment_assistant.analysis.regime as d_analysis_regime
+import investment_assistant.workflow.batch as d_workflow_batch
+import investment_assistant.workflow.nodes.regime as d_workflow_nodes_regime
 
 HOLIDAY = datetime(2026, 10, 24, 22, 30, tzinfo=UTC)          # a Saturday in New York
 RUN_ID = 'daily-20261022223000-0a1b2c3d'
@@ -54,11 +63,12 @@ def go(daily_db, clock, *, trigger='manual_batch', now=NOW, run_id=RUN_ID, d=Non
     seed_watchlist(daily_db, [('NVDA', ['core'])]) if not explicit_pool and not kwargs.pop('no_seed', False) else None
     return workflow.run(run_id=run_id, trigger=trigger, now=now, deps=d or world(clk=clock),
                         explicit_pool=explicit_pool, checkpointer_factory=factory or shared_saver()[1],
-                        sleep=clock.sleep, notify_cfg=NotifyCfg(), config=daily_config(), **kwargs)
+                        sleep=clock.sleep, notify_cfg=NotifyCfg(), config=daily_config(),
+                        send=ports.send, sec_scan=filings._scan, **kwargs)
 
 
 def rows(conn, run_id=RUN_ID):
-    return repository.stage_rows_for_run(conn, run_id)
+    return workflow_repo.stage_rows_for_run(conn, run_id)
 
 
 def effective(conn, run_id=RUN_ID):
@@ -82,8 +92,8 @@ def test_daily_eleven_rows_each_path(daily_db, clock, notices, path, monkeypatch
     elif path == 'explicit_pool':
         kwargs.update(explicit_pool=['NVDA', 'MU'])
     elif path == 'failed_midway':
-        monkeypatch.setattr(service, 'stage_regime', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('regime boom')))
-        monkeypatch.setitem(workflow.BODIES, 'regime', service.stage_regime)
+        monkeypatch.setattr(d_workflow_nodes_regime, 'run', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('regime boom')))
+        monkeypatch.setitem(workflow.BODIES, 'regime', d_workflow_nodes_regime.run)
     result = go(daily_db, clock, **kwargs)
     eff = effective(daily_db)
     assert list(eff) == list(workflow.NODES) and len(eff) == 11          # exactly eleven effective rows, in stages-5 order
@@ -102,7 +112,8 @@ def test_daily_eleven_rows_each_path(daily_db, clock, notices, path, monkeypatch
 @pytest.fixture(autouse=True)
 def no_fetch_backoff(monkeypatch):
     """The fetch-1 backoff (2 s, 8 s) never sleeps for real."""
-    from investment_assistant.workbench import collect, earnings
+    import investment_assistant.data.collect as collect
+    from investment_assistant.data.adapters import earnings
 
     monkeypatch.setattr(collect, 'FETCH_SLEEP', lambda seconds: None)
     monkeypatch.setattr(earnings, 'FETCH_SLEEP', lambda seconds: None)
@@ -187,7 +198,7 @@ def test_regime_failure_stops_chain(daily_db, clock, notices, monkeypatch):
     def boom(**kwargs):
         raise RuntimeError('regime exploded')
 
-    monkeypatch.setattr(service.regime_module, 'snapshot', boom)
+    monkeypatch.setattr(d_analysis_regime, 'snapshot', boom)
     result = go(daily_db, clock)
     assert result['failed_node'] == 'regime' and clock.sleeps == [60]
     assert effective(daily_db)['signals']['reason'] == 'upstream_failed'
@@ -228,7 +239,7 @@ def test_every_execution_summary_carries_cutoff_and_session(daily_db, clock, not
 
 def test_retro_not_due_on_non_trading_day(daily_db, clock, notices):
     due_week = date(2026, 10, 19)                                   # the week due on HOLIDAY
-    repository.insert_review_push(daily_db, {'kind': 'weekly', 'period': due_week, 'review_id': None,
+    review_repo.insert_review_push(daily_db, {'kind': 'weekly', 'period': due_week, 'review_id': None,
                                              'trigger_source': 'scheduled', 'sent': True, 'messages': 1})
     go(daily_db, clock, trigger='scheduled', now=HOLIDAY, no_seed=True)
     retro = effective(daily_db)['retro']
@@ -236,7 +247,7 @@ def test_retro_not_due_on_non_trading_day(daily_db, clock, notices):
 
 
 def test_retro_on_a_trading_day_is_never_not_due(daily_db, clock, notices):
-    repository.insert_review_push(daily_db, {'kind': 'weekly', 'period': date(2026, 10, 19), 'review_id': None,
+    review_repo.insert_review_push(daily_db, {'kind': 'weekly', 'period': date(2026, 10, 19), 'review_id': None,
                                              'trigger_source': 'scheduled', 'sent': True, 'messages': 1})
     go(daily_db, clock, trigger='scheduled')
     retro = effective(daily_db)['retro']
@@ -244,7 +255,7 @@ def test_retro_on_a_trading_day_is_never_not_due(daily_db, clock, notices):
 
 
 def test_retro_after_push_failure_does_not_block_push(daily_db, clock, notices, monkeypatch):
-    from investment_assistant.workbench import retro_cards
+    from investment_assistant.review import retro_cards
 
     def boom(*args, **kwargs):
         raise RuntimeError('retro exploded')
@@ -341,15 +352,15 @@ def test_run_status_reads_effective_rows():
 def test_daily_lock_rejects_overlap(daily_db, clock, notices):
     from investment_assistant.tasks import daily
 
-    with daily.exclusive():
-        assert daily.is_running() is True
-        with pytest.raises(daily.DailyBusy):
-            with daily.exclusive():
+    with locks.exclusive():
+        assert locks.is_running() is True
+        with pytest.raises(locks.DailyBusy):
+            with locks.exclusive():
                 pass
-        with pytest.raises(daily.DailyBusy):
+        with pytest.raises(locks.DailyBusy):
             daily.run(daily_config(), trigger_source='manual', now=NOW, deps=world(clk=clock),
                       checkpointer_factory=shared_saver()[1], sleep=clock.sleep, notify_cfg=NotifyCfg())
-    assert daily.is_running() is False                                # released in finally
+    assert locks.is_running() is False                                # released in finally
 
 
 def test_failure_notification_once(daily_db, clock, notices, job_reports, monkeypatch):
@@ -377,7 +388,7 @@ def test_migration_028_missing_refuses(plain_db, clock, notices, job_reports):
 
 
 def test_sec_monitor_node_records_fetch_row_and_lock(daily_db, clock, notices, fake_sec, monkeypatch):
-    from investment_assistant.workbench import collect
+    import investment_assistant.data.collect as collect
 
     fake_sec.result = {'tickers': ['NVDA', 'MU'], 'errors': {'MU': 'sec timeout'}, 'downloaded_count': 1,
                        'event_ids': ['a'], 'delivery': {'status': 'sent', 'receipts': [{'status': 'sent'}]},
@@ -440,7 +451,7 @@ def test_collect_retries_do_not_shrink_agent_budget(daily_db, clock, notices, sc
 
 
 def test_review_shares_agent_window(daily_db, clock, notices, scripted_model, monkeypatch):
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
 
     seen = {}
 
@@ -463,7 +474,7 @@ def test_review_shares_agent_window(daily_db, clock, notices, scripted_model, mo
 
 
 def test_retro_has_own_window(daily_db, clock, notices, scripted_model, monkeypatch):
-    from investment_assistant.workbench import retro_cards
+    from investment_assistant.review import retro_cards
 
     seen = {}
 
@@ -506,7 +517,7 @@ def test_fault_once_env_injects_single_failure(daily_db, clock, notices, monkeyp
     # a resume does not inject again: the node already has a row
     again = workflow.resume(RUN_ID, 'screen', now=NOW + timedelta(minutes=30), deps=world(clk=clock),
                             checkpointer_factory=factory, sleep=clock.sleep, notify_cfg=NotifyCfg(),
-                            config=daily_config())
+                            config=daily_config(), send=ports.send, sec_scan=filings._scan)
     assert again['status'] in ('success', 'degraded') and again['failed_node'] is None
     assert clock.sleeps == [60]
     assert [r['attempt'] for r in rows(daily_db) if r['stage'] == 'screen'] == [1, 2]
@@ -517,7 +528,7 @@ def test_fault_once_env_injects_single_failure(daily_db, clock, notices, monkeyp
 
 def test_run_batch_shell_unchanged(plain_db):
     """``run_batch`` with no recorder is the v2.7 batch: the same keys, the same values."""
-    summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
+    summary = d_workflow_batch.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))
     assert set(summary) == {'session', 'cutoff_at', 'tickers', 'benchmark', 'filings', 'earnings', 'plans', 'conflicts',
                             'errors', 'briefs', 'screen', 'pool', 'etfs', 'macro', 'regime', 'sources', 'timings',
                             'agent', 'review', 'retro'}
@@ -534,15 +545,15 @@ def test_run_batch_shell_unchanged(plain_db):
 
 def test_signals_plan_same_transaction(plain_db, monkeypatch):
     """Q4: ``signals`` and ``plan`` still finish a ticker together — a failing plan rolls its candidates back too."""
-    real = service._generate_rule_plan
+    real = execution_plan_context._generate_rule_plan
 
     def plan(conn, ticker, *args, **kwargs):
         if ticker == 'MU':
             raise RuntimeError('plan exploded')
         return real(conn, ticker, *args, **kwargs)
 
-    monkeypatch.setattr(service, '_generate_rule_plan', plan)
-    summary = service.run_batch(tickers=['NVDA', 'MU'], now=NOW, deps=deps(Sources()))
+    monkeypatch.setattr(execution_plan_context, '_generate_rule_plan', plan)
+    summary = d_workflow_batch.run_batch(tickers=['NVDA', 'MU'], now=NOW, deps=deps(Sources()))
     assert 'MU rules: plan exploded' in summary['errors']
     assert plain_db.execute("SELECT count(*) FROM signal_candidates WHERE ticker = 'MU'").fetchone()[0] == 0
     assert plain_db.execute("SELECT count(*) FROM signal_candidates WHERE ticker = 'NVDA'").fetchone()[0] > 0
@@ -552,7 +563,7 @@ def test_run_batch_shell_non_explicit_literals(plain_db):
     """The non-explicit v2.7 batch (range + screen + a new member), key by key against what v2.7 produced: the order of
     the tickers, the pool and source blocks, the SEC listing keys and the earnings statuses."""
     seed_watchlist(plain_db, [('NVDA', ['core'])])
-    summary = service.run_batch(now=NOW, deps=_universe_deps(_member_sources(), ['MU']))
+    summary = d_workflow_batch.run_batch(now=NOW, deps=_universe_deps(_member_sources(), ['MU']))
     assert list(summary['tickers']) == ['NVDA', 'MU']                  # pool order: core, then the screen member
     assert summary['pool'] == {'core': 1, 'extended': 1, 'holdings': 0, 'screen': 1, 'chains': 0,
                                'changes': summary['pool']['changes']}
@@ -601,7 +612,7 @@ def test_resume_migration_030_missing_refuses_before_graph_or_report(daily_db, m
 
 
 def test_accounts_node_failure_preserves_push_and_retro(daily_db,clock,notices,monkeypatch):
-    from investment_assistant.workbench import paper_accounts
+    import investment_assistant.workflow.nodes.accounts as paper_accounts
     monkeypatch.setattr(paper_accounts,'run_stage',lambda *a,**k: (_ for _ in ()).throw(ValueError('account stage failure')))
     result=go(daily_db,clock)
     eff=effective(daily_db)

@@ -6,7 +6,7 @@ version: 1
 applies_to: [knowledge-perf-1, plan-shadow-1]
 summary: "按引用过这条知识的计划版本的影子结果回看：每个单元取最早引用的一版，少于 5 个有结果不给均值，复查中的引用单列。"
 related: [system.my_knowledge, review.plan_shadow, review.r_multiple]
-sources: [investment_assistant/workbench/knowledge_perf.py, investment_assistant/workbench/review.py]
+sources: [investment_assistant/review/knowledge/perf.py, investment_assistant/review/outcomes.py]
 ---
 
 ## 是什么

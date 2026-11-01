@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "观察候选：当日出现对你而言是新的 10-Q / 10-K / 8-K 申报；它不看价格，只提醒你去读。"
 related: [family.sec_filings, rule.earnings_gap_up, rule.abnormal_move, system.decision_unit]
-sources: [investment_assistant/workbench/rules.py, investment_assistant/workbench/derivation.py, docs/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

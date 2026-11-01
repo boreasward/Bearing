@@ -2,7 +2,10 @@
 import re
 from pathlib import Path
 
-from investment_assistant.workbench import accounts, entry_rules, paper_fill, paper_strategies
+from investment_assistant.execution import accounts
+from investment_assistant.execution import entry_rules
+from investment_assistant.execution.paper import fill as paper_fill
+from investment_assistant.execution.paper import strategies as paper_strategies
 
 ROOT = Path(__file__).resolve().parents[1]
 ACCOUNTS_TS = ROOT / 'web/src/lib/accounts.ts'

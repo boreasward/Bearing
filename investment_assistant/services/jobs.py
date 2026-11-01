@@ -7,7 +7,7 @@ from typing import Any, Callable
 from investment_assistant import db
 from investment_assistant.config import load_config
 from investment_assistant.db import connect
-from investment_assistant.tasks import runner
+from investment_assistant.core import locks, runner
 from investment_assistant.tasks.scheduler import MANUAL_ONLY, REGISTRY
 
 
@@ -78,7 +78,7 @@ def _date_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
 
 def trigger_job(name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     """Run a registered job in the background. ``daily`` and ``sec_backfill`` share the ``daily:run`` lock: while it is
-    held ``daily.DailyBusy`` is raised (the route turns it into 409 ``daily_running``). A ``daily`` run gets its id up
+    held ``locks.DailyBusy`` is raised (the route turns it into 409 ``daily_running``). A ``daily`` run gets its id up
     front and returns it as ``daily_run_id`` (the id of ``job_reports`` / the detail page)."""
     if name not in REGISTRY:
         raise UnknownJobError(f"unknown job: {name}")
@@ -90,11 +90,11 @@ def trigger_job(name: str, payload: dict[str, Any] | None = None) -> dict[str, A
         from investment_assistant.tasks import daily
 
         try:
-            busy = daily.is_running()
+            busy = locks.is_running()
         except Exception:   # noqa: BLE001 - no database to ask: the run itself reports what is wrong
             busy = False
         if busy:
-            raise daily.DailyBusy()
+            raise locks.DailyBusy()
     if name == "daily":
         daily.ensure_ready()        # 503 migration_028_missing instead of a 200 and a run that only records it
         rid = daily.new_run_id()    # the date arguments do not apply: it always targets the latest settled session
@@ -117,10 +117,11 @@ def resume_daily(payload: dict[str, Any] | None) -> dict[str, Any]:
 
     ``ValueError`` (body without ``run_id`` / ``node``, a malformed id, a node not of ``stages-4``), ``LookupError``
     (no such run), ``workflow.ResumeRejected`` (``not_failed`` / ``node_mismatch`` / ``resume_window_closed``),
-    ``daily.DailyBusy`` (the lock is taken) and ``service.Unavailable`` (migration 028 / 029 missing, no database) are the
+    ``locks.DailyBusy`` (the lock is taken) and ``service.Unavailable`` (migration 028 / 029 missing, no database) are the
     caller's to map."""
     from investment_assistant.tasks import daily
-    from investment_assistant.workbench import run_detail, workflow
+    from investment_assistant.views.runs import detail as run_detail
+    from investment_assistant.workflow import graph as workflow
 
     body = payload or {}
     run_id, node = body.get("run_id"), body.get("node")
@@ -130,7 +131,7 @@ def resume_daily(payload: dict[str, Any] | None) -> dict[str, Any]:
         raise ValueError("run_id 格式不合法")
     info = workflow.resume_check(run_id, node, now=datetime.now(UTC))     # raises before anything is written
     daily.ensure_ready()        # migration 029 too (the background resume checks it as well): 503, not a lost 202
-    if daily.is_running():
-        raise daily.DailyBusy()
+    if locks.is_running():
+        raise locks.DailyBusy()
     runner_id = runner.submit("daily_resume", lambda: daily.resume(run_id, node))
     return {"run_id": run_id, "node": node, "status": "pending", "attempt": info["attempt"], "runner_id": runner_id}

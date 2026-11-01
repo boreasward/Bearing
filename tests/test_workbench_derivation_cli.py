@@ -2,6 +2,7 @@
 
 计划与阶段行来自真实批处理（假 fetcher、一次性库）；篡改直接 UPDATE 已存计划。
 两个子命令都在只读事务里执行，前后各表行数不变。"""
+import investment_assistant.workflow.repo as workflow_repo
 import subprocess
 import sys
 from pathlib import Path
@@ -13,8 +14,10 @@ from investment_assistant.core import tx as core_tx
 
 from test_workbench_service import NOW, SESSION, _ok_responses, _task_run, agent_deps, db, seed_watchlist   # noqa: F401
 from test_workbench_stage_runs import _recorder, _sent, wired   # noqa: F401  (fixtures)
-from investment_assistant.workbench import derivation, service
-from investment_assistant.workbench import stages as stages_module
+import investment_assistant.workflow.check as derivation
+import investment_assistant.core.tx as service
+import investment_assistant.core.stages as stages_module
+import investment_assistant.workflow.batch as d_workflow_batch
 
 TABLES = ('trade_plans', 'signal_candidates', 'stage_runs', 'job_reports', 'agent_runs', 'price_bars')
 
@@ -51,10 +54,10 @@ def _line(out: str, needle: str) -> str:
 # ---------------------------------------------------------------- offline
 
 def test_import_is_database_free():
-    code = ("import sys; import investment_assistant.workbench.derivation as d; "
-            "bad = [m for m in ('psycopg', 'investment_assistant.workbench.service', "
-            "'investment_assistant.workbench.derivation_view') if m in sys.modules]; "
-            "assert not bad, bad; assert callable(d.main)")
+    code = ("import sys; import investment_assistant.derivation.chain as d; "
+            "bad = [m for m in ('psycopg', 'investment_assistant.core.tx', "
+            "'investment_assistant.derivation.views') if m in sys.modules]; "
+            "assert not bad, bad; assert callable(d.derive_plan)")
     done = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,
                           cwd=Path(__file__).resolve().parent.parent)
     assert done.returncode == 0, done.stderr
@@ -120,7 +123,7 @@ def test_check_ignores_inconsistency_of_non_ok_plans(wired, monkeypatch, capsys)
 
 def test_check_filters_kind_and_dates(db, scripted_model, capsys):
     d = agent_deps(scripted_model, _ok_responses('AAA'))
-    service.run_batch(tickers=['AAA'], now=NOW, deps=d, run_id='run-cli', stages=_recorder('run-cli'))
+    d_workflow_batch.run_batch(tickers=['AAA'], now=NOW, deps=d, run_id='run-cli', stages=_recorder('run-cli'))
     db.commit()
     rule_id = str(db.execute("SELECT id FROM trade_plans WHERE kind = 'rule'").fetchone()[0])
     agent_id = str(db.execute("SELECT id FROM trade_plans WHERE kind = 'agent'").fetchone()[0])
@@ -270,20 +273,20 @@ def _row(run_id, stage, attempt, status, reason=None, *, minute=0):
 
 def _insert_run(conn, run_id, *, resumed=False):
     """Ten rows; ``resumed`` = collect failed in the first execution and the second one re-ran it and what followed."""
-    from investment_assistant.workbench import repository
+    # Repository consumers use their owning layers below.
 
     nodes = stages_module.STAGE_IDS_V4
     if not resumed:
         for stage in nodes:
-            repository.insert_stage_run(conn, _row(run_id, stage, 1, 'success'))
+            workflow_repo.insert_stage_run(conn, _row(run_id, stage, 1, 'success'))
     else:
         for n, stage in enumerate(nodes):
             first = 'success' if n < 2 else ('failed' if stage == 'collect' else 'skipped')
-            repository.insert_stage_run(conn, _row(run_id, stage, 1, 'failed' if stage == 'collect' else first,
+            workflow_repo.insert_stage_run(conn, _row(run_id, stage, 1, 'failed' if stage == 'collect' else first,
                                                    'aborted: x' if stage == 'collect' else (
                                                        'upstream_failed' if first == 'skipped' else None)))
         for stage in nodes[1:]:
-            repository.insert_stage_run(conn, _row(run_id, stage, 2, 'success', minute=30))
+            workflow_repo.insert_stage_run(conn, _row(run_id, stage, 2, 'success', minute=30))
     conn.commit()
 
 
@@ -305,24 +308,24 @@ def test_derivation_stages_accepts_resumed_runs_cli(db28, capsys):
     assert '含重试' in _line(out, 'daily-20261023043000-bbbbbbbb')
     assert '2 个齐全' in out.splitlines()[-1] and out.splitlines()[-1].endswith('通过')
     # forge: sec_monitor already succeeded in attempt 1, yet an attempt 2 appears
-    from investment_assistant.workbench import repository
-    repository.insert_stage_run(db28, _row('daily-20261023033000-aaaaaaaa', 'sec_monitor', 2, 'success', minute=40))
+    # Repository consumers use their owning layers below.
+    workflow_repo.insert_stage_run(db28, _row('daily-20261023033000-aaaaaaaa', 'sec_monitor', 2, 'success', minute=40))
     db28.commit()
     code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())
     assert code == 1
     assert 'sec_monitor 的 attempt 2 不该存在' in out and '1 个齐全' in out.splitlines()[-1]
     # a gap in the attempts is reported too
-    repository.insert_stage_run(db28, _row('daily-20261023043000-bbbbbbbb', 'collect', 4, 'success', minute=50))
+    workflow_repo.insert_stage_run(db28, _row('daily-20261023043000-bbbbbbbb', 'collect', 4, 'success', minute=50))
     db28.commit()
     code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())
     assert code == 1 and 'collect 的 attempt 不连续' in out
 
 
 def test_derivation_stages_short_stages_4_run_fails(db28, capsys):
-    from investment_assistant.workbench import repository
+    # Repository consumers use their owning layers below.
 
     for stage in stages_module.STAGE_IDS_V4[:-1]:
-        repository.insert_stage_run(db28, _row('daily-20261023033000-cccccccc', stage, 1, 'success'))
+        workflow_repo.insert_stage_run(db28, _row('daily-20261023033000-cccccccc', stage, 1, 'success'))
     _insert_report(db28, 'daily-20261023033000-cccccccc', datetime(2026, 10, 23, 3, 30, tzinfo=UTC), task='daily')
     db28.commit()
     code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())
@@ -330,11 +333,11 @@ def test_derivation_stages_short_stages_4_run_fails(db28, capsys):
 
 
 def test_derivation_stages_5_counts_account_node(db28, capsys):
-    from investment_assistant.workbench import repository
+    # Repository consumers use their owning layers below.
 
     run_id = 'daily-20261023033000-dddddddd'
     for stage in stages_module.STAGE_IDS:
-        repository.insert_stage_run(db28, {**_row(run_id, stage, 1, 'success'), 'stages_version': 'stages-5'})
+        workflow_repo.insert_stage_run(db28, {**_row(run_id, stage, 1, 'success'), 'stages_version': 'stages-5'})
     _insert_report(db28, run_id, datetime(2026, 10, 23, 3, 30, tzinfo=UTC), task='daily')
     db28.commit()
     code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())

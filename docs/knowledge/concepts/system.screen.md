@@ -6,7 +6,7 @@ version: 1
 applies_to: [screen-1]
 summary: "每个交易日在纳指 100 范围里按固定阈值筛出候选，先触发组、后形态组，每天新入选不超过 20 只，成员有保留期与轮换。"
 related: [family.universe, indicator.dollar_volume_20, indicator.screen_rs, system.pool_tiers]
-sources: [investment_assistant/workbench/screen.py, investment_assistant/workbench/screening.py]
+sources: [investment_assistant/analysis/screen_rules.py, investment_assistant/analysis/screening.py]
 ---
 
 ## 是什么

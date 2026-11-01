@@ -94,8 +94,8 @@
 只读概览命令：
 
 ```bash
-.venv/bin/python -m investment_assistant.workbench.paper_accounts show
-.venv/bin/python -m investment_assistant.workbench.paper_accounts show --account <账户ID或名称> --session 2026-10-30
+.venv/bin/python -m investment_assistant.views.account show
+.venv/bin/python -m investment_assistant.views.account show --account <账户ID或名称> --session 2026-10-30
 ```
 
 命令按账户显示权益概览、指定交易日的持仓与待成交订单，以及该日决策的总结、订单校验与成交结果、持有理由；未指定日期时使用最近收盘交易日。历史查询按当前已知记录还原指定日期的持仓和待成交状态，决策订单同时显示当前已知的后续成交结果。无持仓、无挂单或当日无决策会明确标出，读取不会触发结算或补决策。

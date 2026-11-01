@@ -15,7 +15,7 @@ NOW = datetime(2026, 10, 20, 22, tzinfo=UTC)
 
 @pytest.fixture
 def ledger():
-    return import_module('investment_assistant.workbench.accounts')
+    return import_module('investment_assistant.execution.accounts')
 
 
 def account(**kw):

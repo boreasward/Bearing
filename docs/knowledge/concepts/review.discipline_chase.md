@@ -6,7 +6,7 @@ version: 1
 applies_to: [review-6, discipline-2]
 summary: "买入成交价高于所关联计划的入场区间上限，就记为追高进场；在成交当时判定。"
 related: [review.discipline_unplanned, review.discipline_early_take, review.discipline_held_loser, plan.entry_zone, review.retro_card]
-sources: [investment_assistant/workbench/discipline.py]
+sources: [investment_assistant/review/discipline.py]
 ---
 
 ## 是什么

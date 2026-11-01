@@ -53,7 +53,7 @@ def event_stream(q):
     """SSE 帧生成器：事件转 data: 帧，空闲 15s 发心跳后继续等待（永不主动断连，对齐旧 server 行为）。"""
     import queue as _queue
 
-    from investment_assistant.tasks import runner
+    from investment_assistant.core import runner
 
     try:
         while True:
@@ -122,7 +122,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/events")
     def _events():
-        from investment_assistant.tasks import runner
+        from investment_assistant.core import runner
 
         return StreamingResponse(event_stream(runner.subscribe()), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache"})

@@ -2,8 +2,9 @@
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from investment_assistant.workbench import instrument_view, reasoning
-from investment_assistant.workbench.agent import tools
+import investment_assistant.views.instrument as instrument_view
+import investment_assistant.views.reasoning as reasoning
+from investment_assistant.analysis.agent import tools
 
 SESSION = date(2026, 10, 22)                                   # Thursday
 HEAD = '33333333-3333-4333-8333-333333333333'

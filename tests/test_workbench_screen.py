@@ -4,7 +4,8 @@ from datetime import date, timedelta
 import pytest
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import rules, screen
+from investment_assistant.analysis import rules
+from investment_assistant.analysis import screen_rules as screen
 
 SESSION = date(2026, 10, 21)  # 周三
 

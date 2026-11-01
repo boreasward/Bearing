@@ -1,6 +1,6 @@
 """SEC monitoring as the first node of the ``daily`` workflow (v2.8 §4.6) and the manual-only ``sec_backfill`` task.
 
-``stage_sec_monitor`` is the node body (the former ``filings`` task without ``run_task``); ``backfill`` runs the same
+``workflow.nodes.sec_monitor.run`` is the node body; ``backfill`` runs the same
 body over a date range, outside the graph, under the ``daily:run`` lock."""
 from __future__ import annotations
 
@@ -13,11 +13,110 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from investment_assistant.config import AssistantConfig, load_config
-from investment_assistant.filings.service import download_configured_filings
+from investment_assistant.core import locks
+from investment_assistant.data.sec.storage import download_configured_filings
+from investment_assistant.data.sec import monitor
+from investment_assistant.data.sources.edgar import EdgarSource
+from investment_assistant.notify.discord_bot import DeliveryError, DiscordBotClient
+from investment_assistant.workflow.nodes import sec_monitor
 
 NY = ZoneInfo("America/New_York")
 FILINGS_LISTED_MAX = 50        # filings kept in the node's outputs
 MAX_RANGE_DAYS = 92
+
+
+def _deliver(state: dict, save, event_ids: list[str], client) -> list[dict]:
+    receipts = []
+    for event_id in dict.fromkeys(event_ids):
+        event = state["events"][event_id]
+        status = event["status"]
+        if status == "sending":
+            # A crash between the HTTP send and local commit is ambiguous.
+            event["status"] = status = "unknown"
+            save()
+        if status not in {"sent", "unknown"}:
+            event["status"] = "sending"
+            save()
+            try:
+                event["receipt"] = client.send(event["content"], event_id)
+                event["status"] = "sent"
+                event.pop("error", None)
+            except DeliveryError as exc:
+                event["status"] = "unknown" if exc.uncertain else "failed"
+                event["error"] = str(exc)
+            except Exception:
+                event["status"] = "unknown"
+                event["error"] = "Discord 未预期错误；投递待核验"
+            save()
+        receipts.append({"event_id": event_id, "status": event["status"],
+                         **event.get("receipt", {}), **({"error": event["error"]} if event.get("error") else {})})
+    return receipts
+
+
+def scan_and_notify(config, start: date, end: date, *, source=None, client=None, notify_cfg=None,
+                    persist=None, reports=None) -> dict:
+    cfg = config.sec_monitor
+    if not cfg.state_dir:
+        raise ValueError("SEC monitor state_dir 未配置")
+    directory = Path(cfg.state_dir)
+    source = source or EdgarSource(directory / "evidence")
+    client = client or DiscordBotClient(cfg.discord_channel_id)
+    if notify_cfg is None:
+        from investment_assistant.services.settings import effective_notify_config
+        notify_cfg = effective_notify_config(config.notify)
+    with monitor.locked_state(directory) as (state, save):
+        try:
+            result = monitor.collect(config, start, end, state, save, source, persist=persist, reports=reports)
+        except Exception as exc:
+            result = {"start_date": start.isoformat(), "end_date": end.isoformat(), "coverage": "unavailable",
+                      "errors": {"collection": str(exc)}, "filings": [], "downloaded_count": 0, "event_ids": []}
+        result["evidence"] = source.evidence
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        scan_key = f"{today}:{start}:{end}"
+        if result["errors"]:
+            if "collection" in result["errors"]:
+                detail = (f"{str(result['errors']['collection'])[:800]}\n未能完成查源/归档，不能判断为零命中。"
+                          "成功查找记录未前移。")
+            else:
+                failed = "; ".join(f"{ticker}: {error}" for ticker, error in sorted(result["errors"].items()))
+                detail = (f"部分股票查源失败：{failed[:700]}\n其余股票已正常处理（归档与通知照常）；覆盖不完整，"
+                          "不能判断为零命中，成功查找记录未前移。")
+            title = "SEC 采集失败" if "collection" in result["errors"] else "SEC 采集部分失败"
+            content = (f"【{title}】本地投研工作台 · {today}\n范围 {start} 至 {end}（美东申报日期）\n"
+                       f"{detail}运行记录：http://127.0.0.1:8787/")
+            result["event_ids"].append(monitor._event(state, "failure:" + today + ":" + content, content))
+        elif (not state.get("notified_scans", {}).get(scan_key)
+              and not any(state["events"][i]["status"] != "sent" for i in result["event_ids"])):
+            # Only a complete scan can assert no new qualifying filings.
+            content = (f"【SEC】{today} 观察名单无新符合规则的 10-Q/10-K/8-K。\n"
+                       f"已完整检查 {len(result['tickers'])} 只，范围 {start} 至 {end}（美东申报日期），"
+                       f"已知申报不重复推送。历史待核验 {result['legacy_pending_verification']} 条。\n"
+                       "来源：https://www.sec.gov/edgar/search/")
+            result["event_ids"].append(monitor._event(state, f"zero:{today}:{start}:{end}", content))
+        save()
+        if notify_cfg.channel != "discord" or not notify_cfg.discord_enabled or notify_cfg.task_enabled.get("filings") is False:
+            result["delivery"] = {"status": "disabled", "receipts": []}
+        else:
+            receipts = _deliver(state, save, result["event_ids"], client)
+            failed = any(r["status"] != "sent" for r in receipts)
+            result["delivery"] = {"status": "needs_attention" if failed else "sent", "receipts": receipts}
+            if failed:
+                result["errors"]["delivery"] = "Discord 投递失败或待核验；详见 delivery.receipts"
+            elif not result["errors"]:
+                state.setdefault("notified_scans", {})[scan_key] = True
+                save()
+        return result
+
+
+def run_monitor(config, *, start_date=None, end_date=None, trigger_source="scheduled") -> dict:
+    from investment_assistant.tasks._harness import run_task
+
+    start = start_date or date.fromisoformat(config.sec_monitor.start_date)
+    end = end_date or (start_date if start_date else datetime.now(ZoneInfo("America/New_York")).date())
+    if start > end:
+        raise ValueError("SEC 起始日期晚于结束日期")
+    return run_task("filings", lambda: scan_and_notify(config, start, end), config=config,
+                    target_start_date=start, target_end_date=end, trigger_source=trigger_source, notify=False)
 
 
 def _core(
@@ -40,102 +139,8 @@ def _core(
     }
 
 
-def _monitor_targets(config: AssistantConfig) -> tuple[list[str], str | None]:
-    """The monitor's actual collection list: the watchlist file's 采集=是 rows.
-
-    Returns (targets, error): the error is kept in detail when even the list
-    cannot be read, so a failure's denominator is honestly unknown, never the
-    config.watchlist (I03)."""
-    from investment_assistant.filings.monitor_source import read_watchlist
-
-    try:
-        return read_watchlist(Path(config.sec_monitor.watchlist_path)), None
-    except Exception as exc:
-        return [], str(exc)
 
 
-def _record_fetch_run(result: dict[str, Any], *, config: AssistantConfig,
-                      trigger_source: str, started_at: datetime, job: str = "daily",
-                      trigger: str | None = None, wall_now=None) -> dict[str, Any]:
-    """Append this run's one sec_filings row to data_fetch_runs (v2.3 §6.3).
-
-    Targets are what this run actually collected (I03): the monitor reads its own
-    watchlist file (summary.tickers on success, the file itself on failure); the
-    downloader keeps config.watchlist. In the result protocol (I02): a per-ticker
-    error fails that ticker; 'collection' is the whole-call failure sentinel '*'
-    (no target is counted ok, '*' is not a target); non-ticker keys such as
-    'delivery' are not fabricated targets and land in detail.non_target_errors.
-    A write failure never changes the task result, and is printed to stderr as the
-    searchable trail for the scheduled path, where the returned data_status is
-    dropped (I08)."""
-    from investment_assistant.workbench import collect, families
-
-    summary = result.get("summary") or {}
-    trigger = trigger or ("scheduled" if trigger_source == "scheduled" else "manual_batch")
-    if config.sec_monitor.enabled:
-        targets_source = "sec_monitor.watchlist_path"
-        tickers = summary.get("tickers")
-        if not isinstance(tickers, list) or not tickers:
-            tickers, targets_error = _monitor_targets(config)
-        else:
-            targets_error = None
-        mode = "monitor"
-    else:
-        targets_source = "config.watchlist"
-        tickers, targets_error, mode = list(config.watchlist), None, "downloader"
-
-    tally = collect.Tally("sec_filings", job, tickers)
-    tally.detail = {"targets_source": targets_source, "mode": mode}
-    if targets_error is not None:
-        tally.detail["targets_error"] = families.sanitize_reason(targets_error)
-    errors = summary.get("errors")
-    call_failed = False
-    non_target_errors: dict[str, str] = {}
-    if isinstance(errors, dict):
-        target_set = {t for t in tickers if isinstance(t, str)}
-        for key, reason in errors.items():
-            if key in target_set:
-                tally.fail(key, reason)
-            elif key == "collection":
-                tally.fail("*", reason)   # whole call down: no target completed collection
-                call_failed = True
-            else:   # e.g. 'delivery': a real problem, but not a collection target
-                non_target_errors[key] = families.sanitize_reason(reason)
-        if not call_failed:
-            for ticker in tickers:
-                if ticker not in tally.outcomes:
-                    tally.ok(ticker)
-    elif isinstance(errors, list):
-        for item in errors:
-            if isinstance(item, dict):
-                ticker = item.get("ticker")
-                if isinstance(ticker, str) and ticker in set(tickers):
-                    tally.fail(ticker, item.get("error", item))
-                else:
-                    tally.fail("*", item.get("error", item))
-                    call_failed = True
-            else:
-                tally.fail("*", item)
-                call_failed = True
-        if not call_failed:
-            for ticker in tickers:
-                if ticker not in tally.outcomes:
-                    tally.ok(ticker)
-    elif summary.get("error"):
-        tally.fail("*", summary["error"])   # 整次失败：没有任何目标成功
-    else:
-        for ticker in tickers:
-            tally.ok(ticker)
-    if non_target_errors:
-        tally.detail["non_target_errors"] = non_target_errors
-    data_status, ids = collect.write_runs_with_ids([tally.row(
-        trigger=trigger,
-        run_id=result.get("run_id"), session=None,
-        started_at=started_at, finished_at=(wall_now or (lambda: datetime.now(UTC)))())])
-    if data_status.get("error"):
-        print(f"[data_fetch_runs] write failed family=sec_filings job={job} trigger={trigger} "
-              f"error={data_status['error']}", file=sys.stderr)
-    return {**data_status, "ids": ids}
 
 
 def _monitor_range(config: AssistantConfig, ny_date: date) -> tuple[date, date]:
@@ -152,9 +157,6 @@ def _scan(config: AssistantConfig, *, start_date: date | None, end_date: date | 
     downloader for the natural T-1. Returns ``(result, mode)``; ``drop_after`` (a resumed run's cutoff) makes the monitor
     ignore filings accepted after it."""
     if config.sec_monitor.enabled:
-        from investment_assistant.filings.monitor import scan_and_notify
-        from investment_assistant.filings.monitor_source import EdgarSource
-
         start, end = (start_date, end_date) if start_date else _monitor_range(config, ny_date)
         end = end or start
         if start > end:
@@ -169,60 +171,8 @@ def _scan(config: AssistantConfig, *, start_date: date | None, end_date: date | 
     return _core(config, start_date=target, end_date=end_date or target), "downloader"
 
 
-def _account(result: dict[str, Any], mode: str, acc, *, config: AssistantConfig, ids: list[int]) -> None:
-    """Fold a pass into the node's accumulator: counts, per-ticker errors, the (capped) filing list, references."""
-    tickers = result.get("tickers")
-    if not isinstance(tickers, list):
-        tickers = _monitor_targets(config)[0] if mode == "monitor" else list(config.watchlist)
-    acc.input(len(tickers))
-    filings = [m for m in result.get("filings") or [] if isinstance(m, dict)]
-    acc.output(len(filings))
-    errors = result.get("errors")
-    for key, reason in (errors.items() if isinstance(errors, dict) else []):
-        acc.fail(f"sec:{key}", reason)
-    delivered = (result.get("delivery") or {}).get("status") == "sent"
-    acc.set_ref("filings", [{"ticker": m.get("ticker"), "form": m.get("form"), "filing_date": m.get("filing_date"),
-                             "accession": m.get("accession_number") or m.get("accession"), "notified": delivered}
-                            for m in filings[:FILINGS_LISTED_MAX]])
-    if ids:
-        acc.set_ref("data_fetch_runs", ids)
-    receipts = (result.get("delivery") or {}).get("receipts") or []
-    acc.detail.update(mode=mode, notifications={"delivery": (result.get("delivery") or {}).get("status"),
-                                                "sent": sum(1 for r in receipts if r.get("status") == "sent")})
-    if "after_cutoff_dropped" in result:
-        acc.detail["after_cutoff_dropped"] = result["after_cutoff_dropped"]
 
 
-def stage_sec_monitor(state: dict[str, Any], ctx, acc) -> dict[str, Any]:
-    """The ``sec_monitor`` node body (spec §4.6): the monitor or the downloader, then the fetch-run row.
-
-    Holds the ``sec_filings`` family lock for the node (so it never runs alongside a manual fetch of the Data menu) and,
-    in monitor mode, the monitor's own state-file lock. Per-ticker errors make the node ``partial``; the local
-    research refresh after it only degrades the node."""
-    from investment_assistant.workbench import collect
-
-    config = ctx.config if isinstance(getattr(ctx, "config", None), AssistantConfig) else load_config()
-    now = datetime.fromisoformat(state["cutoff_at"])
-    ny_date = date.fromisoformat(state["ny_date"])
-    wall = getattr(ctx, "wall_now", None) or (lambda: datetime.now(UTC))
-    started = wall()
-    with collect.family_locks(["sec_filings"]):
-        result, mode = _scan(config, start_date=None, end_date=None, ny_date=ny_date,
-                             drop_after=now if ctx.resumed else None, notify_cfg=ctx.notify_cfg)
-        trigger = state.get("trigger") or "scheduled"
-        data_status = _record_fetch_run({"run_id": state.get("run_id"), "summary": result}, config=config,
-                                        trigger_source="scheduled" if trigger == "scheduled" else "manual",
-                                        started_at=started, wall_now=wall)
-    _account(result, mode, acc, config=config, ids=data_status.get("ids") or [])
-    research = _local_research_after_success({"summary": result}, config).get("research")
-    if research is not None:
-        acc.detail["research"] = research
-        if research.get("errors"):
-            acc.degrade("local_research_failed", "")
-    summary = dict(state.get("summary") or {})
-    summary["sec_monitor"] = {"mode": mode, "filings": len(result.get("filings") or []),
-                              "errors": result.get("errors") or {}}
-    return {"summary": summary}
 
 
 def backfill(config: AssistantConfig, *, start_date: date, end_date: date | None = None,
@@ -231,7 +181,6 @@ def backfill(config: AssistantConfig, *, start_date: date, end_date: date | None
 
     Holds the ``daily:run`` lock (``DailyBusy`` when a run is in progress), writes one ``data_fetch_runs`` row
     (``job = 'sec_backfill'``, trigger ``manual_family``) and one ``job_reports`` row (``task = 'sec_backfill'``)."""
-    from investment_assistant.tasks import daily
     from investment_assistant.tasks._harness import run_task
 
     end_date = end_date or start_date
@@ -247,32 +196,20 @@ def backfill(config: AssistantConfig, *, start_date: date, end_date: date | None
         started = datetime.now(UTC)
         result, mode = _scan(config, start_date=start_date, end_date=end_date, ny_date=ny_today, drop_after=None,
                              notify_cfg=effective_notify_config(config.notify))
-        data_status = _record_fetch_run({"run_id": run_id, "summary": result}, config=config,
+        data_status = sec_monitor._record_fetch_run({"run_id": run_id, "summary": result}, config=config,
                                         trigger_source=trigger_source, started_at=started, job="sec_backfill",
                                         trigger="manual_family")
         out = {**result, "mode": mode, "data_status": data_status}
-        research = _local_research_after_success({"summary": result}, config).get("research")
+        research = sec_monitor._local_research_after_success({"summary": result}, config).get("research")
         if research is not None:
             out["research"] = research
         return out
 
-    with daily.exclusive():
+    with locks.exclusive():
         return run_task("sec_backfill", body, config=config, target_start_date=start_date,
                         target_end_date=end_date, trigger_source=trigger_source, notify=False, pass_run_id=True)
 
 
-def _local_research_after_success(result, config):
-    """After original reporting/notifications, derive only indexed local files."""
-    summary = result.get("summary", {})
-    tickers = list(dict.fromkeys(m.get("ticker") for m in summary.get("filings", []) if m.get("ticker")))
-    if not tickers:
-        return result
-    try:
-        from investment_assistant.us_research.service import refresh_local_filings
-        research = refresh_local_filings(tickers, config=config)
-    except Exception:
-        research = {"errors": [{"error": "美股本地原文研究刷新失败；原SEC结果保留"}], "notifications": "disabled"}
-    return {**result, "research": research}
 
 
 def main() -> None:

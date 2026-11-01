@@ -6,7 +6,7 @@ version: 2
 applies_to: [fetch-1]
 summary: "每个外部请求连接 10 秒、总共 30 秒封顶，可重试的失败再试 2 次（隔 2 秒、8 秒），4xx 不重试，推送不重发；每个目标的成败、次数与原因逐个记下来。"
 related: [family.bars, family.news, family.sec_filings, family.fred, system.stage_status, system.push]
-sources: [investment_assistant/data/fetch_policy.py, investment_assistant/data/http.py, investment_assistant/workbench/collect.py, docs/features/data-menu.md]
+sources: [investment_assistant/data/fetch_policy.py, investment_assistant/data/http.py, investment_assistant/data/collect.py, docs/features/data-menu.md]
 ---
 
 ## 是什么

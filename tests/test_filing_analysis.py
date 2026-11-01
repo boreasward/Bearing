@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from investment_assistant.filings.analysis import analyze_filing, analyze_files
-from investment_assistant.filings.report import build_filing_report, filing_notification, write_filing_report
+from investment_assistant.data.sec.extraction import analyze_filing, analyze_files
+from investment_assistant.data.sec.report import build_filing_report, filing_notification, write_filing_report
 
 
 def context(key, start="2025-01-01", end="2025-12-31", *, dimension=False):
@@ -143,7 +143,7 @@ def test_missing_exhibit_cannot_be_treated_as_an_empty_analysis(tmp_path):
 
 
 def test_service_analyzes_exhibit_and_monitor_notification_has_financial_values(tmp_path, monkeypatch):
-    from investment_assistant.filings.service import _write_reports
+    from investment_assistant.data.sec.storage import _write_reports
     main = tmp_path/'main.htm'; main.write_text('<html>Item 2.02</html>')
     exhibit = tmp_path/'ex99.htm'; exhibit.write_text(earnings_release())
     monkeypatch.setenv('FILINGS_REPORT_DIR', str(tmp_path/'reports'))

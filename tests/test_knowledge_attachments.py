@@ -4,17 +4,23 @@ The front end names concept ids in `web/src/lib/knowledge.ts` (the ATTACH table,
 `derivationStepConcept`); the back end names them in `reasoning`, `run_overview` and `instrument_view`. All of them
 must exist in the real catalog `docs/knowledge`, and the Chinese rule names the two languages carry must agree.
 Offline: reads source files and the committed cards, no database."""
+from investment_assistant.data import families as data_families
 import re
 from pathlib import Path
 
-from investment_assistant.workbench import derivation, families, instrument_view, labels, reasoning, run_overview
-from investment_assistant.workbench.knowledge import DEFAULT_ROOT, ID_BODY, ID_RE, load
+import investment_assistant.workflow.targets as families
+import investment_assistant.views.instrument as instrument_view
+import investment_assistant.core.texts as labels
+import investment_assistant.views.reasoning as reasoning
+import investment_assistant.views.runs.overview as run_overview
+from investment_assistant.derivation import chain as derivation
+from investment_assistant.core.knowledge import DEFAULT_ROOT, ID_BODY, ID_RE, load
 
 ROOT = Path(__file__).resolve().parents[1]
 KNOWLEDGE_TS = ROOT / 'web' / 'src' / 'lib' / 'knowledge.ts'
 WORKBENCH_TS = ROOT / 'web' / 'src' / 'lib' / 'workbench.ts'
-DERIVATION_PY = ROOT / 'investment_assistant' / 'workbench' / 'derivation.py'
-INSTRUMENT_VIEW_PY = ROOT / 'investment_assistant' / 'workbench' / 'instrument_view.py'
+DERIVATION_PY = ROOT / 'investment_assistant' / 'derivation' / 'chain.py'
+INSTRUMENT_VIEW_PY = ROOT / 'investment_assistant' / 'views' / 'instrument.py'
 
 QUOTED_ID = re.compile(rf"""['"`]({ID_BODY})['"`]""")
 
@@ -91,7 +97,7 @@ def test_frontend_attach_ids_exist():
     literal_ids = set(QUOTED_ID.findall(text))
     assert len(literal_ids) > 40, 'the ATTACH table should name dozens of concepts'
     # Ids the helpers build at runtime.
-    built = {f'family.{family.id}' for family in families.FAMILIES}
+    built = {f'family.{family.id}' for family in data_families.FAMILIES}
     built |= {f'rule.{rule_id}' for rule_id in labels.RULE_TEXT}
     built |= {c for c in (step_concept(k) for k in _derivation_step_keys()) if c}
     assert 'familyConcept' in text and 'ruleConcept' in text and 'derivationStepConcept' in text

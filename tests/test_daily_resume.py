@@ -1,6 +1,7 @@
 """Resuming a failed ``daily`` run from its checkpoint (v2.8 §5): completed nodes do not run again, ``attempt`` rows
 are appended for the re-executed ones only, the cutoff and session are the original run's, the window closes at the
 next session's New York 17:00. SQL tests on the disposable database; the checkpointer is one shared in-memory saver."""
+import investment_assistant.workflow.repo as workflow_repo
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -10,7 +11,10 @@ from _daily_db import (NotifyCfg, clock, daily_config, daily_db, job_reports, no
 from test_daily_workflow import (HOLIDAY, RUN_ID, effective, fake_sec, flaky, go, no_fetch_backoff, rows, world)   # noqa: F401
 from test_workbench_service import NOW, SESSION, Sources, _agent_settings, _ok_responses, agent_deps, seed_watchlist
 
-from investment_assistant.workbench import derivation, repository, service, workflow
+import investment_assistant.workflow.check as derivation
+import investment_assistant.core.tx as service
+import investment_assistant.workflow.graph as workflow
+from investment_assistant.tasks import filings, ports
 
 NY = ZoneInfo('America/New_York')
 LATER = NOW + timedelta(hours=2)
@@ -30,7 +34,8 @@ def counting(stage_id, monkeypatch):
 
 def resume(clock, factory, node, *, now=LATER, d=None, run_id=RUN_ID):
     return workflow.resume(run_id, node, now=now, deps=d or world(clk=clock), checkpointer_factory=factory,
-                           sleep=clock.sleep, notify_cfg=NotifyCfg(), config=daily_config())
+                           sleep=clock.sleep, notify_cfg=NotifyCfg(), config=daily_config(),
+                           send=ports.send, sec_scan=filings._scan)
 
 
 def failed_run(daily_db, clock, monkeypatch, node='screen', **kwargs):
@@ -246,7 +251,7 @@ def test_derivation_stages_accepts_resumed_runs(daily_db, clock, notices, job_re
     assert any('stages-5' in line and '11 行' in line and '含重试' in line for line in lines)
     # a counterfeit: a completed node "ran again" with attempt 2
     row = {key: value for key, value in effective(daily_db)['collect'].items() if key not in ('id', 'created_at')}
-    repository.insert_stage_run(daily_db, {**row, 'attempt': 2})
+    workflow_repo.insert_stage_run(daily_db, {**row, 'attempt': 2})
     lines.clear()
     assert derivation._stages(SimpleNamespace(session=SESSION), lines.append) == 1
     assert any('collect 的 attempt 2 不该存在' in line for line in lines)
@@ -258,7 +263,7 @@ def test_resume_with_the_real_postgres_saver(daily_db, clock, notices, monkeypat
     import os
     import uuid
 
-    from investment_assistant.workbench.agent import model as agent_model
+    from investment_assistant.core.llm import model as agent_model
 
     url = os.environ['INVESTMENT_ASSISTANT_TEST_DATABASE_URL']
     agent_model.setup_checkpoints(url)
@@ -284,7 +289,7 @@ def test_resume_from_sec_monitor(daily_db, clock, notices, monkeypatch):
 
 def test_resume_at_review_restarts_agent_window(daily_db, clock, notices, monkeypatch):
     """D24: a resume counts the Agent window from the resumed execution, not from the first run's ``agent`` node."""
-    from investment_assistant.workbench import plan_review
+    import investment_assistant.workflow.nodes.review as plan_review
 
     seen = {}
 

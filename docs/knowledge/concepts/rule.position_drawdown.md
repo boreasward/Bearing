@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "卖出候选，仅限没有计划的持仓：收盘较成本跌 ≥ 8%，或较持仓以来最高收盘回撤 ≥ 12%。"
 related: [rule.plan_stop, plan.stop, review.position, system.decision_unit]
-sources: [investment_assistant/workbench/rules.py, investment_assistant/workbench/exits.py, docs/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/execution/exits.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

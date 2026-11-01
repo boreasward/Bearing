@@ -4,8 +4,9 @@ from fastapi import APIRouter, Body, HTTPException
 
 from investment_assistant.api.http import parse_int
 from investment_assistant.services import jobs
-from investment_assistant.tasks import daily
-from investment_assistant.workbench import service, workflow
+from investment_assistant.core import locks
+from investment_assistant.core import tx as service
+from investment_assistant.workflow import graph as workflow
 
 router = APIRouter()
 
@@ -17,7 +18,7 @@ def _call(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except jobs.UnknownJobError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc    # 旧契约：未知任务 404
-    except daily.DailyBusy as exc:
+    except locks.DailyBusy as exc:
         raise HTTPException(status_code=409, detail="daily_running") from exc
     except workflow.ResumeRejected as exc:
         raise HTTPException(status_code=409, detail=exc.code) from exc

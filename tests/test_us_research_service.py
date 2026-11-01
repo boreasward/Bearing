@@ -1,8 +1,13 @@
+from investment_assistant.core import tx as core_tx
+from investment_assistant.analysis import fundamentals
+from investment_assistant.data.sources import fundamentals as source_module
+from investment_assistant.workflow.nodes import sec_monitor
+import investment_assistant.data.repo as data_repo
 import copy
 import hashlib
 import importlib.util
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -10,9 +15,21 @@ from test_us_research_postgres import research_db
 
 
 def module():
-    assert importlib.util.find_spec('investment_assistant.us_research.service'), 'missing US collection service'
-    from investment_assistant.us_research import service
+    assert importlib.util.find_spec('investment_assistant.data.acquisition'), 'missing acquisition normalization'
+    from investment_assistant.data import acquisition as service
     return service
+
+
+def seed_snapshot(conn, dataset, payload):
+    """Stored-source fixtures for read/normalization tests, independent of retired sync."""
+    s = module()
+    rows, details = (s._financial_rows if dataset == 'financials' else s._market_rows)(payload)
+    records = data_repo.store_rows(conn, payload['identity']['security_id'], dataset, rows)
+    status = 'partial' if details.get('conflicting_fact_keys') else 'ready'
+    data_repo.collection_state(conn, payload['identity']['security_id'], dataset,
+                               status=status, count=len(records), details=details)
+    conn.commit()
+    return status
 
 
 def financial(value=10, raw=b'{ "facts": 10 }', ticker='MU'):
@@ -43,12 +60,10 @@ class Source:
     def market(self, ticker): return market(ticker)
 
 
-@pytest.mark.parametrize('symbols,datasets', [([], None), (['688008.SH'], None), ('MU', None), (['../MU'], None), (['MU'], []), (['MU'], ['prices']), (['MU'], 'market')])
-def test_invalid_inputs_rejected_before_connection(symbols, datasets, monkeypatch):
+def test_acquisition_has_no_legacy_sync_entrypoint():
     s = module()
-    def forbidden(): pytest.fail('invalid input touched database')
-    monkeypatch.setattr(s, 'connection', forbidden)
-    with pytest.raises(ValueError): s.sync(symbols, datasets=datasets)
+    assert not hasattr(s, 'sync')
+    assert not hasattr(s, 'validate_request')
 
 
 def test_raw_snapshot_exact_bytes_and_hash(tmp_path):
@@ -62,52 +77,25 @@ def test_raw_snapshot_exact_bytes_and_hash(tmp_path):
     with pytest.raises(ValueError): s.archive_snapshot({'source_hash': 'b'*64, 'raw_snapshot': raw}, root=tmp_path)
 
 
-def test_dataset_commits_independently_and_failed_refresh_preserves_old_values(research_db, monkeypatch, tmp_path):
-    s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    class Partial(Source):
-        def market(self, ticker): raise ValueError('proxy://user:secret@host raw private body')
-    result = s.sync(['MU'], datasets=['financials', 'market'], source=Partial())
-    assert [(r['dataset'], r['status']) for r in result['results']] == [('financials', 'ready'), ('market', 'failed')]
-    assert result['notifications'] == 'disabled'
-    assert 'secret' not in json.dumps(result)
-    v = s.view('MU')
-    assert v['financials'][0]['metrics']['revenue']['value'] == 10
-    assert isinstance(v['financials'][0]['metrics']['revenue']['input_ids'][0], int)
-    assert v['valuation']['ps_ttm']['value'] is None
-    class FinancialFailed(Source):
-        def companyfacts(self, ticker): raise RuntimeError('user:secret@proxy')
-    result = s.sync(['MU'], datasets=['market', 'financials'], source=FinancialFailed())
-    assert [r['status'] for r in result['results']] == ['ready', 'failed']
-    v = s.view('MU')
-    assert v['market']['bars'][0]['close'] == 100
-    assert v['financials'][0]['metrics']['revenue']['value'] == 10
-    assert next(r for r in v['statuses'] if r['dataset'] == 'financials')['retained_old_values'] is True
 
 
-def test_absent_symbols_only_active_us_entries(research_db, monkeypatch, tmp_path):
-    s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    research_db.execute("INSERT INTO watchlist_items(ticker,status) VALUES ('MU','paused'),('NVDA','active'),('688008.SH','active')")
-    research_db.commit()
-    result = s.sync(datasets=['financials'], source=Source())
-    assert [r['security_id'] for r in result['results']] == ['US:stock:NVDA']
 
 
 def test_view_asof_is_local_and_filters_all_datasets(research_db, monkeypatch, tmp_path):
     s = module()
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    s.sync(['MU'], datasets=['financials', 'market'], source=Source())
+    seed_snapshot(research_db, 'financials', financial())
+    seed_snapshot(research_db, 'market', market())
     def forbidden(*a, **kw): pytest.fail('GET fetched remote data')
-    monkeypatch.setattr(s, 'USSources', forbidden)
-    v = s.view('MU', as_of='2026-01-01T00:00:00Z')
+    monkeypatch.setattr(source_module, 'USSources', forbidden)
+    v = fundamentals.view('MU', as_of='2026-01-01T00:00:00Z')
     assert v['financials'] == [] and v['filings'] == []
     assert v['market']['bars'] == [] and v['market']['quote'] == {}
     assert v['guidance']['records'] == [] and 'card' not in v
     assert v['pit']['strict'] is False
     assert all(r['scope'] == 'current_collection_state' for r in v['statuses'])
     assert all(r['status'] == 'unavailable_at_cutoff' for r in v['statuses'])
-    with pytest.raises(ValueError): s.view('MU', as_of='2026-01-01')
+    with pytest.raises(ValueError): fundamentals.view('MU', as_of='2026-01-01')
 
 
 def test_local_filing_parser_missing_file_is_per_document_and_sources_bound(research_db, monkeypatch, tmp_path):
@@ -127,26 +115,15 @@ def test_local_filing_parser_missing_file_is_per_document_and_sources_bound(rese
     research_db.commit()
     result = s.refresh_local_filings(['MU'])
     assert result['results'][0]['status'] == 'partial'
-    v = s.view('MU')
+    v = fundamentals.view('MU')
     assert len(v['filings']) == 1
     assert v['filings'][0]['analysis']['sources'][0]['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
     state = next(r for r in v['statuses'] if r['dataset']=='filings')
     assert len(state['details']['document_errors']) == 2
     assert v['filings'][0]['limitations']  # no fabricated URL from accession prefix
-    assert s.view('MU', as_of='2026-10-02T00:00:00Z')['filings'] == []
+    assert fundamentals.view('MU', as_of='2026-10-02T00:00:00Z')['filings'] == []
 
 
-def test_job_boundary_sanitizes_even_database_exception(monkeypatch, tmp_path):
-    module()
-    from investment_assistant.tasks import us_research
-    from investment_assistant.us_research import service
-    def explode(*a, **kw): raise ValueError('password=private proxy://user:secret@host')
-    monkeypatch.setattr(service, 'sync', explode)
-    monkeypatch.setenv('INVESTMENT_ASSISTANT_RUNTIME_BASE', str(tmp_path))
-    result = us_research.run(symbols=['MU'])
-    assert result['status'] == 'error'
-    assert result['summary']['errors'] and result['summary']['notifications'] == 'disabled'
-    assert 'secret' not in json.dumps(result) and 'private' not in json.dumps(result)
 
 
 def test_lock_covers_source_io_and_is_released_after_failure(research_db, monkeypatch, tmp_path):
@@ -155,39 +132,28 @@ def test_lock_covers_source_io_and_is_released_after_failure(research_db, monkey
     import psycopg
     from contextlib import contextmanager
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    outer = s.connection
-    class Concurrent(Source):
-        def companyfacts(self, ticker):
+    outer = core_tx.connection
+    def local_rows(conn, ticker, **kwargs):
             @contextmanager
             def second_connection():
                 with psycopg.connect(URL) as other:
                     other.execute('SET search_path TO pg_temp')
                     yield other
-            monkeypatch.setattr(s, 'connection', second_connection)
+            monkeypatch.setattr(core_tx, 'connection', second_connection)
             try:
                 with pytest.raises(ValueError, match='正在运行'):
-                    s.sync(['MU'], datasets=['financials'], source=Source())
+                    s.refresh_local_filings(['MU'])
             finally:
-                monkeypatch.setattr(s, 'connection', outer)
+                monkeypatch.setattr(core_tx, 'connection', outer)
             raise RuntimeError('secret source exception')
-    result = s.sync(['MU'], datasets=['financials'], source=Concurrent())
+    monkeypatch.setattr(s, '_local_filing_rows', local_rows)
+    result = s.refresh_local_filings(['MU'])
     assert result['results'][0]['status'] == 'failed'
     with psycopg.connect(URL) as other:
         assert other.execute("SELECT pg_try_advisory_lock(hashtext('us-research-sync'))").fetchone() == (True,)
         other.execute("SELECT pg_advisory_unlock(hashtext('us-research-sync'))")
 
 
-def test_retry_failed_only_refreshes_failed_datasets(research_db, monkeypatch, tmp_path):
-    s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    s.sync(['MU'], datasets=['financials', 'market'], source=Source())
-    from investment_assistant.us_research import repository as repo
-    repo.collection_state(research_db, 'US:stock:MU', 'market', status='failed', error='safe')
-    research_db.commit()
-    class MarketOnly(Source):
-        def companyfacts(self, ticker): pytest.fail('successful financials retried')
-    result = s.sync(['MU'], datasets=['financials', 'market'], retry_failed=True, source=MarketOnly())
-    assert [r['status'] for r in result['results']] == ['skipped', 'ready']
 
 
 def test_original_monitor_exhibit_metadata_is_used_without_url_inference(research_db, monkeypatch, tmp_path):
@@ -210,7 +176,7 @@ def test_original_monitor_exhibit_metadata_is_used_without_url_inference(researc
     research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)', ('MU','8-K','2026-10-01','0000999999-26-000001',str(primary)))
     research_db.commit()
     s.refresh_local_filings(['MU'])
-    filing = s.view('MU')['filings'][0]
+    filing = fundamentals.view('MU')['filings'][0]
     assert [x['url'] for x in filing['analysis']['sources']] == [primary_url,exhibit_url]
     assert filing['analysis']['guidance'][0]['url'] == exhibit_url
     assert Path(filing['snapshots'][1]['snapshot_path']).read_bytes() == exhibit.read_bytes()
@@ -222,12 +188,12 @@ def test_sec_success_hook_retains_original_result_and_runs_local_extraction(monk
     from dataclasses import replace
     from investment_assistant.tasks import filings
     from investment_assistant.config import AssistantConfig, SecMonitorConfig
-    from investment_assistant.us_research import service
+    from investment_assistant.data import acquisition as service
     original = {'run_id':'existing','status':'success','summary':{'downloaded_count':1,'filings':[{'ticker':'MU','path':'local'}], 'errors':{},'delivery':{'status':'sent'}}}
     # Local refresh is the I/O boundary here; its database/parser path has real TEMP tests above.
-    monkeypatch.setattr(service, 'refresh_local_filings', lambda tickers, **kw: {'tickers':tickers,'notifications':'disabled'})
+    monkeypatch.setattr(sec_monitor, 'refresh_local_filings', lambda tickers, **kw: {'tickers':tickers,'notifications':'disabled'})
     # v2.8: the hook is ``filings._local_research_after_success``, run inside the sec_monitor node after the SEC pass
-    result = filings._local_research_after_success(copy.deepcopy(original), AssistantConfig(sec_monitor=SecMonitorConfig(enabled=monitor)))
+    result = sec_monitor._local_research_after_success(copy.deepcopy(original), AssistantConfig(sec_monitor=SecMonitorConfig(enabled=monitor)))
     assert {k:v for k,v in result.items() if k not in ('research','data_status')} == original
     assert result['research'] == {'tickers':['MU'],'notifications':'disabled'}
 
@@ -236,11 +202,11 @@ def test_failed_sec_run_does_not_add_research_or_replace_original_error(monkeypa
     module()
     from investment_assistant.tasks import filings
     from investment_assistant.config import AssistantConfig
-    from investment_assistant.us_research import service
+    from investment_assistant.data import acquisition as service
     original = {'run_id':'existing','status':'error','summary':{'errors':{'MU':'original'}, 'filings':[]}}
     def forbidden(*a): pytest.fail('failed original SEC job started extraction')
-    monkeypatch.setattr(service, 'refresh_local_filings', forbidden)
-    result = filings._local_research_after_success(copy.deepcopy(original), AssistantConfig())
+    monkeypatch.setattr(sec_monitor, 'refresh_local_filings', forbidden)
+    result = sec_monitor._local_research_after_success(copy.deepcopy(original), AssistantConfig())
     assert {k: v for k, v in result.items() if k != 'data_status'} == original
 
 
@@ -248,11 +214,11 @@ def test_sec_local_hook_failure_is_sanitized_and_preserves_original_success(monk
     module()
     from investment_assistant.tasks import filings
     from investment_assistant.config import AssistantConfig
-    from investment_assistant.us_research import service
+    from investment_assistant.data import acquisition as service
     original = {'status':'success','summary':{'filings':[{'ticker':'MU'}], 'errors':{}}}
     def bad(*a, **kw): raise ValueError('proxy://user:secret@host')
-    monkeypatch.setattr(service, 'refresh_local_filings', bad)
-    result = filings._local_research_after_success(copy.deepcopy(original), AssistantConfig())
+    monkeypatch.setattr(sec_monitor, 'refresh_local_filings', bad)
+    result = sec_monitor._local_research_after_success(copy.deepcopy(original), AssistantConfig())
     assert result['status']=='success' and result['summary']==original['summary']
     assert result['research']['errors'] and 'secret' not in json.dumps(result)
 
@@ -260,45 +226,42 @@ def test_sec_local_hook_failure_is_sanitized_and_preserves_original_success(monk
 def test_market_observation_retains_its_original_snapshot_mapping(research_db, monkeypatch, tmp_path):
     s = module()
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    s.sync(['MU'], datasets=['market'], source=Source())
-    bar = s.view('MU')['market']['bars'][0]
+    seed_snapshot(research_db, 'market', market())
+    bar = next(r for r in data_repo.read_rows(research_db, 'US:stock:MU', 'market') if r['kind'] == 'bar')
     assert Path(bar['snapshot_path']).read_bytes() == b'{ "chart": 1 }'
     assert hashlib.sha256(Path(bar['snapshot_path']).read_bytes()).hexdigest() == bar['source_hash']
 
 
-def test_empty_active_us_universe_does_not_resurrect_config_defaults(research_db, monkeypatch):
-    s = module()
-    research_db.execute("INSERT INTO watchlist_items(ticker,status) VALUES ('MU','paused'),('688008.SH','active')")
-    research_db.commit()
-    class Forbidden(Source):
-        def companyfacts(self, ticker): pytest.fail('empty universe triggered remote I/O')
-    assert s.sync(datasets=['financials'], source=Forbidden())['results'] == []
 
 
 def test_dataset_rollback_keeps_prior_values_and_other_commits(research_db, monkeypatch, tmp_path):
     s = module()
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    s.sync(['MU'], datasets=['financials'], source=Source())
+    seed_snapshot(research_db, 'financials', financial())
     class BadFinancial(Source):
         def companyfacts(self, ticker):
             payload = financial(value=20)
             invalid = {**payload['observations'][0], 'metric':'cfo', 'concept':'CFO', 'value':float('nan')}
             payload['observations'].append(invalid)
             return payload
-    result = s.sync(['MU'], datasets=['market','financials'], source=BadFinancial())
-    assert [r['status'] for r in result['results']] == ['ready','failed']
-    assert s.view('MU')['financials'][0]['metrics']['revenue']['value'] == 10
-    assert s.view('MU')['market']['bars'][0]['close'] == 100
-    from investment_assistant.us_research import repository as repo
+    seed_snapshot(research_db, 'market', market())
+    with pytest.raises(ValueError):
+        seed_snapshot(research_db, 'financials', BadFinancial().companyfacts('MU'))
+    research_db.rollback()
+    assert fundamentals.view('MU')['financials'][0]['metrics']['revenue']['value'] == 10
+    assert next(r for r in data_repo.read_rows(research_db, 'US:stock:MU', 'market') if r['kind'] == 'bar')['close'] == 100
+    assert fundamentals.view('MU')['market']['bars'] == []
+    from investment_assistant.data import repo
     assert len(repo.read_history(research_db,'US:stock:MU','financials')) == 1
 
 
 def test_get_reads_persisted_rows_without_source_or_database_writes(research_db, monkeypatch, tmp_path, client):
     s = module()
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    s.sync(['MU'], datasets=['financials','market'], source=Source())
+    seed_snapshot(research_db, 'financials', financial())
+    seed_snapshot(research_db, 'market', market())
     def forbidden(*a, **kw): pytest.fail('read endpoint touched remote source')
-    monkeypatch.setattr(s, 'USSources', forbidden)
+    monkeypatch.setattr(source_module, 'USSources', forbidden)
     before = research_db.execute('SELECT count(*),max(last_seen_at) FROM us_research_observations').fetchone()
     response = client.get('/api/us-research/MU')
     assert response.status_code == 200
@@ -307,9 +270,37 @@ def test_get_reads_persisted_rows_without_source_or_database_writes(research_db,
     assert after == before
 
 
+def test_market_view_reads_price_bar_revisions_and_ignores_old_dataset(research_db, monkeypatch, tmp_path):
+    s = module()
+    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    seed_snapshot(research_db, 'market', market())  # old dataset says 100; it is no longer the read source.
+    first = datetime(2026, 10, 16, 22, tzinfo=UTC)
+    later = datetime(2026, 10, 19, 22, tzinfo=UTC)
+    bar = {'price_date': date(2026, 10, 15), 'open': 120, 'high': 130, 'low': 115,
+           'close': 125, 'adj_close': 124, 'volume': 10000, 'split_factor': 1}
+    data_repo.store_bars(research_db, 'MU', [bar], now=first)
+    data_repo.store_bars(research_db, 'SPY', [{**bar, 'close': 500, 'adj_close': 495}], now=first)
+    data_repo.store_bars(research_db, 'MU', [{**bar, 'close': 128, 'adj_close': 127}], now=later)
+    research_db.commit()
+    before = research_db.execute('SELECT count(*) FROM price_bars').fetchone()
+    def forbidden(*a, **kw): pytest.fail('read-only projection fetched an external source')
+    monkeypatch.setattr(source_module, 'USSources', forbidden)
+    early = fundamentals.view('MU', as_of=first)
+    late = fundamentals.view('MU', as_of=later)
+    assert early['market']['bars'][0]['close'] == 125
+    assert early['market']['bars'][0]['adjusted_close'] == 124
+    assert early['market']['benchmarks']['SPY'][0]['close'] == 500
+    assert early['market']['benchmarks']['QQQ'] == []
+    assert late['market']['bars'][0]['close'] == 128
+    assert late['market']['quote']['price'] == 128
+    assert late['valuation']['ps_ttm']['value'] is None
+    assert fundamentals.view('MU', as_of='2026-10-15T22:00:00Z')['market']['bars'] == []
+    assert research_db.execute('SELECT count(*) FROM price_bars').fetchone() == before
+
+
 def test_conflicting_same_filing_facts_remain_unavailable_until_correction(research_db, monkeypatch, tmp_path):
     s = module()
-    from investment_assistant.us_research import repository as repo
+    from investment_assistant.data import repo
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
     class Frozen(datetime):
         current = datetime(2026,6,1,tzinfo=UTC)
@@ -321,8 +312,8 @@ def test_conflicting_same_filing_facts_remain_unavailable_until_correction(resea
             payload = financial(raw=b'{"facts":[10,20]}')
             payload['observations'].append({**payload['observations'][0], 'id':'other-provisional', 'value':20, 'source_locator':'/facts/1'})
             return payload
-    assert s.sync(['MU'],datasets=['financials'],source=Conflict())['results'][0]['status'] == 'partial'
-    current = s.view('MU')['financials'][0]['metrics']['revenue']
+    assert seed_snapshot(research_db, 'financials', Conflict().companyfacts('MU')) == 'partial'
+    current = fundamentals.view('MU')['financials'][0]['metrics']['revenue']
     assert current['value'] is None and 'Conflicting' in current['missing_reason']
     assert len(current['input_ids']) == 1 and isinstance(current['input_ids'][0], int)
     assert {r['source_locator'] for r in current['sources']} == {'/facts/0','/facts/1'}
@@ -332,18 +323,18 @@ def test_conflicting_same_filing_facts_remain_unavailable_until_correction(resea
     for fact in group['conflicts']:
         assert hashlib.sha256(Path(fact['snapshot_path']).read_bytes()).hexdigest() == fact['source_hash']
     Frozen.current = datetime(2026,6,2,tzinfo=UTC)
-    s.sync(['MU'],datasets=['financials'],source=Source())
-    assert s.view('MU')['financials'][0]['metrics']['revenue']['value'] == 10
-    historical = s.view('MU',as_of='2026-06-01T12:00:00Z')['financials'][0]['metrics']['revenue']
+    seed_snapshot(research_db, 'financials', financial())
+    assert fundamentals.view('MU')['financials'][0]['metrics']['revenue']['value'] == 10
+    historical = fundamentals.view('MU',as_of='2026-06-01T12:00:00Z')['financials'][0]['metrics']['revenue']
     assert historical['value'] is None and historical['input_ids'] == current['input_ids']
     assert len(repo.read_history(research_db,'US:stock:MU','financials')) == 2
 
 
 def test_unrelated_fact_change_updates_acquisition_without_revising_existing_fact(research_db, monkeypatch, tmp_path):
     s = module()
-    from investment_assistant.us_research import repository as repo
+    from investment_assistant.data import repo
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    s.sync(['MU'],datasets=['financials'],source=Source())
+    seed_snapshot(research_db, 'financials', financial())
     before = repo.read_rows(research_db,'US:stock:MU','financials')[0]
     class AddedFact(Source):
         def companyfacts(self,ticker):
@@ -351,7 +342,7 @@ def test_unrelated_fact_change_updates_acquisition_without_revising_existing_fac
             payload['observations'][0]['source_locator']='/facts/9'
             payload['observations'].append({**payload['observations'][0], 'metric':'cfo','concept':'CFO','value':5,'source_locator':'/facts/1'})
             return payload
-    s.sync(['MU'],datasets=['financials'],source=AddedFact())
+    seed_snapshot(research_db, 'financials', AddedFact().companyfacts('MU'))
     records=repo.read_rows(research_db,'US:stock:MU','financials')
     revenue=next(r for r in records if r['metric']=='revenue')
     assert revenue['id']==before['id'] and revenue['source_locator']=='/facts/0'
@@ -361,42 +352,16 @@ def test_unrelated_fact_change_updates_acquisition_without_revising_existing_fac
     assert Path(acquisition['snapshot_path']).read_bytes()==b'{"facts":[{"revenue":10},{"cfo":5}]}'
 
 
-def test_manual_research_job_persists_existing_job_report_and_runlog_without_notifications(research_db, monkeypatch, tmp_path, client):
-    s = module()
-    from investment_assistant import db
-    from investment_assistant.tasks import us_research, _harness
-    monkeypatch.setattr(s,'RAW_ROOT',tmp_path/'raw')
-    monkeypatch.setattr(s,'USSources',Source)
-    monkeypatch.setenv('INVESTMENT_ASSISTANT_RUNTIME_BASE',str(tmp_path))
-    monkeypatch.setenv('INVESTMENT_ASSISTANT_DATABASE_URL','TEMP-test-boundary')
-    connection = s.connection
-    monkeypatch.setattr(db,'connect',lambda url: connection())
-    from investment_assistant.services import jobs
-    monkeypatch.setattr(jobs,'connect',lambda url: connection())
-    def forbidden(*a, **kw): pytest.fail('research task dispatched notification')
-    monkeypatch.setattr(_harness,'dispatch',forbidden)
-    research_db.execute('''CREATE TEMP TABLE job_reports(id BIGSERIAL,task TEXT,run_id TEXT,status TEXT,
-        started_at TIMESTAMPTZ,finished_at TIMESTAMPTZ,summary JSONB,target_start_date DATE,target_end_date DATE,
-        trigger_source TEXT,created_at TIMESTAMPTZ DEFAULT now())''')
-    research_db.commit()
-    result = us_research.run(symbols=['MU'],datasets=['financials'])
-    stored=research_db.execute('SELECT task,run_id,status,summary,trigger_source FROM job_reports').fetchone()
-    assert stored is not None
-    assert (stored[0],stored[1],stored[2],stored[4])==('us-research',result['run_id'],'success','manual')
-    assert stored[3]['notifications']=='disabled'
-    assert json.loads((tmp_path/'logs/investment-assistant-runs.jsonl').read_text())['summary']['results'][0]['security_id']=='US:stock:MU'
-    reports=client.get('/api/jobs/reports?task=us-research').json()['reports']
-    assert len(reports)==1 and reports[0]['run_id']==result['run_id']
 
 
 def test_partial_sec_collection_derives_successful_documents_and_preserves_error(monkeypatch):
     module()
     from investment_assistant.tasks import filings
     from investment_assistant.config import AssistantConfig
-    from investment_assistant.us_research import service
+    from investment_assistant.data import acquisition as service
     original={'status':'error','summary':{'filings':[{'ticker':'MU'}],'errors':{'NVDA':'original source failure'}}}
-    monkeypatch.setattr(service,'refresh_local_filings',lambda tickers,**kw:{'tickers':tickers,'notifications':'disabled'})
-    result=filings._local_research_after_success(copy.deepcopy(original), AssistantConfig())
+    monkeypatch.setattr(sec_monitor,'refresh_local_filings',lambda tickers,**kw:{'tickers':tickers,'notifications':'disabled'})
+    result=sec_monitor._local_research_after_success(copy.deepcopy(original), AssistantConfig())
     assert result['status']=='error' and result['summary']==original['summary']
     assert result['research']['tickers']==['MU']
 
@@ -406,7 +371,7 @@ def test_sec_hook_uses_supplied_config_for_real_local_files_and_exhibits(researc
     s = module()
     from investment_assistant.config import AssistantConfig, FilingsConfig, SecMonitorConfig
     from investment_assistant.tasks import filings
-    from investment_assistant.filings import monitor as monitor_module
+    from investment_assistant.tasks import filings as monitor_module
     root, state = tmp_path/'supplied-library', tmp_path/'supplied-state'
     primary = root/'MU'/'8-K'/'0000999999-26-000001-report.html'
     exhibit = primary.with_name('0000999999-26-000001-ex99.html')
@@ -426,15 +391,15 @@ def test_sec_hook_uses_supplied_config_for_real_local_files_and_exhibits(researc
     monkeypatch.setattr(s,'load_config',lambda:default)
     monkeypatch.setattr(s,'RAW_ROOT',tmp_path/'raw')
     def forbidden(*a,**kw): pytest.fail('local SEC hook invoked a remote research source')
-    monkeypatch.setattr(s,'USSources',forbidden)
+    monkeypatch.setattr(source_module,'USSources',forbidden)
     research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)',
         ('MU','8-K','2026-10-01','0000999999-26-000001',str(primary)))
     research_db.commit()
     original = {'run_id':'original-sec-job','status':'success','summary':{'filings':[{'ticker':'MU','path':str(primary)}],'errors':{},'delivery':{'status':'sent'}}}
-    result = filings._local_research_after_success(copy.deepcopy(original), supplied)
+    result = sec_monitor._local_research_after_success(copy.deepcopy(original), supplied)
     assert result['research']['results'][0]['status']=='ready'
     assert {k:v for k,v in result.items() if k not in ('research','data_status')}==original
-    parsed = s.view('MU')['filings']
+    parsed = fundamentals.view('MU')['filings']
     assert len(parsed)==1 and parsed[0]['path']==str(primary)
     assert [x['url'] for x in parsed[0]['analysis']['sources']]==[primary_url,exhibit_url]
     assert parsed[0]['analysis']['guidance'][0]['url']==exhibit_url
@@ -442,27 +407,12 @@ def test_sec_hook_uses_supplied_config_for_real_local_files_and_exhibits(researc
     assert Path(parsed[0]['snapshots'][1]['snapshot_path']).read_bytes()==exhibit.read_bytes()
 
 
-@pytest.mark.parametrize('explicit', [True, False])
-def test_manual_task_shares_one_effective_config_with_harness_and_sync(monkeypatch, explicit):
-    from investment_assistant.tasks import us_research
-    from investment_assistant.config import AssistantConfig, FilingsConfig
-    config = AssistantConfig(filings=FilingsConfig(output_dir=Path('/tmp/explicit-research-filings')))
-    loads, calls = [], []
-    monkeypatch.setattr(us_research, 'load_config', lambda: loads.append(True) or config)
-    monkeypatch.setattr(us_research.service, 'sync', lambda *a, **kw: calls.append(kw) or {'results': []})
-    def harness(name, core, **kwargs):
-        assert kwargs['config'] is config
-        return core()
-    monkeypatch.setattr(us_research, 'run_task', harness)
-    assert us_research.run(config if explicit else None, symbols=['MU']) == {'results': []}
-    assert calls[0]['config'] is config
-    assert len(loads) == (0 if explicit else 1)
 
 
 def test_financial_source_identity_survives_storage_view_and_watchlist_enrichment(research_db, monkeypatch, tmp_path):
     from contextlib import nullcontext
     from investment_assistant.services import watchlist as wl
-    from investment_assistant.us_research.sources import USSources
+    from investment_assistant.data.sources.fundamentals import USSources
     s = module()
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
     raw = {'cik': 723125, 'entityName': 'Micron Technology', 'facts': {'us-gaap': {'Revenues': {'units': {'USD': [
@@ -473,13 +423,13 @@ def test_financial_source_identity_survives_storage_view_and_watchlist_enrichmen
     monkeypatch.setattr(adapter, '_get', lambda url, **kw: (raw, {'source_url': url, 'source_hash': hashlib.sha256(encoded).hexdigest(), 'raw_snapshot': encoded, 'request_params': {}, 'collected_at': '2026-10-16T00:00:00Z'}))
     # Use the actual adapter identity normalization, then the actual persistence path.
     monkeypatch.setattr(adapter.downloader, '_resolve_cik', lambda ticker, ua: '0000723125')
-    s.sync(['MU'], datasets=['financials'], source=adapter)
-    assert s.view('MU')['statuses'][0]['last_success_details']['identity']['name'] == 'Micron Technology'
+    seed_snapshot(research_db, 'financials', adapter.companyfacts('MU'))
+    assert fundamentals.view('MU')['statuses'][0]['last_success_details']['identity']['name'] == 'Micron Technology'
     monkeypatch.setenv('INVESTMENT_ASSISTANT_DATABASE_URL', 'TEMP-test-boundary')
     monkeypatch.setattr(wl, 'connect', lambda _: nullcontext(research_db))
     # The research schema has no workbench tables; the earnings lookup is not under test here.
-    from investment_assistant.workbench import repository as wb_repo
-    monkeypatch.setattr(wb_repo, 'latest_earnings', lambda conn, ticker, *, cutoff_at: None)
+    # Repository consumers use their owning layers below.
+    monkeypatch.setattr(data_repo, 'latest_earnings', lambda conn, ticker, *, cutoff_at: None)
     research_db.execute("INSERT INTO watchlist_items(ticker,status) VALUES ('MU','active'),('AAPL.US','active'),('TSLA.SH','active'),('ABC.DEF','active')")
     listed = wl.watchlist_rows(enriched=True)
     assert next(r for r in listed if r['ticker'] == 'MU')['name'] == 'Micron Technology'
@@ -487,50 +437,12 @@ def test_financial_source_identity_survives_storage_view_and_watchlist_enrichmen
     assert wl.current_watchlist() == ['MU']
 
 
-def test_partial_coverage_only_reports_old_values_when_prior_records_were_retained(research_db, monkeypatch, tmp_path):
-    s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    class Limited(Source):
-        def market(self, ticker):
-            payload = market(ticker)
-            payload['limitations'] = ['Market cap and share-class basis remain unverified']
-            return payload
-    def state(): return next(r for r in s.view('MU')['statuses'] if r['dataset'] == 'market')
-    s.sync(['MU'], datasets=['market'], source=Limited())
-    initial = state()
-    assert initial['status'] == 'partial' and initial['retained_old_values'] is False
-    assert s.view('MU')['valuation']['ps_ttm']['value'] is None
-    class Failed(Source):
-        def market(self, ticker): raise ValueError('offline')
-    s.sync(['MU'], datasets=['market'], source=Failed())
-    failed = state()
-    assert failed['retained_old_values'] is True
-    assert failed['succeeded_at'] == initial['succeeded_at']
-    assert failed['attempted_at'] >= initial['attempted_at']
-    class MissingQuote(Limited):
-        def market(self, ticker):
-            payload = super().market(ticker)
-            payload['quote'] = {}
-            payload['bars'] = [{**payload['bars'][0], 'date': '2026-10-16'}]
-            return payload
-    s.sync(['MU'], datasets=['market'], source=MissingQuote())
-    partial = state()
-    assert partial['status'] == 'partial' and partial['retained_old_values'] is True
-    assert partial['succeeded_at'] >= failed['succeeded_at']
-    assert partial['last_success_details']['limitations']
 
 
-def test_active_us_job_ignores_unsupported_legacy_codes(research_db, monkeypatch, tmp_path):
-    s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
-    research_db.execute("INSERT INTO watchlist_items(ticker,status) VALUES ('BRK.B','active'),('AAPL.US','active'),('TSLA.SH','active'),('ABC.DEF','active')")
-    result = s.sync(datasets=['financials'], source=Source())
-    assert [r['security_id'] for r in result['results']] == ['US:stock:BRK.B']
 
 
 
 def test_manual_task_explicit_config_controls_actual_local_source_root(research_db, monkeypatch, tmp_path):
-    from investment_assistant.tasks import us_research
     from investment_assistant.config import AssistantConfig, FilingsConfig
     s = module()
     root = tmp_path / 'supplied-library'
@@ -540,10 +452,9 @@ def test_manual_task_explicit_config_controls_actual_local_source_root(research_
     supplied = AssistantConfig(filings=FilingsConfig(output_dir=root))
     monkeypatch.setattr(s, 'load_config', lambda: AssistantConfig(filings=FilingsConfig(output_dir=tmp_path / 'wrong-root')))
     monkeypatch.setattr(s, 'RAW_ROOT', tmp_path / 'raw')
-    monkeypatch.setattr(us_research, 'run_task', lambda name, core, **kw: core())
     research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)',
         ('MU', '8-K', '2026-10-01', '0000999999-26-000001', str(primary)))
     research_db.commit()
-    result = us_research.run(supplied, symbols=['MU'], datasets=['filings'])
+    result = s.refresh_local_filings(['MU'], config=supplied)
     assert result['results'][0]['status'] == 'ready'
-    assert s.view('MU')['filings'][0]['path'] == str(primary)
+    assert fundamentals.view('MU')['filings'][0]['path'] == str(primary)

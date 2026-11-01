@@ -6,7 +6,7 @@ version: 1
 applies_to: [regime-2]
 summary: "SMH / XLK / QQQ 相对 SPY 的 20 日、60 日强弱，归为强、弱、分化、数据不足四种状态。"
 related: [indicator.relative_strength, plan.context_flags, indicator.regime, agent.invalidation]
-sources: [investment_assistant/workbench/regime.py, investment_assistant/workbench/pool.py, docs/features/pool-and-context.md]
+sources: [investment_assistant/analysis/regime.py, investment_assistant/analysis/pool.py, docs/features/pool-and-context.md]
 ---
 
 ## 是什么

@@ -1,10 +1,13 @@
 """Read-only account projections and explicitly requested account commands."""
+from investment_assistant.execution.paper import accounts as execution_paper_accounts
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Body, Query
 
 from investment_assistant.api.routes.workbench import _call, _date
-from investment_assistant.workbench import account_views, paper_accounts, service
+from investment_assistant.views import account as account_views
+from investment_assistant.workflow.nodes import accounts as paper_accounts
+from investment_assistant.core import tx as service
 
 router = APIRouter(prefix='/api/accounts')
 
@@ -24,7 +27,7 @@ def overview(include_closed: bool = False):
 
 @router.post('')
 def create(payload: dict = Body(default_factory=dict)):
-    return _run(paper_accounts.create_paper_account, payload, now=_now())
+    return _run(execution_paper_accounts.create_paper_account, payload, now=_now())
 
 
 # Literal route must precede /{account_id}.
@@ -40,17 +43,17 @@ def detail(account_id: str):
 
 @router.post('/{account_id}/opening')
 def opening(account_id: str, payload: dict = Body(default_factory=dict)):
-    return _run(paper_accounts.open_real_account, account_id, payload, now=_now())
+    return _run(execution_paper_accounts.open_real_account, account_id, payload, now=_now())
 
 
 @router.post('/{account_id}/params')
 def params(account_id: str, payload: dict = Body(default_factory=dict)):
-    return _run(paper_accounts.change_params, account_id, payload, now=_now())
+    return _run(execution_paper_accounts.change_params, account_id, payload, now=_now())
 
 
 @router.post('/{account_id}/close')
 def close(account_id: str, payload: dict = Body(default_factory=dict)):
-    return _run(paper_accounts.close, account_id, payload, now=_now())
+    return _run(execution_paper_accounts.close, account_id, payload, now=_now())
 
 
 @router.get('/{account_id}/equity')

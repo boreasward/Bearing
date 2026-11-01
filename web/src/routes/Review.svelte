@@ -579,7 +579,7 @@
 
   {#if tab === 'backchecks' && !error}
     <Section level={2} title="上线前检查 · 历史回放">
-      <p class="text-xs text-muted-foreground">新规则上线前手动运行，回答「触发是否过频、止损是否总被扫掉」。只读已存 K 线与 SEC 文件，不联网、不补采。也可用命令行：python -m investment_assistant.workbench.backcheck。</p>
+      <p class="text-xs text-muted-foreground">新规则上线前手动运行，回答「触发是否过频、止损是否总被扫掉」。只读已存 K 线与 SEC 文件，不联网、不补采。也可用命令行：python -m investment_assistant.optimize.backcheck。</p>
       <div class="flex flex-wrap items-center gap-2">
         <Button variant="primary" onclick={runBackcheckNow}>运行历史检查</Button>
         {#if backcheckError}<Alert variant="danger" class="w-auto py-1"><AlertDescription class="text-xs">{backcheckError}</AlertDescription></Alert>{/if}

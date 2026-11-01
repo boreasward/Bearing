@@ -4,7 +4,7 @@ v2.8 起 SEC 监控是[每日工作流](daily-plan.md#十个节点)（任务 `da
 
 ## 下载器
 
-- 实现：`filings/sec_downloader.py` 的 `SecEdgarDownloader.download_filings_batch(ticker, form_types, start_date, end_date, output_base)`，由 `filings/service.py` 的 `download_configured_filings` 编排。
+- 实现：`data/adapters/sec_text.py` 的 `SecEdgarDownloader.download_filings_batch(ticker, form_types, start_date, end_date, output_base)`，由 `data/sec/storage.py` 的 `download_configured_filings` 编排并持久化文件索引；已下载原文解析在 `data/sec/extraction.py`。
 - 需要 `SEC_USER_AGENT`（`名字 邮箱`），未设置时返回空列表，不发请求。
 - CIK 通过 `company_tickers.json` 解析为**注册方** CIK。accession 前缀是报送方（Filing Agent）的 CIK，不能直接用来拼归档路径，否则 RKLB 这类由代理报送的公司会 404。
 - 落盘路径：`<output_dir>/<TICKER>/<FORM>/<accession>-<primaryDocument>`，同时写入 `filings` 表。

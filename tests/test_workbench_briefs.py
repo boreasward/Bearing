@@ -2,8 +2,8 @@
 import uuid
 from datetime import UTC, date, datetime
 
-from investment_assistant.workbench import briefs
-from investment_assistant.workbench.agent import REASON_TEXT
+from investment_assistant.analysis import briefs
+from investment_assistant.analysis.agent import REASON_TEXT
 
 T = date(2026, 10, 22)
 CUTOFF = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)
@@ -15,7 +15,7 @@ CANDS = [{'id': CID, 'rule_id': 'trend_reclaim', 'action': 'buy', 'inputs': {'va
 
 # --- for_run / rule_summary (P4 design §7.1) ---
 
-from investment_assistant.workbench.agent import REASON_TEXT
+from investment_assistant.analysis.agent import REASON_TEXT
 
 
 def _run(**overrides):

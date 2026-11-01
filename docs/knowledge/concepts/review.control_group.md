@@ -6,7 +6,7 @@ version: 1
 applies_to: [review-6, review-8]
 summary: "全部单元（v2.9 起不再只看已决定的）都假设下一交易日开盘入场，统计 5、10、20 个交易日相对 SPY 的超额收益；窗口没走完记未成熟。"
 related: [review.weekly, review.plan_shadow, system.decision_unit]
-sources: [investment_assistant/workbench/review.py]
+sources: [investment_assistant/review/outcomes.py]
 ---
 
 ## 是什么

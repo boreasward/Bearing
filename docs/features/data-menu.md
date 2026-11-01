@@ -34,7 +34,7 @@ v2.6 起，页面上的概念名旁有一个「ⓘ」（v2.10 起是 lucide `inf
 | --- | --- |
 | `GET /api/data/families` | 总览：六张卡 |
 | `GET /api/data/families/{id}` | 族详情：卡片 + 最近 20 次拉取记录 + 逐目标覆盖表（每个目标的最新时点、是否滞后、最近失败原因） |
-| `POST /api/data/families/{id}/fetch` | 手动拉取，body 可选 `{"ticker": "MU"}`；返回 `{run_id, status: "pending"}`。`run_id` 是 `tasks/runner` 的进程内运行号：页面轮询完成即就地显示结果；直接查询用 `GET /api/runs/{run_id}`（同一进程内有效），单族拉取不写 `job_reports`，「工具 → 运行记录」看不到它 |
+| `POST /api/data/families/{id}/fetch` | 手动拉取，body 可选 `{"ticker": "MU"}`；返回 `{run_id, status: "pending"}`。`run_id` 是 `core/runner` 的进程内运行号：页面轮询完成即就地显示结果；直接查询用 `GET /api/runs/{run_id}`（同一进程内有效），单族拉取不写 `job_reports`，「工具 → 运行记录」看不到它 |
 | `GET /api/data/browse/{id}?ticker=&series=` | 原始值浏览：按标的的族传 `ticker`，FRED 传 `series`，范围族不传 |
 
 错误体沿用 `{"error": "..."}`：数据库未配置 / 不可达 / 工作台旧表缺失 / 迁移 024 未执行 → 503（POST 在提交后台任务前就检查这些）；未知族 → 404；非法参数（派生族、族不支持单只、非字符串或非法 `ticker`、缺 `ticker` / `series`、未知序列）→ 400；该族正在采集 → 409。迁移 024 未执行时读取照常（无「最近拉取」一栏），拉取接口返回 503「需执行迁移 024」。
@@ -66,7 +66,7 @@ curl -s "localhost:8787/api/data/browse/bars?ticker=MU"
 - 卡片「最近拉取」与 spec §8 的口径不同（2026-10-27 验收后用户决定）：spec 取该族最新一行，现在主行只取全族记录，单只拉取只在比它更新时另列一行，「最近成功」也只算全族记录。原因：验收时单拉一只不存在的代码，日线卡就整张显示 `failed`，而覆盖是 106/106。接口上 `last_run` 为最新全族记录，新增 `last_ticker_run`；详情页的最近 20 次记录不变，单只记录照常列出。
 - 与 spec 的两处实现偏差（如实记录）：
   1. 批处理写的拉取记录 `run_id` 为空：记录在采集阶段末尾写入，此时拿不到任务的 `run_id`，靠 `job` + `started_at` 对照「工具 → 运行记录」里的运行报告（`started_at` 为采集阶段的真实墙钟，是个对照线索而非精确外键；`filings` 任务在任务返回后写记录，能带上 `run_id`）。
-  2. 手动拉取的记录带的是 `tasks/runner` 的 `run_id`（经 `runner.submit(..., with_run_id=True)` 传入），不是 `job_reports.run_id`；它不写 `job_reports`，结果经页内轮询展示，或用 `GET /api/runs/{run_id}` 查询（同一进程内）。
+  2. 手动拉取的记录带的是 `core/runner` 的 `run_id`（经 `runner.submit(..., with_run_id=True)` 传入），不是 `job_reports.run_id`；它不写 `job_reports`，结果经页内轮询展示，或用 `GET /api/runs/{run_id}` 查询（同一进程内）。
 - 已披露的目标清单兼容偏差：手动全族与批处理四族目标的并集口径是「当前观察池 ∪ 未平仓持仓」，而旧批处理循环为已清仓的历史持仓继续采集数据（plan stop 与财报提醒需要）；因此批处理的 `target_count` 可能比手动目标多出已清仓标的。这是保持旧主线行为的已知偏差，不是遗漏。
 - SEC 申报有两条采集路径：`filings` 任务（监控清单或 `config.watchlist`）与 `workbench` 批处理（当前池 + 持仓），目标不同；卡片的「所属任务」指注册任务（`filings`），最近拉取行按记录如实显示实际 `job` 与 `targets_source`。
 - 覆盖口径与滞后阈值是展示定义，不是规则参数，不用历史数据去调；FRED 的「覆盖 = 有观测值的序列数」与「滞后 = 最新观测早于 7 天」是两个独立口径，一条序列可以既覆盖又滞后。

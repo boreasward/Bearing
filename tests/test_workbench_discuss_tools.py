@@ -1,6 +1,10 @@
 """The three discussion-only tools (v2.7 spec §8.3): unit boundary, shapes, no drafts, truncation, read-only.
 
 Offline: the boundary and the table. SQL (explicit test database): the shapes over a real chain and card."""
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.execution.repo_legacy as execution_repo_legacy
+import investment_assistant.review.repo as review_repo
 import dataclasses
 import json
 import uuid
@@ -9,11 +13,14 @@ from datetime import UTC, date, datetime
 import psycopg
 import pytest
 
-from investment_assistant.workbench import repository, service
-from investment_assistant.workbench.agent import discuss_tools
-from investment_assistant.workbench.agent.discuss_tools import (DISCUSS_DESCRIPTIONS, DISCUSS_TOOLS, DiscussContext,
+import investment_assistant.core.tx as service
+import investment_assistant.views.derivation as derivation_view
+import investment_assistant.views.reasoning as reasoning
+import investment_assistant.workflow.batch as d_workflow_batch
+from investment_assistant.review import discuss_tools
+from investment_assistant.review.discuss_tools import (DISCUSS_DESCRIPTIONS, DISCUSS_TOOLS, DiscussContext,
                                                                 get_agent_run, get_derivation, get_plan_context)
-from investment_assistant.workbench.agent.tools import TOOLS, Recorder, ToolContext, ToolError, call
+from investment_assistant.analysis.agent.tools import TOOLS, Recorder, ToolContext, ToolError, call
 
 S = date(2026, 10, 22)
 CUTOFF = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)
@@ -26,7 +33,8 @@ def boom_read(fn):
 
 def offline_ctx(**over):
     base = dict(ticker='AAA', session=S, cutoff_at=CUTOFF, read=boom_read, signal_date=S, plan_id='p-1', card_id=None,
-                unit_plan_ids=frozenset({'p-1', 'p-2'}), unit_run_ids=frozenset({'r-1'}))
+                unit_plan_ids=frozenset({'p-1', 'p-2'}), unit_run_ids=frozenset({'r-1'}),
+                read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in)
     return DiscussContext(**{**base, **over})
 
 
@@ -86,25 +94,26 @@ from test_workbench_service import NOW, SESSION, _ok_responses, agent_deps, db  
 
 
 def run_chain(db, scripted_model, ticker='AAA'):
-    service.run_batch(tickers=[ticker], now=NOW, deps=agent_deps(scripted_model, _ok_responses(ticker)))
+    d_workflow_batch.run_batch(tickers=[ticker], now=NOW, deps=agent_deps(scripted_model, _ok_responses(ticker)))
     db.commit()
-    return repository.agent_plan(db, ticker, SESSION), repository.latest_agent_run(db, ticker, SESSION)
+    return execution_repo.agent_plan(db, ticker, SESSION), analysis_repo.latest_agent_run(db, ticker, SESSION)
 
 
 def make_ctx(db, *, ticker='AAA', plan_id=None, card_id=None, extra_runs=()):
-    plans = repository.plans_for_unit(db, ticker, SESSION)
+    plans = execution_repo.plans_for_unit(db, ticker, SESSION)
     runs = [r for mode in ('propose', 'revise', 'review', 'interpret', 'retro', 'discuss')
-            for r in repository.agent_runs_for(db, ticker, SESSION, mode)]
+            for r in analysis_repo.agent_runs_for(db, ticker, SESSION, mode)]
     return DiscussContext(
         ticker=ticker, session=SESSION, cutoff_at=NOW, read=lambda fn: fn(db), signal_date=SESSION,
         plan_id=str(plan_id) if plan_id else None, card_id=card_id,
         unit_plan_ids=frozenset(str(p['id']) for p in plans),
-        unit_run_ids=frozenset([str(r['id']) for r in runs] + [str(r) for r in extra_runs]))
+        unit_run_ids=frozenset([str(r['id']) for r in runs] + [str(r) for r in extra_runs]),
+        read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in)
 
 
 def insert_run(db, *, mode='propose', status='rejected', reason='malformed', output=None, calls=(), ticker='AAA'):
     run_id = str(uuid.uuid4())
-    repository.insert_agent_run(db, {
+    analysis_repo.insert_agent_run(db, {
         'id': run_id, 'ticker': ticker, 'signal_date': SESSION, 'pool': 'main', 'attempt': 1, 'mode': mode,
         'agent_version': 'agent-2', 'provider': 'chatgpt', 'model': 'm', 'cutoff_at': NOW, 'status': status,
         'reason': reason, 'detail': None, 'output': output, 'counter': None, 'plan_id': None, 'input_tokens': 0,
@@ -116,7 +125,7 @@ def test_plan_context_shape(db, scripted_model):
     plan, run = run_chain(db, scripted_model)
     ctx = make_ctx(db, plan_id=plan['id'])
     item = item_with_versions(db, [(datetime(2026, 10, 1, tzinfo=UTC), ['AAA'], [])])
-    repository.insert_knowledge_citations(db, [{'agent_run_id': run['id'], 'plan_id': plan['id'], 'review_id': None,
+    analysis_repo.insert_knowledge_citations(db, [{'agent_run_id': run['id'], 'plan_id': plan['id'], 'review_id': None,
                                                 'knowledge_id': item, 'version': 1, 'field': 'thesis', 'call_seq': 1}])
     data = get_plan_context(ctx)
     json.dumps(data, ensure_ascii=False)                                  # JSON all the way down
@@ -141,17 +150,17 @@ def test_plan_context_shape(db, scripted_model):
 
 def test_plan_context_includes_reviews_decision_and_trades(db, scripted_model):
     plan, _ = run_chain(db, scripted_model)
-    review = repository.insert_plan_review(db, {
+    review = execution_repo.insert_plan_review(db, {
         'ticker': 'AAA', 'signal_date': SESSION, 'head_plan_id': plan['id'], 'session': SESSION, 'trigger': 'batch',
         'run_id': 'run-x', 'mode': 'entry', 'timeline_version': 'timeline-1',
         'signals': [{'kind': 'new_8k', 'fired': True, 'detail': 'x'}, {'kind': 'abnormal_move', 'fired': False}],
         'conditions': [], 'user_input_ids': [], 'outcome': 'maintain', 'decided_by': 'host', 'reason': '维持',
         'refs': [], 'detail': {}, 'attempt': 1, 'cutoff_at': NOW})
-    dec = repository._insert_decision_for_tests(db, {
+    dec = execution_repo_legacy._insert_decision_for_tests(db, {
         'request_id': uuid.uuid4(), 'ticker': 'AAA', 'signal_date': SESSION, 'candidate_ids': [uuid.uuid4()],
         'brief_id': None, 'proposed_action': 'buy', 'final_action': 'buy', 'decision': 'accept', 'reason': '照做',
         'supersedes_id': None, 'plan_id': plan['id']}, 'h', decided_at=NOW)
-    repository.insert_trade(db, {'request_id': uuid.uuid4(), 'ticker': 'AAA', 'side': 'buy', 'quantity': 10,
+    execution_repo.insert_trade(db, {'request_id': uuid.uuid4(), 'ticker': 'AAA', 'side': 'buy', 'quantity': 10,
                                  'price': 100, 'fee': 0, 'executed_at': NOW, 'decision_id': dec['id'], 'note': None},
                             'h', recorded_at=NOW)
     db.commit()
@@ -170,7 +179,7 @@ def test_plan_context_has_execution(db, scripted_model):
 
     plan, _ = run_chain(db, scripted_model)
     fill_at = datetime(2026, 10, 23, 14, 0, tzinfo=UTC)
-    repository.insert_trade(db, {'request_id': uuid.uuid4(), 'ticker': 'AAA', 'side': 'buy', 'quantity': 10,
+    execution_repo.insert_trade(db, {'request_id': uuid.uuid4(), 'ticker': 'AAA', 'side': 'buy', 'quantity': 10,
                                  'price': 100, 'fee': 0, 'executed_at': fill_at, 'decision_id': None,
                                  'plan_id': plan['id'], 'note': None}, 'h', recorded_at=fill_at + timedelta(hours=6))
     db.execute('INSERT INTO plan_notes (request_id, request_hash, ticker, chain_signal_date, kind, body) '
@@ -209,23 +218,23 @@ def test_card_context_excludes_drafts(db, scripted_model):
                     end_session=SESSION, facts={'subject': {'kind': 'unit', 'exit_basis': None}, 'plans': [{'key': 'plan:x'}]})
     retro_run = insert_run(db, mode='retro', status='ok', reason=None,
                            output={'headline': '叙述标题XYZ', 'lessons': [{'title': '教训标题QRS'}]})
-    draft = repository.insert_card_draft(db, {
+    draft = review_repo.insert_card_draft(db, {
         'card_id': cid, 'attempt': 1, 'trigger': 'batch', 'agent_run_id': retro_run, 'status': 'ok', 'reason': None,
         'output': {'headline': '叙述标题XYZ', 'lessons': [{'title': '教训标题QRS'}]}})
-    lesson_draft = repository.insert_knowledge_draft(db, {
+    lesson_draft = review_repo.insert_knowledge_draft(db, {
         'origin': 'review_card', 'card_draft_id': draft, 'lesson_index': 0, 'discussion_turn_id': None,
         'target_knowledge_id': None, 'target_version': None, 'title': '教训标题QRS', 'body': '教训正文QRS',
         'scope': 's', 'counter_examples': 'c', 'concepts': [], 'tickers': ['AAA'], 'refs': ['fact:plans']})
     other = make_card(db, key='unit:AAA:2026-10-22:other', ticker='AAA', signal_date=SESSION)
-    adopted = repository.insert_knowledge_item(db, {'origin': 'review_card', 'source_card_id': cid})
-    version = repository.insert_knowledge_version(db, {
+    adopted = review_repo.insert_knowledge_item(db, {'origin': 'review_card', 'source_card_id': cid})
+    version = review_repo.insert_knowledge_version(db, {
         'knowledge_id': adopted, 'version': 1, 'supersedes_id': None, 'request_id': uuid.uuid4(), 'request_hash': 'h',
         'draft_id': lesson_draft, 'title': '已采纳的经验', 'body': 'b', 'scope': 's', 'counter_examples': 'c',
         'concepts': [], 'tickers': ['AAA'], 'schema_version': 'my-knowledge-1'})
     db.execute('UPDATE knowledge_versions SET created_at = %s WHERE id = %s', (datetime(2026, 10, 22, 20, tzinfo=UTC),
                                                                            version))
-    elsewhere = repository.insert_knowledge_item(db, {'origin': 'review_card', 'source_card_id': other})
-    repository.insert_knowledge_version(db, {
+    elsewhere = review_repo.insert_knowledge_item(db, {'origin': 'review_card', 'source_card_id': other})
+    review_repo.insert_knowledge_version(db, {
         'knowledge_id': elsewhere, 'version': 1, 'supersedes_id': None, 'request_id': uuid.uuid4(),
         'request_hash': 'h', 'draft_id': None, 'title': '别的卡的经验', 'body': 'b', 'scope': 's',
         'counter_examples': 'c', 'concepts': [], 'tickers': ['AAA'], 'schema_version': 'my-knowledge-1'})
@@ -234,7 +243,7 @@ def test_card_context_excludes_drafts(db, scripted_model):
     ctx = make_ctx(db, card_id=cid)
     unreviewed = get_plan_context(ctx)
     assert unreviewed['status'] == 'not_reviewed' and unreviewed['verdict'] is None
-    repository.insert_card_verdict(db, {'card_id': cid, 'request_id': uuid.uuid4(), 'request_hash': 'h',
+    review_repo.insert_card_verdict(db, {'card_id': cid, 'request_id': uuid.uuid4(), 'request_hash': 'h',
                                         'draft_id': draft, 'note': '我的复盘说明'})
     data = get_plan_context(ctx)
     text = json.dumps(data, ensure_ascii=False)
@@ -302,7 +311,7 @@ def test_get_agent_run_truncates(db, scripted_model):
     assert second['result'] == small and 'result_truncated' not in second       # short results are left alone
     assert discuss_tools.RESULT_CHARS == 2000
     # only the tool's own copy is cut: the stored call is unchanged
-    assert len(json.dumps(repository.agent_tool_calls(db, run_id)[0]['result'], ensure_ascii=False)) > 2000
+    assert len(json.dumps(analysis_repo.agent_tool_calls(db, run_id)[0]['result'], ensure_ascii=False)) > 2000
 
 
 def test_discuss_tools_read_only(db, scripted_model):

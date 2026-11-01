@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-2, agent-review-1, my-knowledge-1]
 summary: "Agent 可以用 get_knowledge 读你审定过的经验，并在论点、失效条件、反证与复查结论里用 know:<id>@<版本> 引用；只能引用本次返回过的版本，不能单独支撑价位，计划上会记下引用了哪一版。"
 related: [system.my_knowledge, agent.citation, agent.tool_calls, system.cutoff, agent.thesis, agent.counter, agent.review_outcome, review.knowledge_performance]
-sources: [investment_assistant/workbench/agent/tools.py, investment_assistant/workbench/agent/growth_check.py, investment_assistant/workbench/agent/graph.py, investment_assistant/workbench/knowledge_items.py]
+sources: [investment_assistant/analysis/agent/tools.py, investment_assistant/core/knowledge.py, investment_assistant/analysis/agent/runner.py, investment_assistant/analysis/repo.py]
 ---
 
 ## 是什么

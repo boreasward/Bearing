@@ -2,6 +2,10 @@
 
 夹具沿用 test_workbench_stage_runs（假 fetcher、recorder、一次性库）；
 推导读到的是计划生成时的那一行，日线新修订、更正快照都不改变结论；读取全程只读。"""
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.workflow.repo as workflow_repo
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
@@ -15,9 +19,13 @@ from test_workbench_service import (NOW, SESSION, Sources, _ok_responses, _task_
                                     seed_watchlist)
 from test_workbench_stage_runs import _recorder, _rows, _sent, wired   # noqa: F401  (fixtures)
 from investment_assistant.config import WorkbenchConfig
-from investment_assistant.workbench import account, derivation, plans, repository, service
-from investment_assistant.workbench import derivation_view as view
-from investment_assistant.workbench import stages as stages_module
+import investment_assistant.core.tx as service
+import investment_assistant.workflow.batch as d_workflow_batch
+from investment_assistant.execution import account_records as account
+from investment_assistant.execution import plan_levels as plans
+from investment_assistant.derivation import chain as derivation
+import investment_assistant.views.derivation as view
+import investment_assistant.core.stages as stages_module
 
 PRE_V24 = 'v2.4 之前生成，无阶段证据'
 NO_TABLE = '迁移 025 未执行，暂无阶段证据'
@@ -25,7 +33,7 @@ NO_TABLE = '迁移 025 未执行，暂无阶段证据'
 
 def _batch(db, run_id, *, tickers=('NVDA',), sources=None, now=NOW, **kwargs):
     kwargs.setdefault('deps', deps(sources or Sources()))
-    summary = service.run_batch(tickers=list(tickers), now=now, run_id=run_id,
+    summary = d_workflow_batch.run_batch(tickers=list(tickers), now=now, run_id=run_id,
                                 stages=_recorder(run_id), **kwargs)
     db.commit()
     return summary
@@ -70,25 +78,25 @@ def test_plan_derivation_consistent_from_batch(wired, monkeypatch):
 def test_agent_and_own_plans_derive_consistently(db, scripted_model):
     """Agent 计划按 agent_run_id 回读运行；自定计划按 based_on_id 回读规则计划。"""
     d = agent_deps(scripted_model, _ok_responses('AAA'))
-    service.run_batch(tickers=['AAA'], now=NOW, deps=d, run_id='run-agent', stages=_recorder('run-agent'))
+    d_workflow_batch.run_batch(tickers=['AAA'], now=NOW, deps=d, run_id='run-agent', stages=_recorder('run-agent'))
     db.commit()
     [agent_id] = _plan_ids(db, 'agent')
     out = view.plan_derivation(agent_id)
     assert out['consistency']['status'] == 'consistent', out['consistency']
     assert out['plan']['plan_version'] == 'agent-3'                       # v2.9：首版是 agent-3
-    assert view.load_rows(db, repository.plan_by_id(db, agent_id)).version['version_no'] == 0
+    assert view.load_rows(db, execution_repo.plan_by_id(db, agent_id)).version['version_no'] == 0
     assert out['inputs']['agent_run']['id'] is not None
     assert out['run']['stage'] == 'agent' and out['run']['run_id'] == 'run-agent'
 
     [rule_id] = _plan_ids(db, 'rule')
-    rule = repository.plan_by_id(db, rule_id)
-    bars = repository.read_bars(db, 'AAA', SESSION, cutoff_at=NOW)
+    rule = execution_repo.plan_by_id(db, rule_id)
+    bars = data_repo.read_bars(db, 'AAA', SESSION, cutoff_at=NOW)
     levels = {k: rule[k] + Decimal('0.01') for k in ('entry_low', 'entry_high', 'stop', 'target1')}
     own = plans.build_own_plan(rule_plan=rule, levels=levels, ticker='AAA', signal_date=SESSION, bars=bars,
-                               earnings_row=repository.latest_earnings(db, 'AAA', cutoff_at=NOW), snapshot=None,
+                               earnings_row=data_repo.latest_earnings(db, 'AAA', cutoff_at=NOW), snapshot=None,
                                exposure={'ticker_value': Decimal(0), 'total_value': Decimal(0)},
                                params=WorkbenchConfig())
-    stored = repository.insert_plan(db, {**own, 'request_id': str(uuid.uuid4()), 'request_hash': 'h' * 64})
+    stored = execution_repo.insert_plan(db, {**own, 'request_id': str(uuid.uuid4()), 'request_hash': 'h' * 64})
     db.commit()
     out = view.plan_derivation(str(stored['id']))
     assert out['consistency']['status'] == 'consistent', out['consistency']
@@ -97,14 +105,14 @@ def test_agent_and_own_plans_derive_consistently(db, scripted_model):
 
 def test_agent2_plan_without_version_row_is_incomplete(db, scripted_model):
     """agent-2 计划回读版本行；读不到（没有这一版、或迁移 026 未执行）→ incomplete，不抛异常。"""
-    service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
+    d_workflow_batch.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
     [agent_id] = _plan_ids(db, 'agent')
-    plan = repository.plan_by_id(db, agent_id)
+    plan = execution_repo.plan_by_id(db, agent_id)
     rows = view.load_rows(db, plan)
     assert rows.missing == [] and str(rows.version['plan_id']) == agent_id
 
-    orphan = repository.insert_plan(db, {k: v for k, v in plan.items() if k not in ('id', 'created_at')})
+    orphan = execution_repo.insert_plan(db, {k: v for k, v in plan.items() if k not in ('id', 'created_at')})
     db.commit()                                                               # 同样的计划行，但没有版本行
     out = view.plan_derivation(str(orphan['id']))
     assert out['consistency']['status'] == 'incomplete'
@@ -122,7 +130,7 @@ def test_load_rows_shapes_match_what_derivation_needs(db):
                                  'equity': '100000'}, now=NOW - timedelta(hours=1))
     _batch(db, 'run-shapes')
     [plan_id] = _plan_ids(db)
-    plan = repository.plan_by_id(db, plan_id)
+    plan = execution_repo.plan_by_id(db, plan_id)
     rows = view.load_rows(db, plan)
     assert rows.missing == []
     assert [b['id'] for b in rows.bars] == plan['inputs']['bar_ids']
@@ -141,7 +149,7 @@ def test_load_rows_shapes_match_what_derivation_needs(db):
 
 def test_load_rows_reports_unreadable_ids(db):
     _batch(db, 'run-gone')
-    plan = repository.plan_by_id(db, _plan_ids(db)[0])
+    plan = execution_repo.plan_by_id(db, _plan_ids(db)[0])
     ids = plan['inputs']['bar_ids']
     broken = {**plan, 'inputs': {**plan['inputs'], 'bar_ids': ids[:-1] + [999999999],
                                  'snapshot_id': str(uuid.uuid4()), 'earnings_date_id': str(uuid.uuid4())}}
@@ -171,7 +179,7 @@ class SixDecimalSources(Sources):
 def test_derivation_float_and_decimal_paths_agree(db):
     _batch(db, 'run-six', sources=SixDecimalSources())
     [plan_id] = _plan_ids(db)
-    plan = repository.plan_by_id(db, plan_id)
+    plan = execution_repo.plan_by_id(db, plan_id)
     assert plan['ref_price'] != plan['ref_price'].quantize(Decimal('0.01'))   # 真有 6 位小数
     assert plan['atr'] < 1 and plan['atr'] != plan['atr'].quantize(Decimal('0.01'))
     out = view.plan_derivation(plan_id)
@@ -184,14 +192,14 @@ def test_derivation_reads_exact_bar_revision(db):
     """日线后来有了新修订：推导仍按计划记录的原 id 读取，结论不变。"""
     _batch(db, 'run-rev')
     [plan_id] = _plan_ids(db)
-    plan = repository.plan_by_id(db, plan_id)
+    plan = execution_repo.plan_by_id(db, plan_id)
     last_id = plan['inputs']['bar_ids'][-1]
     before = db.execute('SELECT ticker, price_date, open, high, low, close, adj_close, volume, split_factor, revision '
                         'FROM price_bars WHERE id = %s', [last_id]).fetchone()
     corrected = {'price_date': before[1], 'open': float(before[2]), 'high': float(before[3]),
                  'low': float(before[4]), 'close': float(before[5]) + 1.0, 'adj_close': float(before[6]) + 1.0,
                  'volume': before[7], 'split_factor': float(before[8])}
-    assert repository.store_bars(db, before[0], [corrected], now=NOW + timedelta(hours=1))['inserted'] == 1
+    assert data_repo.store_bars(db, before[0], [corrected], now=NOW + timedelta(hours=1))['inserted'] == 1
     db.commit()
     assert db.execute('SELECT max(revision) FROM price_bars WHERE ticker = %s AND price_date = %s',
                       [before[0], before[1]]).fetchone()[0] == before[9] + 1
@@ -209,14 +217,14 @@ def test_snapshot_superseded_still_consistent(db):
     db.commit()
     _batch(db, 'run-snap')
     [plan_id] = _plan_ids(db)
-    plan = repository.plan_by_id(db, plan_id)
+    plan = execution_repo.plan_by_id(db, plan_id)
     assert str(plan['inputs']['snapshot_id']) == str(first['id'])
     assert plan['sizing']['status'] != 'no_equity'
     account.record_snapshot(db, {'request_id': str(uuid.uuid4()),
                                  'as_of': (SESSION - timedelta(days=2)).isoformat(), 'equity': '150000',
                                  'supersedes_id': str(first['id'])}, now=NOW + timedelta(hours=1))
     db.commit()
-    assert str(repository.snapshot_head(db)['id']) != str(first['id'])
+    assert str(execution_repo.snapshot_head(db)['id']) != str(first['id'])
     out = view.plan_derivation(plan_id)
     assert out['consistency'] == {'status': 'consistent', 'mismatches': [], 'missing': []}
     assert out['inputs']['snapshot']['id'] == str(first['id'])
@@ -240,7 +248,7 @@ def test_run_evidence_points_to_inserting_run(wired, monkeypatch):
 
 
 def test_pre_v24_plan_has_note(db):
-    service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))   # 没有 recorder：不写阶段行
+    d_workflow_batch.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()))   # 没有 recorder：不写阶段行
     db.commit()
     [plan_id] = _plan_ids(db)
     out = view.plan_derivation(plan_id)
@@ -279,7 +287,7 @@ def test_unit_derivation_and_errors(db):
     assert buy['consistency']['status'] == 'consistent' and 'steps' not in buy
 
     # 没有计划的卖出单元：只有触发段
-    repository.store_candidate(db, 'MU', SESSION, derivation_candidate(), run_id=None)
+    analysis_repo.store_candidate(db, 'MU', SESSION, derivation_candidate(), run_id=None)
     db.commit()
     sell = view.unit_derivation('MU', SESSION)
     assert sell['plan_ids'] == []
@@ -296,7 +304,7 @@ def test_unit_derivation_and_errors(db):
 
 
 def derivation_candidate():
-    from investment_assistant.workbench import rules
+    from investment_assistant.analysis import rules
     return rules.Candidate(rule_id='trend_break', rule_version='1', action='sell',
                            inputs={'values': {'close': 90.0, 'ma50': 100.0}, 'thresholds': {}})
 
@@ -315,8 +323,8 @@ def test_stage_runs_view_orders_and_validates(db):
     # 阶段行故意倒序写入：视图按 STAGE_IDS 排列；两次运行按先后分组
     for run_id in ('run-a', 'run-b'):
         for i, stage in enumerate(reversed(stages_module.STAGE_IDS_V3)):
-            repository.insert_stage_run(db, _stage_row(run_id, stage, offset=i))
-    repository.insert_stage_run(db, _stage_row('run-other', 'collect', date(2026, 10, 21)))
+            workflow_repo.insert_stage_run(db, _stage_row(run_id, stage, offset=i))
+    workflow_repo.insert_stage_run(db, _stage_row('run-other', 'collect', date(2026, 10, 21)))
     db.commit()
 
     out = view.stage_runs_view(session=SESSION)
@@ -387,17 +395,17 @@ def test_reads_are_read_only(db):
 
 def test_by_id_readers(db):
     _batch(db, 'run-readers')
-    plan = repository.plan_by_id(db, _plan_ids(db)[0])
+    plan = execution_repo.plan_by_id(db, _plan_ids(db)[0])
     ids = plan['inputs']['bar_ids']
-    rows = repository.bars_by_ids(db, list(reversed(ids)) + [999999999])
+    rows = data_repo.bars_by_ids(db, list(reversed(ids)) + [999999999])
     assert [r['id'] for r in rows] == list(reversed(ids))              # 输入顺序；读不到的 id 不出现
     assert all(isinstance(r['close'], Decimal) and isinstance(r['volume'], int) for r in rows)
-    assert repository.bars_by_ids(db, []) == []
-    earnings = repository.earnings_row_by_id(db, plan['inputs']['earnings_date_id'])
+    assert data_repo.bars_by_ids(db, []) == []
+    earnings = data_repo.earnings_row_by_id(db, plan['inputs']['earnings_date_id'])
     assert isinstance(earnings['earnings_date'], date) and earnings['status'] == 'known'
-    assert repository.earnings_row_by_id(db, str(uuid.uuid4())) is None
-    assert repository.snapshot_by_id(db, str(uuid.uuid4())) is None
+    assert data_repo.earnings_row_by_id(db, str(uuid.uuid4())) is None
+    assert execution_repo.snapshot_by_id(db, str(uuid.uuid4())) is None
     regime = plan['inputs']['context']['regime']
     if regime:
-        assert str(repository.regime_by_id(db, regime['id'])['id']) == regime['id']
-    assert repository.regime_by_id(db, str(uuid.uuid4())) is None
+        assert str(analysis_repo.regime_by_id(db, regime['id'])['id']) == regime['id']
+    assert analysis_repo.regime_by_id(db, str(uuid.uuid4())) is None

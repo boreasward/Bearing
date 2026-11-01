@@ -55,20 +55,20 @@ frontmatter 字段只有下表这些，多余字段校验失败：
 | `/api/knowledge/concepts/{ref}` | 一张卡：上面的字段 + `html`、`related_cards`、`backlinks`（均为 `[{id, title}]`）、`stale`（当前版时为 `null`） | 格式错 400；不存在 404；加载失败 503 |
 | `/api/knowledge/principles` | `{title, version, sections: [{heading, html, stage, concepts}]}` | 原理页缺失 404；加载失败 503 |
 
-加载失败时响应为 `{"error": "概念卡加载失败：<第一条问题>", "problems": [...]}`。规则的中文名表在 `workbench/labels.py`（`RULE_TEXT`、`RULE_SHORT`、`ACTION_TEXT`），不依赖其它工作台模块。
+加载失败时响应为 `{"error": "概念卡加载失败：<第一条问题>", "problems": [...]}`。规则的中文名表在 `core/texts.py`（`RULE_TEXT`、`RULE_SHORT`、`ACTION_TEXT`），不依赖业务层模块。
 
 ## CLI
 
 ```bash
-python -m investment_assistant.workbench.knowledge check [--root PATH]   # 校验整个目录
-python -m investment_assistant.workbench.knowledge show <ref> [--root PATH]   # 打印一张卡
+python -m investment_assistant.core.knowledge check [--root PATH]   # 校验整个目录
+python -m investment_assistant.core.knowledge show <ref> [--root PATH]   # 打印一张卡
 ```
 
 `check` 通过时打印「概念卡 n 张、原理页 m 节，通过」，退出码 0；有问题逐条打印，退出码 1。`show` 打印 frontmatter 字段和给 Agent 的纯文本；id 不存在或格式不对退出码 1。
 
 ## 怎么验证一次
 
-1. 跑 `python -m investment_assistant.workbench.knowledge check`，应通过。
+1. 跑 `python -m investment_assistant.core.knowledge check`，应通过。
 2. 离线测试：`env -u INVESTMENT_ASSISTANT_DATABASE_URL -u INVESTMENT_ASSISTANT_TEST_DATABASE_URL -u TEST_DATABASE_URL .venv/bin/python -m pytest tests/test_knowledge.py tests/test_workbench_labels.py tests/test_api_knowledge.py tests/test_api_contract.py -q`。
 3. 服务启动后 `curl -s localhost:8787/api/knowledge/concepts`，看分组与计数；`curl -s localhost:8787/api/knowledge/concepts/plan.stop@9` 看 `stale`。
 4. 故意把某张卡的 `version` 改成 0 再 `check`，应报出该文件名与原因；改回。
@@ -106,6 +106,6 @@ v2.7 新增（`my-knowledge-1`，设计见 [v2.7 spec §5、§6、§7](../specs/
 - **被引用与表现回看**：计划（首版、修订）和复查通过校验后，引用的知识版本按字段写进 `knowledge_citations`（与计划同一事务）。回看（`knowledge-perf-1`，`my_knowledge.performance`）的样本单位是单元：同一条链修订三次都引用它只算一个样本，取最早引用的那一版，用 `plan-shadow-1` 模拟，汇总用 `review.shadow_block`（与「计划影子」的 `agent_summary` 同一函数、同一阈值）；有结果的不足 5 个不给均值；只在复查里被引用的次数单列。
 - **页面**：「知识」菜单的第三项「我的知识」（`#knowledge/mine`，列表与筛选、`mine/new` 写一条、`mine/drafts` 草稿、`mine/<id>[@<版本>]` 条目页：全文、版本历史、被引用、表现回看，旧版有提示）；概念卡页多一段「挂在这张卡上的我的知识」；「标的」页「我的知识」一段。
 - **接口**：`GET/POST /api/workbench/my-knowledge`（列表 `?ticker=&concept=&status=active|archived|all`、新条目）、`GET /api/workbench/my-knowledge/{id}[?version=]`（`item`、`versions`、`status_history`、`citations`、`current`）、`POST …/{id}/versions`、`POST …/{id}/status`（body `{request_id, status, reason}`，状态不变 409 `status_unchanged`）、`GET …/{id}/performance`、`GET /api/workbench/my-knowledge-drafts?status=open|all`、`POST /api/workbench/my-knowledge-drafts/{id}/verdict`；`GET /api/workbench/instruments/{ticker}` 多一个 `knowledge`；`GET /api/workbench/chains/…` 每个版本与 `GET /api/workbench/today` 单元的 `agent` 块多一个 `knowledge_refs`（`[{ref, title, fields, current_version}]`）。迁移 027 未执行 503「迁移 027 未执行」（`today` / 链视图的 `knowledge_refs` 为空列表，「标的」页的 `knowledge` 为 `null` 并在 `errors.knowledge` 说明）。挂概念时概念卡目录读不出 → 503「概念卡不可用：…」，只挂标的的照常。
-- **命令行** `python -m investment_assistant.workbench.my_knowledge`：`show --id N [--version V]`（只读，没有这条知识退出码 1）；`check-cutoff --since D`（只读）：对 `since` 之后每个成功的 `get_knowledge` 调用，按它所属运行的 `cutoff_at` 用 `visible` 重算一次，返回的每条都必须可见、条数是截止时间下应有的数；对 `knowledge_citations` 每一行，所属运行里必须有一次 `get_knowledge` 返回过这个 `know:<id>@<版本>`，且该版本写于运行截止时间之前；有问题退出码 1，数据库不可用或迁移 027 未执行退出码 2。
+- **命令行** `python -m investment_assistant.review.knowledge.my_knowledge`：`show --id N [--version V]`（只读，没有这条知识退出码 1）；`check-cutoff --since D`（只读）：对 `since` 之后每个成功的 `get_knowledge` 调用，按它所属运行的 `cutoff_at` 用 `visible` 重算一次，返回的每条都必须可见、条数是截止时间下应有的数；对 `knowledge_citations` 每一行，所属运行里必须有一次 `get_knowledge` 返回过这个 `know:<id>@<版本>`，且该版本写于运行截止时间之前；有问题退出码 1，数据库不可用或迁移 027 未执行退出码 2。
 - **怎么验证一次**：手写一条挂到一个概念和一个标的 → 改一版（第 2 版指向第 1 版）→ 归档 → 恢复；对挂了知识的标的的一条有效链点「重新复查」，推理视图里能看到 `get_knowledge` 的调用与返回的版本；`my_knowledge check-cutoff --since <上线日>` 通过。
 - **已知限制**：知识正文是纯文本；概念卡改版后，知识上挂的 `concept:<id>@<旧版>` 不自动更新（条目页提示挂的是第几版）；表现回看只看影子，不区分你是否真的照做；样本小且不同单元常同日重叠。

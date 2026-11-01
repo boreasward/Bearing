@@ -4,6 +4,11 @@ Fake fetchers serve a fabricated price path (tickers SYN*, every price is synthe
 scripted model answers by prompt (first-version proposal, counter, review, revision), so interpretation runs
 for unrelated watch units never eat a reply meant for the review. `now` advances session by session.
 """
+from investment_assistant.execution import chains as execution_chains
+from investment_assistant.execution import trades as execution_trades
+import investment_assistant.analysis.repo as analysis_repo
+import investment_assistant.data.repo as data_repo
+import investment_assistant.execution.repo as execution_repo
 import json
 import uuid
 
@@ -21,13 +26,16 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from test_workbench_service import db   # noqa: F401  (fixture: service wired to the disposable schema)
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import plan_review, repository, service
-from investment_assistant.workbench import pool as pool_module
-from investment_assistant.workbench import regime as regime_module
-from investment_assistant.workbench import stages as stages_module
-from investment_assistant.workbench.agent import graph as agent_graph
-from investment_assistant.workbench.agent import model as agent_model_module
-from investment_assistant.workbench.universe import Universe
+import investment_assistant.workflow.nodes.review as plan_review
+import investment_assistant.core.tx as service
+import investment_assistant.analysis.agent.runner as d_analysis_agent_runner
+import investment_assistant.workflow.batch as d_workflow_batch
+from investment_assistant.analysis import pool as pool_module
+from investment_assistant.analysis import regime as regime_module
+import investment_assistant.workflow.recorder as stages_module
+from investment_assistant.analysis.agent import graph as agent_graph
+from investment_assistant.core.llm import model as agent_model_module
+from investment_assistant.data.adapters.universe import Universe
 
 NY = ZoneInfo('America/New_York')
 S1 = date(2026, 9, 1)                    # signal session (Tuesday)
@@ -173,7 +181,7 @@ class LateClock:
         if self.first:
             self.first = False
             return 0.0
-        return float(service.AGENT_DEADLINE_S)
+        return float(d_analysis_agent_runner.AGENT_DEADLINE_S)
 
 
 def settings(**overrides):
@@ -256,7 +264,7 @@ def run(db, market, k, *, tickers=None, pool=None, model=None, agent=None, clock
     deps.agent_checkpointer = lambda: nullcontext(InMemorySaver())
     deps.agent_settings = agent or settings()
     deps.clock = clock
-    summary = service.run_batch(tickers=None if pool is not None else list(tickers), pool=pool,
+    summary = d_workflow_batch.run_batch(tickers=None if pool is not None else list(tickers), pool=pool,
                                 now=now, deps=deps, run_id=run_id, stages=recorder)
     return summary, {row['stage']: row for row in rows}, model
 
@@ -269,17 +277,17 @@ def signal_day(db, market, tickers, *, review_when=None, pool=None, chains=None)
     model = make_model(propose=[m for t in order for m in proposal(t, review_when=review_when.get(t))],
                        counter=[m for _ in order for m in counter()])
     summary, stage_rows, _ = run(db, market, 0, tickers=tickers, pool=pool, model=model)
-    heads = {t: repository.chain_head(db, t, S1) for t in order}
+    heads = {t: execution_repo.chain_head(db, t, S1) for t in order}
     assert all(h is not None and h['version']['version_no'] == 0 for h in heads.values()), summary['agent']
     return heads, stage_rows
 
 
 def reviews(db, ticker='SYNTH'):
-    return repository.chain_reviews(db, ticker, S1)
+    return execution_repo.chain_reviews(db, ticker, S1)
 
 
 def head(db, ticker='SYNTH'):
-    return repository.chain_head(db, ticker, S1)
+    return execution_repo.chain_head(db, ticker, S1)
 
 
 def skips(row):
@@ -339,7 +347,7 @@ def test_default_next_session_calls_model(db):
     assert model.calls == {'review': 1}
     [row] = reviews(db)
     assert (row['outcome'], row['decided_by'], row['reason']) == ('maintain', 'agent', '趋势未变')
-    run_row = repository.agent_run_by_id(db, row['review_agent_run_id'])
+    run_row = data_repo.agent_run_by_id(db, row['review_agent_run_id'])
     assert (run_row['mode'], run_row['agent_version'], run_row['status']) == ('review', 'agent-review-2', 'ok')
     assert run_row['plan_id'] is None and run_row['cutoff_at'] == evening(day(1))
     assert row['input_tokens'] == 10 and row['output_tokens'] == 5
@@ -415,11 +423,11 @@ def test_signal_triggers_revision(db, monkeypatch, kind):
     assert (plan['entry_type'], plan['max_hold_sessions']) == ('zone_limit', 10)
     assert version['schema_version'] == 'agent-3' and plan['inputs']['chain_mode'] == 'entry'
     assert str(row['new_plan_id']) == str(plan['id'])
-    revise_run = repository.agent_run_by_id(db, row['revision_agent_run_id'])
+    revise_run = data_repo.agent_run_by_id(db, row['revision_agent_run_id'])
     assert (revise_run['mode'], revise_run['agent_version'], revise_run['status']) == ('revise', 'agent-3', 'ok')
     assert str(revise_run['plan_id']) == str(plan['id']) and str(version['agent_run_id']) == str(revise_run['id'])
-    assert {c['phase'] for c in repository.agent_tool_calls(db, revise_run['id'])} == {'propose', 'counter'}
-    assert [c['phase'] for c in repository.agent_tool_calls(db, row['review_agent_run_id'])] == ['review']
+    assert {c['phase'] for c in analysis_repo.agent_tool_calls(db, revise_run['id'])} == {'propose', 'counter'}
+    assert [c['phase'] for c in analysis_repo.agent_tool_calls(db, row['review_agent_run_id'])] == ['review']
     # plan, version, revise run, review run and review row: one transaction
     same = {xmin(db, 'trade_plans', 'id', plan['id']), xmin(db, 'agent_plan_versions', 'plan_id', plan['id']),
             xmin(db, 'agent_runs', 'id', revise_run['id']), xmin(db, 'agent_runs', 'id', row['review_agent_run_id']),
@@ -462,7 +470,7 @@ def test_revision_failure_keeps_head(db):
     assert 'changes_mismatch' in row['detail']['revision_status']
     assert row['detail']['revision_status'] == 'rejected: changes_mismatch'
     assert str(head(db)['plan']['id']) == str(v0['plan']['id'])
-    revise_run = repository.agent_run_by_id(db, row['revision_agent_run_id'])
+    revise_run = data_repo.agent_run_by_id(db, row['revision_agent_run_id'])
     assert (revise_run['status'], revise_run['reason'], revise_run['plan_id']) == ('rejected', 'changes_mismatch', None)
     stage = rows['review']
     assert stage['status'] == 'degraded' and [d['kind'] for d in stage['degradations']] == ['revision_failed']
@@ -479,7 +487,7 @@ def test_revision_pass_becomes_invalidate(db):
     [row] = reviews(db)
     assert (row['outcome'], row['decided_by']) == ('invalidate', 'agent')
     assert row['detail']['via'] == 'revision_pass' and row['new_plan_id'] is None
-    assert repository.agent_run_by_id(db, row['revision_agent_run_id'])['status'] == 'pass'
+    assert data_repo.agent_run_by_id(db, row['revision_agent_run_id'])['status'] == 'pass'
     summary, rows, _ = run(db, market, 2, tickers=['SYNTH'])
     assert summary['review']['objects'] == 0 and len(reviews(db)) == 1
 
@@ -496,7 +504,7 @@ def test_entry_revision_invalid_is_failed_revision(db):
     assert row['detail']['revision_status'].startswith('plan_invalid: earnings_in_validity')
     assert str(head(db)['plan']['id']) == str(v0['plan']['id'])
     assert db.execute("SELECT count(*) FROM trade_plans WHERE kind = 'agent'").fetchone()[0] == 1
-    revise_run = repository.agent_run_by_id(db, row['revision_agent_run_id'])
+    revise_run = data_repo.agent_run_by_id(db, row['revision_agent_run_id'])
     assert (revise_run['status'], revise_run['reason']) == ('rejected', 'plan_invalid')
     assert [d['kind'] for d in rows['review']['degradations']] == ['revision_failed']
 
@@ -508,7 +516,7 @@ def test_review_tool_context_uses_review_session(db):
     model = make_model(review=verdict('SYNTH', 'maintain', '异动但趋势未破', first=tool('get_trigger', {}, 'r1')))
     run(db, market, 1, tickers=['SYNTH'], model=model)
     [row] = reviews(db)
-    [call] = repository.agent_tool_calls(db, row['review_agent_run_id'])
+    [call] = analysis_repo.agent_tool_calls(db, row['review_agent_run_id'])
     assert call['tool'] == 'get_trigger' and call['phase'] == 'review'
     assert [c['rule_id'] for c in call['result']['data']] == ['abnormal_move']       # S 当日的候选
     assert {c['inputs']['signal_date'] for c in call['result']['data']} == {day(1).isoformat()}
@@ -523,7 +531,7 @@ def test_review_tool_context_uses_review_session(db):
 # ---------------------------------------------------------------- holdings, ends, ordering
 
 def _decide(db, ticker, final, *, plan_id=None, now):
-    cands = repository.unit_candidates(db, ticker, S1)
+    cands = data_repo.unit_candidates(db, ticker, S1)
     return legacy_decisions.decide({'request_id': str(uuid.uuid4()), 'ticker': ticker, 'signal_date': S1.isoformat(),
                            'candidate_ids': [str(c['id']) for c in cands], 'proposed_action': 'buy',
                            'final_action': final, 'decision': 'accept' if final == 'buy' else 'reject',
@@ -541,7 +549,7 @@ def test_holding_chain_reviewed_after_invalid_version(db):
     v0 = signal_day(db, market, ['SYNTH'])[0]['SYNTH']
     decision = _decide(db, 'SYNTH', 'buy', plan_id=v0['plan']['id'], now=evening(S1))
     legacy_decisions.add_trade(_trade('SYNTH', 'buy', '10', '125', day(1), decision['id']), now=evening(day(1)))
-    service.add_snapshot({'request_id': str(uuid.uuid4()), 'as_of': day(1).isoformat(), 'equity': '1000'},
+    execution_trades.add_snapshot({'request_id': str(uuid.uuid4()), 'as_of': day(1).isoformat(), 'equity': '1000'},
                          now=evening(day(1)) - timedelta(hours=1))   # 已持有 1250 > 单票上限 → 修订版 no_room
     model = make_model(review=verdict('SYNTH', 'revise', '止损应上移'), revise=revision('SYNTH'), counter=counter())
     run(db, market, 1, tickers=['SYNTH'], model=model)
@@ -584,7 +592,7 @@ def test_invalidated_holding_chain_is_not_a_holding_without_chain(db):
     decision = _decide(db, 'SYNTH', 'buy', plan_id=v0['plan']['id'], now=evening(S1))
     legacy_decisions.add_trade(_trade('SYNTH', 'buy', '10', '125', day(1), decision['id']), now=evening(day(1)))
     legacy_decisions.add_trade(_trade('SYNB', 'buy', '5', '90', day(1)), now=evening(day(1)))      # 无链的持仓
-    repository.insert_plan_review(db, {
+    execution_repo.insert_plan_review(db, {
         'ticker': 'SYNTH', 'signal_date': S1, 'head_plan_id': v0['plan']['id'], 'session': day(1),
         'trigger': 'batch', 'run_id': 'run-x', 'mode': 'holding', 'timeline_version': 'timeline-1',
         'outcome': 'invalidate', 'decided_by': 'host', 'reason': '失效条件成立', 'attempt': 1,
@@ -593,7 +601,7 @@ def test_invalidated_holding_chain_is_not_a_holding_without_chain(db):
     _, rows, model = run(db, market, 2, tickers=['SYNTH'])
     assert model.calls.get('review', 0) == 0
     assert rows['review']['detail']['holdings_without_chain'] == ['SYNB']
-    assert service.held_chain_states(db, day(2)) == {'SYNTH': 'invalidated'}
+    assert execution_chains.held_chain_states(db, day(2)) == {'SYNTH': 'invalidated'}
 
 
 def test_extended_pool_chain_reviewed_last(db, monkeypatch):
@@ -602,17 +610,17 @@ def test_extended_pool_chain_reviewed_last(db, monkeypatch):
                "VALUES ('SYNA', 'extended', %s, %s)", [S1 - timedelta(days=1), evening(S1) - timedelta(days=1)])
     pool = pool_module.Pool(core=('SYNTH',), extended=('SYNA',))
     signal_day(db, market, None, pool=pool)
-    assert {c['ticker']: c['pool'] for c in repository.all_chains(db)} == {'SYNA': 'extended', 'SYNTH': 'main'}
+    assert {c['ticker']: c['pool'] for c in execution_repo.all_chains(db)} == {'SYNA': 'extended', 'SYNTH': 'main'}
     model = make_model(review=[*verdict('SYNTH', 'maintain', '主列表', cite=False),
                                *verdict('SYNA', 'maintain', '扩展池', cite=False)])
     run(db, market, 1, pool=pool, model=model)
-    rows = repository.reviews_on(db, day(1))
+    rows = execution_repo.reviews_on(db, day(1))
     assert [(r['ticker'], r['reason']) for r in rows] == [('SYNTH', '主列表'), ('SYNA', '扩展池')]
 
-    monkeypatch.setattr(plan_review, 'REVIEW_MAX_OBJECTS', 1)
+    monkeypatch.setattr(execution_chains, 'REVIEW_MAX_OBJECTS', 1)
     _, stage_rows, _ = run(db, market, 2, pool=pool,
                            model=make_model(review=verdict('SYNTH', 'maintain', '主列表', cite=False)))
-    assert [r['ticker'] for r in repository.reviews_on(db, day(2))] == ['SYNTH']
+    assert [r['ticker'] for r in execution_repo.reviews_on(db, day(2))] == ['SYNTH']
     assert skips(stage_rows['review']) == {'object_cap': ['SYNA']}
     assert stage_rows['review']['detail']['excluded'] == [
         {'ticker': 'SYNA', 'signal_date': S1.isoformat(), 'reason': 'object_cap'}]
@@ -633,7 +641,7 @@ def test_budget_skips(db, monkeypatch, gate):
         kwargs['model'] = make_model(other=[QuotaError()])
     elif gate == 'token_budget':
         kwargs['agent'] = settings(daily_tokens=1000)
-        monkeypatch.setattr(repository, 'agent_tokens_on', lambda conn, ny_date: 10 ** 6)
+        monkeypatch.setattr(analysis_repo, 'agent_tokens_on', lambda conn, ny_date: 10 ** 6)
     else:
         kwargs['agent'] = settings(connection='no_sharing')      # signed in, but no plan usage shared: not_configured
     summary, rows, model = run(db, market, 1, tickers=['SYNQ', 'SYNTH'], **kwargs)
@@ -769,7 +777,7 @@ def test_chain_ticker_collected_without_rules(db):
                       ['SYNTH', day(1)]).fetchone()[0] == 0
     assert db.execute('SELECT count(*) FROM trade_plans WHERE ticker = %s AND signal_date = %s',
                       ['SYNTH', day(1)]).fetchone()[0] == 0
-    assert repository.latest_brief(db, 'SYNTH', day(1)) is None
+    assert analysis_repo.latest_brief(db, 'SYNTH', day(1)) is None
     assert rows['signals']['input_count'] == 1                      # 规则循环只跑 SYNF
     [row] = reviews(db)
     assert row['session'] == day(1) and signal(row, 'abnormal_move')['fired'] is False
@@ -789,7 +797,7 @@ def test_chain_ended_while_model_runs_writes_nothing(db, winner):
 
     def other_side():
         if winner == 'invalidate':
-            repository.insert_plan_review(db, {
+            execution_repo.insert_plan_review(db, {
                 'ticker': 'SYNTH', 'signal_date': S1, 'head_plan_id': v0['plan']['id'], 'session': day(1),
                 'trigger': 'recheck', 'run_id': 'recheck-1', 'mode': 'entry',
                 'timeline_version': 'timeline-1', 'outcome': 'invalidate', 'decided_by': 'host',
@@ -802,14 +810,14 @@ def test_chain_ended_while_model_runs_writes_nothing(db, winner):
                        counter=counter())
     summary, rows, model = run(db, market, 1, tickers=['SYNTH'], model=model)
     assert model.calls['revise'] == 2                     # the losing side did run its revision
-    assert [v['version_no'] for v in repository.chain_versions(db, 'SYNTH', S1)] == [0]
+    assert [v['version_no'] for v in execution_repo.chain_versions(db, 'SYNTH', S1)] == [0]
     batch_rows = [r for r in reviews(db) if r['trigger'] == 'batch']
     assert batch_rows == []
     lost = db.execute("SELECT mode, status, reason, input_tokens, output_tokens, plan_id FROM agent_runs "
                       "WHERE mode IN ('review', 'revise') ORDER BY mode").fetchall()
     assert lost == [('review', 'skipped', 'review_in_progress', 20, 10, None),
                     ('revise', 'skipped', 'review_in_progress', 40, 20, None)]
-    assert repository.agent_tokens_on(db, day(1)) >= 90
+    assert analysis_repo.agent_tokens_on(db, day(1)) >= 90
     assert skips(rows['review']) == {'review_in_progress': ['SYNTH']}
     assert summary['review']['outcomes'] == {'maintain': 0, 'revise': 0, 'invalidate': 0, 'skipped': 0, 'error': 0}
 
@@ -819,14 +827,14 @@ def test_broken_chain_does_not_stop_the_others(db, monkeypatch):
     is reported; the other chain is still collected and reviewed."""
     market = Market()
     signal_day(db, market, ['SYNB', 'SYNF', 'SYNTH'], chains=['SYNB', 'SYNTH'])
-    real = service.chain_status
+    real = execution_chains.chain_status
 
     def chain_status(conn, ticker, signal_date, **kwargs):
         if ticker == 'SYNB':
             conn.execute('SELECT * FROM no_such_table_for_synb')        # aborts the transaction without a savepoint
         return real(conn, ticker, signal_date, **kwargs)
 
-    monkeypatch.setattr(service, 'chain_status', chain_status)
+    monkeypatch.setattr(execution_chains, 'chain_status', chain_status)
     model = make_model(review=verdict('SYNTH', 'maintain', '照旧', cite=False))
     summary, rows, _ = run(db, market, 1, tickers=['SYNF'], model=model)     # both chain tickers left the pool
     assert summary['pool']['chains'] == 1
@@ -858,18 +866,18 @@ def test_failed_write_still_counts_attempt_and_tokens(db, monkeypatch):
         assert (row['outcome'], row['decided_by'], row['attempt']) == ('error', 'agent', attempt)
         assert 'plan build exploded' in row['detail']['write_error'] and row['new_plan_id'] is None
         assert (row['input_tokens'], row['output_tokens']) == (60, 30)
-        runs = [repository.agent_run_by_id(db, row['review_agent_run_id']),
-                repository.agent_run_by_id(db, row['revision_agent_run_id'])]
+        runs = [data_repo.agent_run_by_id(db, row['review_agent_run_id']),
+                data_repo.agent_run_by_id(db, row['revision_agent_run_id'])]
         assert [(r['mode'], r['status'], r['input_tokens']) for r in runs] == [('review', 'error', 20),
                                                                               ('revise', 'error', 40)]
         assert [f['target'] for f in rows['review']['failures']] == ['SYNTH']
         assert [e for e in summary['errors'] if e.startswith('SYNTH review: ')]
-    assert [v['version_no'] for v in repository.chain_versions(db, 'SYNTH', S1)] == [0]
-    assert repository.agent_tokens_on(db, day(1)) >= 120
+    assert [v['version_no'] for v in execution_repo.chain_versions(db, 'SYNTH', S1)] == [0]
+    assert analysis_repo.agent_tokens_on(db, day(1)) >= 120
 
 
 def test_chain_tickers_requires_exclude():
     import inspect
 
-    param = inspect.signature(plan_review.chain_tickers).parameters['exclude']
+    param = inspect.signature(execution_chains.chain_tickers).parameters['exclude']
     assert param.kind is inspect.Parameter.KEYWORD_ONLY and param.default is inspect.Parameter.empty

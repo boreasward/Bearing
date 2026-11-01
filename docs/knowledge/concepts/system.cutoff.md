@@ -6,7 +6,7 @@ version: 1
 applies_to: []
 summary: "规则、计划和 Agent 的数据类工具只读截止时间之前已入库的数据（触发候选与持仓记录除外），每版计划的截止时间固定；这能还原当时所知，但不是严格的历史回测。"
 related: [system.append_only, agent.tool_calls, agent.version_chain, system.concept_card]
-sources: [investment_assistant/workbench/agent/tools.py, investment_assistant/workbench/timeline.py, investment_assistant/workbench/service.py]
+sources: [investment_assistant/analysis/agent/tools.py, investment_assistant/execution/timeline.py, investment_assistant/analysis/agent/runner.py, investment_assistant/core/tx.py]
 ---
 
 ## 是什么

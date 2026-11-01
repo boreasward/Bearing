@@ -50,7 +50,7 @@ def test_event_stream_frames_events_and_survives_keepalive(monkeypatch):
     import queue as _queue
 
     from investment_assistant.api import app as app_mod
-    from investment_assistant.tasks import runner
+    from investment_assistant.core import runner
 
     unsubscribed = []
     monkeypatch.setattr(runner, "unsubscribe", lambda q: unsubscribed.append(q))

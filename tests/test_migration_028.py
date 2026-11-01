@@ -1,6 +1,8 @@
 """Migration 028 (v2.8 spec §10): stage_runs attempt / daily / sec_monitor, three new tables, scheduled_jobs merged.
 
 SQL tests run in a throwaway schema of the disposable test database only; the two source checks are offline."""
+import investment_assistant.core.dbutil as core_dbutil
+import investment_assistant.core.schema as core_schema
 import json
 import os
 import re
@@ -10,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from investment_assistant.workbench import repository
+# Repository consumers use their owning layers below.
 
 MIGRATION = Path('migrations/028_daily_workflow.sql')
 NOW = datetime(2026, 10, 29, 3, 30, tzinfo=UTC)
@@ -80,10 +82,10 @@ def _reject(conn, exc_name, fn, *args, **kwargs):
 
 def test_migrate_001_to_028_and_rerun(migrated_db):
     conn = migrated_db
-    assert repository.daily_ready(conn) is False
+    assert core_schema.daily_ready(conn) is False
     _apply(conn)
     _apply(conn)                                              # idempotent: rerunning must not fail or duplicate
-    assert repository.daily_ready(conn) is True
+    assert core_schema.daily_ready(conn) is True
     for table in NEW_TABLES:
         assert conn.execute('SELECT to_regclass(%s)', (table,)).fetchone()[0] is not None, table
     assert conn.execute("SELECT to_regclass('idx_job_reports_run_id'), to_regclass('idx_agent_connection_events_created'), "
@@ -218,16 +220,17 @@ def test_scheduled_jobs_merged(migrated_db, workbench_enabled):
 
 
 def test_new_tables_not_in_workbench_tables():
-    assert not set(NEW_TABLES) & set(repository.WORKBENCH_TABLES)
+    assert not set(NEW_TABLES) & set(core_dbutil.WORKBENCH_TABLES)
 
 
 def test_repository_never_mentions_agent_connections():
-    source = Path('investment_assistant/workbench/repository.py').read_text(encoding='utf-8')
+    source = '\n'.join(path.read_text(encoding='utf-8')
+                       for path in Path('investment_assistant').glob('*/repo*.py'))
     assert 'agent_connections' not in source and 'agent_connection_events' not in source
 
 
 def test_repository_only_inserts_into_attempt_resets():
-    source = Path('investment_assistant/workbench/repository.py').read_text(encoding='utf-8')
+    source = Path('investment_assistant/analysis/repo.py').read_text(encoding='utf-8')
     assert 'agent_attempt_resets' in source
     assert not re.search(r'(UPDATE|DELETE\s+FROM|TRUNCATE|ALTER\s+TABLE|DROP\s+TABLE)\s+agent_attempt_resets', source,
                          re.IGNORECASE)

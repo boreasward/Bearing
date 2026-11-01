@@ -6,7 +6,7 @@ version: 1
 applies_to: [timeline-2, agent-review-2]
 summary: "每个持仓标的每个复查交易日一行：持有天数、距止损与 T1、现在几 R、指令（持有/卖一半/退出/无计划）和维持理由，复查失败那天也照写。"
 related: [plan.max_hold, agent.retrigger, system.active_chain, review.chain_state, review.r_multiple]
-sources: [investment_assistant/workbench/timeline.py, investment_assistant/workbench/plan_review.py, investment_assistant/workbench/repository.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/timeline.py, investment_assistant/execution/chains.py, investment_assistant/execution/repo.py, docs/features/daily-plan.md]
 ---
 
 ## 是什么

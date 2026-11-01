@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from investment_assistant.notify import templates
-from investment_assistant.workbench import review_digest
+from investment_assistant.review import period_digest as review_digest
 
 SH = ZoneInfo('Asia/Shanghai')
 NY = ZoneInfo('America/New_York')

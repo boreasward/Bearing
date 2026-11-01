@@ -1,4 +1,6 @@
 """Concept-card knowledge layer (v2.6 spec §4): load, validate, render, refs, CLI. Offline, tmp_path only."""
+import investment_assistant.review.agent_runs as review_agent_runs
+import ast
 import hashlib
 import re
 from pathlib import Path
@@ -6,8 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from investment_assistant.workbench import knowledge
-from investment_assistant.workbench.knowledge import KnowledgeError, load
+from investment_assistant.core import knowledge
+from investment_assistant.core.knowledge import KnowledgeError, load
 
 GOOD_BODY = '## 是什么\n\n止损是一个价位。\n'
 
@@ -93,8 +95,8 @@ def test_validation_rules(tmp_path, overrides, filename, keyword):
 
 def test_boundary_values_accepted(tmp_path):
     write_card(tmp_path, 'plan.stop', title='字' * 30, summary='字' * 120, body='字' * 6000,
-               sources=['investment_assistant/workbench/plans.py'])
-    assert load(tmp_path).concepts['plan.stop'].sources == ('investment_assistant/workbench/plans.py',)
+               sources=['investment_assistant/execution/plan_levels.py'])
+    assert load(tmp_path).concepts['plan.stop'].sources == ('investment_assistant/execution/plan_levels.py',)
 
 
 def test_all_problems_reported_at_once(tmp_path):
@@ -336,25 +338,43 @@ def test_catalog_failure_not_cached(tmp_path, monkeypatch):
 
 def test_known_versions_cover_code_constants():
     from investment_assistant.data import fetch_policy
-    from investment_assistant.workbench import (accounts, backcheck, derivation, knowledge_items, knowledge_perf, monthly,
-                                                paper_fill, paper_strategies, plan_shadow, plans, regime, retro,
-                                                review, rules, screen, stages, timeline, tracks, workflow)
-    from investment_assistant.workbench.agent import chatgpt, conditions, graph
+    from investment_assistant.optimize import backcheck
+    from investment_assistant.review.knowledge import items as knowledge_items
+    from investment_assistant.review.knowledge import perf as knowledge_perf
+    from investment_assistant.review import monthly
+    from investment_assistant.analysis import regime
+    from investment_assistant.review import retro
+    from investment_assistant.review import outcomes as review
+    from investment_assistant.analysis import rules
+    from investment_assistant.analysis import screen_rules as screen
+    import investment_assistant.core.stages as stages
+    from investment_assistant.review import tracks
+    import investment_assistant.workflow.graph as workflow
+    from investment_assistant.execution import simulation as plan_shadow
+    from investment_assistant.execution import timeline
+    from investment_assistant.execution import accounts
+    from investment_assistant.execution.paper import fill as paper_fill
+    from investment_assistant.execution.paper import strategies as paper_strategies
+    from investment_assistant.execution import plan_levels as plans
+    from investment_assistant.derivation import chain as derivation
+    from investment_assistant.analysis.agent import graph
+    from investment_assistant.execution import conditions
+    from investment_assistant.core.llm import chatgpt
     current = {plans.PLAN_VERSION, plans.AGENT_VERSION, timeline.AGENT_V2, graph.REVIEW_VERSION,
                graph.INTERPRET_VERSION, conditions.CONDITIONS_VERSION, timeline.TIMELINE_VERSION,
                plans.CONTEXT_VERSION, screen.SCREEN_VERSION, regime.REGIME_VERSION, derivation.DERIVATION_VERSION,
                plan_shadow.SHADOW_VERSION, tracks.TRACKS_VERSION, review.CALC_VERSION, monthly.MONTHLY_VERSION,
                stages.STAGES_VERSION, backcheck.CALC_VERSION, 'rules-' + rules.RULE_VERSION,
                knowledge.KNOWLEDGE_VERSION, retro.RETRO_VERSION, knowledge_items.MY_KNOWLEDGE_VERSION,
-               knowledge_perf.KNOWLEDGE_PERF_VERSION, graph.RETRO_AGENT_VERSION, graph.DISCUSS_AGENT_VERSION,
+               knowledge_perf.KNOWLEDGE_PERF_VERSION, review_agent_runs.RETRO_AGENT_VERSION, review_agent_runs.DISCUSS_AGENT_VERSION,
                fetch_policy.FETCH_POLICY_VERSION, workflow.DAILY_GRAPH_VERSION, chatgpt.CHATGPT_PROTOCOL_VERSION,
                accounts.ACCOUNT_VERSION, paper_fill.PAPER_FILL_VERSION, paper_strategies.FOLLOW_PLANS_VERSION,
                graph.PORTFOLIO_AGENT_VERSION}
     assert current <= knowledge.KNOWN_VERSIONS
     assert {'stages-5', 'daily-2', 'retro-2', 'agent-retro-2', 'agent-discuss-1', 'my-knowledge-1',
             'knowledge-perf-1', 'review-8'} == {stages.STAGES_VERSION, workflow.DAILY_GRAPH_VERSION,
-                                                 retro.RETRO_VERSION, graph.RETRO_AGENT_VERSION,
-                                                 graph.DISCUSS_AGENT_VERSION, knowledge_items.MY_KNOWLEDGE_VERSION,
+                                                 retro.RETRO_VERSION, review_agent_runs.RETRO_AGENT_VERSION,
+                                                 review_agent_runs.DISCUSS_AGENT_VERSION, knowledge_items.MY_KNOWLEDGE_VERSION,
                                                  knowledge_perf.KNOWLEDGE_PERF_VERSION, review.CALC_VERSION}
     assert {'stages-1', 'review-5', 'monthly-2', 'regime-1', 'context-1', 'backcheck-1'} <= knowledge.KNOWN_VERSIONS
     # v2.8 adds four literals, each with its constant
@@ -374,8 +394,15 @@ def test_known_versions_cover_code_constants():
 
 def test_knowledge_module_does_not_import_agent_or_service_at_top_level():
     source = Path(knowledge.__file__).read_text(encoding='utf-8')
-    top_imports = [line for line in source.splitlines() if re.match(r'(from|import) ', line)]
-    assert not [line for line in top_imports if 'agent' in line or 'service' in line], top_imports
+    imports = []
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.ImportFrom):
+            imports.append(node.module or '')
+        elif isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+    assert not [name for name in imports if name.startswith('investment_assistant.')
+                and not (name == 'investment_assistant.core' or name.startswith('investment_assistant.core.')
+                         or name == 'investment_assistant.data.calendar')], imports
 
 
 def test_groups_order():

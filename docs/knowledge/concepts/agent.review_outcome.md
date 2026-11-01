@@ -6,7 +6,7 @@ version: 1
 applies_to: [agent-review-1, timeline-1]
 summary: "每天收盘后对每条入场期或持仓期的链复查一次，结论为维持、修订或作废，由系统规则或 Agent 判定；还可能是跳过或出错。"
 related: [agent.signals, agent.invalidation, agent.review_when, agent.version_chain, agent.user_input]
-sources: [investment_assistant/workbench/plan_review.py, investment_assistant/workbench/timeline.py, investment_assistant/workbench/agent/plan_check.py, investment_assistant/workbench/agent/graph.py]
+sources: [investment_assistant/analysis/agent/runner.py, investment_assistant/execution/timeline.py, investment_assistant/execution/plan_check.py, investment_assistant/analysis/agent/graph.py]
 ---
 
 ## 是什么

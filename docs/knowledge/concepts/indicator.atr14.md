@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "最近 14 个真实波幅的平均，衡量一只股票一天通常波动多少；止损、目标、入场区间和移动止损都以它为尺。"
 related: [family.atr, plan.stop, plan.target1, plan.entry_zone, plan.trailing_stop]
-sources: [investment_assistant/workbench/plans.py, investment_assistant/workbench/agent/tools.py, investment_assistant/workbench/screen.py]
+sources: [investment_assistant/derivation/indicators/price.py, investment_assistant/analysis/agent/tools.py, investment_assistant/analysis/screen_rules.py]
 ---
 
 ## 是什么

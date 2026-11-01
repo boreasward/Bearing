@@ -3,8 +3,8 @@ from datetime import date, timedelta
 from statistics import quantiles
 
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.workbench import backcheck
-from investment_assistant.workbench.rules import Candidate
+from investment_assistant.optimize import backcheck
+from investment_assistant.analysis.rules import Candidate
 
 START = date(2026, 1, 5)
 

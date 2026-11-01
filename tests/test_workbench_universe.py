@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from investment_assistant.workbench import universe
+from investment_assistant.data.adapters import universe
 
 
 def _write(tmp_path, name, data):

@@ -1,7 +1,8 @@
 """The data routes are thin wrappers: they delegate to data_view and map its errors."""
 import pytest
 
-from investment_assistant.workbench import data_view, service
+import investment_assistant.views.data as data_view
+import investment_assistant.core.tx as service
 
 
 def raiser(exc):
@@ -103,7 +104,7 @@ def test_post_checks_tables_and_024_before_submitting(workbench_db, monkeypatch)
     from fastapi.testclient import TestClient
     from investment_assistant import db
     from investment_assistant.api.app import create_app
-    from investment_assistant.workbench import data_view
+    import investment_assistant.views.data as data_view
 
     url = os.environ['INVESTMENT_ASSISTANT_TEST_DATABASE_URL']
     schema = workbench_db.execute('SHOW search_path').fetchone()[0]
@@ -111,7 +112,7 @@ def test_post_checks_tables_and_024_before_submitting(workbench_db, monkeypatch)
                        f'{url}?options=-csearch_path%3D{schema}')
 
     submitted = []
-    monkeypatch.setattr('investment_assistant.tasks.runner.submit',
+    monkeypatch.setattr('investment_assistant.core.runner.submit',
                         lambda kind, job, **kw: submitted.append(kind) or 'fake-run')
     client = TestClient(create_app())
 

@@ -6,7 +6,7 @@ version: 1
 applies_to: [account-1]
 summary: "账本按本账户的初始现金、出入金和成交算现金，按先进先出算持仓，再用最近收盘估值；券商快照只用来对账。"
 related: [account.reconciliation, account.comparison, review.position, review.monthly_return]
-sources: [investment_assistant/workbench/accounts.py, investment_assistant/workbench/positions.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
+sources: [investment_assistant/execution/accounts.py, investment_assistant/execution/positions.py, docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md]
 ---
 
 ## 是什么

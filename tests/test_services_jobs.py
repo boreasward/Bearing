@@ -181,12 +181,12 @@ def test_sec_backfill_requires_dates(client, monkeypatch):
 
 
 def test_daily_job_ignores_dates_and_returns_its_run_id(monkeypatch):
-    from investment_assistant.tasks import daily
+    from investment_assistant.core import locks
 
     seen = {}
     monkeypatch.setattr(jobs, "REGISTRY", {"daily": lambda config, **kw: seen.update(kw) or {"ok": True}})
     monkeypatch.setattr(jobs, "load_config", lambda: object())
-    monkeypatch.setattr(daily, "is_running", lambda: False)
+    monkeypatch.setattr(locks, "is_running", lambda: False)
     monkeypatch.setattr(jobs.runner, "submit", lambda kind, fn: fn() and "runner-3")
     out = jobs.trigger_job("daily", {"date": "2026-10-01"})
     assert out["run_id"] == "runner-3" and out["status"] == "pending"
@@ -197,44 +197,45 @@ def test_daily_job_ignores_dates_and_returns_its_run_id(monkeypatch):
 
 @pytest.mark.parametrize("name, payload", [("daily", {}), ("sec_backfill", {"date": "2026-10-01"})])
 def test_manual_runs_raise_daily_busy_while_the_lock_is_held(monkeypatch, name, payload):
-    from investment_assistant.tasks import daily
+    from investment_assistant.core import locks
 
     monkeypatch.setattr(jobs, "REGISTRY", {name: lambda config, **kw: pytest.fail("must not run")})
     monkeypatch.setattr(jobs, "load_config", lambda: object())
-    monkeypatch.setattr(daily, "is_running", lambda: True)
+    monkeypatch.setattr(locks, "is_running", lambda: True)
     monkeypatch.setattr(jobs.runner, "submit", lambda *a, **k: pytest.fail("must not submit"))
-    with pytest.raises(daily.DailyBusy):
+    with pytest.raises(locks.DailyBusy):
         jobs.trigger_job(name, payload)
 
 
 def test_a_missing_database_does_not_block_the_manual_run(monkeypatch):
-    from investment_assistant.tasks import daily
+    from investment_assistant.core import locks
 
     def no_db():
         raise RuntimeError("数据库未配置")
 
     monkeypatch.setattr(jobs, "REGISTRY", {"daily": lambda config, **kw: {"ok": True}})
     monkeypatch.setattr(jobs, "load_config", lambda: object())
-    monkeypatch.setattr(daily, "is_running", no_db)
+    monkeypatch.setattr(locks, "is_running", no_db)
     monkeypatch.setattr(jobs.runner, "submit", lambda kind, fn: "runner-4")
     assert jobs.trigger_job("daily")["run_id"] == "runner-4"
 
 
 def test_resume_daily_checks_then_submits_in_that_order(monkeypatch):
     from investment_assistant.tasks import daily
-    from investment_assistant.workbench import workflow
+    from investment_assistant.core import locks
+    import investment_assistant.workflow.graph as workflow
 
     order = []
     run_id = "daily-20261030033000-1a2b3c4d"
     monkeypatch.setattr(workflow, "resume_check", lambda rid, node, *, now: order.append("check") or {"attempt": 3})
     monkeypatch.setattr(daily, "ensure_ready", lambda: order.append("ready"))
-    monkeypatch.setattr(daily, "is_running", lambda: order.append("lock") or False)
+    monkeypatch.setattr(locks, "is_running", lambda: order.append("lock") or False)
     monkeypatch.setattr(jobs.runner, "submit", lambda kind, fn: order.append(("submit", kind)) or "daily_resume-x")
     out = jobs.resume_daily({"run_id": run_id, "node": "collect", "request_id": "ignored"})
     assert out == {"run_id": run_id, "node": "collect", "status": "pending", "attempt": 3, "runner_id": "daily_resume-x"}
     assert order == ["check", "ready", "lock", ("submit", "daily_resume")]
-    monkeypatch.setattr(daily, "is_running", lambda: True)
-    with pytest.raises(daily.DailyBusy):
+    monkeypatch.setattr(locks, "is_running", lambda: True)
+    with pytest.raises(locks.DailyBusy):
         jobs.resume_daily({"run_id": run_id, "node": "collect"})
     assert order.count(("submit", "daily_resume")) == 1                  # a busy lock submits nothing
 
@@ -243,14 +244,16 @@ def test_resume_daily_without_migration_029_is_503_and_submits_nothing(monkeypat
     """Task-6 review M1: the 029 gate of the resume runs in the synchronous pre-check, so the endpoint answers 503
     ``migration_029_missing`` instead of a 202 whose background run fails unseen."""
     from investment_assistant.tasks import daily
-    from investment_assistant.workbench import service, workflow
+    from investment_assistant.core import locks
+    import investment_assistant.core.tx as service
+    import investment_assistant.workflow.graph as workflow
 
     def not_ready():
         raise service.Unavailable("migration_029_missing")
 
     monkeypatch.setattr(workflow, "resume_check", lambda rid, node, *, now: {"attempt": 1})
     monkeypatch.setattr(daily, "ensure_ready", not_ready)
-    monkeypatch.setattr(daily, "is_running", lambda: False)
+    monkeypatch.setattr(locks, "is_running", lambda: False)
     monkeypatch.setattr(jobs.runner, "submit", lambda *a, **k: pytest.fail("must not submit"))
     with pytest.raises(service.Unavailable, match="migration_029_missing"):
         jobs.resume_daily({"run_id": "daily-20261030033000-1a2b3c4d", "node": "collect"})
@@ -259,7 +262,7 @@ def test_resume_daily_without_migration_029_is_503_and_submits_nothing(monkeypat
 @pytest.mark.parametrize("body", [None, {}, {"run_id": "daily-20261030033000-1a2b3c4d"}, {"node": "collect"},
                                   {"run_id": "x", "node": "collect"}, {"run_id": 1, "node": "collect"}])
 def test_resume_daily_refuses_a_bad_body_before_any_check(monkeypatch, body):
-    from investment_assistant.workbench import workflow
+    import investment_assistant.workflow.graph as workflow
 
     monkeypatch.setattr(workflow, "resume_check", lambda *a, **k: pytest.fail("the body is checked first"))
     with pytest.raises(ValueError):

@@ -6,7 +6,7 @@ version: 2
 applies_to: [retro-1, agent-retro-1, retro-2, agent-retro-2]
 summary: "交易平仓或你写过备注的计划结束后，系统冻结当时的事实，Agent 只讲述并起草教训草稿，由你审定一次；教训进入我的知识。v2.9 起卡讲的是你的执行而不是决定。"
 related: [review.retro_end, system.my_knowledge, review.tracks, review.plan_shadow, system.append_only, review.discipline_early_take]
-sources: [investment_assistant/workbench/retro.py, investment_assistant/workbench/knowledge_items.py]
+sources: [investment_assistant/review/retro.py, investment_assistant/review/knowledge/items.py]
 ---
 
 ## 是什么

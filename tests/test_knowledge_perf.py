@@ -2,8 +2,8 @@
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
 
-from investment_assistant.workbench import knowledge_perf as perf
-from investment_assistant.workbench import review
+from investment_assistant.review.knowledge import perf
+from investment_assistant.review import outcomes as review
 
 T0 = datetime(2026, 10, 20, 12, tzinfo=UTC)
 

@@ -1,11 +1,13 @@
 """Account snapshots and cash flows: append-only, replay-safe, void-once (design §3.4, §3.5)."""
+import investment_assistant.execution.repo as execution_repo
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
-from investment_assistant.workbench import account, ledger, repository
+from investment_assistant.execution import account_records as account
+from investment_assistant.execution import ledger
 
 NOW = datetime(2026, 10, 23, 1, 0, tzinfo=UTC)
 
@@ -47,7 +49,7 @@ def test_snapshot_correction_must_target_head(workbench_db):
     fix = account.record_snapshot(workbench_db, snapshot_payload(as_of='2026-10-31', equity='110000',
                                                                  supersedes_id=str(s2['id'])), now=NOW)
     assert fix['status'] == 'created'
-    assert repository.snapshot_at(workbench_db, date(2026, 12, 31), cutoff_at=NOW)['equity'] == Decimal('110000')
+    assert execution_repo.snapshot_at(workbench_db, date(2026, 12, 31), cutoff_at=NOW)['equity'] == Decimal('110000')
 
 
 def test_flow_zero_rejected(workbench_db):
@@ -78,7 +80,7 @@ def test_snapshot_at_ignores_recorded_after_cutoff(workbench_db):
     t2 = datetime(2026, 10, 24, 9, 0, tzinfo=UTC)
     account.record_snapshot(workbench_db, snapshot_payload(as_of='2026-10-15', equity='100000'), now=t1)
     account.record_snapshot(workbench_db, snapshot_payload(as_of='2026-10-20', equity='105000'), now=t2)  # 补录
-    seen = repository.snapshot_at(workbench_db, date(2026, 10, 21), cutoff_at=datetime(2026, 10, 23, tzinfo=UTC))
+    seen = execution_repo.snapshot_at(workbench_db, date(2026, 10, 21), cutoff_at=datetime(2026, 10, 23, tzinfo=UTC))
     assert seen['equity'] == Decimal('100000')  # 补录行 recorded_at 晚于 cutoff，被忽略
-    assert repository.snapshot_at(workbench_db, date(2026, 10, 21), cutoff_at=t2)['equity'] == Decimal('105000')
-    assert repository.snapshot_at(workbench_db, date(2026, 10, 14), cutoff_at=t2) is None
+    assert execution_repo.snapshot_at(workbench_db, date(2026, 10, 21), cutoff_at=t2)['equity'] == Decimal('105000')
+    assert execution_repo.snapshot_at(workbench_db, date(2026, 10, 14), cutoff_at=t2) is None

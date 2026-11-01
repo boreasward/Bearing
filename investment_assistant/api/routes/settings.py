@@ -5,8 +5,9 @@ import psycopg
 from fastapi import APIRouter, Body, HTTPException
 
 from investment_assistant.services import settings
-from investment_assistant.workbench import agent_connection, service
-from investment_assistant.workbench.agent.chatgpt import ChatGPTError
+from investment_assistant.core import tx as service
+from investment_assistant.core.llm import connection as agent_connection
+from investment_assistant.core.llm.chatgpt import ChatGPTError
 
 router = APIRouter()
 

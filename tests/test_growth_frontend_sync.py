@@ -6,7 +6,11 @@ The front end keeps its own copies of the retro texts (`web/src/lib/growth.ts`),
 import re
 from pathlib import Path
 
-from investment_assistant.workbench import agent, discussion, retro
+from investment_assistant.analysis import agent
+
+from investment_assistant.review import discussion
+
+from investment_assistant.review import retro
 
 ROOT = Path(__file__).resolve().parents[1]
 GROWTH_TS = ROOT / 'web' / 'src' / 'lib' / 'growth.ts'

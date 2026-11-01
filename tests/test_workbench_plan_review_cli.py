@@ -3,6 +3,12 @@
 Chains and reviews come from real batches (fake fetchers, routed scripted model — the helpers of
 test_workbench_plan_review); every price is synthetic test data. Tampering is done with plain SQL.
 """
+import investment_assistant.analysis.agent.runner as analysis_agent_runner
+import investment_assistant.analysis.units as analysis_units
+from investment_assistant.execution import chains as execution_chains
+import investment_assistant.core.schema as core_schema
+import investment_assistant.execution.repo as execution_repo
+import investment_assistant.workflow.repo as workflow_repo
 import uuid
 from contextlib import nullcontext
 from datetime import timedelta
@@ -15,7 +21,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from test_workbench_service import db   # noqa: F401  (fixture: service wired to the disposable schema)
 from test_workbench_plan_review import (QUIET, S1, Market, counter, day, evening, make_model, proposal,
                                         reviews, run, settings, signal_day, verdict)
-from investment_assistant.workbench import plan_review, repository, service, user_inputs
+import investment_assistant.workflow.nodes.review as plan_review
+import investment_assistant.core.tx as service
+from investment_assistant.execution import user_inputs
 
 TABLES = ('trade_plans', 'agent_plan_versions', 'plan_reviews', 'user_inputs', 'agent_runs', 'agent_tool_calls',
           'signal_decisions')
@@ -66,7 +74,7 @@ def test_unavailable_database_exits_two_other_errors_propagate(capsys, monkeypat
 
 
 def test_migration_026_missing_exits_two(db, monkeypatch, capsys):
-    monkeypatch.setattr(repository, 'timeline_ready', lambda conn: False)
+    monkeypatch.setattr(core_schema, 'timeline_ready', lambda conn: False)
     assert plan_review.main(['check', '--session', day(1).isoformat()]) == 2
     assert '迁移 026 未执行' in capsys.readouterr().err
 
@@ -164,7 +172,7 @@ def test_check_version_and_ref_violations(db, capsys):
         "INSERT INTO user_inputs (request_id, request_hash, ticker, kind, body, created_at) "
         "VALUES (%s, 'x', 'SYNTH', 'news', '晚到的新闻', %s) RETURNING id",
         [str(uuid.uuid4()), evening(day(1)) + timedelta(hours=1)]).fetchone()[0]
-    head = repository.chain_head(db, 'SYNTH', S1)
+    head = execution_repo.chain_head(db, 'SYNTH', S1)
     db.execute("UPDATE agent_runs SET output = jsonb_set(output, '{changes,0,refs}', %s::jsonb) WHERE id = %s",
                [f'["user:{late}"]', head['version']['agent_run_id']])
     db.commit()
@@ -209,14 +217,14 @@ def test_recheck_command_writes_one_review(db, capsys, monkeypatch):
 def _store_stage_rows(db, rows):
     """The run helper records stage rows in a list; write them to stage_runs as a real batch would."""
     for row in rows.values():
-        repository.insert_stage_run(db, row)
+        workflow_repo.insert_stage_run(db, row)
     db.commit()
 
 
 def test_check_reads_object_cap_per_chain_from_stage_evidence(db, capsys, monkeypatch):
     market = Market()
     signal_day(db, market, ['SYNA', 'SYNTH'])
-    monkeypatch.setattr(plan_review, 'REVIEW_MAX_OBJECTS', 1)
+    monkeypatch.setattr(execution_chains, 'REVIEW_MAX_OBJECTS', 1)
     _, rows, _ = run(db, market, 1, tickers=['SYNA', 'SYNTH'],
                      model=make_model(review=verdict('SYNA', 'maintain', '照旧')))
     assert rows['review']['detail']['excluded'] == [
@@ -253,7 +261,7 @@ def test_later_recheck_version_does_not_mask_missing_batch_review(db, capsys):
                         agent_settings=settings())
     row = plan_review.recheck('SYNTH', S1, now=evening(day(1)) + timedelta(hours=1), deps=deps)
     assert row['new_plan_id'] is not None
-    assert repository.chain_head(db, 'SYNTH', S1)['version']['as_of_session'] == day(1)
+    assert execution_repo.chain_head(db, 'SYNTH', S1)['version']['as_of_session'] == day(1)
     db.commit()
     code, out = _run(capsys, 'check', '--session', day(1).isoformat())
     assert code == 1
@@ -272,8 +280,8 @@ def test_check_flags_two_active_chains(db, capsys, monkeypatch):
     v0 = signal_day(db, market, ['SYNTH'])[0]['SYNTH']
     fill(db, 'SYNTH', '10', '125', 1, v0['plan']['id'])               # chain A is holding, so B does not supersede it
     spike(market, 'SYNTH', 1)
-    monkeypatch.setattr(service, '_open_or_merge', lambda *args, **kwargs: None)       # the plan node misses A
-    monkeypatch.setattr(service, '_first_version_guard', lambda *args, **kwargs: None)   # ... and so does the guard
+    monkeypatch.setattr(analysis_units, '_open_or_merge', lambda *args, **kwargs: None)       # the plan node misses A
+    monkeypatch.setattr(analysis_agent_runner, '_first_version_guard', lambda *args, **kwargs: None)   # ... and so does the guard
     run(db, market, 1, tickers=['SYNTH'], model=make_model(propose=proposal('SYNTH'), counter=counter(),
                                                           review=verdict('SYNTH', 'maintain', '照旧', cite=False)))
     db.commit()
@@ -352,7 +360,7 @@ def test_chain_output_includes_retriggers_status_notes(db, capsys, monkeypatch):
     fill(db, 'SYNTH', '10', '125', 1, v0['plan']['id'])
     spike(market, 'SYNTH', 2)
     run(db, market, 2, tickers=['SYNTH'], model=make_model(review=verdict('SYNTH', 'maintain', '趋势未变', cite=False)))
-    repository.insert_plan_note(db, {'request_id': str(uuid.uuid4()), 'request_hash': 'h', 'ticker': 'SYNTH',
+    execution_repo.insert_plan_note(db, {'request_id': str(uuid.uuid4()), 'request_hash': 'h', 'ticker': 'SYNTH',
                                      'chain_signal_date': S1, 'plan_id': None, 'kind': 'note',
                                      'body': '等财报后再加仓', 'supersedes_id': None})
     db.commit()
@@ -374,7 +382,7 @@ def test_check_holding_status_uses_the_cutoff_the_run_froze(db, capsys):
     run(db, market, 2, tickers=['SYNTH'], model=make_model(review=verdict('SYNTH', 'maintain', '照旧', cite=False)))
     rec = {'request_id': str(uuid.uuid4()), 'ticker': 'SYNB', 'side': 'buy', 'quantity': '5', 'price': '90', 'fee': 0,
            'executed_at': evening(day(2)) - timedelta(hours=3), 'plan_id': None, 'note': None}
-    repository.insert_trade(db, rec, 'd', recorded_at=evening(day(2)) + timedelta(minutes=5))   # after the cutoff
+    execution_repo.insert_trade(db, rec, 'd', recorded_at=evening(day(2)) + timedelta(minutes=5))   # after the cutoff
     db.commit()
     code, out = _run(capsys, 'check', '--session', day(2).isoformat())
     assert code == 0, out

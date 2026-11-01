@@ -2,6 +2,7 @@
 筛选与区制的产出引用对得上；非交易日推送之外的阶段整段跳过；信号、计划、Agent、推送的计数与产出引用；每次运行恰好 9 行
 （未执行 027 时 8 行，未执行 026 时 7 行）。
 复用 characterization 的假 fetcher，recorder 用默认写入，行落在一次性库的 stage_runs 里再读回。"""
+import investment_assistant.workflow.repo as workflow_repo
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -9,21 +10,22 @@ import pytest
 from test_workbench_batch_characterization import UNIVERSE, batch_deps
 from test_workbench_service import (NOW, SESSION, Sources, _agent_settings, _ok_responses, _task_run,
                                     agent_deps, db, deps, seed_watchlist)
-from investment_assistant.workbench import regime as regime_module
-from investment_assistant.workbench import repository, service
-from investment_assistant.workbench import stages as stages_module
-from investment_assistant.workbench import universe as universe_module
+from investment_assistant.analysis import regime as regime_module
+import investment_assistant.workflow.batch as service
+import investment_assistant.core.stages as stages_module
+from investment_assistant.workflow.recorder import StageRecorder
+from investment_assistant.data.adapters import universe as universe_module
 
 SATURDAY = datetime(2026, 10, 24, 22, 30, tzinfo=UTC)   # 纽约周六，非交易日
 
 
-def _recorder(run_id: str, *, trigger: str = 'scheduled') -> stages_module.StageRecorder:
-    return stages_module.StageRecorder(run_id, trigger, SESSION, wall_now=lambda: NOW,
+def _recorder(run_id: str, *, trigger: str = 'scheduled') -> StageRecorder:
+    return StageRecorder(run_id, trigger, SESSION, wall_now=lambda: NOW,
                                        version=stages_module.STAGES_VERSION_V3)
 
 
 def _stage(db, run_id: str, stage_id: str) -> dict:
-    rows = [row for row in repository.stage_runs_for_run(db, run_id) if row['stage'] == stage_id]
+    rows = [row for row in workflow_repo.stage_runs_for_run(db, run_id) if row['stage'] == stage_id]
     assert len(rows) == 1
     return rows[0]
 
@@ -98,7 +100,7 @@ def test_regime_stage(db):
 def test_non_trading_day_skips_six():
     """周六早退：push 之前的阶段（含 review）整段 skipped，push 留给任务层，不写行。"""
     rows = []
-    recorder = stages_module.StageRecorder('run-closed', 'scheduled', date(2026, 10, 24),
+    recorder = StageRecorder('run-closed', 'scheduled', date(2026, 10, 24),
                                             writer=rows.append, wall_now=lambda: SATURDAY,
                                             version=stages_module.STAGES_VERSION_V3)
     summary = service.run_batch(now=SATURDAY, skip_non_trading=True, deps=batch_deps(),
@@ -150,7 +152,7 @@ def _sent(monkeypatch, out=None):
 
 
 def _rows(db, run_id: str) -> dict[str, dict]:
-    return {row['stage']: row for row in repository.stage_runs_for_run(db, run_id)}
+    return {row['stage']: row for row in workflow_repo.stage_runs_for_run(db, run_id)}
 
 
 def _job_run_id(db) -> str:
@@ -169,7 +171,7 @@ def test_stage_runs_nine_rows(wired, monkeypatch):
         result = _task_run(trigger, moment=moment)
         run_id = _job_run_id(wired)
         assert run_id == result['run_id']
-        rows = repository.stage_runs_for_run(wired, run_id)
+        rows = workflow_repo.stage_runs_for_run(wired, run_id)
         assert [r['stage'] for r in rows].count('push') == 1
         assert {r['stage'] for r in rows} == set(stages_module.STAGE_IDS_V3) and len(rows) == 9
         assert {r['run_id'] for r in rows} == {run_id}
@@ -200,7 +202,7 @@ def test_stage_runs_nine_rows(wired, monkeypatch):
 
     monkeypatch.setattr(regime_module, 'snapshot', boom)
     result = _task_run('scheduled', moment=NOW + timedelta(minutes=10))
-    rows = repository.stage_runs_for_run(wired, result['run_id'])
+    rows = workflow_repo.stage_runs_for_run(wired, result['run_id'])
     assert len(rows) == 9 and {r['stage'] for r in rows} == set(stages_module.STAGE_IDS_V3)
     assert {r['status'] for r in rows if r['stage'] in ('review', 'retro', 'push')} == {'failed'}
 
@@ -221,7 +223,7 @@ def test_without_migration_027_stages_2(wired, monkeypatch):
     for trigger, moment in (('scheduled', NOW), ('manual', NOW + timedelta(minutes=5)),
                             ('scheduled', datetime(2026, 10, 24, 22, 30, tzinfo=UTC))):
         result = _task_run(trigger, moment=moment)
-        rows = repository.stage_runs_for_run(wired, result['run_id'])
+        rows = workflow_repo.stage_runs_for_run(wired, result['run_id'])
         assert len(rows) == 8 and [r['stage'] for r in rows].count('retro') == 0
         assert {r['stage'] for r in rows} == set(stages_module.STAGE_IDS_V2)
         assert {r['stages_version'] for r in rows} == {'stages-2'}
@@ -244,7 +246,7 @@ def test_without_migration_026_runs_record_stages_1(wired, monkeypatch):
     for trigger, moment in (('scheduled', NOW), ('manual', NOW + timedelta(minutes=5)),
                             ('scheduled', datetime(2026, 10, 24, 22, 30, tzinfo=UTC))):
         result = _task_run(trigger, moment=moment)
-        rows = repository.stage_runs_for_run(wired, result['run_id'])
+        rows = workflow_repo.stage_runs_for_run(wired, result['run_id'])
         assert len(rows) == 7 and [r['stage'] for r in rows].count('review') == 0
         assert {r['stage'] for r in rows} == set(stages_module.STAGE_IDS_V1)
         assert {r['stages_version'] for r in rows} == {'stages-1'}
@@ -257,7 +259,7 @@ def test_without_migration_026_runs_record_stages_1(wired, monkeypatch):
 
 
 def test_signals_and_plan_counts(db, monkeypatch):
-    from investment_assistant.workbench import plans
+    from investment_assistant.execution import plan_levels as plans
 
     real = plans.build_rule_plan
 
@@ -457,7 +459,7 @@ def test_batch_derivation_counts_clean(db):
 
 
 def test_batch_without_recorder_does_not_check(db, monkeypatch):
-    from investment_assistant.workbench import derivation_view
+    import investment_assistant.views.derivation as derivation_view
 
     def boom(_):
         raise AssertionError('stages=None 时不得校验')
@@ -488,7 +490,8 @@ def test_batch_derivation_detects_tampered_plan(db):
 
 def test_batch_derivation_mismatch_reported(wired, monkeypatch):
     """注入一份 mismatch：plan 阶段 degraded，errors 有一条；计划行与推送里的计划行与未注入时相同。"""
-    from investment_assistant.workbench import derivation_view, digest
+    import investment_assistant.views.derivation as derivation_view
+    from investment_assistant.review import push_digest as digest
 
     seed_watchlist(wired, [('NVDA', ['core'])])
     _sent(monkeypatch)
@@ -534,7 +537,7 @@ def test_batch_derivation_mismatch_reported(wired, monkeypatch):
 
 
 def test_batch_derivation_check_error(db, monkeypatch):
-    from investment_assistant.workbench import derivation_view
+    import investment_assistant.views.derivation as derivation_view
 
     base = service.run_batch(tickers=['NVDA', 'MU'], now=NOW, deps=deps(Sources()), run_id='run-base',
                              stages=_recorder('run-base'))

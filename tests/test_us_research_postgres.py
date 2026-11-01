@@ -17,14 +17,15 @@ def research_db(monkeypatch):
     if not URL:
         pytest.skip('explicit test database URL required; TEMP tables only')
     import psycopg
-    assert importlib.util.find_spec('investment_assistant.us_research.repository'), 'missing durable US repository'
-    from investment_assistant.us_research import service
+    assert importlib.util.find_spec('investment_assistant.data.repo'), 'missing durable US repository'
     with psycopg.connect(URL) as conn:
         conn.execute('SET search_path TO pg_temp')
         sql = Path('migrations/014_us_research.sql').read_text().replace('CREATE TABLE IF NOT EXISTS', 'CREATE TEMP TABLE')
         conn.execute(sql)
         conn.execute('CREATE TEMP TABLE watchlist_items(ticker TEXT PRIMARY KEY,status TEXT,thesis TEXT,tags TEXT[],created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ)')
         conn.execute('CREATE TEMP TABLE filings(id BIGINT,ticker TEXT,form TEXT,filing_date DATE,accession_number TEXT,primary_document TEXT,file_path TEXT,downloaded_at TIMESTAMPTZ,created_at TIMESTAMPTZ)')
+        conn.execute(Path('migrations/016_us_workbench.sql').read_text().split('-- SEC acceptance')[0]
+                     .replace('CREATE TABLE IF NOT EXISTS', 'CREATE TEMP TABLE'))
         conn.commit()
         @contextmanager
         def connection():
@@ -40,7 +41,7 @@ def row(value, **payload):
 
 
 def test_append_only_aba_dedup_and_ids(research_db):
-    from investment_assistant.us_research import repository as repo
+    from investment_assistant.data import repo
     ids = []
     for day, value in [(1, 10), (2, 10), (3, 20), (4, 10)]:
         records = repo.store_rows(research_db, 'US:stock:MU', 'financials', [row(value)], now=datetime(2026, 6, day, tzinfo=UTC))
@@ -55,7 +56,7 @@ def test_append_only_aba_dedup_and_ids(research_db):
 
 
 def test_new_whole_response_hash_does_not_revise_unchanged_economic_fact(research_db):
-    from investment_assistant.us_research import repository as repo
+    from investment_assistant.data import repo
     first = repo.store_rows(research_db, 'US:stock:MU', 'financials', [row(10, source_locator='/facts/0', source_hash='a'*64, id='provisional-a')])[0]
     second = repo.store_rows(research_db, 'US:stock:MU', 'financials', [row(10, source_locator='/facts/9', source_hash='b'*64, id='provisional-b')])[0]
     assert second['id'] == first['id']
@@ -64,7 +65,7 @@ def test_new_whole_response_hash_does_not_revise_unchanged_economic_fact(researc
 
 
 def test_historical_cutoff_checks_seen_disclosure_and_identity(research_db):
-    from investment_assistant.us_research import repository as repo
+    from investment_assistant.data import repo
     repo.store_rows(research_db, 'US:stock:MU', 'guidance', [row(10)], now=datetime(2026, 4, 1, tzinfo=UTC))
     repo.store_rows(research_db, 'US:stock:NVDA', 'guidance', [row(999)], now=datetime(2026, 4, 1, tzinfo=UTC))
     repo.store_rows(research_db, 'US:stock:MU', 'guidance', [row(20)], now=datetime(2026, 6, 1, tzinfo=UTC))
@@ -74,7 +75,7 @@ def test_historical_cutoff_checks_seen_disclosure_and_identity(research_db):
 
 
 def test_dataset_failure_retains_last_success_state(research_db):
-    from investment_assistant.us_research import repository as repo
+    from investment_assistant.data import repo
     repo.store_rows(research_db, 'US:stock:MU', 'market', [row(10)])
     repo.collection_state(research_db, 'US:stock:MU', 'market', status='ready', count=1, details={'coverage': 'one'})
     research_db.commit()
@@ -89,7 +90,7 @@ def test_dataset_failure_retains_last_success_state(research_db):
 
 
 def test_guidance_source_only_correction_appends_revision(research_db):
-    from investment_assistant.us_research import repository as repo
+    from investment_assistant.data import repo
     first_row = row(100, source_url='https://issuer.example/original', source_locator='page 2')
     first_row['source_url'] = 'https://issuer.example/original'
     first = repo.store_rows(research_db, 'US:stock:MU', 'guidance', [first_row])[0]

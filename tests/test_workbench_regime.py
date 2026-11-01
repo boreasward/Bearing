@@ -1,7 +1,8 @@
 """Breadth, regime labels, sector strength and macro views (pure functions)."""
 from datetime import date, timedelta
 
-from investment_assistant.workbench import regime
+from investment_assistant.analysis import regime
+from investment_assistant.derivation.indicators import breadth
 
 SESSION = date(2026, 10, 21)
 
@@ -14,14 +15,14 @@ def _bars(n, *, closes=None, end=SESSION):
 def test_constants():
     assert regime.REGIME_VERSION == 'regime-2'
     assert regime.MIN_ELIGIBLE_200 == 20
-    assert regime.RS_WINDOWS == (20, 60)
+    assert breadth.RS_WINDOWS == (20, 60)
     assert regime.LABEL_TEXT == {'risk_on': '进攻', 'neutral': '中性', 'risk_off': '防守', 'insufficient': '样本不足'}
 
 
 def test_breadth_eligibility_by_history():
     rising_120 = _bars(120)
     flat_drop = _bars(300, closes=[100] * 299 + [50])
-    b = regime.breadth({'A': rising_120, 'B': flat_drop}, SESSION)
+    b = breadth.breadth({'A': rising_120, 'B': flat_drop}, SESSION)
     assert b['tickers'] == 2
     assert b['eligible_50'] == 2
     assert b['above_50'] == 1
@@ -37,7 +38,7 @@ def test_breadth_eligibility_by_history():
 def test_breadth_excludes_ticker_without_session_bar():
     stale = _bars(60, end=SESSION - timedelta(days=1))
     fresh = _bars(60)
-    b = regime.breadth({'STALE': stale, 'FRESH': fresh}, SESSION)
+    b = breadth.breadth({'STALE': stale, 'FRESH': fresh}, SESSION)
     assert b['tickers'] == 1
     assert b['eligible_50'] == 1
     assert b['eligible_200'] == 0
@@ -47,14 +48,14 @@ def test_breadth_excludes_ticker_without_session_bar():
 def test_new_high_and_low():
     high = _bars(300, closes=list(range(1, 301)))
     low = _bars(300, closes=list(range(300, 0, -1)))
-    b = regime.breadth({'H': high, 'L': low}, SESSION)
+    b = breadth.breadth({'H': high, 'L': low}, SESSION)
     assert b['new_highs'] == 1
     assert b['new_lows'] == 1
     assert b['eligible_52w'] == 2
 
 
 def test_all_ineligible_is_insufficient():
-    b = regime.breadth({'A': _bars(60), 'B': _bars(30)}, SESSION)
+    b = breadth.breadth({'A': _bars(60), 'B': _bars(30)}, SESSION)
     assert b['eligible_200'] == 0
     assert regime.label(b) == 'insufficient'
 
@@ -75,22 +76,22 @@ def test_sector_states():
     down = _bars(70, closes=list(range(140, 70, -1)))          # falls over both windows
     up = _bars(70, closes=list(range(70, 140)))                 # rises over both windows
     mixed = _bars(70, closes=[90] * 40 + [100] * 30)            # flat 20, up over 60 -> rs20=0, rs60>0 => mixed
-    assert regime.sector_strength(down, spy_flat, SESSION)['state'] == 'weak'
-    assert regime.sector_strength(up, spy_flat, SESSION)['state'] == 'strong'
-    assert regime.sector_strength(mixed, spy_flat, SESSION)['state'] == 'mixed'
-    assert regime.sector_strength(down, spy_flat, SESSION)['rs20'] < 0
-    assert regime.sector_strength(up, spy_flat, SESSION)['rs60'] > 0
+    assert breadth.sector_strength(down, spy_flat, SESSION)['state'] == 'weak'
+    assert breadth.sector_strength(up, spy_flat, SESSION)['state'] == 'strong'
+    assert breadth.sector_strength(mixed, spy_flat, SESSION)['state'] == 'mixed'
+    assert breadth.sector_strength(down, spy_flat, SESSION)['rs20'] < 0
+    assert breadth.sector_strength(up, spy_flat, SESSION)['rs60'] > 0
 
 
 def test_sector_short_history_none():
     spy = _bars(70)
-    assert regime.sector_strength(_bars(60), spy, SESSION) is None
-    assert regime.sector_strength(_bars(70), _bars(50), SESSION) is None
+    assert breadth.sector_strength(_bars(60), spy, SESSION) is None
+    assert breadth.sector_strength(_bars(70), _bars(50), SESSION) is None
 
 
 def test_macro_change_against_20_obs_back():
     rows = [{'obs_date': SESSION - timedelta(days=30 - i), 'value': float(i)} for i in range(31)]
-    view = regime.macro_view(rows)
+    view = breadth.macro_view(rows)
     assert view['value'] == 30.0
     assert view['obs_date'] == SESSION
     assert view['change'] == 20.0
@@ -99,10 +100,10 @@ def test_macro_change_against_20_obs_back():
 
 def test_macro_short_series_no_change():
     rows = [{'obs_date': SESSION - timedelta(days=20 - i), 'value': float(i)} for i in range(20)]
-    view = regime.macro_view(rows)
+    view = breadth.macro_view(rows)
     assert view['change'] is None
     assert view['change_from'] is None
-    assert regime.macro_view([]) is None
+    assert breadth.macro_view([]) is None
 
 
 def test_snapshot_shape():
