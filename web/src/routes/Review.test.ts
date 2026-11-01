@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import Review from './Review.svelte'
+import { REAL_ACCOUNT_ID } from '../lib/accounts'
+import { accountFixture, paperFixture } from '../lib/components/account/fixtures'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const trade = { id: 't1', ticker: 'NVDA', side: 'buy', quantity: 10, price: 101.5, fee: 1, executed_at: '2026-10-23T14:00:00Z',
@@ -27,31 +29,47 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => { calls.push({ url: String(url), init }); return respond(String(url), init) }))
   vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'req-t') })
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); history.replaceState(null, '', '#review') })
 
-it('records a trade with a timezone-aware time and a request id', async () => {
-  render(Review, { sub: 'trades' })
-  expect(await screen.findByText(/浮动盈亏/)).toBeInTheDocument()
-  await fireEvent.input(screen.getByLabelText('代码'), { target: { value: 'nvda' } })
-  await fireEvent.input(screen.getByLabelText('数量'), { target: { value: '5' } })
-  await fireEvent.input(screen.getByLabelText('成交价'), { target: { value: '102' } })
-  await fireEvent.input(screen.getByLabelText('成交时间'), { target: { value: '2026-10-23T10:15' } })
-  await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-  const isPost = (c: { url: string; init?: RequestInit }) => c.url === '/api/workbench/trades' && c.init?.method === 'POST'
-  await waitFor(() => expect(calls.some(isPost)).toBe(true))
-  const body = JSON.parse(String(calls.find(isPost)!.init!.body))
-  expect(body).toMatchObject({ request_id: 'req-t', ticker: 'NVDA', side: 'buy', quantity: '5', price: '102', fee: '0' })
-  expect(body.executed_at).toMatch(/^2026-10-23T\d{2}:15:00(\.000)?Z$/)
-})
-
-it('voids a trade only with a reason', async () => {
-  render(Review, { sub: 'trades' })
-  await screen.findByText(/101.5/)
-  await fireEvent.click(screen.getByRole('button', { name: '作废' }))
-  expect(screen.getByRole('button', { name: '确认作废' })).toBeDisabled()
-  await fireEvent.input(screen.getByLabelText('作废理由'), { target: { value: '价格录错' } })
-  await fireEvent.click(screen.getByRole('button', { name: '确认作废' }))
-  await waitFor(() => expect(calls.some(c => c.url === '/api/workbench/trades/t1/void')).toBe(true))
+describe('account-scoped review tabs', () => {
+  const discipline = { session: '2026-10-30', since: '2026-10-01', trades: [], counts: { chase: 0, early_take: 0, held_loser: 0, unplanned: 0 }, immature: {}, planned_buys: 0, compliance_rate: null }
+  function accountResponses() {
+    const base = respond
+    respond = async (url, init) => url.startsWith('/api/accounts') ? json({ accounts: [accountFixture, paperFixture] })
+      : url.startsWith('/api/workbench/discipline') ? json(discipline) : base(url, init)
+  }
+  it('removes the migrated tabs and defaults discipline to the real account', async () => {
+    accountResponses()
+    render(Review, { sub: 'discipline' })
+    await screen.findByRole('combobox', { name: '复盘账户' })
+    await waitFor(() => expect(calls.some(c => c.url === `/api/workbench/discipline?account_id=${REAL_ACCOUNT_ID}`)).toBe(true))
+    const nav = screen.getByRole('navigation', { name: '复盘页签' })
+    expect(within(nav).queryByRole('link', { name: '交易与持仓' })).toBeNull()
+    expect(within(nav).queryByRole('link', { name: '资金' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '记录成交' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '录入资金快照' })).toBeNull()
+  })
+  it('changing the account actually reloads discipline and preserves the query', async () => {
+    accountResponses()
+    render(Review, { sub: 'discipline' })
+    await fireEvent.click(await screen.findByRole('combobox', { name: '复盘账户' }))
+    await fireEvent.pointerUp(await screen.findByRole('option', { name: 'Agent 账户' }), { pointerType: 'mouse' })
+    await waitFor(() => expect(calls.some(c => c.url === '/api/workbench/discipline?account_id=paper-1')).toBe(true))
+    expect(location.hash).toBe('#review/discipline?account=paper-1')
+    expect(screen.getByRole('link', { name: '轨道对比' })).toHaveAttribute('href', '#review/tracks?account=paper-1')
+  })
+  it('loads tracks from the hash account and switching changes only the tracks call', async () => {
+    accountResponses()
+    const base = respond
+    respond = async (url, init) => url.startsWith('/api/workbench/review/tracks') ? json(trackView) : base(url, init)
+    history.replaceState(null, '', '#review/tracks?account=paper-1')
+    render(Review, { sub: 'tracks' })
+    await waitFor(() => expect(calls.some(c => c.url === '/api/workbench/review/tracks?account_id=paper-1')).toBe(true))
+    await fireEvent.click(screen.getByRole('combobox', { name: '复盘账户' }))
+    await fireEvent.pointerUp(await screen.findByRole('option', { name: '真实账户' }), { pointerType: 'mouse' })
+    await waitFor(() => expect(calls.some(c => c.url === `/api/workbench/review/tracks?account_id=${REAL_ACCOUNT_ID}`)).toBe(true))
+    expect(calls.some(c => c.url.startsWith('/api/workbench/discipline'))).toBe(false)
+  })
 })
 
 it('shows shadow outcomes with immature windows marked', async () => {
@@ -129,50 +147,6 @@ describe('monthly and account tabs', () => {
     expect(screen.getByText(/\+12\.00%/)).toBeInTheDocument()
     expect(screen.getByText(/SPY \+4\.00%/)).toBeInTheDocument()
     expect(screen.getByText(/超额 \+8\.00%/)).toBeInTheDocument()
-  })
-
-  it('account tab records a snapshot and a flow', async () => {
-    respond = async (url, init) => {
-      if (url.includes('/account/snapshots') && init?.method !== 'POST')
-        return json({ snapshots: [], flows: [], params: { risk_pct: 0.01, single_cap: 0.25, total_cap: 1,
-                                                          public_url: 'http://localhost:8787',
-                                                          return_tiers: [0.2, 0.1, 0] } })
-      if (url.includes('/account/flows') && init?.method === 'POST')
-        return json({ status: 'created', record: { id: 'f1' } })
-      if (url.includes('/account/snapshots'))
-        return json({ status: 'created', record: { id: 's1' } })
-      return json({})
-    }
-    render(Review, { sub: 'account' })
-    expect(await screen.findByText(/单票上限 25%/)).toBeInTheDocument()
-    await fireEvent.input(screen.getByLabelText('资金日期'), { target: { value: '2026-10-31' } })
-    await fireEvent.input(screen.getByLabelText('总资金'), { target: { value: '112000' } })
-    await fireEvent.click(screen.getByRole('button', { name: '录入资金快照' }))
-    await fireEvent.input(screen.getByLabelText('出入金日期'), { target: { value: '2026-10-15' } })
-    await fireEvent.input(screen.getByLabelText('金额'), { target: { value: '5000' } })
-    await fireEvent.click(screen.getByRole('button', { name: '录入出入金' }))
-    const snap = calls.find(c => c.url.includes('/account/snapshots') && c.init?.method === 'POST')!
-    expect(JSON.parse(String(snap.init!.body))).toMatchObject({ as_of: '2026-10-31', equity: '112000' })
-    const flow = calls.find(c => c.url.includes('/account/flows') && c.init?.method === 'POST')!
-    expect(JSON.parse(String(flow.init!.body))).toMatchObject({ flow_date: '2026-10-15', amount: '5000' })
-  })
-
-  it('account tab voids a flow with a reason', async () => {
-    respond = async (url) => url.includes('/account/snapshots')
-      ? json({ snapshots: [], params: {}, flows: [{ id: 'f1', request_id: 'r', flow_date: '2026-10-15',
-                                                    amount: 5000, note: null, recorded_at: '2026-10-15T12:00:00Z',
-                                                    voided_at: null, void_reason: null }] })
-      : json({})
-    render(Review, { sub: 'account' })
-    await screen.findByText(/5000/)
-    await fireEvent.click(screen.getByRole('button', { name: '作废' }))
-    await fireEvent.input(screen.getByLabelText('作废理由'), { target: { value: '录错' } })
-    await fireEvent.click(screen.getByRole('button', { name: '确认作废' }))
-    await waitFor(() => {
-      const voided = calls.find(c => c.url.includes('/account/flows/f1/void'))
-      expect(voided).toBeTruthy()
-      expect(JSON.parse(String(voided!.init!.body))).toEqual({ reason: '录错' })
-    })
   })
 
   it('weekly shows plan and discipline sections', async () => {
@@ -523,12 +497,12 @@ describe('growth loop', () => {
     }
   })
 
-  it('cards tab second', async () => {
-    render(Review, { sub: 'trades' })
-    await screen.findByText(/浮动盈亏/)
+  it('cards tab is now first', async () => {
+    render(Review, { sub: 'shadow' })
+    await screen.findByText('+4.00%')
     const tabs = screen.getAllByRole('link').filter(a => a.getAttribute('href')!.startsWith('#review/'))
-    expect(tabs.slice(0, 3).map(a => a.getAttribute('href'))).toEqual(['#review/trades', '#review/cards', '#review/shadow'])
-    expect(tabs[1]).toHaveTextContent('复盘卡')
+    expect(tabs.slice(0, 2).map(a => a.getAttribute('href'))).toEqual(['#review/cards', '#review/shadow'])
+    expect(tabs[0]).toHaveTextContent('复盘卡')
     // the badge shows the to_review count on every tab
     expect(await screen.findByLabelText('待审定 2 张')).toHaveTextContent('2')
   })
@@ -599,212 +573,6 @@ describe('growth loop', () => {
 
 
 // ---- v2.9: 关联计划 (spec §6.1, §10.4) ----
-
-describe('trade form · 关联计划', () => {
-  const linkableView = {
-    ticker: 'NVDA',
-    plans: [
-      { plan_id: 'ap2', label: 'Agent NVDA·10-22 第 2 版（入场期，有效至 10-27）', kind: 'agent', chain_signal_date: '2026-10-22', version_no: 2 },
-      { plan_id: 'rp1', label: '规则基线 plan-2 NVDA·10-23（有效至 10-27）', kind: 'rule' },
-      { plan_id: 'op1', label: '自定 NVDA·10-20', kind: 'own' }],
-    default_plan_id: 'ap2',
-  }
-  const isPost = (c: { url: string; init?: RequestInit }) => c.url === '/api/workbench/trades' && c.init?.method === 'POST'
-  const postBody = () => JSON.parse(String(calls.find(isPost)!.init!.body))
-  const linkableCalls = () => calls.filter(c => c.url.startsWith('/api/workbench/trades/linkable-plans'))
-
-  async function fill(extra: Record<string, string> = {}) {
-    render(Review, { sub: 'trades' })
-    await screen.findByText(/浮动盈亏/)
-    await fireEvent.input(screen.getByLabelText('代码'), { target: { value: 'nvda' } })
-    await fireEvent.input(screen.getByLabelText('数量'), { target: { value: '5' } })
-    await fireEvent.input(screen.getByLabelText('成交价'), { target: { value: '102' } })
-    await fireEvent.input(screen.getByLabelText('成交时间'), { target: { value: extra.executed ?? '2026-10-23T10:15' } })
-  }
-  const withLinkable = (view: unknown = linkableView) => {
-    const base = respond
-    respond = async (url, init) => url.startsWith('/api/workbench/trades/linkable-plans') ? json(view) : base(url, init)
-  }
-
-  it('asks for the plans linkable at the fill time and defaults to the active chain head', async () => {
-    withLinkable()
-    await fill()
-    await waitFor(() => expect(linkableCalls()).toHaveLength(1))
-    const url = new URL(linkableCalls()[0].url, 'http://x')
-    expect(url.searchParams.get('ticker')).toBe('NVDA')
-    expect(url.searchParams.get('executed_at')).toMatch(/^2026-10-23T\d{2}:15:00\.000Z$/)
-    const select = screen.getByLabelText('关联计划') as HTMLSelectElement
-    await waitFor(() => expect(select.value).toBe('ap2'))
-    expect([...select.options].map(o => o.textContent)).toEqual([
-      '无计划', 'Agent NVDA·10-22 第 2 版（入场期，有效至 10-27）', '规则基线 plan-2 NVDA·10-23（有效至 10-27）', '自定 NVDA·10-20', '自定'])
-    expect(screen.queryByText('关联决定')).toBeNull()
-    await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-    await waitFor(() => expect(calls.some(isPost)).toBe(true))
-    const body = postBody()
-    expect(body).toMatchObject({ plan_id: 'ap2', ticker: 'NVDA', side: 'buy' })
-    expect('decision_id' in body).toBe(false)
-    expect('own_plan' in body).toBe(false)
-  })
-
-  it('defaults to 无计划 without an active chain, and sends neither link', async () => {
-    withLinkable({ ticker: 'NVDA', plans: [], default_plan_id: null })
-    await fill()
-    await waitFor(() => expect(linkableCalls()).toHaveLength(1))
-    expect((screen.getByLabelText('关联计划') as HTMLSelectElement).value).toBe('__none__')
-    await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-    await waitFor(() => expect(calls.some(isPost)).toBe(true))
-    const body = postBody()
-    for (const key of ['plan_id', 'own_plan', 'decision_id']) expect(key in body).toBe(false)
-  })
-
-  it('a sell is not linked by default, and a chosen plan wins over the default', async () => {
-    withLinkable()
-    await fill()
-    await waitFor(() => expect((screen.getByLabelText('关联计划') as HTMLSelectElement).value).toBe('ap2'))
-    await fireEvent.change(screen.getByLabelText('关联计划'), { target: { value: 'rp1' } })
-    await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-    await waitFor(() => expect(calls.some(isPost)).toBe(true))
-    expect(postBody().plan_id).toBe('rp1')
-  })
-
-  it('does not link a sell by default', async () => {
-    withLinkable()
-    await fill()
-    await fireEvent.change(screen.getByLabelText('方向'), { target: { value: 'sell' } })
-    await waitFor(() => expect(linkableCalls().length).toBeGreaterThan(0))
-    expect((screen.getByLabelText('关联计划') as HTMLSelectElement).value).toBe('__none__')
-  })
-
-  it('自定 opens the four levels and the max hold, validates them, and posts own_plan', async () => {
-    withLinkable()
-    await fill()
-    await waitFor(() => expect((screen.getByLabelText('关联计划') as HTMLSelectElement).value).toBe('ap2'))
-    await fireEvent.change(screen.getByLabelText('关联计划'), { target: { value: '__own__' } })
-    const group = screen.getByRole('group', { name: '自定计划' })
-    expect(within(group).getByLabelText('最长持有')).toBeInTheDocument()
-    await fireEvent.input(within(group).getByLabelText('入场下沿'), { target: { value: '99' } })
-    await fireEvent.input(within(group).getByLabelText('入场上沿'), { target: { value: '101' } })
-    await fireEvent.input(within(group).getByLabelText('止损'), { target: { value: '100' } })
-    await fireEvent.input(within(group).getByLabelText('T1'), { target: { value: '112' } })
-    expect(group).toHaveTextContent('价位需满足：止损 < 入场下限 ≤ 入场上限 < T1')
-    expect(screen.getByRole('button', { name: '记录成交' })).toBeDisabled()
-    await fireEvent.input(within(group).getByLabelText('止损'), { target: { value: '94' } })
-    await fireEvent.input(within(group).getByLabelText('最长持有'), { target: { value: '7.5' } })
-    expect(group).toHaveTextContent('最长持有须为正整数（交易日）')
-    await fireEvent.input(within(group).getByLabelText('最长持有'), { target: { value: '12' } })
-    expect(screen.getByRole('button', { name: '记录成交' })).toBeEnabled()
-    await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-    await waitFor(() => expect(calls.some(isPost)).toBe(true))
-    const body = postBody()
-    expect(body.own_plan).toEqual({ entry_low: '99', entry_high: '101', stop: '94', target1: '112', max_hold_sessions: 12 })
-    expect('plan_id' in body).toBe(false)
-  })
-
-  it('an empty own plan omits the max hold (the backend defaults to 10) and blocks blank levels', async () => {
-    withLinkable()
-    await fill()
-    await fireEvent.change(screen.getByLabelText('关联计划'), { target: { value: '__own__' } })
-    await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-    expect(await screen.findByText('自定计划需要填写四个价位')).toBeInTheDocument()
-    expect(calls.some(isPost)).toBe(false)
-    const group = screen.getByRole('group', { name: '自定计划' })
-    for (const [label, value] of [['入场下沿', '99'], ['入场上沿', '101'], ['止损', '94'], ['T1', '112']])
-      await fireEvent.input(within(group).getByLabelText(label), { target: { value } })
-    await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-    await waitFor(() => expect(calls.some(isPost)).toBe(true))
-    expect('max_hold_sessions' in postBody().own_plan).toBe(false)
-  })
-
-  it.each([
-    [409, 'plan_stale: 成交时这条链已是第 3 版，请关联第 3 版', '成交时这条链已是第 3 版，请关联第 3 版'],
-    [409, 'plan_after_fill', '这一版生成于成交之后，不可能是你照着做的那一版'],
-    [400, 'decision_link_retired', 'v2.9 起成交不再关联决定，请改为关联计划'],
-    [503, 'migration_029_missing', '迁移 029 未执行'],
-  ])('shows the %s %s text and keeps the form', async (status, error, text) => {
-    withLinkable()
-    const base = respond
-    respond = async (url, init) => url === '/api/workbench/trades' && init?.method === 'POST' ? json({ error }, status) : base(url, init)
-    await fill()
-    await waitFor(() => expect((screen.getByLabelText('关联计划') as HTMLSelectElement).value).toBe('ap2'))
-    await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-    expect(await screen.findByText(text)).toBeInTheDocument()
-    expect((screen.getByLabelText('数量') as HTMLInputElement).value).toBe('5')
-    if (status === 409) await waitFor(() => expect(linkableCalls().length).toBeGreaterThanOrEqual(2))   // re-read after a stale link
-  })
-
-  it('clears the chosen plan and the own levels when the ticker changes, and a stale plan id is never sent', async () => {
-    const base = respond
-    respond = async (url, init) => {
-      if (url.startsWith('/api/workbench/trades/linkable-plans')) {
-        const t = new URL(url, 'http://x').searchParams.get('ticker')
-        return json(t === 'MU' ? { ticker: 'MU', plans: [{ plan_id: 'mu1', label: 'Agent MU·10-29 第 2 版' }], default_plan_id: 'mu1' }
-                              : { ticker: 'NVDA', plans: [{ plan_id: 'ap2', label: 'Agent NVDA·10-22 第 2 版' }], default_plan_id: null })
-      }
-      return base(url, init)
-    }
-    render(Review, { sub: 'trades' })
-    await screen.findByText(/浮动盈亏/)
-    await fireEvent.input(screen.getByLabelText('代码'), { target: { value: 'mu' } })
-    await fireEvent.input(screen.getByLabelText('数量'), { target: { value: '5' } })
-    await fireEvent.input(screen.getByLabelText('成交价'), { target: { value: '102' } })
-    await fireEvent.input(screen.getByLabelText('成交时间'), { target: { value: '2026-10-23T10:15' } })
-    const select = screen.getByLabelText('关联计划') as HTMLSelectElement
-    await waitFor(() => expect([...select.options].some(o => o.value === 'mu1')).toBe(true))
-    await fireEvent.change(select, { target: { value: 'mu1' } })
-    expect(select.value).toBe('mu1')
-    await fireEvent.input(screen.getByLabelText('代码'), { target: { value: 'nvda' } })
-    await waitFor(() => expect([...select.options].some(o => o.value === 'ap2')).toBe(true))
-    expect(select.value).toBe('__none__')                           // the MU choice is gone, NVDA has no default
-    await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
-    await waitFor(() => expect(calls.some(isPost)).toBe(true))
-    const body = postBody()
-    expect(body.ticker).toBe('NVDA')
-    for (const key of ['plan_id', 'own_plan']) expect(key in body).toBe(false)
-  })
-
-  it('a change of the fill time drops a chosen plan row but keeps 自定', async () => {
-    withLinkable()
-    await fill()
-    const select = screen.getByLabelText('关联计划') as HTMLSelectElement
-    await waitFor(() => expect(select.value).toBe('ap2'))
-    await fireEvent.change(select, { target: { value: 'rp1' } })
-    expect(select.value).toBe('rp1')
-    await fireEvent.input(screen.getByLabelText('成交时间'), { target: { value: '2026-10-24T10:15' } })
-    await waitFor(() => expect(select.value).toBe('ap2'))           // back to the default for the new time
-    await waitFor(() => expect(linkableCalls()).toHaveLength(2))
-    await fireEvent.change(select, { target: { value: '__own__' } })
-    await fireEvent.input(screen.getByLabelText('成交时间'), { target: { value: '2026-10-25T10:15' } })
-    await waitFor(() => expect(linkableCalls()).toHaveLength(3))
-    expect(select.value).toBe('__own__')
-  })
-
-  it('keeps the form usable when the linkable list cannot be read', async () => {
-    const base = respond
-    respond = async (url, init) => url.startsWith('/api/workbench/trades/linkable-plans')
-      ? json({ error: 'migration_029_missing' }, 503) : base(url, init)
-    await fill()
-    expect(await screen.findByText('可关联的计划暂不可用：迁移 029 未执行')).toBeInTheDocument()
-    expect((screen.getByLabelText('关联计划') as HTMLSelectElement).value).toBe('__none__')
-    expect([...(screen.getByLabelText('关联计划') as HTMLSelectElement).options].map(o => o.textContent)).toEqual(['无计划', '自定'])
-  })
-
-  it('no longer loads the decisions shadow on the trades tab, and lists the plan each trade followed', async () => {
-    const base = respond
-    respond = async (url, init) => url === '/api/workbench/trades' && init?.method !== 'POST'
-      ? json({ trades: [
-          { ...trade, plan_id: 'ap2', plan_label: 'Agent NVDA·10-22 第 2 版' },
-          { ...trade, id: 't2', plan_id: null, decision_id: 'd1' },
-          { ...trade, id: 't3', plan_id: null, decision_id: null },
-          { ...trade, id: 't4', side: 'sell', plan_id: null, decision_id: null }] })
-      : base(url, init)
-    render(Review, { sub: 'trades' })
-    await screen.findByText(/浮动盈亏/)
-    const cells = (await screen.findAllByTestId('trade-plan')).map(el => el.textContent)
-    expect(cells).toEqual(['· 关联计划：Agent NVDA·10-22 第 2 版', '· 关联计划：旧决定', '· 关联计划：无计划（计划外）', '· 关联计划：—'])
-    expect(screen.getByRole('link', { name: 'Agent NVDA·10-22 第 2 版' })).toHaveAttribute('href', '#plan/ap2')
-    expect(calls.some(c => c.url.includes('/review/shadow'))).toBe(false)
-  })
-})
 
 describe('weekly review-8 snapshots', () => {
   it('read executed / not executed and by_execution, while review-7 snapshots keep the decision wording', async () => {
@@ -918,83 +686,13 @@ describe('primitive layer', () => {
     render(Review, { sub: 'shadow' })
     const nav = screen.getByRole('navigation', { name: '复盘页签' })
     const links = within(nav).getAllByRole('link')
-    expect(links.map(a => a.getAttribute('href'))).toEqual(['#review/trades', '#review/cards', '#review/shadow', '#review/tracks',
-      '#review/weekly', '#review/monthly', '#review/account', '#review/backchecks'])
-    expect(links.map(a => a.textContent!.replace(/\d+$/, '').trim())).toEqual(['交易与持仓', '复盘卡', '对照组', '轨道对比', '周度复盘', '月度复盘', '资金', '上线前检查'])
+    expect(links.map(a => a.getAttribute('href'))).toEqual(['#review/cards', '#review/shadow', `#review/discipline?account=${REAL_ACCOUNT_ID}`, `#review/tracks?account=${REAL_ACCOUNT_ID}`,
+      '#review/weekly', '#review/monthly', '#review/backchecks'])
+    expect(links.map(a => a.textContent!.replace(/\d+$/, '').trim())).toEqual(['复盘卡', '对照组', '纪律', '轨道对比', '周度复盘', '月度复盘', '上线前检查'])
     expect(links.filter(a => a.getAttribute('aria-current') === 'page').map(a => a.textContent!.trim())).toEqual(['对照组'])
     expect(screen.queryByRole('tablist')).toBeNull()
     expect(screen.queryByRole('tab')).toBeNull()
     expect(await within(nav).findByLabelText('待审定 2 张')).toHaveTextContent('2')
-  })
-
-  it('void trade needs confirm', async () => {
-    render(Review, { sub: 'trades' })
-    await screen.findByText(/101.5/)
-    await fireEvent.click(screen.getByRole('button', { name: '作废' }))
-    // one dialog: it names the trade, holds the reason field and starts on the safe choice
-    const dialog = await screen.findByRole('dialog')
-    expect(dialog).toHaveAccessibleName('作废这笔成交？')
-    expect(dialog).toHaveTextContent('NVDA')
-    expect(within(dialog).getByLabelText('作废理由')).toBeInTheDocument()
-    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: '取消' })))
-    expect(within(dialog).getByRole('button', { name: '确认作废' })).toBeDisabled()       // no reason yet
-    expect(calls.some(c => c.url.includes('/void'))).toBe(false)
-    // cancelling sends nothing
-    await fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(calls.some(c => c.url.includes('/void'))).toBe(false)
-    // confirming with a reason sends it and closes the dialog
-    await fireEvent.click(screen.getByRole('button', { name: '作废' }))
-    const again = await screen.findByRole('dialog')
-    expect((within(again).getByLabelText('作废理由') as HTMLInputElement).value).toBe('')      // the reason does not leak between openings
-    await fireEvent.input(within(again).getByLabelText('作废理由'), { target: { value: '价格录错' } })
-    await fireEvent.click(within(again).getByRole('button', { name: '确认作废' }))
-    await waitFor(() => expect(calls.some(c => c.url === '/api/workbench/trades/t1/void')).toBe(true))
-    const voided = calls.find(c => c.url === '/api/workbench/trades/t1/void')!
-    expect(JSON.parse(String(voided.init!.body))).toEqual({ reason: '价格录错' })
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-  })
-
-  it('a voided trade stays in the list, greyed and struck through', async () => {
-    const base = respond
-    respond = async (url, init) => url === '/api/workbench/trades' && init?.method !== 'POST'
-      ? json({ trades: [{ ...trade, voided_at: '2026-10-24T01:00:00Z', void_reason: '价格录错' }] }) : base(url, init)
-    render(Review, { sub: 'trades' })
-    const item = (await screen.findByText(/已作废：价格录错/)).closest('li')!
-    expect(item.className).toMatch(/text-muted-foreground/)
-    expect(item).toHaveTextContent('101.5')
-    expect(within(item).queryByRole('button', { name: '作废' })).toBeNull()
-  })
-
-  it('numeric inputs decimal and right-aligned', async () => {
-    render(Review, { sub: 'trades' })
-    await screen.findByText(/浮动盈亏/)
-    for (const label of ['数量', '成交价', '费用']) {
-      const input = screen.getByLabelText(label)
-      expect(input).toHaveAttribute('inputmode', 'decimal')
-      expect(input.className).toMatch(/text-right/)
-    }
-    // a date time is not numeric, and it names its time zone
-    expect(screen.getByLabelText('成交时间').className).not.toMatch(/text-right/)
-    expect(screen.getByText('成交时间（本机时区）')).toBeInTheDocument()
-    await fireEvent.change(screen.getByLabelText('关联计划'), { target: { value: '__own__' } })
-    const group = screen.getByRole('group', { name: '自定计划' })
-    for (const label of ['入场下沿', '入场上沿', '止损', 'T1']) {
-      expect(within(group).getByLabelText(label)).toHaveAttribute('inputmode', 'decimal')
-      expect(within(group).getByLabelText(label).className).toMatch(/text-right/)
-    }
-    expect(within(group).getByLabelText('最长持有')).toHaveAttribute('inputmode', 'numeric')
-  })
-
-  it('numeric inputs of the account forms are decimal and right-aligned too', async () => {
-    respond = async (url) => url.includes('/account/snapshots')
-      ? json({ snapshots: [], flows: [], params: { risk_pct: 0.01, single_cap: 0.25, total_cap: 1 } }) : json({})
-    render(Review, { sub: 'account' })
-    await screen.findByText(/单票上限 25%/)
-    for (const label of ['总资金', '金额']) {
-      expect(screen.getByLabelText(label)).toHaveAttribute('inputmode', 'decimal')
-      expect(screen.getByLabelText(label).className).toMatch(/text-right/)
-    }
   })
 
   it('stats header shows calc version, n and cutoff', async () => {

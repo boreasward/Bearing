@@ -3,6 +3,7 @@ import { CHAIN_STATE_TEXT } from '$lib/timeline'
 import { CARD_STATUS_TEXT, KNOWLEDGE_STATUS_TEXT } from '$lib/growth'
 import { CONSISTENCY_TEXT } from '$lib/derivation'
 import { EXECUTION_TEXT, INSTRUCTION_TEXT } from '$lib/workbench'
+import { ORDER_STATUS_TEXT, RECONCILE_TEXT } from '$lib/accounts'
 
 // The one status vocabulary of the site (spec 4.4): { domain, key } -> { Chinese label, tone }.
 // `StatusPill` only knows this table. To add a status: add the key to TONES (one line per domain, the Python guard
@@ -12,6 +13,7 @@ export type Tone = 'success' | 'warn' | 'danger' | 'info' | 'running' | 'neutral
 export type StatusDomain =
   | 'node' | 'run' | 'chain' | 'fetch' | 'agent' | 'connection' | 'card' | 'retro' | 'push'
   | 'execution' | 'knowledge' | 'instruction' | 'system' | 'block' | 'consistency'
+  | 'account' | 'paper_order' | 'paper_decision' | 'reconcile'
 
 // Keep every domain on ONE line, without spreads: tests/test_frontend_design_guards.py reads this block by lines.
 export const TONES = {
@@ -45,6 +47,10 @@ export const TONES = {
   block: { not_computed: 'warn', insufficient: 'warn' },
   // derivation.CONSISTENCY_TEXT (plan derivation check)
   consistency: { consistent: 'success', mismatch: 'danger', incomplete: 'warn' },
+  account: { active: 'success', closed: 'neutral' },
+  paper_order: { pending: 'info', filled: 'success', voided: 'neutral', expired: 'neutral', cancelled: 'neutral', rejected: 'danger' },
+  paper_decision: { ok: 'success', skipped: 'neutral', rejected: 'danger' },
+  reconcile: { matched: 'success', mismatch: 'danger', no_ledger: 'neutral' },
 } as const satisfies Record<StatusDomain, Record<string, Tone>>
 
 // Existing Chinese tables are referenced, not copied. `execution` is the one exception: EXECUTION_TEXT has no
@@ -70,6 +76,10 @@ export const LABELS: Record<StatusDomain, Record<string, string>> = {
   system: { up: '正常', degraded: '降级', down: '不可用', unknown: '未知' },
   block: { not_computed: '没算', insufficient: '样本不足' },
   consistency: CONSISTENCY_TEXT,
+  account: { active: '使用中', closed: '已关闭' },
+  paper_order: ORDER_STATUS_TEXT,
+  paper_decision: { ok: '已决策', skipped: '跳过', rejected: '未通过校验' },
+  reconcile: RECONCILE_TEXT,
 }
 
 export type StatusInfo = { label: string; tone: Tone; known: boolean }

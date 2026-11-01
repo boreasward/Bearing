@@ -127,7 +127,7 @@
         <summary class="cursor-pointer font-medium text-xs">输入快照</summary>
         <p class="text-xs"><ConceptTerm id={D.refPrice}>参考价</ConceptTerm> {text(plan.inputs.ref_price?.value)}（bar {text(plan.inputs.ref_price?.source_bar_id)}）</p>
         <p class="text-xs"><ConceptTerm id={D.earnings}>财报</ConceptTerm> {plan.inputs.earnings ? `${plan.inputs.earnings.status ?? '无'} · ${text(plan.inputs.earnings.earnings_date)} · 取于 ${text(plan.inputs.earnings.fetched_at)}` : text(plan.inputs.earnings_note)}</p>
-        <p class="text-xs"><ConceptTerm id={D.snapshot}>资金快照</ConceptTerm> {plan.inputs.snapshot ? `${text(plan.inputs.snapshot.as_of)} · equity {text(plan.inputs.snapshot.equity)}` : text(plan.inputs.snapshot_note)}</p>
+        <p class="text-xs">{#if plan.inputs.equity_source === 'ledger'}账本权益{:else}<ConceptTerm id={D.snapshot}>资金快照</ConceptTerm>{/if} {plan.inputs.snapshot ? `${text(plan.inputs.snapshot.as_of)} · equity ${text(plan.inputs.snapshot.equity)}` : text(plan.inputs.snapshot_note)}</p>
         {#if plan.inputs.exposure}
           <p class="text-xs"><ConceptTerm id={D.exposure}>敞口</ConceptTerm> 该票 {text(plan.inputs.exposure.ticker_value)} / 总持仓 {text(plan.inputs.exposure.total_value)}（{plan.inputs.exposure.note}）</p>
         {/if}

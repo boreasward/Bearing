@@ -12,8 +12,8 @@ def test_svelte_entrypoint_and_app_root():
 
 
 def test_svelte_route_views_exist():
-    # v2.3 adds the Data menu after Review.
-    routes = ["Today", "Instrument", "Review", "Data", "Tools", "Settings"]
+    # v2.3 adds Data; v2.11 adds the standalone Account menu.
+    routes = ["Today", "Instrument", "Account", "Review", "Data", "Tools", "Settings"]
     for r in routes:
         path = Path(f"web/src/routes/{r}.svelte")
         assert path.exists(), str(path)
@@ -60,9 +60,10 @@ def test_api_client_exports_core_functions():
 
 
 def test_app_hash_router_covers_all_zones():
-    # v2.3 restores data; v2.4 adds the standalone #plan/<id> zone; v2.6 adds knowledge; v2.7 adds the #discuss/<id> zone; v2.1 legacy zones still fall back to today.
+    # v2.11 adds #account/<id>/<tab>; the earlier zones and legacy fallbacks remain covered.
     router = Path("web/src/lib/router.ts").read_text(encoding="utf-8")
-    assert "export type Zone = 'today' | 'instrument' | 'review' | 'data' | 'knowledge' | 'tools' | 'settings' | 'plan' | 'discuss'" in router
+    assert "export type Zone = 'today' | 'instrument' | 'account' | 'review' | 'data' | 'knowledge' | 'tools' | 'settings' | 'plan' | 'discuss'" in router
+    assert "export const workbenchZones: Zone[] = ['today', 'instrument', 'account', 'review']" in router
     assert "export const zones: Zone[] = [...workbenchZones, 'data', 'knowledge', 'tools', 'settings', 'plan', 'discuss']" in router
     for zone in ["technicals", "strategy", "trade"]:
         assert f"'{zone}'" not in router, f"legacy zone still routed: {zone}"

@@ -31,7 +31,8 @@ export interface Plan {
   status: 'ok' | 'invalid'; entry_low: number; entry_high: number; stop: number; target1: number
   ref_price: number; atr: number; valid_from: string; valid_until: string
   sizing: { status: 'sized' | 'capped' | 'no_equity' | 'no_room'; shares: number | null
-            risk_amount?: number | null; snapshot_as_of?: string | null } | null
+            risk_amount?: number | null; snapshot_as_of?: string | null; snapshot_id?: string | number | null
+            equity_source?: 'ledger' | 'snapshot' } | null
   invalid_reasons: string[]; warnings: string[]; based_on_id?: string | null
   inputs?: { context?: PlanContext; chain_mode?: 'entry' | 'holding' }   // chain_mode: R3, written by build_version_plan
   // v2.9 §5.1: execution fields; absent on plan-1 / agent-2 rows
@@ -101,6 +102,7 @@ export interface DisciplineTrade {
 }
 export interface DisciplineView {
   session: string; since: string; trades: DisciplineTrade[]
+  calc_version?: string; cutoff_at?: string | null
   counts: { chase: number; early_take: number; held_loser: number; unplanned: number }
   immature: Record<string, number>; planned_buys: number; compliance_rate: number | null
 }
@@ -239,7 +241,7 @@ export const getToday = () => request<TodayView>('/api/workbench/today')
 export const getScreen = (session?: string, full = false) =>
   request<{ report: ScreenReport | null }>(`/api/workbench/screen${session ? `?session=${encodeURIComponent(session)}` : '?'}${full ? `${session ? '&' : ''}full=1` : ''}`)
 export const getInstrument = (ticker: string) => request<InstrumentView>(`/api/workbench/instruments/${encodeURIComponent(ticker)}`)
-export const getTrades = () => request<{ trades: Trade[] }>('/api/workbench/trades')
+export const getTrades = (accountId?: string) => request<{ trades: Trade[] }>(`/api/workbench/trades${query({ account_id: accountId })}`)
 export const postTrade = (body: TradeBody) => post<{ status: string; record: Trade }>('/api/workbench/trades', body)
 export const voidTrade = (id: string, reason: string) => post<Trade>(`/api/workbench/trades/${id}/void`, { reason })
 export const getShadow = () => request<ShadowView>('/api/workbench/review/shadow')
@@ -247,7 +249,7 @@ export const getTradeReview = () => request<TradeReview>('/api/workbench/review/
 export const getWeekly = () => request<{ reviews: WeeklyReview[] }>('/api/workbench/weekly-reviews')
 export const postWeekly = (body: object) => post<WeeklyReview>('/api/workbench/weekly-reviews', body)
 export const runWorkbench = () => post<{ run_id: string; status: string }>('/api/workbench/run', {})
-export const getAccount = () => request<AccountView>('/api/workbench/account/snapshots')
+export const getAccount = (accountId?: string) => request<AccountView>(`/api/workbench/account/snapshots${query({ account_id: accountId })}`)
 export const postSnapshot = (body: object) => post<{ status: string; record: Snapshot }>('/api/workbench/account/snapshots', body)
 export const postFlow = (body: object) => post<{ status: string; record: CashFlow }>('/api/workbench/account/flows', body)
 export const voidFlow = (id: string, reason: string) => post<CashFlow>(`/api/workbench/account/flows/${id}/void`, { reason })
@@ -256,7 +258,7 @@ export const getPlanShadow = (since?: string) =>
 export const getAgentRun = (id: string) => request<AgentRunDetail>(`/api/workbench/agent-runs/${id}`)
 export const rerunAgent = (ticker: string, signalDate: string) =>
   post<AgentRunOk | AgentRunFailed>('/api/workbench/agent-runs', { ticker, signal_date: signalDate })
-export const getDiscipline = () => request<DisciplineView>('/api/workbench/discipline')
+export const getDiscipline = (accountId?: string) => request<DisciplineView>(`/api/workbench/discipline${query({ account_id: accountId })}`)
 export const getMonthly = () => request<{ reviews: MonthlyReview[] }>('/api/workbench/monthly-reviews')
 export const postMonthly = (body: object) => post<MonthlyReview>('/api/workbench/monthly-reviews', body)
 export const pushToday = () => post<{ session: string; sent: boolean; messages?: number; reason?: string }>('/api/workbench/push', {})
@@ -422,8 +424,8 @@ export const TRACK_STATUS_TEXT_V2: Record<TrackStatus, string> = {
   ...TRACK_STATUS_TEXT, voided: '开盘作废', merged: '并入其他链',
 }
 
-export const getTracks = (since?: string, until?: string) => request<TracksView>(
-  `/api/workbench/review/tracks${since || until ? `?${since ? `since=${since}` : ''}${since && until ? '&' : ''}${until ? `until=${until}` : ''}` : ''}`)
+export const getTracks = (since?: string, until?: string, accountId?: string) => request<TracksView>(
+  `/api/workbench/review/tracks${query({ since, until, account_id: accountId })}`)
 export const getReviewPushes = () => request<{ pushes: ReviewPush[] }>('/api/workbench/review-pushes')
 export const postReviewPush = (kind: 'weekly' | 'monthly', period: string) =>
   post<{ kind: string; period: string; sent: boolean; messages?: number; reason?: string }>(
@@ -613,6 +615,7 @@ export interface OwnPlanBody extends OwnPlanInput { max_hold_sessions?: number }
 /** POST /trades (§6.1): at most one of `plan_id` / `own_plan`; `decision_id` is gone (400 `decision_link_retired`). */
 export interface TradeBody {
   request_id: string; ticker: string; side: 'buy' | 'sell'; quantity: string; price: string; fee: string
+  account_id?: string
   executed_at: string; note: string | null; plan_id?: string | null; own_plan?: OwnPlanBody | null
 }
 export interface PlanNoteBody {

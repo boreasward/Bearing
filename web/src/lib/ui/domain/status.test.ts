@@ -22,8 +22,8 @@ describe('status vocabulary', () => {
 
   it('every domain of the type is in TONES and LABELS', () => {
     expect(domains.sort()).toEqual([
-      'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'execution', 'fetch', 'instruction',
-      'knowledge', 'node', 'push', 'retro', 'run', 'system',
+      'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'execution', 'fetch', 'instruction',
+      'knowledge', 'node', 'paper_decision', 'paper_order', 'push', 'reconcile', 'retro', 'run', 'system',
     ])
     expect(Object.keys(LABELS).sort()).toEqual(domains)
   })

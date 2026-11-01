@@ -15,9 +15,10 @@
   const primary: NavItem[] = [
     { id: 'today', label: '今日', icon: 'calendar-days' },
     { id: 'instrument', label: '标的', icon: 'search' },
+    { id: 'account', label: '账户', icon: 'activity' },
     {
       id: 'review', label: '复盘', icon: 'clipboard-list', children: [
-        { id: 'trades', label: '交易与持仓' },
+        { id: 'cards', label: '复盘卡' },
         { id: 'shadow', label: '对照组' },
         { id: 'weekly', label: '周度复盘' },
       ],
@@ -31,17 +32,6 @@
         { id: 'mine', label: '我的知识' },
       ],
     },
-  ]
-
-  // Shared-base entries stay reachable, folded under 更多.
-  const legacy: NavItem[] = [
-    {
-      id: 'tools', label: '工具', icon: 'wrench', children: [
-        { id: 'tasks',   label: '任务中心' },
-        { id: 'runs',    label: '运行记录' },
-        { id: 'filings', label: 'SEC 文件' },
-      ],
-    },
     {
       id: 'settings', label: '设置', icon: 'settings', children: [
         { id: 'system',    label: '系统' },
@@ -51,6 +41,13 @@
         { id: 'env',       label: '环境变量' },
       ],
     },
+  ]
+
+  // Shared-base tools remain reachable under 更多.
+  const legacy: NavItem[] = [
+    { id: 'tools', label: '工具', icon: 'wrench', children: [
+      { id: 'tasks', label: '任务中心' }, { id: 'runs', label: '运行记录' }, { id: 'filings', label: 'SEC 文件' },
+    ] },
   ]
 
   const legacyIds = legacy.map(item => item.id)

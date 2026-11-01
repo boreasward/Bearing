@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { onMount } from 'svelte'
   import { fmtPct } from '../lib/format'
   import * as wb from '../lib/workbench'
+  import { listAccounts, REAL_ACCOUNT_ID, type Account } from '$lib/accounts'
   import * as api from '../lib/api'
   import ConceptTerm from '../lib/components/ConceptTerm.svelte'
   import ReviewCard from '../lib/components/ReviewCard.svelte'
@@ -12,7 +13,6 @@
   import { Alert, AlertDescription } from '$lib/ui/alert/index'
   import { Button } from '$lib/ui/button/index'
   import * as Card from '$lib/ui/card/index'
-  import ConfirmDialog from '$lib/ui/confirm-dialog/ConfirmDialog.svelte'
   import { DataTable } from '$lib/ui/data-table/index'
   import type { Column } from '$lib/ui/data-table/types'
   import CalcVersion from '$lib/ui/domain/CalcVersion.svelte'
@@ -25,19 +25,18 @@
   import Field from '$lib/ui/field/Field.svelte'
   import { Input } from '$lib/ui/input/index'
   import * as Sheet from '$lib/ui/sheet/index'
+  import * as Select from '$lib/ui/select/index'
   import TabNav from '$lib/ui/tab-nav/TabNav.svelte'
   import { Textarea } from '$lib/ui/textarea/index'
   import { notify } from '$lib/ui/toast'
 
   let { sub }: { sub?: string } = $props()
   const uid = $props.id()
-  const SELECT = 'h-8 w-full min-w-0 rounded-md border border-input bg-card px-2 text-sm text-foreground'
-  const NUM = 'text-right tabular-nums'
-  const TABS = [['trades', '交易与持仓'], ['cards', '复盘卡'], ['shadow', '对照组'], ['tracks', '轨道对比'], ['weekly', '周度复盘'],
-                 ['monthly', '月度复盘'], ['account', '资金'], ['backchecks', '上线前检查']] as const
+  const TABS = [['cards', '复盘卡'], ['shadow', '对照组'], ['discipline', '纪律'], ['tracks', '轨道对比'], ['weekly', '周度复盘'],
+                 ['monthly', '月度复盘'], ['backchecks', '上线前检查']] as const
   // sub is the path below #review/: `cards`, `cards/12`, `weekly` …
   const head = $derived(sub?.split('/')[0])
-  let tab = $derived(TABS.some(([id]) => id === head) ? head! : 'trades')
+  let tab = $derived(TABS.some(([id]) => id === head) ? head! : 'cards')
   const cardId = $derived.by(() => {
     const m = /^cards\/(\d+)$/.exec(sub ?? '')
     return m ? Number(m[1]) : null
@@ -50,38 +49,40 @@
   $effect(() => { void sub; void loadCardCounts() })
 
   let error = $state('')
-  let trades = $state<wb.Trade[]>([])
-  let tradeReview = $state<wb.TradeReview | null>(null)
   let shadow = $state<wb.ShadowView | null>(null)
   let weekly = $state<wb.WeeklyReview[] | null>(null)
   let monthly = $state<wb.MonthlyReview[] | null>(null)
-  let account = $state<wb.AccountView | null>(null)
   let backchecks = $state<wb.Backcheck[] | null>(null)
   let tracks = $state<wb.TracksView | null>(null)
+  let discipline = $state<wb.DisciplineView | null>(null)
+  const accountFromHash = () => new URLSearchParams(location.hash.split('?')[1] ?? '').get('account') || REAL_ACCOUNT_ID
+  let selectedAccount = $state(accountFromHash())
+  let accountChoices = $state<Account[]>([])
+  let accountChoiceError = $state('')
+  const selectedAccountName = $derived(accountChoices.find(account => account.id === selectedAccount)?.name ?? (selectedAccount === REAL_ACCOUNT_ID ? '真实账户' : selectedAccount))
+  let accountSequence = 0
+  $effect(() => {
+    if (tab !== 'discipline' && tab !== 'tracks') return
+    const sequence = ++accountSequence
+    void listAccounts(true).then(result => { if (sequence === accountSequence) { accountChoices = result.accounts ?? []; accountChoiceError = '' } })
+      .catch(err => { if (sequence === accountSequence) accountChoiceError = wb.describeError(err) })
+  })
+  onMount(() => {
+    const onHash = () => { if (location.hash.startsWith('#review')) selectedAccount = accountFromHash() }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  })
+  function selectAccount(value: string) {
+    if (!value) return
+    selectedAccount = value
+    history.replaceState(null, '', `#review/${tab}?account=${encodeURIComponent(value)}`)
+  }
   let callDrawer = $state<{ open: boolean; calls: wb.AgentToolCall[]; call: wb.AgentToolCall | null }>({ open: false, calls: [], call: null })
   const closeCalls = () => { callDrawer = { open: false, calls: [], call: null } }
   let pushResults = $state<Record<string, string>>({})
   let pushes = $state<wb.ReviewPush[]>([])
   let backcheckNote = $state('')
   let backcheckError = $state('')
-
-  // 关联计划（spec §6.1）：'' = 没动过（按默认项），NONE = 无计划，OWN = 自定，其余是计划行 id
-  const NONE = '__none__'
-  const OWN = '__own__'
-  const emptyForm = () => ({ ticker: '', side: 'buy', quantity: '', price: '', fee: '0', executed: '', planChoice: '', note: '',
-                             own: { entry_low: '', entry_high: '', stop: '', target1: '', max_hold: '' },
-                             requestId: wb.newRequestId() })
-  let form = $state(emptyForm())
-  let linkable = $state<wb.LinkablePlansView | null>(null)
-  let linkableError = $state('')
-  let linkableSeq = 0
-  let formError = $state('')
-  let recording = $state(false)
-  let voidReason = $state('')
-  // 作废：点「作废」打开 ConfirmDialog，理由在对话框里填，填了才能点「确认作废」
-  let voidAsk = $state<{ kind: 'trade' | 'flow'; id: string; what: string } | null>(null)
-  let voidOpen = $state(false)
-  let voidBusy = $state(false)
 
   function monday(d = new Date()): string {
     const copy = new Date(d)
@@ -143,125 +144,21 @@
   let weekNotes = $state('')
   let weekError = $state('')
 
-  async function load(which: string) {
+  let loadSequence = 0
+  async function load(which: string, accountId?: string) {
+    const sequence = ++loadSequence
     error = ''
     try {
-      if (which === 'trades') {
-        const [list, reviewed] = await Promise.all([wb.getTrades(), wb.getTradeReview()])
-        trades = list.trades
-        tradeReview = reviewed
-      } else if (which === 'shadow') {
-        shadow = await wb.getShadow()
-      } else if (which === 'cards') {
-        // the cards tab loads itself
-      } else if (which === 'tracks') {
-        tracks = await wb.getTracks()
-      } else if (which === 'monthly') {
-        monthly = (await wb.getMonthly()).reviews
-        loadPushes()
-      } else if (which === 'account') {
-        account = await wb.getAccount()
-      } else if (which === 'backchecks') {
-        backchecks = (await wb.getBackchecks()).backchecks
-      } else {
-        weekly = (await wb.getWeekly()).reviews
-        loadPushes()
-      }
-    } catch (e) {
-      error = wb.describeError(e)
-    }
+      if (which === 'cards') return
+      if (which === 'shadow') { const value = await wb.getShadow(); if (sequence === loadSequence) shadow = value }
+      else if (which === 'tracks') { tracks = null; const value = await wb.getTracks(undefined, undefined, accountId); if (sequence === loadSequence) tracks = value }
+      else if (which === 'discipline') { discipline = null; const value = await wb.getDiscipline(accountId); if (sequence === loadSequence) discipline = value }
+      else if (which === 'monthly') { const value = await wb.getMonthly(); if (sequence === loadSequence) { monthly = value.reviews; void loadPushes() } }
+      else if (which === 'backchecks') { const value = await wb.getBackchecks(); if (sequence === loadSequence) backchecks = value.backchecks }
+      else { const value = await wb.getWeekly(); if (sequence === loadSequence) { weekly = value.reviews; void loadPushes() } }
+    } catch (err) { if (sequence === loadSequence) error = wb.describeError(err) }
   }
-
-  $effect(() => { load(tab) })
-
-  const tickerKey = $derived(form.ticker.trim().toUpperCase())
-
-  // 可关联的计划按成交时刻取（该标的活跃链的最新版、有效期覆盖成交日的规则基线、最近的自定计划）；
-  // 代码或成交时间变了就重新取，晚到的旧响应丢弃。
-  async function loadLinkable(ticker: string, executed: string) {
-    const seq = ++linkableSeq
-    const at = new Date(executed)
-    try {
-      const res = await wb.getLinkablePlans(ticker, (Number.isNaN(at.getTime()) ? new Date() : at).toISOString())
-      if (seq !== linkableSeq) return
-      linkable = { plans: Array.isArray(res?.plans) ? res.plans : [], default_plan_id: res?.default_plan_id ?? null }
-      linkableError = ''
-    } catch (e) {
-      if (seq !== linkableSeq) return
-      linkable = null
-      linkableError = wb.describeError(e)
-    }
-  }
-  // 可关联的计划是按代码与成交时间取的：代码变了，之前选的计划（和自定价位）不再属于这只票；成交时间变了，
-  // 选中的计划行也可能不再可关联——一律清掉重选（「自定」本身与成交时间无关，保留）。
-  let lastKey = ''
-  let lastExecuted = ''
-  $effect(() => {
-    const ticker = tickerKey
-    const executed = form.executed
-    untrack(() => {
-      if (ticker !== lastKey) {
-        form.planChoice = ''
-        form.own = { entry_low: '', entry_high: '', stop: '', target1: '', max_hold: '' }
-      } else if (executed !== lastExecuted && form.planChoice !== OWN) {
-        form.planChoice = ''
-      }
-      lastKey = ticker
-      lastExecuted = executed
-    })
-    if (!ticker) { linkableSeq++; linkable = null; linkableError = ''; return }
-    const timer = setTimeout(() => { void loadLinkable(ticker, executed) }, 250)   // 输入代码时不逐字请求
-    return () => clearTimeout(timer)
-  })
-
-  // 买入默认选活跃链最新版，没有时「无计划」；卖出可不关联（平仓按 FIFO 配对）
-  // 选中的计划 id 不在当前可关联列表里（列表还没取到、取失败、换了票）就当没选过
-  const choiceValid = $derived(form.planChoice === NONE || form.planChoice === OWN
-    || !!linkable?.plans.some(p => p.plan_id === form.planChoice))
-  const planChoice = $derived((form.planChoice && choiceValid ? form.planChoice : '')
-    || (form.side === 'buy' && linkable?.default_plan_id && linkable.plans.some(p => p.plan_id === linkable!.default_plan_id)
-        ? linkable.default_plan_id : NONE))
-  const ownError = $derived.by(() => {
-    if (planChoice !== OWN) return null
-    const o = form.own
-    if (o.entry_low.trim() === '' && o.entry_high.trim() === '' && o.stop.trim() === '' && o.target1.trim() === '') return null
-    const levels = wb.levelsError(o)
-    if (levels) return levels
-    const hold = o.max_hold.trim()
-    if (hold !== '' && !/^[1-9][0-9]*$/.test(hold)) return '最长持有须为正整数（交易日）'
-    return null
-  })
-  const ownBlank = $derived(planChoice === OWN && form.own.entry_low.trim() === '')
-
-  async function recordTrade(e: Event) {
-    e.preventDefault()
-    formError = ''
-    const executed = new Date(form.executed)
-    if (Number.isNaN(executed.getTime())) { formError = '请填写成交时间'; return }
-    if (planChoice === OWN && (ownBlank || ownError)) { formError = ownError ?? '自定计划需要填写四个价位'; return }
-    const link: Partial<wb.TradeBody> = planChoice === OWN
-      ? { own_plan: { entry_low: form.own.entry_low.trim(), entry_high: form.own.entry_high.trim(), stop: form.own.stop.trim(),
-                      target1: form.own.target1.trim(),
-                      ...(form.own.max_hold.trim() ? { max_hold_sessions: Number(form.own.max_hold.trim()) } : {}) } }
-      : planChoice !== NONE ? { plan_id: planChoice } : {}
-    recording = true
-    try {
-      await wb.postTrade({
-        request_id: form.requestId, ticker: tickerKey, side: form.side as 'buy' | 'sell',
-        quantity: String(form.quantity), price: String(form.price), fee: String(form.fee || '0'),
-        executed_at: executed.toISOString(), note: form.note || null, ...link,
-      })
-      form = emptyForm()
-      notify.success('已记录成交')
-      await load('trades')
-    } catch (err) {
-      formError = wb.describeError(err)
-      // 409 plan_stale / plan_after_fill：可关联的版本变了，重新取一次让用户改选
-      if (err instanceof wb.WorkbenchError && err.status === 409 && tickerKey) void loadLinkable(tickerKey, form.executed)
-    } finally {
-      recording = false
-    }
-  }
+  $effect(() => { void load(tab, tab === 'discipline' || tab === 'tracks' ? selectedAccount : undefined) })
 
   async function runBackcheckNow() {
     backcheckError = ''; backcheckNote = ''
@@ -272,35 +169,6 @@
       await load('backchecks')
     } catch (e) {
       backcheckError = wb.describeError(e)
-    }
-  }
-
-  function askVoid(kind: 'trade' | 'flow', id: string, what: string) {
-    voidAsk = { kind, id, what }
-    voidReason = ''
-    voidOpen = true
-  }
-
-  async function runVoid() {
-    const ask = voidAsk
-    if (!ask) return
-    voidBusy = true
-    try {
-      if (ask.kind === 'trade') {
-        await wb.voidTrade(ask.id, voidReason.trim())
-        notify.success('已作废这笔成交')
-        await load('trades')
-      } else {
-        await wb.voidFlow(ask.id, voidReason.trim())
-        notify.success('已作废这笔出入金')
-        account = await wb.getAccount()
-      }
-    } catch (err) {
-      if (ask.kind === 'trade') formError = wb.describeError(err)
-      else accountError = wb.describeError(err)
-    } finally {
-      voidBusy = false
-      voidOpen = false
     }
   }
 
@@ -348,57 +216,13 @@
     }
   }
 
-  const snapshotForm = () => ({ as_of: '', equity: '', note: '', requestId: wb.newRequestId() })
-  let snap = $state(snapshotForm())
-  const flowForm = () => ({ flow_date: '', amount: '', note: '', requestId: wb.newRequestId() })
-  let flow = $state(flowForm())
-  let accountError = $state('')
-
-  let snapBusy = $state(false)
-  let flowBusy = $state(false)
-  async function recordSnapshot(e: Event) {
-    e.preventDefault()
-    if (snapBusy) return
-    accountError = ''
-    snapBusy = true
-    try {
-      await wb.postSnapshot({ request_id: snap.requestId, as_of: snap.as_of, equity: String(snap.equity),
-                              note: snap.note || null })
-      snap = snapshotForm()
-      notify.success('已录入资金快照')
-      account = await wb.getAccount()
-    } catch (err) {
-      accountError = wb.describeError(err)
-    } finally {
-      snapBusy = false
-    }
-  }
-
-  async function recordFlow(e: Event) {
-    e.preventDefault()
-    if (flowBusy) return
-    accountError = ''
-    flowBusy = true
-    try {
-      await wb.postFlow({ request_id: flow.requestId, flow_date: flow.flow_date, amount: String(flow.amount),
-                          note: flow.note || null })
-      flow = flowForm()
-      notify.success('已录入出入金')
-      account = await wb.getAccount()
-    } catch (err) {
-      accountError = wb.describeError(err)
-    } finally {
-      flowBusy = false
-    }
-  }
-
   const windowText = (w: wb.Window | undefined) =>
     !w || w.status === 'immature' ? '未成熟' : w.excess !== undefined ? wb.pct(w.excess) : `走势 ${wb.pct(w.move)}`
 
 
   // ---- tabs ----
   const tabItems = $derived(TABS.map(([id, label]) => ({
-    href: `#review/${id}`, label, current: tab === id, ...(id === 'cards' && toReview > 0 ? { badge: toReview, badgeLabel: `待审定 ${toReview} 张` } : {}),
+    href: `#review/${id}${id === 'discipline' || id === 'tracks' ? `?account=${encodeURIComponent(selectedAccount)}` : ''}`, label, current: tab === id, ...(id === 'cards' && toReview > 0 ? { badge: toReview, badgeLabel: `待审定 ${toReview} 张` } : {}),
   })))
   // review-8 counts executed / not executed units, older snapshots decided / undecided; no `units` = not computed
   const weeklyN = (r: wb.WeeklyReview): number | null => {
@@ -472,6 +296,12 @@
     { key: 'e20', header: '超额 20 日', value: b => excessCell(b, '20') },
     { key: 'flags', header: '标记', value: b => (b.stats?.all?.flags ?? []).join('、') || '无' },
   ]
+  const disciplineColumns: Column<wb.DisciplineTrade>[] = [
+    { key: 'ticker', header: '标的' }, { key: 'track', header: '依据计划', value: row => row.track ? wb.KIND_TEXT[row.track] ?? row.track : '无计划' },
+    { key: 'flags', header: '纪律标记', value: row => row.flags.map(flag => wb.FLAG_LABELS[flag] ?? flag).join('、') || '无' },
+    { key: 'immature', header: '未成熟', value: row => row.immature.map(flag => wb.FLAG_LABELS[flag] ?? flag).join('、') || '无' },
+    { key: 'r', header: '实际 R', align: 'num', value: row => wb.rText(row.r) },
+  ]
 </script>
 
 {#snippet rStat(v: number | null)}{#if v == null}<StatusPill domain="block" value="not_computed" />{:else}{wb.rText(v)}{/if}{/snippet}
@@ -490,6 +320,20 @@
     {#snippet meta()}描述性统计：股票少、样本重叠，不代表任何规则有效。{/snippet}
   </PageHeader>
   <TabNav label="复盘页签" items={tabItems} />
+  {#if tab === 'discipline' || tab === 'tracks'}
+    <Field label="复盘账户" id={`${uid}-account`}>
+      {#snippet children({ id, describedby })}
+        <Select.Root type="single" value={selectedAccount} onValueChange={selectAccount}>
+          <Select.Trigger {id} aria-describedby={describedby}>{selectedAccountName}</Select.Trigger>
+          <Select.Content>
+            {#if !accountChoices.length}<Select.Item value={REAL_ACCOUNT_ID} label="真实账户" />{/if}
+            {#each accountChoices as account (account.id)}<Select.Item value={account.id} label={account.name} />{/each}
+          </Select.Content>
+        </Select.Root>
+      {/snippet}
+    </Field>
+    {#if accountChoiceError}<DataBlock state="degraded" message={`账户列表暂不可用：${accountChoiceError}`} />{/if}
+  {/if}
 
   {#if error}<DataBlock state="error" message={error} />{/if}
 
@@ -499,106 +343,6 @@
     {:else}
       <ReviewCardList oncounts={counts => toReview = counts.to_review ?? 0} />
     {/if}
-  {/if}
-
-  {#if tab === 'trades' && !error}
-    <Card.Root size="sm" class="px-3">
-      <form class="grid grid-cols-1 gap-3 text-sm md:grid-cols-2 lg:grid-cols-4" onsubmit={recordTrade}>
-        <Field label="代码" id={`${uid}-ticker`}>
-          {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} bind:value={form.ticker} />{/snippet}
-        </Field>
-        <Field label="方向" id={`${uid}-side`}>
-          {#snippet children({ id, describedby })}
-            <select {id} aria-describedby={describedby} class={SELECT} bind:value={form.side}>
-              <option value="buy">买入</option><option value="sell">卖出</option>
-            </select>
-          {/snippet}
-        </Field>
-        <Field label="数量" id={`${uid}-quantity`}>
-          {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode="decimal" class={NUM} bind:value={form.quantity} />{/snippet}
-        </Field>
-        <Field label="成交价" id={`${uid}-price`}>
-          {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode="decimal" class={NUM} bind:value={form.price} />{/snippet}
-        </Field>
-        <Field label="费用" id={`${uid}-fee`}>
-          {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode="decimal" class={NUM} bind:value={form.fee} />{/snippet}
-        </Field>
-        <Field label="成交时间（本机时区）" id={`${uid}-executed`}>
-          {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} aria-label="成交时间" type="datetime-local" bind:value={form.executed} />{/snippet}
-        </Field>
-        <Field label="关联计划" id={`${uid}-plan`}>
-          {#snippet children({ id, describedby })}
-            <select {id} aria-describedby={describedby} class={SELECT} value={planChoice}
-                    onchange={e => form.planChoice = (e.currentTarget as HTMLSelectElement).value}>
-              <option value={NONE}>无计划</option>
-              {#each linkable?.plans ?? [] as p (p.plan_id)}<option value={p.plan_id}>{p.label}</option>{/each}
-              <option value={OWN}>自定</option>
-            </select>
-          {/snippet}
-        </Field>
-        <Field label="备注" id={`${uid}-note`}>
-          {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} bind:value={form.note} />{/snippet}
-        </Field>
-        {#if linkableError}<Alert variant="warn" role="status" class="col-span-full"><AlertDescription>可关联的计划暂不可用：{linkableError}</AlertDescription></Alert>{/if}
-        {#if planChoice === OWN}
-          <div class="col-span-full grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5" role="group" aria-label="自定计划">
-            <Field label="入场下沿" id={`${uid}-own-low`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode="decimal" class={NUM} bind:value={form.own.entry_low} />{/snippet}
-            </Field>
-            <Field label="入场上沿" id={`${uid}-own-high`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode="decimal" class={NUM} bind:value={form.own.entry_high} />{/snippet}
-            </Field>
-            <Field label="止损" id={`${uid}-own-stop`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode="decimal" class={NUM} bind:value={form.own.stop} />{/snippet}
-            </Field>
-            <Field label="T1" id={`${uid}-own-t1`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode="decimal" class={NUM} bind:value={form.own.target1} />{/snippet}
-            </Field>
-            <Field label="最长持有（交易日，缺省 10）" id={`${uid}-own-hold`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} aria-label="最长持有" inputmode="numeric" class={NUM} bind:value={form.own.max_hold} />{/snippet}
-            </Field>
-            {#if ownError}<Alert variant="danger" class="col-span-full"><AlertDescription>{ownError}</AlertDescription></Alert>{/if}
-          </div>
-        {/if}
-        <div class="col-span-full flex flex-wrap items-center gap-3">
-          <Button type="submit" variant="primary" busy={recording} disabled={!!ownError}>记录成交</Button>
-          {#if formError}<Alert variant="danger" class="w-auto py-1"><AlertDescription class="text-xs">{formError}</AlertDescription></Alert>{/if}
-        </div>
-      </form>
-    </Card.Root>
-
-    {#if tradeReview}
-      <Section level={2} title="当前持仓">
-        <ul class="text-sm">
-          {#each tradeReview.open as p}
-            <li>{p.ticker} {p.quantity} 股 · 成本 {Number(p.avg_cost).toFixed(2)} · 收盘 {p.last_close}（{p.as_of}）· 浮动盈亏 {Number(p.unrealized_pnl).toFixed(2)}（{wb.pct(p.unrealized_return)}）</li>
-          {:else}<li class="text-muted-foreground">无持仓</li>{/each}
-        </ul>
-      </Section>
-      <Section level={2} title="已平仓">
-        <ul class="text-sm">
-          {#each tradeReview.closed as s}
-            <li>{s.ticker} {s.opened} → {s.closed}（{s.holding_sessions} 个交易日）· 盈亏 {Number(s.realized_pnl).toFixed(2)}（{wb.pct(s.return)}）· 同期 SPY {wb.pct(s.spy_return)} · 最大浮盈 {wb.pct(s.max_favorable)} / 最大浮亏 {wb.pct(s.max_adverse)}</li>
-          {:else}<li class="text-muted-foreground">暂无</li>{/each}
-        </ul>
-      </Section>
-    {/if}
-
-    <Section level={2} title="成交记录">
-      <ul class="grid gap-1 text-sm">
-        {#each trades as t (t.id)}
-          <li class={t.voided_at ? 'text-muted-foreground line-through' : ''}>
-            {wb.dateTime(t.executed_at)} {t.ticker} {t.side === 'buy' ? '买入' : '卖出'} {t.quantity} @ {t.price}（费 {t.fee}）
-            <span data-testid="trade-plan" class="text-xs text-muted-foreground">· 关联计划：{#if t.plan_id}<a class="text-primary underline" href={`#plan/${t.plan_id}`}>{t.plan_label ?? t.plan_id}</a>{:else if t.decision_id}旧决定{:else if t.side === 'buy'}无计划（计划外）{:else}—{/if}</span>
-            {#if t.voided_at}<span class="no-underline">（已作废：{t.void_reason}）</span>
-            {:else}
-              <Button variant="ghost" size="sm" class="h-6 px-2 text-xs text-muted-foreground"
-                      onclick={() => askVoid('trade', t.id, `${t.ticker} ${t.side === 'buy' ? '买入' : '卖出'} ${t.quantity} @ ${t.price}`)}>作废</Button>
-            {/if}
-          </li>
-        {:else}<li class="text-muted-foreground">暂无成交</li>{/each}
-      </ul>
-    </Section>
   {/if}
 
   {#if tab === 'shadow' && shadow && !error}
@@ -635,6 +379,19 @@
     {:else}
       <DataBlock state="loading" skeleton="table" />
     {/if}
+  {/if}
+
+  {#if tab === 'discipline' && !error}
+    <Section level={2} title="执行纪律">
+      <DataBlock state={!discipline ? 'loading' : 'ready'}>
+        {#if discipline}
+          <div class="flex flex-wrap items-center gap-3 text-xs text-muted-foreground"><CalcVersion version={discipline.calc_version ?? 'discipline-2'} /><SampleSize n={discipline.trades.length} /><CutoffTime at={discipline.cutoff_at} /><span>数据日 {discipline.session}</span></div>
+          <p class="text-sm">计划买入 {discipline.planned_buys} · 遵守率 {discipline.compliance_rate == null ? '—' : wb.pct(discipline.compliance_rate)}</p>
+          <p class="text-sm">计划外 {discipline.counts.unplanned} · 追高 {discipline.counts.chase} · 过早止盈 {discipline.counts.early_take} · 死扛亏损 {discipline.counts.held_loser}</p>
+          <DataBlock state={discipline.trades.length ? 'ready' : 'empty'} message="该账户暂无可评估的买入成交"><DataTable columns={disciplineColumns} rows={discipline.trades} rowKey={row => row.trade_id} ariaLabel="执行纪律明细" /></DataBlock>
+        {/if}
+      </DataBlock>
+    </Section>
   {/if}
 
   {#if tab === 'weekly' && weekly && !error}
@@ -820,69 +577,6 @@
     {:else}<DataBlock state="empty" message="尚无月度复盘" />{/each}
   {/if}
 
-  {#if tab === 'account' && !error}
-    {#if account}
-      <Card.Root size="sm" class="gap-1 px-3 text-sm">
-        <h2 class="text-sm font-medium">风险参数（只读，改配置文件）</h2>
-        <p class="text-xs text-muted-foreground">单笔风险 {wb.pct(account.params.risk_pct)} · 单票上限 {Math.round(account.params.single_cap * 100)}% · 总持仓上限 {Math.round(account.params.total_cap * 100)}%</p>
-      </Card.Root>
-      {#if accountError}<Alert variant="danger"><AlertDescription>{accountError}</AlertDescription></Alert>{/if}
-      <div class="grid gap-3 md:grid-cols-2">
-        <Card.Root size="sm" class="px-3">
-          <form class="grid gap-3 text-sm" onsubmit={recordSnapshot}>
-            <h2 class="text-sm font-medium">录入资金快照</h2>
-            <Field label="资金日期" id={`${uid}-snap-date`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} type="date" bind:value={snap.as_of} />{/snippet}
-            </Field>
-            <Field label="总资金" id={`${uid}-snap-equity`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode="decimal" class={NUM} bind:value={snap.equity} />{/snippet}
-            </Field>
-            <Field label="备注" id={`${uid}-snap-note`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} aria-label="快照备注" bind:value={snap.note} />{/snippet}
-            </Field>
-            <div><Button type="submit" variant="primary" busy={snapBusy} disabled={!snap.as_of || !snap.equity}>录入资金快照</Button></div>
-          </form>
-        </Card.Root>
-        <Card.Root size="sm" class="px-3">
-          <form class="grid gap-3 text-sm" onsubmit={recordFlow}>
-            <h2 class="text-sm font-medium">录入出入金</h2>
-            <Field label="出入金日期" id={`${uid}-flow-date`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} type="date" bind:value={flow.flow_date} />{/snippet}
-            </Field>
-            <Field label="金额（入金为正）" id={`${uid}-flow-amount`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} aria-label="金额" inputmode="decimal" class={NUM} bind:value={flow.amount} />{/snippet}
-            </Field>
-            <Field label="备注" id={`${uid}-flow-note`}>
-              {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} aria-label="出入金备注" bind:value={flow.note} />{/snippet}
-            </Field>
-            <div><Button type="submit" variant="primary" busy={flowBusy} disabled={!flow.flow_date || !flow.amount}>录入出入金</Button></div>
-          </form>
-        </Card.Root>
-      </div>
-      <Section level={2} title="资金快照">
-        <ul class="grid gap-1 text-sm">
-          {#each account.snapshots as s (s.id)}
-            <li>{s.as_of} · {s.equity}{s.note ? `（${s.note}）` : ''}{s.supersedes_id ? ' · 更正版' : ''} · 录入于 {wb.dateTime(s.recorded_at)}</li>
-          {:else}<li class="text-muted-foreground">暂无快照</li>{/each}
-        </ul>
-      </Section>
-      <Section level={2} title="出入金">
-        <ul class="grid gap-1 text-sm">
-          {#each account.flows as f (f.id)}
-            <li class={f.voided_at ? 'text-muted-foreground line-through' : ''}>
-              {f.flow_date} · {f.amount > 0 ? '入金' : '出金'} {Math.abs(f.amount)}{f.note ? `（${f.note}）` : ''}
-              {#if f.voided_at}<span>（已作废：{f.void_reason}）</span>
-              {:else}
-                <Button variant="ghost" size="sm" class="h-6 px-2 text-xs text-muted-foreground"
-                        onclick={() => askVoid('flow', f.id, `${f.flow_date} ${f.amount > 0 ? '入金' : '出金'} ${Math.abs(f.amount)}`)}>作废</Button>
-              {/if}
-            </li>
-          {:else}<li class="text-muted-foreground">暂无出入金</li>{/each}
-        </ul>
-      </Section>
-    {/if}
-  {/if}
-
   {#if tab === 'backchecks' && !error}
     <Section level={2} title="上线前检查 · 历史回放">
       <p class="text-xs text-muted-foreground">新规则上线前手动运行，回答「触发是否过频、止损是否总被扫掉」。只读已存 K 线与 SEC 文件，不联网、不补采。也可用命令行：python -m investment_assistant.workbench.backcheck。</p>
@@ -903,15 +597,6 @@
       {/if}
     </Section>
   {/if}
-
-  <ConfirmDialog bind:open={voidOpen} destructive busy={voidBusy}
-                 title={voidAsk?.kind === 'flow' ? '作废这笔出入金？' : '作废这笔成交？'}
-                 consequence={`${voidAsk?.what ?? ''}。作废后这条记录不再计入，原记录仍保留可查（划线显示）；理由必填。`}
-                 confirmDisabled={!voidReason.trim()} actionLabel="确认作废" onConfirm={runVoid}>
-    <Field label="作废理由" id={`${uid}-void-reason`}>
-      {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} bind:value={voidReason} />{/snippet}
-    </Field>
-  </ConfirmDialog>
 
   <Sheet.Root open={callDrawer.open} onOpenChange={open => { if (!open) closeCalls() }}>
     <Sheet.Content side="right" width="sm" onCloseAutoFocus={restoreCallFocus}>

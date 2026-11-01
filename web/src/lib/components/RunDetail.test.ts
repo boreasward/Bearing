@@ -9,9 +9,10 @@ import type { FetchFamily, RunDetail as RunDetailView, RunNode } from '../runs'
 const RID = 'daily-20261030033000-1a2b3c4d'
 const TITLES: Record<string, string> = {
   sec_monitor: 'SEC 监控', collect: '数据采集', screen: '筛选', regime: '市场环境', signals: '信号', plan: '规则计划',
-  agent: 'Agent', review: '每日复查', push: '推送', retro: '复盘',
+  agent: 'Agent', review: '每日复查', accounts: '账户', push: '推送', retro: '复盘',
 }
 const IDS = Object.keys(TITLES)
+const HISTORICAL_IDS_V4 = ['sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'push', 'retro']
 
 const node = (id: string, over: Partial<RunNode> = {}): RunNode => ({
   id, title: TITLES[id], purpose: `用途-${id}`, concept: 'system.stages', status: 'success', reason: null, reason_text: null,
@@ -30,7 +31,7 @@ const family = (over: Partial<FetchFamily> = {}): FetchFamily => ({
   failures: [{ target: 'NVDA', reason: 'timeout after 30s (NVDA)' }], legacy: false, ...over,
 })
 
-/** A daily run that failed in collect: sec_monitor ok, collect failed, the other eight skipped upstream_failed. */
+/** A stages-5 daily run that failed in collect: sec_monitor ok, collect failed, nine skipped upstream_failed. */
 function failedRun(over: Partial<RunDetailView> = {}): RunDetailView {
   const nodes = IDS.map(id => {
     if (id === 'sec_monitor') return node(id)
@@ -51,9 +52,9 @@ function failedRun(over: Partial<RunDetailView> = {}): RunDetailView {
     return node(id, { status: 'skipped', reason: 'upstream_failed', reason_text: '上游节点失败，未执行', duration_ms: null, attempts: [] })
   })
   return {
-    run_id: RID, task: 'daily', kind: 'daily', graph_version: 'daily-1', stages_version: 'stages-4', session: '2026-10-29',
+    run_id: RID, task: 'daily', kind: 'daily', graph_version: 'daily-1', stages_version: 'stages-5', session: '2026-10-29',
     cutoff_at: '2026-10-30T03:30:00Z', trigger: 'scheduled', status: 'failed',
-    headline: '10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：aborted；其后 8 个节点未执行',
+    headline: '10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：aborted；其后 9 个节点未执行',
     executions: [{ report_id: 812, trigger_source: 'scheduled', status: 'error', started_at: '2026-10-30T03:30:00Z',
       finished_at: '2026-10-30T03:36:00Z', resume_node: null, attempt: 1 }],
     resume: { allowed: true, node: 'collect', deadline_at: '2026-10-30T21:00:00Z', reason: null },
@@ -80,16 +81,23 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); cleanup(); vi.restoreAllMocks() })
 
 describe('RunDetail · page', () => {
+  it('keeps historical stages-4 at ten nodes with no account stage', async () => {
+    vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ stages_version: 'stages-4', nodes: HISTORICAL_IDS_V4.map(id => node(id)) }))
+    render(RunDetail, { runId: RID })
+    expect(await screen.findByTestId('meta')).toHaveTextContent('daily-1 / stages-4')
+    expect(within(screen.getByRole('list', { name: '节点状态图' })).getAllByRole('listitem')).toHaveLength(10)
+    expect(screen.queryByRole('button', { name: /^账户：/ })).toBeNull()
+  })
   it('headline and meta line', async () => {
     render(RunDetail, { runId: RID })
     expect(await screen.findByTestId('headline')).toHaveTextContent(
-      '10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：aborted；其后 8 个节点未执行')
+      '10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：aborted；其后 9 个节点未执行')
     const meta = screen.getByTestId('meta')
     expect(meta).toHaveTextContent('任务 daily')
     expect(meta).toHaveTextContent('触发 定时')
     expect(meta).toHaveTextContent('session 2026-10-29')
     expect(meta).toHaveTextContent(`截止 ${fmtBeijing('2026-10-30T03:30:00Z')}`)
-    expect(meta).toHaveTextContent('daily-1 / stages-4')
+    expect(meta).toHaveTextContent('daily-1 / stages-5')
     expect(screen.getByRole('link', { name: '返回运行记录' })).toHaveAttribute('href', '#tools/runs')
     expect(api.getRunDetail).toHaveBeenCalledWith(RID)
     // 一次执行时不列执行记录

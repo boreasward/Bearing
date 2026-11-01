@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import App from './app.svelte'
 import { row as planRow } from './lib/plan-table-fixtures'
+import { REAL_ACCOUNT_ID } from './lib/accounts'
+import { accountFixture, detailFixture } from './lib/components/account/fixtures'
 
 // In-memory stand-in for the workbench API; SYNTH and all numbers are synthetic.
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -27,6 +29,12 @@ beforeEach(() => {
   vi.stubGlobal('crypto', { randomUUID: () => 'req-scenario' })
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     url = String(url)
+    if (url === '/api/accounts?include_closed=true') return json({ accounts: [accountFixture] })
+    if (url === '/api/accounts/compare') return json({ columns: [], rows: [], cutoff_at: null, calc_versions: ['account-1'] })
+    if (url === `/api/accounts/${REAL_ACCOUNT_ID}`) return json({ ...detailFixture, positions: [], closed_positions: [] })
+    if (url === `/api/accounts/${REAL_ACCOUNT_ID}/trades`) return json({ trades })
+    if (url === `/api/accounts/${REAL_ACCOUNT_ID}/equity`) return json({ rows: [], spy: [] })
+    if (url.startsWith('/api/workbench/account/snapshots')) return json({ snapshots: [], flows: [], params: accountFixture.params })
     if (url === '/api/workbench/today') return json({ session: '2026-09-01', market, screen: null })
     if (url.startsWith('/api/workbench/plan-table'))
       return json({ session: '2026-09-01', groups: { entry: [synth()], holding: [], ended: [] }, other_units: [], counts: {}, errors: {} })
@@ -70,6 +78,9 @@ it('records a trade against the plan the table showed, and the list names it', a
   history.replaceState(null, '', '#review/trades')
   render(App)
   await screen.findByText('成交记录')
+  expect(location.hash).toBe(`#account/${REAL_ACCOUNT_ID}/trades`)
+  await fireEvent.click(screen.getByRole('link', { name: '概览' }))
+  await screen.findByRole('heading', { name: '录入成交' })
   await fireEvent.input(screen.getByLabelText('代码'), { target: { value: 'synth' } })
   await fireEvent.input(screen.getByLabelText('数量'), { target: { value: '10' } })
   await fireEvent.input(screen.getByLabelText('成交价'), { target: { value: '124' } })
@@ -77,10 +88,11 @@ it('records a trade against the plan the table showed, and the list names it', a
   await waitFor(() => expect((screen.getByLabelText('关联计划') as HTMLSelectElement).value).toBe('ap1'))
   await fireEvent.click(screen.getByRole('button', { name: '记录成交' }))
   await waitFor(() => expect(tradeBodies).toHaveLength(1))
-  expect(tradeBodies[0]).toMatchObject({ ticker: 'SYNTH', plan_id: 'ap1', request_id: 'req-scenario' })
+  expect(tradeBodies[0]).toMatchObject({ account_id: REAL_ACCOUNT_ID, ticker: 'SYNTH', plan_id: 'ap1', request_id: 'req-scenario' })
   expect('decision_id' in tradeBodies[0]).toBe(false)
-  const list = await screen.findByTestId('trade-plan')
-  expect(list).toHaveTextContent('关联计划：Agent SYNTH·09-01 第 0 版')
+  await fireEvent.click(screen.getByRole('link', { name: '成交' }))
+  const list = await screen.findByRole('table', { name: '账户成交' })
+  expect(within(list).getByRole('link', { name: 'Agent SYNTH·09-01 第 0 版' })).toHaveAttribute('href', '#plan/ap1')
 })
 
 it('an old decision is still readable in the shadow review', async () => {

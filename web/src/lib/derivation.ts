@@ -93,7 +93,8 @@ export interface DerivationInputs {
   ref_price: { value: string | number | null; source_bar_id: string | number | null }
   earnings: { id: string; status: string | null; earnings_date: string | null; fetched_at: string | null } | null
   earnings_note: string | null
-  snapshot: { id: string; as_of: string | null; equity: string | number | null } | null
+  snapshot: { id: string | number; as_of: string | null; equity: string | number | null } | null
+  equity_source?: 'ledger' | 'snapshot'
   snapshot_note: string | null
   exposure: { ticker_value: string | number | null; total_value: string | number | null; note: string } | null
   sizing_params: { risk_pct: string | number | null; single_cap: string | number | null

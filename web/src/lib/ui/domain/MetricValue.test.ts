@@ -5,6 +5,11 @@ import MetricValue from './MetricValue.svelte'
 afterEach(() => cleanup())
 
 describe('MetricValue', () => {
+  it('keeps explicit raw Decimal text without rounding', () => {
+    const { container } = render(MetricValue, { value: null, raw: '100000.0100', unit: 'USD' })
+    expect(container.textContent?.trim()).toBe('100000.0100 USD')
+    expect(screen.queryByText('没算')).toBeNull()
+  })
   it('null shows 没算', () => {
     render(MetricValue, { value: null })
     expect(screen.getByText('没算')).toBeInTheDocument()

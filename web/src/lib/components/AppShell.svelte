@@ -19,10 +19,10 @@
 
   // The top bar names the current page; the content column is 1400px wide, table pages may use the whole width.
   const TITLES: Record<string, string> = {
-    today: '今日', instrument: '标的', review: '复盘', data: '数据', knowledge: '知识', tools: '工具', settings: '设置',
+    today: '今日', instrument: '标的', account: '账户', review: '复盘', data: '数据', knowledge: '知识', tools: '工具', settings: '设置',
     plan: '计划', discuss: '讨论',
   }
-  const FULL_WIDTH = ['today', 'review']
+  const FULL_WIDTH = ['today', 'account', 'review']
   const pageTitle = $derived(TITLES[route] ?? '')
 
   // Below 768px the side navigation becomes a drawer from the top bar (spec 4.1: 顶部抽屉); it closes when the page changes.

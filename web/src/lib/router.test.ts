@@ -4,6 +4,22 @@ import SideNav from './components/SideNav.svelte'
 import { parseHash, workbenchZones, zones } from './router'
 
 describe('parseHash', () => {
+  it('places accounts between instruments and review in the main navigation', () => {
+    const { container } = render(SideNav, { current: 'today' })
+    const labels = [...container.querySelectorAll('[data-nav-item]')].map(el => (el.getAttribute('aria-label') ?? el.textContent ?? '').trim())
+    expect(labels.slice(0, 7)).toEqual(['今日', '标的', '账户', '复盘', '数据', '知识', '设置'])
+  })
+  it.each([
+    ['#account', undefined], ['#account/00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001'],
+    ['#account/00000000-0000-0000-0000-000000000001/trades', '00000000-0000-0000-0000-000000000001/trades'],
+    ['#account/compare', 'compare'],
+  ])('routes %s to accounts with the full nested path', (hash, sub) => {
+    expect(parseHash(hash)).toEqual({ zone: 'account', sub })
+  })
+  it('redirects both retired review pages to the real account', () => {
+    expect(parseHash('#review/trades')).toEqual({ zone: 'account', sub: '00000000-0000-0000-0000-000000000001/trades' })
+    expect(parseHash('#review/account')).toEqual({ zone: 'account', sub: '00000000-0000-0000-0000-000000000001' })
+  })
   it('parses the workbench zones with subs', () => {
     expect(parseHash('#instrument/NVDA')).toEqual({ zone: 'instrument', sub: 'NVDA' })
     expect(parseHash('#review/weekly')).toEqual({ zone: 'review', sub: 'weekly' })

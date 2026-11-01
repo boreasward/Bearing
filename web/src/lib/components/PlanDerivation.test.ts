@@ -69,6 +69,14 @@ const derivation = (over: Partial<Derivation> = {}): Derivation => ({
 describe('PlanDerivation', () => {
   afterEach(() => vi.restoreAllMocks())
   beforeEach(() => resetConceptIndex())
+  it('labels a numeric frozen ledger equity source without calling it a broker snapshot', async () => {
+    const value = derivation()
+    value.inputs = { ...value.inputs, equity_source: 'ledger', snapshot: { id: 42, as_of: '2026-10-20', equity: '100000.0100' } }
+    vi.spyOn(api, 'getPlanDerivation').mockResolvedValue(value)
+    render(PlanDerivation, { planId: 'p1' })
+    expect(await screen.findByText(/账本权益.*2026-10-20.*100000.0100/)).toBeInTheDocument()
+    expect(screen.queryByText('资金快照', { exact: true })).toBeNull()
+  })
 
   it('shows consistency badge in three states', async () => {
     const states = [['consistent', '推导与重算一致'], ['mismatch', '推导与已存值不一致'],

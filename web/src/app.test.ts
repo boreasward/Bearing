@@ -68,12 +68,15 @@ describe('app routing', () => {
     expect(getByRole('button', { name: /更多/ })).toBeInTheDocument()
   })
 
-  it('keeps tools and settings under more, with data in primary navigation', async () => {
+  it('keeps tools under more and exposes accounts and settings in primary navigation', async () => {
     location.hash = '#tools'
     const { getAllByText, getByRole, queryByText } = render(App)
     expect(getAllByText('工具').length).toBeGreaterThan(0)
     expect(getAllByText('设置').length).toBeGreaterThan(0)
     expect(getByRole('link', { name: /数据/ })).toHaveAttribute('href', '#data')
+    expect(getByRole('link', { name: '账户' })).toHaveAttribute('href', '#account')
+    const entries = [...document.querySelectorAll('nav [data-nav-item]')].map(item => item.textContent!.trim())
+    expect(entries.indexOf('设置')).toBeLessThan(entries.indexOf('更多'))
     expect(queryByText('策略')).toBeNull()
     expect(queryByText('交易')).toBeNull()
   })

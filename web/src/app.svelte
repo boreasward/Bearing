@@ -9,6 +9,7 @@
   import Today from './routes/Today.svelte'
   import Instrument from './routes/Instrument.svelte'
   import Review from './routes/Review.svelte'
+  import Account from './routes/Account.svelte'
   import Data from './routes/Data.svelte'
   import Knowledge from './routes/Knowledge.svelte'
   import Plan from './routes/Plan.svelte'
@@ -16,6 +17,12 @@
   import { guardHashNavigation } from './lib/navigation-guard'
   import { parseHash, type Zone } from './lib/router'
 
+  function redirectLegacyReview() {
+    if (!/^#review\/(trades|account)(?:\?|$)/.test(location.hash)) return
+    const route = parseHash(location.hash)
+    history.replaceState(null, '', `#${route.zone}/${route.sub}`)
+  }
+  redirectLegacyReview()
   let { zone, sub } = $state(parseHash(location.hash))
   let hash = $state(location.hash)
 
@@ -28,6 +35,7 @@
     let previousHash = location.hash
     const onhashchange = (event: HashChangeEvent) => {
       if (!guardHashNavigation(event, previousHash)) return
+      redirectLegacyReview()
       previousHash = location.hash
       hash = location.hash
       const parsed = parseHash(location.hash)
@@ -51,6 +59,8 @@
       <Instrument {sub} />
     {:else if zone === 'review'}
       <Review {sub} />
+    {:else if zone === 'account'}
+      <Account {sub} />
     {:else if zone === 'data'}
       <Data {sub} />
     {:else if zone === 'knowledge'}
