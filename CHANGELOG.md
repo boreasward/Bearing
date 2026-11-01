@@ -11,6 +11,64 @@
 - **并行工具调用撞 `agent_tool_calls` 的 `(run_id, seq)` 唯一键，整个单元记成 `model_error`**（2026-10-29 MU 2026-10-28 attempt 2 的 `seq 10`、2026-10-31 14:30 手动重跑 LIN 2026-10-30 的 `seq 8`，都在反方阶段）：`Recorder.record` 用 `len(calls) + 1` 编号再追加，两步不是原子的；模型一轮里并行发出多个工具调用时LangGraph 的 `ToolNode` 在线程池里同时执行它们，两个调用算出同一个 `call:N`（检查点里能看到 MU 的 `get_indicators` / `get_news` 都是 `call:10`、LIN 的 `get_trigger` / `get_concept` 都是 `call:8`，各缺一个号），运行结束逐条 INSERT 时撞唯一键，事务回滚、token 白花。现在编号与追加在同一把锁内完成，`call:N` 引用形式不变。新增测试 `test_concurrent_records_get_distinct_monotonic_seqs`（屏障确定性复现）与 `test_parallel_tool_calls_in_one_round_get_distinct_refs`（走真实 `ToolNode`）；[agent-track.md](docs/features/agent-track.md) 工具层一段补上编号规则。
 - 三处都是后端修正，**无迁移，`.env` 与 LaunchAgent plist 不变**；需要重启服务生效，10/30 缺失的日线要手动补拉一次并重跑筛选，MU 2026-10-28 与 LIN 2026-10-30 两个单元要手动「重新运行 Agent」。
 
+## v2.11.0 — 2026-11-01
+
+账户与模拟交易（[spec](docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md)）：真实账户改为从成交与出入金计算权益，券商快照用于对账；新增 Agent 自管与照计划执行两种模拟账户，分别记录订单、成交、每日权益和决策依据。2026-11-01 复核通过后合入 `main`，前端包版本 `2.11.0`；测试与审查结果见下。[真实库只读核查](docs/roadmap/v2.11-acceptance.md)已于 2026-10-31 完成；**备份与迁移 030、重建 `web/dist` 与服务重启、真实数据验收、tag 和推送均待逐项单独授权**。
+
+### 交付
+
+- **账户账本 `account-1`**（`accounts.py`）：初始现金 + 净出入金 − 买入成本 + 卖出净所得；FIFO 持仓、费用与拆股、每日现金 / 市值 / 权益 / 盈亏、自开户修正 Dietz 收益（以开户首个交易日收盘权益为起点）和最大回撤。真实账户开账可带入已有持仓，按实物转入登记、不再次扣现金；快照与账本的绝对差额和比例差额同时不超容差才算一致（默认 100 美元与 1%），差异只提示、不改账。
+- **模拟账户与决策**（`paper_strategies.py`、`agent/portfolio_check.py`、`graph.run_portfolio`）：两种策略只买可买集合内的 Agent 入场期计划，都受账户现金、风险、单票、总仓位和持仓数量上限约束。照计划执行按最大允许股数逐项挂单、修订换单、链结束撤单；Agent 自管可选择计划与股数、撤在挂买单、提前卖全部或一半，并解释订单与未卖持仓。宿主逐条拒绝超限订单，不缩数；模型不能改计划价位或取消止损、T1 卖半与时间止损。
+- **模拟成交 `paper-fill-1`**（`paper_fill.py`）：入场复用 `entry-1`，持仓逐日步进与 `plan-shadow-2` 共用 `PositionState` / `step_position`；成交当天检查退出，同日止损先于 T1，T1 按 `max(开盘, T1)` 卖半，移动止损下限为买入成交价，时间止损在次一交易日开盘退出。持仓冻结买入时的计划，链之后的修订不改持仓价位；每链最多成交一次，入场作废或退出消耗整链；订单过期或撤单只消耗该版本，宿主拒绝的订单不消耗版本。
+- **每日工作流**（`paper_accounts.py`、`workflow.py`、`tasks/daily.py`）：`accounts` 在 `review` 后、`push` 前，顺序为所有模拟账户补结算 → 真实权益 → 模拟持仓状态 → 本 session 决策。模拟账户按 `settled_through` 逐交易日补权益与成交，缺跑日期不补造 Agent 决策；同账户同 session 决策唯一。账户 Agent 共用独立 600 秒窗口（`ACCOUNTS_AGENT_DEADLINE_S`），token 仍计入当日总量；模型不可用只跳过新决策，已有挂单和自动退出照常结算。采集范围包含模拟持仓和在挂买单标的。
+- **API 与读视图**（`api/routes/accounts.py`、`account_views.py`）：`/api/accounts` 支持账户列表、创建模拟账户、真实开账、改参数、关闭、概览、权益、成交、订单、决策与对比；已有成交、持仓、资金、纪律、轨道接口按账户读取，默认固定真实账户。账户页本月至今独立取上月最后交易日至当前截止 session 的精确完整权益，扣净出入金；不足时仅可回退同两日的有效快照，否则为空，SPY 使用相同端点，完整月报 `monthly-5` 不变。账户另给 `opening_session`，按交易所日历取开账当日或之后首个交易日，保留原 `opened_on`。模拟成交由宿主记录，人工成交、券商快照与出入金只允许真实账户；改参数从下一交易日起生效。只读 CLI 为 `python -m investment_assistant.workbench.paper_accounts show`。
+- **账户页面**（`routes/Account.svelte`、`lib/accounts.ts`、`lib/components/account/`）：侧栏加入「账户」，页签为概览、持仓、成交、Agent 决策 / 执行记录、对比；提供真实开账、创建与管理模拟账户、真实成交与资金录入、权益与 SPY / 其他账户曲线、决策证据和订单结果。曲线以 `opening_session` 的完整正权益归一到 100，缺该日完整权益时不另取更晚基准。旧 `#review/trades`、`#review/account` 跳到真实账户；复盘页纪律与轨道对比可选账户，周 / 月复盘及复盘卡仍只看真实账户。数字保留后端 Decimal 字符串，统计块标截止时间与口径，对比不排名、平均 R 样本少于 5 时为空。
+- **月度收益 `monthly-5`**：优先读取本月与上月最后一个交易日的最新账本权益，扣除端点之间净出入金；未开账或缺任一精确端点时回退 `monthly-4` 快照公式，标 `source = ledger | snapshot`。已冻结的周 / 月复盘和复盘卡保留当时版本，不重算历史结果。
+- **旧规则计划重跑兼容**（`repository.store_plan`）：比较时将缺省的 `equity_source` 按旧 `snapshot` 解释，仅构造临时副本，不修改冻结记录；旧计划若改为显式 `ledger` / `null`，或金额、股数、快照 ID 发生变化，仍返回 `conflict`。
+- **迁移 030**（[迁移与备份](docs/operations/migrations-and-backup.md)）：新增 `accounts`、`account_param_changes`、`account_equity_days`、`paper_orders`、`paper_decisions`、`paper_chain_done` 六张表；`trades`、`account_snapshots`、`cash_flows`、`holding_status` 增加 `account_id`，旧行默认归入固定真实账户。成交加 `recorded_by` / `detail`，持仓状态唯一键加账户；放行 `stage_runs.accounts`、Agent 的 `portfolio` 模式与工具阶段。缺迁移时账户接口返回 503，`daily` 与续跑前检拒绝运行。
+- **知识与设计标准**：新增账户组七张概念卡，总数 112；月收益卡与原理页同步账本、对账、模拟规则与对比，节点卡保留旧版本并解释当前十一个节点。设计标准补 `MetricValue.raw`、账户 / 模拟订单 / 模拟决策 / 对账四个状态域、账户表格窄屏行转卡；架构、功能索引和调度说明同步。
+
+### 版本
+
+新增或切换的口径为 `account-1`、`paper-fill-1`、`follow-plans-1`、`agent-portfolio-1`、`stages-5`、`daily-2`、`monthly-5`。前端 `package.json` 与 `package-lock.json` 仅根包版本改为 `2.11.0`，不变更依赖。旧规则、原有提议 / 反方 / 复查提示词及其版本继续保留，旧快照、旧卡与旧成交状态不改写；原有推送内容仍只使用真实账户。
+
+### 验证
+
+- **审查**：Task 0–5 的 spec 与代码质量审查全部通过，Astra 最终代码审查及旧计划兼容修复追加复审通过，独立纯函数复验 6 条通过。2026-11-01 复核：opus 全量代码审查（`7baa913` 之后的提交与整个工作区）无 Critical，3 个 Important（自开户收益率起点、被拒订单消耗版本、撤单 / 过期原因枚举）与所列 Minor 已修复，未修项写入下方「与 spec 的差异」「限制与待验收」；修复经 opus 复审一轮，复审指出的拆股基准下卖半取整与文档残留已改正。
+- **迁移 030**：一次性库上 001–029 之后以 `psql --single-transaction -v ON_ERROR_STOP=1` 从零连跑两次均成功；已执行初版 030（`92eab02`）的库再跑现版两次均成功，两库 `pg_dump --schema-only` 逐字相同，初版两条可被 NULL 绕过的 CHECK 与漏 `ticker` 的挂单唯一索引被替换。
+- **后端全量**（复核修复后）：离线 `2724 passed / 1129 skipped`；一次性库 `3853 passed`，无跳过、无失败。
+- **前端**：95 个测试文件、1101 条测试全部通过（Node 26 需 `NODE_OPTIONS=--no-experimental-webstorage`；默认并行度下 `Fundamentals.test.ts` 一条偶发 5 秒超时，该文件本版未改，`--maxWorkers=4` 下稳定通过）。
+- **构建**：`svelte-check` 为 0 errors / 0 warnings，Vite 生产构建成功，保留超过 500 kB 的分包体积提示；产物只写到临时目录，现有 `web/dist` 的 hash 未变。概念卡检查 112 张通过，文档链接测试通过。
+- **页面检查**：合成数据下账户页五个页签，以及 1280px 桌面和 375px 移动布局检查通过；真实库与当前服务上的数据验收尚未执行。
+- **真实库只读核查**：2026-10-31 18:13:16 +0800，`trades`、`account_snapshots`、`cash_flows`、`holding_status` 均为 0 行；029 结构已具备，030 六张新表与四张旧表的 `account_id` 列均不存在。核查使用只读事务并回滚，未执行迁移或重启；这不代表真实业务验收完成。
+
+### 与 spec 的差异
+
+- **在挂买单唯一键补齐标的**：使用 `(account_id, ticker, chain_signal_date)`，修正草案遗漏 `ticker` 的键；同账户同一信号日不同股票的挂单可以共存，同一条链仍至多一个在挂买单。
+- **同账户同标的至多一个未平持仓**：持有该标的时阻止其他链的新买单，避免一只持仓同时对应多个冻结计划；平仓后才重新检查其他链的机会。
+- **保留未知计划的拒单意图**：仅 `status = rejected` 的买单允许 `plan_id` / `chain_signal_date` 为空，模型给出的未知计划 ID 保存在 `paper_decisions.output`；可执行订单仍须有真实计划外键与链字段，不能借此绕过计划范围校验。
+- **账户节点独立冻结截止时间**：普通节点继续使用原运行的 `cutoff_at`；`accounts` 每次节点尝试开始时单独读取一次当前墙钟，session 不变，允许读取本轮上游在节点开始前已提交的计划，之后的版本仍被排除。同账户同 session 已有决策先复用，保留原截止时间、证据与订单；尚未决策的账户才使用新尝试的截止时间，显式写入阶段与决策的 `detail.cutoff_at`、有证据时的 `account.cutoff_at`，由决策 API 回显。所有读取仍受各自截止时间过滤。
+- **自开户收益率以开户首日权益为起点**：spec §4.2 的公式只用 `opening_cash` 作分母，没有考虑 D25 开账持仓不扣现金；现改为开户首个交易日权益行扣除累计净出入金作起点，该行缺失或估值不完整（`bars_missing` / `stale`）、起点非正时为空。无开账持仓且开户首日无成交、无出入金的账户结果与旧公式相同；收益区间自开户首个交易日收盘起算，开户当天的盘中盈亏不计入。
+- **宿主拒绝的订单不消耗版本**：`tried_plan_ids`、`validate_orders` 与 `follow_plans_orders` 都排除 `rejected` 订单，被拒的版本次日可改正后重下；作废、成交仍消耗链，过期、撤单仍消耗版本（D24 不变）。
+- **撤单原因落成枚举并有中文**：Agent 撤单的被撤订单写 `agent_cancel`（原文保留在撤单行的 `reason`），过期写 `validity_expired`；新增枚举值 `account_closed`（关闭账户时撤销在挂订单），不在 plan 原列表内。中文表 `CANCEL_REASON_TEXT` / `VOID_REASON_TEXT` / `CHAIN_DONE_TEXT` 前后端各一份并由 `test_accounts_frontend_sync.py` 守护。
+- **关闭账户撤销在挂订单**：同一事务把全部 `pending` 订单撤成 `cancelled`，原因 `account_closed`。
+- **卖半向下取整**：T1 卖半与 Agent 卖一半取成交日股数的一半向下取整（结算时已知后来的拆股也按成交日股数取整），结果为 0 时不产生成交（T1 仍推进状态）；奇数股时账本数量与 `plan-shadow-2` 按比例算的 R 不再逐笔一致。
+- **`monthly-5` 回退口径**：月末权益行带 `bars_missing` / `stale`（估值不完整）时同样回退快照；回退路径的快照按 `recorded_at ≤ now` 截止，出入金按 `known_flows`（按 now 的作废状态），与旧 `monthly-4` 不截止的读法略有不同。
+- **新错误码 `record_before_opened_on`**：开账后不能补录开户日之前的成交或出入金（400）；资金快照不受限。
+- **模拟账户 `discipline-2` 口径**：只按冻结计划与本账户持仓状态判定，不读链头与 `plan_stop` 事件。
+- **Agent 运行列表不含 `portfolio` 运行**：账户决策的运行按 id 可查，列表入口不显示。
+- **结算时防御性 `pending → rejected`**：`chain_consumed`、`plan_not_buyable`（以及卖半得 0 股的 `cannot_halve`）超出 spec §7.5 的状态流转，计数里不统计；`exit_instruction` 退出原因在当前路径不会产生（时间止损记 `time_stop`）。
+
+### 限制与待验收
+
+- 模拟成交依赖日线，默认每笔费用 0，无滑点、不模拟部分成交；日线无法还原盘中路径或成交队列。模拟时间戳只保证 FIFO 顺序（必要时后一笔加 1 微秒），不能当作真实盘中时点或成交证据。
+- 缺当日收盘记 `bars_missing`，沿用历史收盘时另标 `stale`；完全没有报价时内部该标的市值暂计 0 并标不完整，不能把含缺价的权益当成完整市场估值。
+- 真实与模拟账户的初始现金都须大于 0，真实账户即使带入实物持仓也同样要求；现金、快照与出入金的录入完整性会影响账本与对账。
+- 账户起点、金额和出入金可能不同，曲线以开账当日或之后首个交易日的完整正权益归一到 100；该日缺失或估值不完整时不绘制账户曲线，各账户的起点和收益区间仍可能不同。这些统计不证明策略优劣或规则 / Agent 有效。真实库迁移、服务重启和手动验收完成前，运行结果与当前真实数据状态保持待核实。
+- **Agent 自管账户的模型调用在账户写事务内进行**：调用期间持有账户锁，工具读取共用该连接；长时间调用会占住写事务。
+- **新建模拟账户默认次一交易日开户**：建账当天运行 `daily` 不产生决策，首笔挂单在开户日收盘后下、再下一个交易日成交。
+- **开账同一 `request_id` 重放返回 409 `already_opened`**，不是幂等回放。
+
 ## v2.10.1 — 2026-10-31
 
 修正 v2.10 真实验收发现的两处「今日」布局问题，只改前端样式。功能、接口、口径、地址不变；**无迁移，`.env` 与 LaunchAgent plist 不变**。版本号：`web/package.json` 与 `web/package-lock.json` 的根包 `2.10.1`。
