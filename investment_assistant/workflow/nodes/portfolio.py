@@ -32,7 +32,7 @@ from investment_assistant.core.versions import PORTFOLIO_CHECK_VERSION
 from investment_assistant.data.calendar import is_trading_day
 from investment_assistant.execution import portfolio
 from investment_assistant.execution.paper import accounts as execution_paper_accounts
-from investment_assistant.workflow.state import _moment, _stage_finish, _stage_skip, _wall, feature_enabled
+from investment_assistant.workflow.state import _moment, _stage_finish, _stage_skip, _wall, breadth_sample, feature_enabled
 
 FLAG = 'portfolio_manager'
 
@@ -67,7 +67,8 @@ def _check_account(account: dict, *, session, now, run_id: str) -> tuple[dict, d
             return row, inputs
 
 
-def _commentary(account: dict, row: dict, inputs: dict | None, *, session, now, deps, settings, clock, started) -> dict:
+def _commentary(account: dict, row: dict, inputs: dict | None, *, session, now, deps, settings, clock, started,
+                breadth_tickers=None) -> dict:
     """The real account's PM commentary status: ``{status, reason}`` (``skipped`` when the model is unavailable)."""
     if inputs is None and row['commentary'] is None:     # a reused row: the plans' levels for the PM come fresh
         with core_tx._tx() as conn:
@@ -75,11 +76,12 @@ def _commentary(account: dict, row: dict, inputs: dict | None, *, session, now, 
     facts = None if inputs is None else {'account': {key: inputs[key] for key in ('cash', 'equity', 'params')},
                                          'plans': inputs['plans'], 'positions': inputs['positions']}
     return analysis_agent_runner.run_pm_commentary(account, row, session=session, now=now, settings=settings,
-                                                   deps=deps, clock=clock, started=started, facts=facts)
+                                                   deps=deps, clock=clock, started=started, facts=facts,
+                                                   breadth_tickers=breadth_tickers)
 
 
 def run_stage(session, *, now, deps, run_id, acc: stages_module.StageAcc | None, settings, features=None,
-              clock=None, started=None) -> dict:
+              clock=None, started=None, breadth_tickers=None) -> dict:
     """The node's work: ``{'accounts': [{account_id, name, ok, blocked, deferred, commentary_status, ...}],
     'cutoff_at'}``. One account's failure is its own ``acc.fail`` line and never stops the others."""
     if not is_trading_day(session):
@@ -111,7 +113,7 @@ def run_stage(session, *, now, deps, run_id, acc: stages_module.StageAcc | None,
         if str(account['id']) == str(REAL_ACCOUNT_ID):
             try:
                 status = _commentary(account, row, inputs, session=session, now=now, deps=deps, settings=settings,
-                                     clock=clock, started=started)
+                                     clock=clock, started=started, breadth_tickers=breadth_tickers)
             except Exception as exc:    # noqa: BLE001 - the hard result stands without commentary
                 status = {'status': 'error', 'reason': families.sanitize_reason(exc)}
             item.update(commentary_status=status['status'], commentary_reason=status['reason'])
@@ -140,7 +142,8 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
     try:
         summary['portfolio'] = run_stage(session, now=now, deps=ctx.deps, run_id=state.get('run_id'), acc=acc,
                                          settings=ctx.deps.agent_settings, features=state.get('features'),
-                                         clock=ctx.clock, started=ctx.clock())
+                                         clock=ctx.clock, started=ctx.clock(),
+                                         breadth_tickers=breadth_sample(state, ctx))
     except Exception as exc:     # noqa: BLE001 - recorded as the node's failure, never raised into the chain
         reason = families.sanitize_reason(exc)
         summary.setdefault('errors', []).append(f'portfolio: {reason}')

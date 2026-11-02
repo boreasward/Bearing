@@ -78,6 +78,24 @@ def _breadth_tickers(manual: pool_module.Pool, universe_: Any) -> tuple[list[str
     return sorted(manual.tickers), ['regime_universe_missing']
 
 
+def host_breadth_sample(deps: Any = None) -> tuple[str, ...]:
+    """The frozen breadth sample a host hands the agent tools (R15): the regime node's own policy (``_breadth_tickers``
+    — screening universe ∪ manual pool, the manual pool alone when the universe file cannot be read) resolved from the
+    current watchlist and universe file, for a host that has no run state to read the daily sample from. A known sample
+    is a tuple (possibly empty); the tools tell that from "no sample supplied" (``None``)."""
+    from investment_assistant.data.adapters import universe as universe_module
+    from investment_assistant.db import list_watchlist_items
+
+    with core_tx._tx() as conn:
+        manual = pool_module.from_watchlist(list_watchlist_items(conn))
+    try:
+        loaded = universe_module.load_for(deps) if deps is not None else universe_module.load()
+    except universe_module.UniverseError:
+        loaded = None
+    tickers, _ = _breadth_tickers(manual, loaded)
+    return tuple(tickers)
+
+
 def _session_units(conn, session: date, *, now: datetime) -> dict[str, list[dict[str, Any]]]:
     """This session's undecided units in three groups (P4 §7.3): main-list
     conflict-free buys (propose), other main-list units (interpret), extended

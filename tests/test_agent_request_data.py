@@ -183,7 +183,8 @@ def test_process_requests_reruns_once_via_recheck_for_opened_chain(wired_db, mon
     traced = _fake_adapter_run(monkeypatch, rows=2)
     reviews = []
 
-    def fake_review(obj, *, session, now, trigger, run_id, deps, settings, started, clock, quota, via):
+    def fake_review(obj, *, session, now, trigger, run_id, deps, settings, started, clock, quota, via,
+                    breadth_tickers=None):
         reviews.append((obj['ticker'], obj['signal_date'], trigger, via))
         return {'revision_agent_run_id': rerun}
 
@@ -205,6 +206,15 @@ def test_process_requests_reruns_once_via_recheck_for_opened_chain(wired_db, mon
     assert counts['reruns'] == 0 and counts['fetched'] == 1 and len(reviews) == 1
 
 
+def _rerun_deps(**kwargs):
+    """Deps whose agent is available (the unopened rerun is gated like any agent work, R36) and whose clock is fixed."""
+    from investment_assistant.core.llm.model import AgentSettings
+
+    return core_tx.Deps(agent_settings=AgentSettings(provider='chatgpt', model='gpt-test', api_key='sk-test',
+                                                     daily_tokens=None, config_error=None),
+                        clock=lambda: 0.0, **kwargs)
+
+
 def test_process_requests_reruns_propose_attempt_for_unopened_unit(wired_db, monkeypatch):
     analysis_repo.insert_agent_run(wired_db, _run_row(status='rejected', reason='invalid_citation'), [],
                                    data_requests=[{'family': 'fundamentals', 'ticker': 'AMD',
@@ -217,13 +227,13 @@ def test_process_requests_reruns_propose_attempt_for_unopened_unit(wired_db, mon
                         {'ticker': ticker, 'signal_date': signal_date, 'pool': 'main', 'pool_tier': 'core'})
 
     def fake_propose(unit, *, now, deps, settings, attempt, run_id, features=None,
-                     carried_research=None, previous_run_id=None):
+                     carried_research=None, previous_run_id=None, breadth_tickers=None):
         seen.update(attempt=attempt, run_id=run_id, ticker=unit['ticker'],
                     carried=carried_research, features=features)
         return {'id': rerun}
 
     monkeypatch.setattr(runner, 'run_agent_unit', fake_propose)
-    counts = runner.process_data_requests(SESSION, run_id='daily-r1', now=NOW, deps=core_tx.Deps(),
+    counts = runner.process_data_requests(SESSION, run_id='daily-r1', now=NOW, deps=_rerun_deps(),
                                           features={'backup_sources': False}, budget_left_s=600)
     assert counts == {'queued': 1, 'fetched': 1, 'failed': 0, 'deferred': 0, 'reruns': 1}
     assert seen == {'attempt': 2, 'run_id': 'daily-r1', 'ticker': 'AMD',      # attempt + 1 (D40)
@@ -231,3 +241,90 @@ def test_process_requests_reruns_propose_attempt_for_unopened_unit(wired_db, mon
                     'features': {'backup_sources': False, 'company_researcher': False}}  # no segment: researcher off (D42)
     row = wired_db.execute('SELECT status, rows, rerun_run_id FROM data_requests').fetchone()
     assert row == ('fetched', 3, rerun)
+
+
+# ---------------------------------------------------------------- fix round 1: gates (R36) and the leftover queue
+
+def _unopened_unit(wired_db, monkeypatch, *, tokens=0):
+    analysis_repo.insert_agent_run(wired_db, {**_run_row(status='rejected', reason='invalid_citation'),
+                                              'input_tokens': tokens}, [],
+                                   data_requests=[{'family': 'fundamentals', 'ticker': 'AMD', 'run_id': 'daily-r1'}])
+    wired_db.commit()
+    _fake_adapter_run(monkeypatch, rows=3)
+    monkeypatch.setattr(runner, '_unit_for_request_rerun',
+                        lambda conn, ticker, signal_date, *, prior, now:
+                        {'ticker': ticker, 'signal_date': signal_date, 'pool': 'main', 'pool_tier': 'core'})
+    ran = []
+    monkeypatch.setattr(runner, 'run_agent_unit', lambda unit, **kwargs: ran.append(unit) or {'id': uuid.uuid4()})
+    return ran
+
+
+def test_unopened_rerun_obeys_the_shared_agent_deadline(wired_db, monkeypatch):
+    """R36: the rerun is agent work inside the shared AGENT_DEADLINE_S window; past it nothing reruns and no attempt
+    is spent (the request stays fetched without a rerun pointer)."""
+    ran = _unopened_unit(wired_db, monkeypatch)
+    ticks = iter([0.0] + [10_000.0] * 20)
+    counts = runner.process_data_requests(SESSION, run_id='daily-r1', now=NOW, deps=_rerun_deps_with(lambda: next(ticks)),
+                                          features={}, budget_left_s=600)
+    assert counts == {'queued': 1, 'fetched': 1, 'failed': 0, 'deferred': 0, 'reruns': 0} and ran == []
+    assert wired_db.execute('SELECT rerun_run_id FROM data_requests').fetchone()[0] is None
+    assert wired_db.execute("SELECT count(*) FROM agent_runs WHERE status = 'skipped'").fetchone()[0] == 0
+
+
+def test_unopened_rerun_obeys_the_daily_token_cap(wired_db, monkeypatch):
+    ran = _unopened_unit(wired_db, monkeypatch, tokens=500)
+    deps = _rerun_deps_with(lambda: 0.0, daily_tokens=500)
+    counts = runner.process_data_requests(SESSION, run_id='daily-r1', now=NOW, deps=deps, features={},
+                                          budget_left_s=600)
+    assert counts['fetched'] == 1 and counts['reruns'] == 0 and ran == []
+    # under the cap the same rerun happens
+    wired_db.execute('DELETE FROM data_requests')
+    analysis_repo.insert_agent_run(wired_db, _run_row(status='rejected', attempt=2), [], data_requests=[
+        {'family': 'news', 'ticker': 'AMD', 'run_id': 'daily-r1'}])
+    wired_db.commit()
+    counts = runner.process_data_requests(SESSION, run_id='daily-r1', now=NOW,
+                                          deps=_rerun_deps_with(lambda: 0.0, daily_tokens=10_000), features={},
+                                          budget_left_s=600)
+    assert counts['reruns'] == 1 and len(ran) == 1
+
+
+def _rerun_deps_with(clock, daily_tokens=None):
+    from investment_assistant.core.llm.model import AgentSettings
+
+    return core_tx.Deps(agent_settings=AgentSettings(provider='chatgpt', model='gpt-test', api_key='sk-test',
+                                                     daily_tokens=daily_tokens, config_error=None), clock=clock)
+
+
+def test_defer_leftover_settles_only_this_runs_queue(wired_db):
+    """§5.5: what the review tail's own reruns queued after the last handler pass settles ``deferred`` — this run's
+    only; another run's and the manual (NULL) flows' rows are not its to close."""
+    run = _run_row()
+    analysis_repo.insert_agent_run(wired_db, run, [], data_requests=[
+        {'family': 'fundamentals', 'ticker': 'AMD', 'run_id': 'daily-r1'},
+        {'family': 'news', 'ticker': 'AMD', 'run_id': 'daily-r2'},
+        {'family': 'sector', 'ticker': 'AMD'}])
+    wired_db.commit()
+    assert runner.defer_leftover_data_requests('daily-r1') == 1
+    rows = wired_db.execute('SELECT family, status, reason FROM data_requests ORDER BY id').fetchall()
+    assert rows == [('fundamentals', 'deferred', 'run_ended'), ('news', 'queued', None), ('sector', 'queued', None)]
+    assert runner.defer_leftover_data_requests(None) == 0              # manual flows are nobody's run
+    assert runner.defer_leftover_data_requests('daily-r1') == 0         # idempotent
+    # the check's one-day rule now sees only the rows nobody owns
+    stale = data_repo.stale_queued_data_requests(wired_db, before=NOW + timedelta(days=2))
+    assert sorted(r['family'] for r in stale) == ['news', 'sector']
+
+
+def test_review_node_defers_what_its_tail_leaves_queued(wired_db, monkeypatch):
+    """The review node ends with the deferral, whatever its stage did; its summary counts move with it."""
+    from investment_assistant.workflow.nodes import review as review_node
+
+    analysis_repo.insert_agent_run(wired_db, _run_row(), [], data_requests=[
+        {'family': 'fundamentals', 'ticker': 'AMD', 'run_id': 'daily-r1'}])
+    wired_db.commit()
+    summary = {'errors': [], 'review': {'data_requests': {'queued': 2, 'fetched': 1, 'failed': 0, 'deferred': 1,
+                                                          'reruns': 1}}}
+    review_node._defer_leftover_requests({'run_id': 'daily-r1'}, summary, None)
+    assert summary['review']['data_requests'] == {'queued': 3, 'fetched': 1, 'failed': 0, 'deferred': 2, 'reruns': 1}
+    assert wired_db.execute("SELECT count(*) FROM data_requests WHERE status = 'queued'").fetchone()[0] == 0
+    review_node._defer_leftover_requests({'run_id': None}, summary, None)          # a shell without a run id: nothing
+    assert summary['errors'] == []

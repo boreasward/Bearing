@@ -189,9 +189,13 @@ def _research_step(run: dict) -> dict | None:
     segment = (run.get('output') or {}).get('research')
     if not isinstance(segment, dict):
         return None
-    return {'kind': 'research', 'title': '公司研究', 'concept': 'agent.company_researcher',
+    step = {'kind': 'research', 'title': '公司研究', 'concept': 'agent.company_researcher',
             'status': segment.get('status'), 'reason': segment.get('reason'),
             'output': segment.get('output')}
+    if segment.get('status') == 'carried':      # R16: the original run owns the call:N refs, the UI resolves them there
+        step['carried_from'] = segment.get('carried_from')
+        step['original_status'] = segment.get('original_status')
+    return step
 
 
 def _previous_chain(run: dict) -> dict | None:
@@ -237,7 +241,7 @@ def _evidence(review: dict | None) -> dict:
 def _proposal(run: dict, *, revise: bool, legacy: bool) -> dict:
     base = {'kind': 'proposal', 'title': '提议', 'concept': 'agent.legacy' if legacy else 'agent.action_levels'}
     out = run.get('output')
-    if not isinstance(out, dict):
+    if not isinstance(out, dict) or 'action' not in out:      # a rejected run keeps only its researcher segment
         return {**base, 'available': False, 'text': _void_text(run)}
     levels = out.get('levels') or {}
     action = out.get('action')

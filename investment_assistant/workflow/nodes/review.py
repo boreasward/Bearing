@@ -58,7 +58,7 @@ from investment_assistant.core import tx as service
 from investment_assistant.core.tx import Unavailable
 from investment_assistant.core.constants import AGENT_DEADLINE_S, NY, BENCHMARK
 from investment_assistant.views.derivation import _check_derivations
-from investment_assistant.workflow.state import _moment, agent_window, _stage_finish, _stage_skip
+from investment_assistant.workflow.state import _moment, agent_window, breadth_sample, _stage_finish, _stage_skip
 from investment_assistant.workflow.nodes import accounts as paper_accounts
 from investment_assistant.execution import timeline
 from investment_assistant.execution import adoption as execution
@@ -137,7 +137,8 @@ def _empty_review() -> dict[str, Any]:
 
 def run_stage(session: date, *, now: datetime, deps, summary: dict[str, Any], started: float,
               clock: Callable[[], float], run_id: str | None, acc: stages_module.StageAcc | None,
-              timeline_ready: bool | None = None) -> str | None:
+              timeline_ready: bool | None = None,
+              breadth_tickers: tuple[str, ...] | None = None) -> str | None:
     """The batch's review stage (spec §7.1): ``summary['review'] = {objects, outcomes, tokens, holding_status}``
     (plus ``quota_exhausted: True`` once the quota ran out) and, with ``acc``, the stage accounting including the
     derivation check of this run's new versions. After the reviews every held ticker gets its ``holding_status``
@@ -188,7 +189,7 @@ def run_stage(session: date, *, now: datetime, deps, summary: dict[str, Any], st
         try:
             out = analysis_agent_runner.run_chain_review({**obj, 'filings_known': sec_known}, session=session, now=now, trigger='batch',
                                run_id=run_id, deps=deps, settings=settings, started=started, clock=clock,
-                               quota=quota)
+                               quota=quota, breadth_tickers=breadth_tickers)
         except service.Unavailable:
             raise
         except Exception as exc:    # §13: one chain's surprise never stops the stage
@@ -881,10 +882,12 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
     now, session = _moment(state)
     summary = state['summary']
     started, clock = agent_window(state, ctx)
+    sample = breadth_sample(state, ctx)
     try:
         skipped = run_stage(session, now=now, deps=ctx.deps, summary=summary, started=started,
                                         clock=clock, run_id=state.get('run_id'), acc=acc,
-                                        timeline_ready=state.get('timeline_ready'))
+                                        timeline_ready=state.get('timeline_ready'),
+                                        breadth_tickers=sample)
     except Unavailable:
         raise
     except Exception as exc:
@@ -897,7 +900,28 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
         else:
             _data_request_tail(state, ctx, acc, now=now, session=session, summary=summary, started=started,
                                clock=clock)
+    _defer_leftover_requests(state, summary, acc)
     return {'summary': summary}
+
+
+def _defer_leftover_requests(state: dict[str, Any], summary: dict[str, Any], acc: stages_module.StageAcc | None) -> None:
+    """§5.5: the review node is the run's last handler pass. Whatever the run still has ``queued`` after it — the requests
+    the tail's own reruns queued, or everything when the review stage was skipped or failed — settles ``deferred``,
+    so ``workflow check``'s one-day rule never names the system's own normal operation. Best effort; counted into the
+    review's ``data_requests`` (queued and deferred) when that detail exists."""
+    try:
+        left = analysis_agent_runner.defer_leftover_data_requests(state.get('run_id'))
+    except Unavailable:
+        raise
+    except Exception as exc:    # noqa: BLE001 - housekeeping never fails the stage
+        summary['errors'].append(f'review data_requests: {families.sanitize_reason(exc)}')
+        return
+    counts = (summary.get('review') or {}).get('data_requests')
+    if left and isinstance(counts, dict):
+        counts['queued'] += left
+        counts['deferred'] += left
+        if acc is not None:
+            acc.detail['data_requests'] = dict(counts)
 
 
 def _data_request_tail(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, *, now, session: date,
@@ -908,7 +932,7 @@ def _data_request_tail(state: dict[str, Any], ctx, acc: stages_module.StageAcc |
     try:
         counts = analysis_agent_runner.process_data_requests(
             session, run_id=state.get('run_id'), now=now, deps=ctx.deps, features=state.get('features'),
-            budget_left_s=AGENT_DEADLINE_S - (clock() - started))
+            budget_left_s=AGENT_DEADLINE_S - (clock() - started), breadth_tickers=breadth_sample(state, ctx))
     except Unavailable:
         raise
     except Exception as exc:    # noqa: BLE001 - the reviews are written; the supplementary fetch is best effort

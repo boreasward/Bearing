@@ -141,3 +141,42 @@ def test_empty_optional_fact_block_sections_do_not_invent_evidence():
     block = research_fact_block(check_research(output, refs=REFS))
     assert '暂无条目' in block
     assert 'call:2' not in block
+
+
+# ---------------------------------------------------------------- the dossier conclusion and its independent counter
+
+def conclusion(**overrides):
+    base = {'action': 'buy', 'summary': '增长可期', 'catalysts': [{'text': '下季财报', 'refs': ['call:1']}],
+            'price_scenarios': [{'text': '回落至支撑', 'refs': ['call:2']}], 'next_steps': []}
+    return {**base, **overrides}
+
+
+def test_conclusion_is_the_writers_three_lists_and_leaves_counter_to_the_counter_phase():
+    from investment_assistant.analysis.agent.research_check import check_conclusion
+
+    out = check_conclusion(json.dumps(conclusion()), refs=REFS)
+    assert out['counter'] == [] and out['catalysts'][0]['refs'] == ['call:1']
+    for bad in ({**conclusion(), 'counter': []}, {k: v for k, v in conclusion().items() if k != 'next_steps'}):
+        with pytest.raises(Rejected) as exc:
+            check_conclusion(bad, refs=REFS)
+        assert exc.value.reason == 'conclusion_malformed'
+    with pytest.raises(Rejected) as exc:
+        check_conclusion(conclusion(catalysts=[]), refs=REFS)
+    assert exc.value.reason == 'conclusion_catalysts_required'
+    with pytest.raises(Rejected) as exc:
+        check_conclusion(conclusion(price_scenarios=[{'text': '虚构价位', 'refs': ['call:9']}]), refs=REFS)
+    assert exc.value.reason == 'research_refs_invalid'
+
+
+def test_counter_filter_drops_bad_entries_and_never_fails_the_dossier():
+    from investment_assistant.analysis.agent.research_check import filter_counter
+
+    good = {'text': '客户集中', 'refs': ['call:1']}
+    text = json.dumps({'counter': [good, {'text': '虚构', 'refs': ['call:9']}, {'text': 'x' * 201, 'refs': ['call:1']},
+                                   {'text': '缺引用'}, 'bare string']})
+    assert filter_counter(text, refs=REFS) == {'status': 'ok', 'counter': [good], 'dropped': 4}
+    assert filter_counter('```json\n{"counter": []}\n```', refs=REFS) == {'status': 'ok', 'counter': [], 'dropped': 0}
+    assert filter_counter('not json', refs=REFS) == {'status': 'malformed', 'counter': [], 'dropped': 0}
+    assert filter_counter(json.dumps({'risks': []}), refs=REFS)['status'] == 'malformed'
+    seven = json.dumps({'counter': [good] * 7})
+    assert len(filter_counter(seven, refs=REFS)['counter']) == 6 and filter_counter(seven, refs=REFS)['dropped'] == 1

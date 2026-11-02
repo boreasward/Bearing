@@ -214,8 +214,24 @@ def test_research_section_rendered():
     view = build(run=run_row(agent_version='agent-4', output={'research': carried, **OUTPUT}), calls=CALLS)
     assert kinds(view)[:2] == ['research', 'read']
     assert view['steps'][0]['status'] == 'carried' and view['steps'][0]['output'] == RESEARCH['output']
+    # R16: the original run owns the carried call:N refs — the step exposes who and what status it was
+    assert view['steps'][0]['carried_from'] == 'original-run' and view['steps'][0]['original_status'] == 'ok'
+    assert 'carried_from' not in research and 'original_status' not in research     # a fresh segment owns its refs
     # pre-agent-4 runs keep the old step list exactly
     assert 'research' not in kinds(build())
+
+
+def test_rejected_agent4_run_keeps_the_research_section_and_voids_the_proposal():
+    """I3: a rejected first version stores only its researcher segment; the view still shows 「公司研究」 and the
+    proposal step says the run was voided (no half-empty proposal)."""
+    rejected = run_row(agent_version='agent-4', status='rejected', reason='invalid_citation', plan_id=None,
+                       counter=None, output={'research': RESEARCH})
+    view = build(run=rejected, calls=[call_row(1, 'get_news', phase='research', args={'days': 30}, data=[]), *CALLS])
+    research = step(view, 'research')
+    assert research['status'] == 'ok' and research['output'] == RESEARCH['output']
+    assert step(view, 'read', 0)['phase'] == 'research' and [c['ref'] for c in step(view, 'read', 0)['calls']] == ['call:1']
+    proposal = step(view, 'proposal')
+    assert proposal['available'] is False and '这次运行作废' in proposal['text']
 
 
 def test_build_revise_has_evidence_and_diff():

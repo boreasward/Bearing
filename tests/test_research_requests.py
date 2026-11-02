@@ -46,9 +46,9 @@ RESEARCH_OK = json.dumps({'facts': [{'text': '财报披露营收增长', 'kind':
                           'risks': [], 'blocked': [], 'summary': '基本面已核验'}, ensure_ascii=False)
 CONCLUSION_BUY = json.dumps({'action': 'buy', 'summary': '增长可期',
                              'catalysts': [{'text': '下季财报', 'refs': ['call:1']}],
-                             'counter': [{'text': '客户集中', 'refs': ['call:1']}],
                              'price_scenarios': [{'text': '回落至支撑', 'refs': ['call:1']}],
                              'next_steps': [{'text': '跟踪指引', 'refs': ['call:1']}]}, ensure_ascii=False)
+COUNTER_OK = json.dumps({'counter': [{'text': '客户集中', 'refs': ['call:1']}]}, ensure_ascii=False)
 
 
 def make(request_id, **kwargs):
@@ -165,7 +165,8 @@ def test_run_collects_then_runs_chain_and_writes_version(wired_db, monkeypatch, 
     made = make(str(uuid.uuid4()), question='增长是否可持续？', horizon_days=30)
     collected = _fake_collect(monkeypatch)
     model = scripted_model([tool('get_news', {'days': 30}), AIMessage(content=RESEARCH_OK),
-                            tool('get_news', {'days': 7}), AIMessage(content=CONCLUSION_BUY)])
+                            tool('get_news', {'days': 7}), AIMessage(content=CONCLUSION_BUY),
+                            AIMessage(content=COUNTER_OK)])
     out = research_requests.run(made['id'], now=NOW,
                                 deps=core_tx.Deps(agent_model=model,
                                                   agent_checkpointer=lambda: nullcontext(InMemorySaver())))
@@ -192,10 +193,10 @@ def test_waiting_data_when_blocked_and_wait(wired_db, monkeypatch, scripted_mode
     blocked = json.dumps({'facts': [{'text': '已披露增长', 'kind': 'disclosure', 'refs': ['call:1']}],
                           'risks': [], 'blocked': [{'what': '最新指引', 'why': '工具返回 not_found'}],
                           'summary': '指引缺失'}, ensure_ascii=False)
-    wait = json.dumps({'action': 'wait', 'summary': '等下季指引', 'catalysts': [], 'counter': [],
+    wait = json.dumps({'action': 'wait', 'summary': '等下季指引', 'catalysts': [],
                        'price_scenarios': [], 'next_steps': []}, ensure_ascii=False)
     model = scripted_model([tool('get_news', {'days': 30}), AIMessage(content=blocked),
-                            AIMessage(content=wait)])
+                            AIMessage(content=wait), AIMessage(content='{"counter": []}')])
     out = research_requests.run(made['id'], now=NOW,
                                 deps=core_tx.Deps(agent_model=model,
                                                   agent_checkpointer=lambda: nullcontext(InMemorySaver())))
@@ -282,3 +283,207 @@ def test_list_and_detail(wired_db, monkeypatch):
     assert detail is not None
     assert detail['request']['id'] == made['id'] and detail['versions'] == [] and detail['chain'] is None
     assert research_requests.detail(str(uuid.uuid4()), now=NOW) is None
+
+
+# ---------------------------------------------------------------- fix round 1: counter stage, §6.3 ⑦, budgets, wedge
+
+def _deps(model, **kwargs):
+    return core_tx.Deps(agent_model=model, agent_checkpointer=lambda: nullcontext(InMemorySaver()), **kwargs)
+
+
+def _settings(daily_tokens=None):
+    from investment_assistant.core.llm.model import AgentSettings
+
+    return AgentSettings(provider='chatgpt', model='gpt-test', api_key='sk-test', daily_tokens=daily_tokens,
+                         config_error=None)
+
+
+def test_chain_has_an_independent_counter_phase_and_price_tools_for_the_writer(wired_db, monkeypatch, scripted_model):
+    """R35 / §6.3 ④: researcher + proposer + counter + check. The writer holds the propose toolset (price tools for
+    ``price_scenarios``), the counter is its own model phase and fills ``output.counter``; the writer never writes it."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()), question='增长是否可持续？')
+    _fake_collect(monkeypatch)
+    monkeypatch.setattr(data_repo, 'read_bars', lambda conn, symbol, session, **kw: [
+        {'price_date': SESSION, 'open': 100, 'high': 101, 'low': 99, 'close': 100, 'adj_close': 100, 'volume': 5}])
+    scenarios = json.dumps({'action': 'buy', 'summary': '增长可期', 'catalysts': [{'text': '下季财报', 'refs': ['call:1']}],
+                            'price_scenarios': [{'text': '回落至 95', 'refs': ['call:2']}],
+                            'next_steps': []}, ensure_ascii=False)
+    model = scripted_model([tool('get_news', {'days': 30}), AIMessage(content=RESEARCH_OK),
+                            tool('get_price_bars', {'ticker': 'AMD'}), AIMessage(content=scenarios),
+                            tool('get_news', {'days': 7}), AIMessage(content=COUNTER_OK)])
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(model))
+    assert out['version']['status'] == 'concluded'
+    run = data_repo.agent_run_by_id(wired_db, out['agent_run_id'])
+    assert run is not None and run['mode'] == 'research'
+    calls = analysis_repo.agent_tool_calls(wired_db, out['agent_run_id'])
+    assert [(c['seq'], c['phase'], c['tool']) for c in calls] == [
+        (1, 'research', 'get_news'), (2, 'propose', 'get_price_bars'), (3, 'counter', 'get_news')]
+    assert 'error' not in calls[1]['result']              # the writer's price tool answered: price_scenarios has evidence
+    output = run['output']
+    assert output['price_scenarios'] == [{'text': '回落至 95', 'refs': ['call:2']}]
+    assert output['counter'] == [{'text': '客户集中', 'refs': ['call:1']}] and output['counter_status'] == 'ok'
+    # independence: the counter's prompt is its own and it never saw the writer's chat history
+    counter_seen = model.seen[-2]                     # the counter's first call (the last holds its tool round)
+    assert '反方审查员' in str(counter_seen[0].content) and len(counter_seen) == 2
+    assert '增长可期' in str(counter_seen[1].content) and '基本面已核验' in str(counter_seen[1].content)
+    assert 'get_price_bars' not in ''.join(str(m.content) for m in counter_seen)
+    # the dossier version carries the same independent field (UI1)
+    version = analysis_repo.research_versions(wired_db, made['id'])[0]
+    assert version['output']['counter'] == output['counter']
+    # a writer that writes its own counter is malformed (its reply is checked before the counter phase)
+    made = make(str(uuid.uuid4()))
+    model = scripted_model([AIMessage(content=RESEARCH_OK.replace('call:1', 'call:1')),
+                            AIMessage(content=json.dumps({**json.loads(CONCLUSION_BUY), 'counter': []}))])
+    bad = research_requests.run(made['id'], now=NOW, deps=_deps(model))
+    assert bad['version']['status'] == 'error' and 'conclusion_malformed' in bad['version']['summary']
+
+
+def test_counter_failures_keep_the_conclusion(wired_db, monkeypatch, scripted_model):
+    """A malformed counter reply / entries citing nothing real are counted, never fatal; the dossier stays concluded."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    _fake_collect(monkeypatch)
+    made = make(str(uuid.uuid4()))
+    model = scripted_model([tool('get_news', {'days': 30}), AIMessage(content=RESEARCH_OK),
+                            AIMessage(content=CONCLUSION_BUY), AIMessage(content='不是 JSON')])
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(model))
+    assert out['version']['status'] == 'concluded'
+    assert out['version']['output']['counter'] == [] and out['version']['output']['counter_status'] == 'malformed'
+    made = make(str(uuid.uuid4()))
+    mixed = json.dumps({'counter': [{'text': '虚构', 'refs': ['call:99']}, {'text': '真实', 'refs': ['call:1']}]},
+                       ensure_ascii=False)
+    model = scripted_model([tool('get_news', {'days': 30}), AIMessage(content=RESEARCH_OK),
+                            AIMessage(content=CONCLUSION_BUY), AIMessage(content=mixed)])
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(model))
+    assert out['version']['output']['counter'] == [{'text': '真实', 'refs': ['call:1']}]
+
+
+def test_request_data_is_settled_synchronously_and_reruns_the_chain_once(wired_db, monkeypatch, scripted_model):
+    """§6.3 ⑦: the first version's ``request_data`` rows carry ``research:<request id>`` (never NULL), are fetched
+    in-entry, a second version runs on the new rows (at most one), the rerun pointer lands on it, and what the second
+    version queues settles ``deferred`` — nothing stays ``queued``."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()), question='缺哪些基本面？')
+    calls = _fake_collect(monkeypatch, rows=2)
+    ask = lambda family: tool('request_data', {'family': family, 'ticker': 'AMD'})       # noqa: E731
+    model = scripted_model([
+        ask('fundamentals'), AIMessage(content=RESEARCH_OK), AIMessage(content=CONCLUSION_BUY),
+        AIMessage(content=COUNTER_OK),
+        ask('sec_text'), AIMessage(content=RESEARCH_OK), AIMessage(content=CONCLUSION_BUY),
+        AIMessage(content=COUNTER_OK)])
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(model))
+    versions = analysis_repo.research_versions(wired_db, made['id'])
+    assert [v['version_no'] for v in versions] == [1, 2] and out['version']['version_no'] == 2
+    assert out['status'] == 'concluded' and str(out['agent_run_id']) == str(versions[1]['agent_run_id'])
+    rows = wired_db.execute('SELECT family, run_id, agent_run_id, status, rows, reason, rerun_run_id '
+                            'FROM data_requests ORDER BY id').fetchall()
+    assert [(r[0], r[1], r[3]) for r in rows] == [('fundamentals', f"research:{made['id']}", 'fetched'),
+                                                   ('sec_text', f"research:{made['id']}", 'deferred')]
+    assert str(rows[0][2]) == str(versions[0]['agent_run_id']) and rows[0][4] == 2
+    assert str(rows[0][6]) == str(versions[1]['agent_run_id'])             # the second version is the rerun
+    assert rows[1][5] == 'research_rerun_limit' and rows[1][6] is None      # at most one rerun
+    assert ('fundamentals', ['AMD'], 'data_request', 'data_request') in [c for c in calls]
+    assert wired_db.execute("SELECT count(*) FROM data_requests WHERE status = 'queued'").fetchone()[0] == 0
+
+
+def test_request_data_without_new_rows_does_not_rerun(wired_db, monkeypatch, scripted_model):
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    _fake_collect(monkeypatch, rows=0)
+    model = scripted_model([tool('request_data', {'family': 'fundamentals', 'ticker': 'AMD'}),
+                            AIMessage(content=RESEARCH_OK), AIMessage(content=CONCLUSION_BUY),
+                            AIMessage(content=COUNTER_OK)])
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(model))
+    assert out['version']['version_no'] == 1 and out['status'] == 'concluded'
+    row = wired_db.execute('SELECT status, rows, rerun_run_id FROM data_requests').fetchone()
+    assert row == ('fetched', 0, None)
+
+
+def test_research_run_obeys_its_900_second_deadline(wired_db, monkeypatch, scripted_model):
+    """R36 / §6.3 预算: no model phase starts after RESEARCH_DEADLINE_S; the attempt is an error version
+    (``stage_budget``) like every failure class, with no model call."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    _fake_collect(monkeypatch)
+    ticks = iter([0.0] + [901.0] * 50)
+    model = scripted_model([])                       # a model call would raise: the gate must stop first
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(model, clock=lambda: next(ticks)))
+    assert out['version']['status'] == 'error' and 'stage_budget' in out['version']['summary']
+    run = data_repo.agent_run_by_id(wired_db, out['version']['agent_run_id'])
+    assert run is not None and run['status'] == 'error' and run['reason'] == 'stage_budget'
+    request = analysis_repo.research_request(wired_db, made['id'])
+    assert request is not None and request['status'] == 'queued' and request['attempts'] == 1
+
+
+def test_research_run_checks_the_daily_token_cap_before_the_model(wired_db, monkeypatch, scripted_model):
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    _fake_collect(monkeypatch)
+    spent = {'id': str(uuid.uuid4()), 'ticker': 'AMD', 'signal_date': SESSION, 'pool': 'main', 'attempt': 1,
+             'mode': 'propose', 'agent_version': 'agent-4', 'provider': 'chatgpt', 'model': 'm', 'cutoff_at': NOW,
+             'status': 'rejected', 'reason': 'invalid_citation', 'detail': None, 'output': None, 'counter': None,
+             'plan_id': None, 'input_tokens': 900, 'output_tokens': 200, 'started_at': NOW, 'finished_at': NOW}
+    analysis_repo.insert_agent_run(wired_db, spent, [])
+    wired_db.commit()
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(
+        scripted_model([]), agent_settings=_settings(daily_tokens=1000)))
+    assert out['version']['status'] == 'error' and 'token_budget' in out['version']['summary']
+
+
+def test_a_failure_after_running_never_leaves_the_request_running(wired_db, monkeypatch):
+    """I5: collection / configuration / write failures become an error version with the reason and the same
+    attempts bookkeeping as a model failure; the third closes it ``max_attempts``."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError('collection exploded')
+
+    monkeypatch.setattr(research_requests, '_collect', boom)
+    for attempt in (1, 2):
+        out = research_requests.run(made['id'], now=NOW + timedelta(minutes=attempt), deps=core_tx.Deps())
+        assert out['version']['status'] == 'error' and out['error'] == 'model_error' and out['status'] == 'queued'
+        request = analysis_repo.research_request(wired_db, made['id'])
+        assert request is not None and request['status'] == 'queued' and request['attempts'] == attempt
+    research_requests.run(made['id'], now=NOW + timedelta(minutes=3), deps=core_tx.Deps())
+    request = analysis_repo.research_request(wired_db, made['id'])
+    assert request is not None and request['status'] == 'closed' and request['closed_reason'] == 'max_attempts'
+    versions = analysis_repo.research_versions(wired_db, made['id'])
+    assert [v['status'] for v in versions] == ['error'] * 3
+    assert 'collection exploded' not in json.dumps(versions, default=str)        # the reason class, not the raw text
+
+
+def test_a_failed_final_write_is_recorded_too(wired_db, monkeypatch):
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    monkeypatch.setattr(research_requests, '_collect', lambda *a, **k: {})
+
+    def boom(row, **kwargs):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(research_requests.agent_runner, 'run_research', boom)
+    out = research_requests.run(made['id'], now=NOW, deps=core_tx.Deps())
+    assert out['version']['status'] == 'error'
+    request = analysis_repo.research_request(wired_db, made['id'])
+    assert request is not None and request['status'] == 'queued' and request['attempts'] == 1
+
+
+def test_requests_of_a_rejected_attempt_do_not_stay_queued(wired_db, monkeypatch, scripted_model):
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    _fake_collect(monkeypatch)
+    model = scripted_model([tool('request_data', {'family': 'fundamentals', 'ticker': 'AMD'}),
+                            AIMessage(content=RESEARCH_OK), AIMessage(content='不是 JSON')])
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(model))
+    assert out['version']['status'] == 'error'
+    row = wired_db.execute('SELECT run_id, status, reason FROM data_requests').fetchone()
+    assert row == (f"research:{made['id']}", 'deferred', 'research_not_followed')

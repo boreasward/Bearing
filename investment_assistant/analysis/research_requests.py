@@ -20,6 +20,7 @@ from investment_assistant.core import runner as core_runner
 from investment_assistant.core import schema as core_schema
 from investment_assistant.core import tx as core_tx
 from investment_assistant.core.constants import NY, RESEARCH_DAILY_MAX
+from investment_assistant.core.llm import model as agent_model
 from investment_assistant.data.adapters import bars as bars_module
 from investment_assistant.data.identity import stock_id
 
@@ -166,8 +167,15 @@ def latest_dossier(conn, ticker: str, *, cutoff_at: datetime) -> dict[str, Any] 
 
 
 def run(request_id: str, *, now: datetime, deps) -> dict[str, Any]:
-    """One dossier attempt (§6.3 run). Raises LookupError for an unknown or non-eligible request."""
-    started = time.monotonic()
+    """One dossier attempt (§6.3 run). Raises LookupError for an unknown or non-eligible request.
+
+    Once the request is ``running`` nothing may leave it there: a failure anywhere after the switch (collection,
+    configuration, the final write) is written as an ``error`` version with the reason and the same attempts /
+    ``closed / max_attempts`` bookkeeping as a model failure (§6.3 失败, D51) and returned as the attempt's result
+    (``error`` names the reason). If that record cannot be written either (the database is gone), the original
+    exception propagates."""
+    clock = deps.clock or time.monotonic
+    started = clock()
     with core_tx._tx() as conn:
         row = analysis_repo.research_request(conn, request_id)
         if row is None or row['status'] not in ('queued', 'waiting_data'):
@@ -175,9 +183,24 @@ def run(request_id: str, *, now: datetime, deps) -> dict[str, Any]:
         if not analysis_repo.update_research_status(conn, row['id'], from_status=row['status'],
                                                     to_status='running'):
             raise LookupError(f'研究请求状态已变化：{request_id}')
-    collection = _collect(row['ticker'], now=now, deps=deps)
-    out = agent_runner.run_research(row, now=now, deps=deps, collection=collection,
-                                    started=started)
+    try:
+        collection = _collect(row['ticker'], now=now, deps=deps)
+        out = agent_runner.run_research(row, now=now, deps=deps, collection=collection, started=started)
+    except Exception as exc:    # noqa: BLE001 — every failure class becomes an error version, never a stuck request
+        settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
+        reason, _ = agent_model.classify_error(exc, settings.api_key)
+        if isinstance(exc, core_tx.Unavailable):
+            reason = 'unavailable'
+        try:
+            version = agent_runner.fail_research(row, now=now, reason=reason, started=started, clock=clock)
+            with core_tx._tx() as conn:
+                current = analysis_repo.research_request(conn, row['id'])
+        except Exception:   # noqa: BLE001 — the record itself failed: the caller sees the original problem
+            raise exc from None
+        if version is None:        # moved on by someone else (closed by hand) or already finished: nothing to add
+            raise
+        return {'id': row['id'], 'status': current['status'] if current else None, 'version': version,
+                'agent_run_id': None, 'error': reason}
     out['collected'] = collection
     return out
 

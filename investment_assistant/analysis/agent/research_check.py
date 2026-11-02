@@ -114,16 +114,20 @@ def research_fact_block(output) -> str:
 
 
 CONCLUSION_ACTIONS = frozenset({'buy', 'pass', 'wait'})
+CONCLUSION_LISTS = ('catalysts', 'price_scenarios', 'next_steps')
+COUNTER_MAX = 6
 
 
 def check_conclusion(output, *, refs: frozenset) -> dict:
     """The dossier conclusion of the research second entrance (§6.3/§6.4): one JSON object the
     conclusion phase emits after the researcher. ``action`` is a *dossier* verdict (D39 B: it never
     opens a chain or trades); ``wait`` says the data the researcher found missing decides the question.
-    Sections are the dossier's reading structure (催化与时间 / 反证与替代解释 / 价格与情景 / 下一步);
-    a buy conclusion must name at least one catalyst — what would prove it."""
+    Sections are the dossier's reading structure (催化与时间 / 价格与情景 / 下一步); a buy conclusion
+    must name at least one catalyst — what would prove it. 反证与替代解释 are not the writer's: the
+    independent counter phase fills ``counter`` (``filter_counter``), so the returned object carries an empty
+    one and a writer that emits its own ``counter`` is malformed."""
     raw = _object(output, reason='conclusion_malformed')
-    if set(raw) != {'action', 'summary', 'catalysts', 'counter', 'price_scenarios', 'next_steps'}:
+    if set(raw) != {'action', 'summary', *CONCLUSION_LISTS}:
         raise Rejected('conclusion_malformed')
     if raw['action'] not in CONCLUSION_ACTIONS:
         raise Rejected('conclusion_action')
@@ -131,7 +135,7 @@ def check_conclusion(output, *, refs: frozenset) -> dict:
         raise Rejected('conclusion_summary')
     out: dict = {'action': raw['action'], 'summary': raw['summary'], 'catalysts': [], 'counter': [],
                  'price_scenarios': [], 'next_steps': []}
-    for key in ('catalysts', 'counter', 'price_scenarios', 'next_steps'):
+    for key in CONCLUSION_LISTS:
         items = raw[key]
         if not isinstance(items, list) or len(items) > 6:
             raise Rejected('conclusion_malformed')
@@ -143,3 +147,27 @@ def check_conclusion(output, *, refs: frozenset) -> dict:
     if out['action'] == 'buy' and not out['catalysts']:
         raise Rejected('conclusion_catalysts_required')
     return out
+
+
+def filter_counter(output, *, refs: frozenset) -> dict:
+    """The counter phase's entries (§6.3④, UI1 ``output.counter``): ``{status, counter, dropped}``. Like the plan
+    chain's counter, a bad entry (wrong shape, text over 200 characters, a ref this run never returned) is dropped and
+    counted rather than failing the dossier; a reply that is not the object is ``malformed`` with no entries; more than
+    six entries keep the first six and count the rest as dropped."""
+    try:
+        raw = _object(output, reason='counter_malformed')
+    except Rejected:
+        return {'status': 'malformed', 'counter': [], 'dropped': 0}
+    items = raw.get('counter')
+    if not isinstance(items, list):
+        return {'status': 'malformed', 'counter': [], 'dropped': 0}
+    kept, dropped = [], 0
+    for item in items:
+        try:
+            if (not isinstance(item, dict) or set(item) != {'text', 'refs'} or not _text(item['text'], 200)
+                    or len(kept) >= COUNTER_MAX):
+                raise Rejected('counter_entry')
+            kept.append({'text': item['text'], 'refs': _refs(item['refs'], refs)})
+        except Rejected:
+            dropped += 1
+    return {'status': 'ok', 'counter': kept, 'dropped': dropped}

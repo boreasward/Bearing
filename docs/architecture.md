@@ -157,12 +157,13 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `analysis/units.py` | 单元、池同步、活跃链合并与再触发 |
 | `analysis/fundamentals.py` | 财季 / 申报 / 指引读取与指引用例；行情投影只读 price_bars |
 | `analysis/fundamental_templates.py` | 基本面开放问题模板 |
-| `analysis/research_requests.py` | 研究请求的创建（幂等、配额、开关）、前台 / 后台运行、结束与详情；`python -m investment_assistant.analysis.research_requests run <request_id> / show <request_id>`（`run` 前台跑一次排队中或等数据的请求，`show` 打印请求与各版结论） |
+| `analysis/research_requests.py` | 研究请求的创建（幂等、配额、开关）、前台 / 后台运行（进入 `running` 之后任何失败都落成 `error` 版本，满三次 `closed / max_attempts`，不会卡在 `running`）、结束与详情；`python -m investment_assistant.analysis.research_requests run <request_id> / show <request_id>`（`run` 前台跑一次排队中或等数据的请求，`show` 打印请求与各版结论） |
 | `analysis/agent/graph.py` | 提议 + 反方、解读、逐链复查与组合决策子图 |
-| `analysis/agent/tools.py` | 十个只读工具与并发安全调用记录 |
+| `analysis/agent/tools.py` | 十个只读工具与并发安全调用记录；`ToolContext` 由宿主带入冻结的 `breadth_tickers`（`get_indicator('breadth')` 的样本，未提供与已知为空不同）与 `sec_text_dir`（`get_filing_text` 的原文根） |
+| `analysis/agent/research.py` | 公司研究员阶段与六个研究工具；第二入口的档案链 `run_chain`：研究员（`research@agent-4`）→ 撰写人（`propose@agent-4`，价格工具给 `price_scenarios` 取证）→ `check_conclusion` → 独立反方（`counter@agent-4`，写 `output.counter` 与 `counter_status`；撰写人不写反方）；`RESEARCH_DEADLINE_S` 到期后不再开新阶段 |
 | `analysis/agent/evidence.py` | 复查提示证据与上一条链证据块 |
 | `analysis/agent/research_check.py`、`analysis/agent/pm_check.py` | 纯研究 / PM 输出校验与研究事实块；不调模型、不写计划 |
-| `analysis/agent/runner.py` | 单元、解读、复查、组合模型调用及原子记账；recent_closed 显式注入 |
+| `analysis/agent/runner.py` | 单元、解读、复查、组合模型调用及原子记账；recent_closed 显式注入；各宿主冻结广度样本并传入工具上下文；首版被拒 / 作废的运行在 `output.research` 保留研究员段（补查重跑沿用）；补查队列 `process_data_requests`（取数与重跑两段，重跑同受共享 `AGENT_DEADLINE_S` 与每日 token 上限约束）、`defer_leftover_data_requests`（评审节点收尾把本次运行仍排队的请求记为 `deferred`）；`run_research`（900 秒与每日 token 闸；本入口的 `request_data` 以 `research:<请求 id>` 记 `run_id`、同步处理并至多再跑一版）与 `fail_research`（取数 / 配置 / 写库失败也写 `error` 版本并记尝试次数） |
 | `analysis/agent/__main__.py` | Agent setup / run CLI |
 | `analysis/repo.py` | 候选、简报、池、筛选、区制、Agent 运行、工具调用与引用写入 SQL；研究请求前态守护、FIFO 重试队列与只追加档案版本 / 截止读取 |
 
@@ -208,13 +209,13 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | --- | --- |
 | `workflow/graph.py` | daily-2 十一个节点、检查点、自动重试、run / resume、有效行与运行状态 |
 | `workflow/context.py` | NodeContext：预算、依赖、记录器、发送 / SEC 端口 |
-| `workflow/state.py` | 跨节点状态、时间、池与记账辅助 |
+| `workflow/state.py` | 跨节点状态、时间、池与记账辅助；`breadth_sample`（与 `regime` 节点同一份广度样本，冻结给 Agent 工具）、`runtime_flags`（无冻结开关时读当前开关，缺行即开，不用空字典） |
 | `workflow/batch.py` | 原 run_batch 薄壳 |
 | `workflow/recorder.py` | StageRecorder 与 stage_runs 写入，每阶段独立事务 |
 | `workflow/repo.py` | 阶段、运行、恢复、推送窗口与证据行 SQL；可按 stages-6 历史顺序读取，但当前图不升版 |
 | `workflow/targets.py` | 按显式 session / now 调原池、持仓、活跃链算法；冻结 TargetFacts 后委托适配器选目标，保留降级说明与旧库能力边界 |
 | `workflow/screen_collection.py` | 筛选新成员补采（`backfill_new_members`，`registry.run_adapter`，`scope='screen_new_members'`）；范围日线由 `collect` 节点采 |
-| `workflow/check.py` | 汇总核对（D45）：`run_checks(conn, *, session, now)` 七项——推导、持仓状态、账户、`portfolio_checks`（节点实际运行过的日子每个活跃账户一行）、`proposals_without_changes`（`optimize.proposals.violations` 为空）、`data_requests`（无排队超一天）、`agent-4` 研究员状态 ∈ ok / rejected / error / disabled / carried；`check --since` 逐份核对计划与推导，`check --session` 汇总七项，`stages` 核对阶段证据 |
+| `workflow/check.py` | 汇总核对（D45）：`run_checks(conn, *, session, now)` 七项——推导、持仓状态、账户、`portfolio_checks`（节点实际运行过的日子每个活跃账户一行）、`proposals_without_changes`（`optimize.proposals.violations` 为空）、`data_requests`（无排队超一天；批处理的请求在评审节点收尾、研究入口的请求在入口结束时都已记为终态，所以排队超一天只会是真故障）、`agent-4` 研究员状态 ∈ ok / rejected / error / disabled / carried；`check --since` 逐份核对计划与推导，`check --session` 汇总七项，`stages` 核对阶段证据 |
 | `workflow/__main__.py` | `python -m investment_assistant.workflow check [--since D] [--session D] / stages` 入口 |
 | `workflow/nodes/sec_monitor.py` | 调用 SEC 端口扫描 / 通知，再由 `sec_text` 适配器（`scope='sec_monitor'`）下载并建索引未失败的标的；持 `sec_filings` + `sec_text` 两把族锁，一行 `data_fetch_runs`（族 `sec_text`、`detail.scope='sec_monitor'`，D47） |
 | `workflow/nodes/collect.py` | 数据采集节点：按注册表顺序对每个已取族调 `registry.run_adapter`（主源 → 开关开时备源 → 降级），目标来自冻结的宿主事实，再按旧形状拼出 summary |

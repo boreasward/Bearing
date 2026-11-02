@@ -8,10 +8,10 @@ from investment_assistant.core.constants import AGENT_DEADLINE_S
 from investment_assistant.core.tx import Unavailable
 from investment_assistant.analysis.agent import runner as analysis_agent_runner
 from investment_assistant.views.derivation import _check_derivations
-from investment_assistant.workflow.state import _moment, _wall, agent_window
+from investment_assistant.workflow.state import _moment, _wall, agent_window, breadth_sample
 
 def _tail(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, *, now, session, summary: dict[str, Any],
-          started: float, clock) -> None:
+          started: float, clock, sample=None) -> None:
     """After the units: research requests FIFO, then the data requests (§5.5), each inside what is left of the
     shared budget. A failure of a tail is a ``summary['errors']`` line; the units already written stand."""
     features = state.get('features')              # None: no frozen run state (the v2.7 shell) → current flags
@@ -28,7 +28,7 @@ def _tail(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, *, now
     try:
         requests = analysis_agent_runner.process_data_requests(
             session, run_id=state.get('run_id'), now=now, deps=ctx.deps, features=features,
-            budget_left_s=AGENT_DEADLINE_S - (clock() - started))
+            budget_left_s=AGENT_DEADLINE_S - (clock() - started), breadth_tickers=sample)
     except Unavailable:
         raise
     except Exception as exc:    # noqa: BLE001 - nor do the supplementary fetches
@@ -49,11 +49,13 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
     summary = state['summary']
     opened = None if ctx.legacy else _wall(ctx)().isoformat()
     started, clock = agent_window({**state, 'agent_started_at': opened}, ctx)
+    sample = breadth_sample(state, ctx)             # R15: the regime node's sample, frozen into the agent tools
     unavailable = analysis_agent_runner.agent_stage(session, now=now, deps=ctx.deps, summary=summary, started=started, clock=clock,
                                acc=acc, timeline_ready=state.get('timeline_ready'), run_id=state.get('run_id'),
-                               features=state.get('features'))
+                               features=state.get('features'), breadth_tickers=sample)
     if unavailable is None:
-        _tail(state, ctx, acc, now=now, session=session, summary=summary, started=started, clock=clock)
+        _tail(state, ctx, acc, now=now, session=session, summary=summary, started=started, clock=clock,
+              sample=sample)
     if ctx.recorder is not None:
         if unavailable is not None:    # 不可用压过「空跑成功」：整阶段 skipped（v2.4 §4）
             ctx.recorder.skip('agent', f'agent_unavailable: {unavailable}')

@@ -15,6 +15,25 @@ def _pool_from_state(data: dict[str, Any]) -> pool_module.Pool:
     return pool_module.Pool(core=tuple(data.get('core') or ()), extended=tuple(data.get('extended') or ()),
                             sectors=dict(data.get('sectors') or {}), sources=dict(data.get('sources') or {}))
 
+def breadth_sample(state: dict[str, Any], ctx) -> tuple[str, ...] | None:
+    """The run's frozen breadth sample for the agent tools (R15): exactly what the ``regime`` node used — an explicit
+    sample, else screening universe ∪ manual pool (``_breadth_tickers``), the manual pool alone for an explicit run."""
+    from types import SimpleNamespace
+
+    from investment_assistant.analysis import units as analysis_units
+
+    if ctx is not None and ctx.breadth_tickers is not None:
+        return tuple(ctx.breadth_tickers)
+    if not (state.get('manual_pool') or state.get('pool')):
+        return None                 # no pool in the state (a shell that never ran collect): the host resolves it
+    manual = _pool_from_state(state.get('manual_pool') or state['pool'])
+    if state.get('explicit'):
+        return tuple(manual.tickers)
+    loaded = state.get('universe')
+    tickers, _ = analysis_units._breadth_tickers(
+        manual, SimpleNamespace(tickers=tuple(loaded['tickers'])) if loaded else None)
+    return tuple(tickers)
+
 def _moment(state: dict[str, Any]) -> tuple[datetime, date]:
     """The run's cutoff (every computation's ``now``) and session from the state's ISO strings."""
     return datetime.fromisoformat(state['cutoff_at']), date.fromisoformat(state['session'])
@@ -46,6 +65,16 @@ def agent_window(state: dict[str, Any], ctx) -> tuple[float, Callable[[], float]
 
 def _wall(ctx) -> Callable[[], datetime]:
     return ctx.wall_now or collect.wall_clock
+
+
+def runtime_flags(features: dict[str, bool] | None) -> dict[str, bool]:
+    """The switches an adapter run reads (R20): the run's frozen ones or, with none (a manual backfill, a state without
+    frozen flags), the current runtime ones — a flag without a change row is on, and so is every flag before migration 031.
+    Never ``{}``: the adapters read a missing ``backup_sources`` as off."""
+    if features is not None:
+        return features
+    with core_tx._tx() as conn:
+        return core_features.frozen(conn) if core_schema.five_layers_ready(conn) else dict.fromkeys(core_features.FLAGS, True)
 
 
 def feature_enabled(state: dict[str, Any], flag: str) -> bool:

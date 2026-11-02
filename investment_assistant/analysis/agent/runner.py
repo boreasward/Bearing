@@ -51,6 +51,36 @@ AGENT_MAX_ATTEMPTS = 3
 REVIEW_MAX_ATTEMPTS = 3
 EMPTY_REASON = '（无理由）'
 
+def _sec_text_dir() -> Path:
+    """The configured local filing-text root every researcher host passes to ``get_filing_text`` (§6.2)."""
+    from investment_assistant.config import load_config
+
+    return Path(load_config().filings.output_dir)
+
+
+def _breadth_for(breadth_tickers, deps: Deps) -> tuple[str, ...] | None:
+    """The frozen breadth sample a host hands ``ToolContext`` (R15): the run's own (``breadth_tickers``, resolved
+    from its state by the node) or, for a host with no state, the regime policy resolved from the watchlist and the
+    universe file. ``None`` only when the sample cannot be determined — the tool then says
+    ``indicator_requires_universe`` instead of passing a single ticker off as a pool."""
+    if breadth_tickers is not None:
+        return tuple(breadth_tickers)
+    try:
+        return units.host_breadth_sample(deps)
+    except Unavailable:
+        raise
+    except Exception:       # noqa: BLE001 - an undeterminable sample is "unknown", never an empty pool
+        return None
+
+
+def _research_only(result: dict) -> dict | None:
+    """``{'research': segment}`` for a run that produced no proposal (rejected / skipped): the researcher's checked work
+    and its calls are stored, so the reasoning view keeps 「公司研究」 and a data-request rerun can carry the segment
+    (D42/R16) instead of degrading to researcher-disabled. None when there is no segment (pre-agent-4 shapes)."""
+    segment = result.get('research')
+    return {'research': segment} if isinstance(segment, dict) else None
+
+
 def _brief_run(run: dict) -> dict:
     """The run as briefs.for_run should see it. briefs.for_run takes contra from ``counter.risks`` (the
     agent-1 shape); an agent-2 brief's contra is the first per-thesis counter instead (v2.5 Task 6), so the
@@ -135,7 +165,8 @@ def _first_version_guard(conn, unit: dict, *, now: datetime) -> dict[str, Any] |
 
 def run_agent_unit(unit: dict, *, now: datetime, deps: Deps, settings, attempt: int,
                     run_id: str | None = None, features: dict | None = None,
-                    carried_research: dict | None = None, previous_run_id: str | None = None) -> dict:
+                    carried_research: dict | None = None, previous_run_id: str | None = None,
+                    breadth_tickers: tuple[str, ...] | list[str] | None = None) -> dict:
     """One unit through the agent-3 graph: the chain's first version (v2.5 §5.1, v2.9 §5.5). Plan, run, calls,
     version 0 and the brief share one transaction taken under the ``chain-open:<ticker>`` lock, which first checks
     again that the ticker has no active chain and the unit was not merged (§4.7; otherwise the proposal is recorded
@@ -174,7 +205,9 @@ def run_agent_unit(unit: dict, *, now: datetime, deps: Deps, settings, attempt: 
             block = agent_evidence.previous_chain_block(_previous_chain_facts(conn, ticker, signal_date, now=now), now=now)
         digest = {'input_digest': {'previous_chain': agent_evidence.previous_chain_digest(block)}}
         last_close = Decimal(str(bars_[-1]['close']))
-        ctx = agent_tools.ToolContext(ticker=ticker, session=signal_date, cutoff_at=now, read=_read_only)
+        ctx = agent_tools.ToolContext(ticker=ticker, session=signal_date, cutoff_at=now, read=_read_only,
+                                      breadth_tickers=_breadth_for(breadth_tickers, deps),
+                                      sec_text_dir=_sec_text_dir())
         with ExitStack() as stack:
             try:
                 factory = deps.agent_checkpointer or (
@@ -218,7 +251,7 @@ def run_agent_unit(unit: dict, *, now: datetime, deps: Deps, settings, attempt: 
                             'run_id': run_id or 'agent', 'timeline_version': timeline.TIMELINE_VERSION,
                             'created_at': now})
                     skipped = row('skipped', reason='active_chain', input_tokens=result['input_tokens'],
-                                  output_tokens=result['output_tokens'])
+                                  output_tokens=result['output_tokens'], output=_research_only(result))
                     record = analysis_repo.insert_agent_run(conn, skipped, result['calls'],
                                                             data_requests=[{**r, 'run_id': run_id} for r in result.get('data_requests') or []])
                     if unit['pool'] == 'main':
@@ -257,7 +290,7 @@ def run_agent_unit(unit: dict, *, now: datetime, deps: Deps, settings, attempt: 
                                                                 candidates=unit['candidates']))
                 return record
         return write(row(result['status'], reason=result['reason'],
-                         output={**result['output'], **digest} if result['output'] else result['output'],
+                         output={**result['output'], **digest} if result['output'] else _research_only(result),
                          counter=result['counter'], input_tokens=result['input_tokens'],
                          output_tokens=result['output_tokens']), result['calls'],
                      data_requests=[{**r, 'run_id': run_id} for r in result.get('data_requests') or []])
@@ -321,7 +354,8 @@ def run_interpret_unit(unit: dict, *, now: datetime, deps: Deps, settings, attem
 def agent_stage(session: date, *, now: datetime, deps: Deps, summary: dict[str, Any],
                  started: float, clock: Callable[[], float],
                  acc: Any | None = None, timeline_ready: bool | None = None,
-                 run_id: str | None = None, features: dict | None = None) -> str | None:
+                 run_id: str | None = None, features: dict | None = None,
+                 breadth_tickers: tuple[str, ...] | list[str] | None = None) -> str | None:
     """The agent track after all rule plans (§8.1): skip rules, then one unit at a time.
 
     v2.9 §4.3: a unit the `plan` node merged into an active chain (a ``chain_retriggers`` row) is not proposed — no
@@ -343,6 +377,8 @@ def agent_stage(session: date, *, now: datetime, deps: Deps, summary: dict[str, 
         summary['errors'].append(f'agent_config: {settings.config_error}')
     unavailable = agent_model.unavailable_reason(settings)
     ny_date = now.astimezone(NY).date()
+    if unavailable is None and breadth_tickers is None:
+        breadth_tickers = _breadth_for(None, deps)         # R15: one frozen sample for every unit of the stage
     runs: dict[str, str] = {}
     briefs: dict[str, str] = {}
     tokens = {'input': 0, 'output': 0}
@@ -457,7 +493,7 @@ def agent_stage(session: date, *, now: datetime, deps: Deps, summary: dict[str, 
         if not ready:       # the shared gates above still come first (deadline, provider, quota, attempts)
             return _skip(unit, 'migration_026_missing', now=now, settings=settings, attempt=attempt)
         return run_agent_unit(unit, now=now, deps=deps, settings=settings, attempt=attempt, run_id=run_id,
-                              features=features)
+                              features=features, breadth_tickers=breadth_tickers)
 
     def propose_or_merge(unit: dict) -> None:
         """§4.3: a merged unit is not proposed; everything else goes through the shared gates."""
@@ -767,7 +803,8 @@ def _run_lock(ticker: str, signal_date: date):
 
 
 def run_chain_review(obj: dict, *, session: date, now: datetime, trigger: str, run_id: str | None, deps, settings,
-                 started: float, clock: Callable[[], float], quota: dict, via: str | None = None) -> dict:
+                 started: float, clock: Callable[[], float], quota: dict, via: str | None = None,
+                 breadth_tickers: tuple[str, ...] | list[str] | None = None) -> dict:
     """Review one chain under its run lock (a busy lock → ``{'skipped_without_row': 'review_in_progress'}``,
     nothing read, no model call); see ``_review_chain`` for the review itself. ``via`` ('data_request')
     marks a D40 data-request recheck in the review row's detail."""
@@ -775,11 +812,13 @@ def run_chain_review(obj: dict, *, session: date, now: datetime, trigger: str, r
         if not got:
             return {'skipped_without_row': 'review_in_progress'}
         return _review_chain(obj, session=session, now=now, trigger=trigger, run_id=run_id, deps=deps,
-                             settings=settings, started=started, clock=clock, quota=quota, via=via)
+                             settings=settings, started=started, clock=clock, quota=quota, via=via,
+                             breadth_tickers=breadth_tickers)
 
 
 def _review_chain(obj: dict, *, session: date, now: datetime, trigger: str, run_id: str | None, deps, settings,
-                  started: float, clock: Callable[[], float], quota: dict, via: str | None = None) -> dict:
+                  started: float, clock: Callable[[], float], quota: dict, via: str | None = None,
+                  breadth_tickers: tuple[str, ...] | list[str] | None = None) -> dict:
     """Review one chain at session S and cutoff ``now`` (spec §7.3–§7.4); returns the written plan_reviews
     row, or ``{'skipped_without_row': reason}`` (review_in_progress, fresh_version, already_reviewed,
     max_attempts, chain_not_active).
@@ -883,7 +922,9 @@ def _review_chain(obj: dict, *, session: date, now: datetime, trigger: str, run_
     user_refs = frozenset(f"user:{r['id']}" for r in [*included, *seen['inputs_old']])
     context = (seen['plan'].get('inputs') or {}).get('context') or {}
     graph_unit = {'ticker': ticker, 'signal_date': signal_date, 'pool_tier': context.get('pool_tier')}
-    ctx = agent_tools.ToolContext(ticker=ticker, session=session, cutoff_at=now, read=core_tx._read_only)
+    # only a revision uses a tool set with get_indicator (review itself runs the legacy ten): resolve lazily
+    ctx = agent_tools.ToolContext(ticker=ticker, session=session, cutoff_at=now, read=core_tx._read_only,
+                                  breadth_tickers=_breadth_for(breadth_tickers, deps), sec_text_dir=_sec_text_dir())
     exit_detail = {'exit_reason': 'agent_invalidate'} if mode == 'holding' else {}
 
     retriggered = mode == 'entry' and bool(hits)      # D4: a merged-in trigger skips the single-phase review
@@ -1027,7 +1068,7 @@ def _revision(conn, attempt: int, *, seen: dict, said_base: dict, review_run: Ca
     tokens = {'input_tokens': revised['input_tokens'] or 0, 'output_tokens': revised['output_tokens'] or 0}
     row['input_tokens'] += tokens['input_tokens']
     row['output_tokens'] += tokens['output_tokens']
-    payload = {'output': revised['output'], 'counter': revised['counter'], **tokens}
+    payload = {'output': revised['output'] or _research_only(revised), 'counter': revised['counter'], **tokens}
     if revised['status'] == 'pass':
         analysis_repo.insert_agent_run(conn, run_row(revise_id, 'revise', 'pass', attempt,
                                                   agent_version=AGENT_RUN_VERSION, **payload),
@@ -1146,7 +1187,7 @@ def _commit(seen: dict, *, ticker: str, signal_date: date, session: date, now: d
         return record
 
 
-def run_portfolio_decision(conn,account,*,session,now,run_id,settings,deps,clock,started,recent_closed,host_cancellations=None,portfolio_check=None):
+def run_portfolio_decision(conn,account,*,session,now,run_id,settings,deps,clock,started,recent_closed,host_cancellations=None,portfolio_check=None,breadth_tickers=None):
     """One Agent-managed account decision (``agent-portfolio-2``). ``portfolio_check`` is the account's
     ``execution_paper_accounts.portfolio_check_state`` — the accounts node resolves it from the run's frozen
     ``portfolio_manager`` switch (K2: off → ``disabled``, no stored row consulted); without one the current row of the
@@ -1175,7 +1216,8 @@ def run_portfolio_decision(conn,account,*,session,now,run_id,settings,deps,clock
     try:
         factory=deps.agent_checkpointer or (lambda:agent_model.checkpointer(os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL','')))
         with factory() as checkpointer:
-            ctx=agent_tools.ToolContext(ticker='',session=session,cutoff_at=now,read=lambda fn:fn(conn))
+            ctx=agent_tools.ToolContext(ticker='',session=session,cutoff_at=now,read=lambda fn:fn(conn),
+                breadth_tickers=None if breadth_tickers is None else tuple(breadth_tickers))     # R15: the node's frozen sample (this conn is mid-transaction)
             result=agent_graph.run_portfolio(account=account,ctx=ctx,model=deps.agent_model if deps.agent_model is not None else agent_model.chat_model(settings),
                 checkpointer=checkpointer,run_id=rid,now=lambda:now,evidence=evidence)
     except Exception as exc:
@@ -1201,7 +1243,8 @@ def run_portfolio_decision(conn,account,*,session,now,run_id,settings,deps,clock
 
 
 def run_pm_commentary(account: dict, check: dict, *, session: date, now: datetime, settings, deps: Deps,
-                      clock: Callable[[], float], started: float, facts: dict | None = None) -> dict:
+                      clock: Callable[[], float], started: float, facts: dict | None = None,
+                      breadth_tickers: tuple[str, ...] | list[str] | None = None) -> dict:
     """The PM commentary of the real account's stored portfolio check (spec §7.2 ④): ``{status, reason}``.
 
     ``ok`` — validated and written to ``portfolio_checks.commentary`` together with its ``agent_runs(mode='pm')``
@@ -1228,7 +1271,8 @@ def run_pm_commentary(account: dict, check: dict, *, session: date, now: datetim
         factory = deps.agent_checkpointer or (
             lambda: agent_model.checkpointer(os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL', '')))
         with factory() as checkpointer:
-            ctx = agent_tools.ToolContext(ticker='', session=session, cutoff_at=now, read=_read_only)
+            ctx = agent_tools.ToolContext(ticker='', session=session, cutoff_at=now, read=_read_only,
+                                          breadth_tickers=_breadth_for(breadth_tickers, deps))
             result = agent_pm.run_pm(
                 execution_paper_accounts.check_result(check), account=account, ctx=ctx,
                 model=deps.agent_model if deps.agent_model is not None else agent_model.chat_model(settings),
@@ -1249,20 +1293,12 @@ def run_pm_commentary(account: dict, check: dict, *, session: date, now: datetim
 
 # ---------------------------------------------------------------- v2.13 data-request tail (§5.5, D40–D42)
 
-def process_data_requests(session: date, *, run_id: str | None, now: datetime, deps: Deps,
-                          features: dict | None, budget_left_s: float) -> dict[str, int]:
-    """The shared agent/review tail: settle this run's queued tool requests in the remaining budget.
-
-    §5.5: read the run's queued ``data_requests`` and dedupe by (family, ticker); with less than
-    ``DATA_REQUEST_MIN_S`` left every request settles ``deferred`` (terminal — the next day's review
-    revises through its own path). Otherwise each family runs under its lock through the registry
-    (scope ``data_request``), one ``data_fetch_runs`` row each, and every request row settles
-    ``fetched`` / ``failed`` with its fetch run and rows. Each unit whose fetch gained rows reruns
-    once (D40): an opened chain through the existing recheck review (``detail.via='data_request'``),
-    an unopened unit as a new propose attempt bounded by ``AGENT_MAX_ATTEMPTS``;
-    ``attach_data_request_rerun`` points the requests at the new run. Returns the node's
-    ``data_requests`` detail counts. Before migration 031 there is no queue: all-zero counts, no table
-    touched. ``features=None`` (a state without frozen flags) reads the current flags."""
+def _settle_requests(session: date, *, run_id: str | None, now: datetime, deps: Deps, features: dict | None,
+                     budget_left_s: float) -> tuple[dict[str, int], list[dict]]:
+    """Fetch half of the data-request tail: read ``run_id``'s queued requests (deduped by (family, ticker)), defer all
+    of them when less than ``DATA_REQUEST_MIN_S`` is left, otherwise fetch each family under its lock (scope
+    ``data_request``) and settle every row ``fetched`` / ``failed``. Returns the counts and the fetched requests that
+    gained rows (their units rerun)."""
     from investment_assistant.data import collect as data_collect
     from investment_assistant.data import registry as data_registry
     from investment_assistant.data.adapter_support import adapter_deps_from_service
@@ -1270,12 +1306,12 @@ def process_data_requests(session: date, *, run_id: str | None, now: datetime, d
     counts = {'queued': 0, 'fetched': 0, 'failed': 0, 'deferred': 0, 'reruns': 0}
     with core_tx._tx() as conn:
         if not core_schema.five_layers_ready(conn):
-            return counts
+            return counts, []
         rows = data_repo.queued_data_requests(conn, run_id)   # NULL run_id pairs with a NULL query (manual flows)
         if rows and features is None:      # D3: no frozen run state → the current flags (default on)
             features = core_features.frozen(conn)
     if not rows:
-        return counts
+        return counts, []
     features = features or {}
     counts['queued'] = len(rows)
     groups: dict[tuple[str, str], list[dict]] = {}
@@ -1288,7 +1324,7 @@ def process_data_requests(session: date, *, run_id: str | None, now: datetime, d
                     data_repo.settle_data_request(conn, row['id'], status='deferred', fetch_run_id=None,
                                                   rows=None, reason='agent_budget', rerun_run_id=None)
         counts['deferred'] = len(rows)
-        return counts
+        return counts, []
 
     projected = adapter_deps_from_service(deps, transaction=core_tx._tx, sleep=data_collect.FETCH_SLEEP)
     settled: list[dict] = []                      # fetched requests with new rows → their units rerun
@@ -1318,9 +1354,52 @@ def process_data_requests(session: date, *, run_id: str | None, now: datetime, d
                     data_repo.settle_data_request(conn, row['id'], status='failed', fetch_run_id=fetch_run_id,
                                                   rows=None, reason=reason or 'fetch_failed', rerun_run_id=None)
                     counts['failed'] += 1
+    return counts, settled
 
+
+def defer_leftover_data_requests(run_id: str | None, *, reason: str = 'run_ended') -> int:
+    """§5.5: whatever a run still has ``queued`` when its last handler pass is over settles ``deferred`` (terminal) —
+    the requests a rerun queued after the final pass, or the second version of a dossier. Nothing the system queued
+    stays ``queued`` past its run, so ``workflow check``'s one-day rule only ever names a real failure. Returns how
+    many rows were settled; before migration 031 there is no queue (0). ``run_id=None`` (manual flows) settles
+    nothing: those rows are not any run's to close."""
+    if run_id is None:
+        return 0
+    with core_tx._tx() as conn:
+        if not core_schema.five_layers_ready(conn):
+            return 0
+        rows = data_repo.queued_data_requests(conn, run_id)
+        for row in rows:
+            data_repo.settle_data_request(conn, row['id'], status='deferred', fetch_run_id=None, rows=None,
+                                          reason=reason, rerun_run_id=None)
+        return len(rows)
+
+
+def process_data_requests(session: date, *, run_id: str | None, now: datetime, deps: Deps,
+                          features: dict | None, budget_left_s: float,
+                          breadth_tickers: tuple[str, ...] | list[str] | None = None) -> dict[str, int]:
+    """The shared agent/review tail: settle this run's queued tool requests in the remaining budget.
+
+    §5.5: read the run's queued ``data_requests`` and dedupe by (family, ticker); with less than
+    ``DATA_REQUEST_MIN_S`` left every request settles ``deferred`` (terminal — the next day's review
+    revises through its own path). Otherwise each family runs under its lock through the registry
+    (scope ``data_request``), one ``data_fetch_runs`` row each, and every request row settles
+    ``fetched`` / ``failed`` with its fetch run and rows. Each unit whose fetch gained rows reruns
+    once (D40): an opened chain through the existing recheck review (``detail.via='data_request'``),
+    an unopened unit as a new propose attempt bounded by ``AGENT_MAX_ATTEMPTS``; both inside the shared
+    ``AGENT_DEADLINE_S`` window and the daily token cap (a rerun the gates refuse simply does not happen —
+    the request stays ``fetched`` without a rerun pointer, and no attempt is spent).
+    ``attach_data_request_rerun`` points the requests at the new run. Returns the node's
+    ``data_requests`` detail counts. Before migration 031 there is no queue: all-zero counts, no table
+    touched. ``features=None`` (a state without frozen flags) reads the current flags."""
+    counts, settled = _settle_requests(session, run_id=run_id, now=now, deps=deps, features=features,
+                                       budget_left_s=budget_left_s)
     if not settled:
         return counts
+    if features is None:
+        with core_tx._tx() as conn:
+            features = core_features.frozen(conn)
+    features = features or {}
     settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
     clock = deps.clock or time.monotonic
     started = clock() - (AGENT_DEADLINE_S - budget_left_s)     # the shared agent+review budget clock
@@ -1332,6 +1411,7 @@ def process_data_requests(session: date, *, run_id: str | None, now: datetime, d
                 continue
             by_unit.setdefault((source['ticker'], source['signal_date']), []).append(row)
     ny_day = now.astimezone(NY).date()
+    rerun_quota: dict = {}
     for (ticker, signal_date), requests in sorted(by_unit.items()):
         # the reruns call the model: no transaction is open across them, only short reads before and the
         # pointer write after
@@ -1343,25 +1423,36 @@ def process_data_requests(session: date, *, run_id: str | None, now: datetime, d
             unit = None
             if not opened and len(prior) < AGENT_MAX_ATTEMPTS:
                 unit = _unit_for_request_rerun(conn, ticker, signal_date, prior=prior, now=now)
+        if not opened and unit is None:
+            continue
+        # R36: the same gates as every other agent/review work — shared deadline, provider, daily tokens (an opened
+        # chain's review applies them itself, and records the skip on the review row)
+        if not opened and _gate(settings, started=started, clock=clock, quota=rerun_quota, now=now) is not None:
+            continue
         rerun_id = None
         if opened:
             review = run_chain_review({'ticker': ticker, 'signal_date': signal_date, 'pool':
                                        (prior[0] or {}).get('pool')}, session=session, now=now,
                                       trigger='recheck', run_id=run_id, deps=deps, settings=settings,
-                                      started=started, clock=clock, quota={}, via='data_request')
+                                      started=started, clock=clock, quota=rerun_quota, via='data_request',
+                                      breadth_tickers=breadth_tickers)
             rerun_id = review.get('revision_agent_run_id') or review.get('review_agent_run_id')
-        elif unit is not None:
-            # D42: a rerun never reruns the researcher — carry the unit's last segment when
-            # one exists; without one the rerun proceeds researcher-disabled, not researcher-fresh.
-            last = prior[-1] if prior else None
-            carried = ((last or {}).get('output') or {}).get('research')
-            carried = carried if carried and carried.get('status') in ('ok', 'carried') else None
+        else:
+            # D42: a rerun never reruns the researcher — carry the unit's last segment when one exists (a rejected
+            # or errored first version keeps its segment in ``output.research``, I3); without one the rerun
+            # proceeds researcher-disabled, not researcher-fresh.
+            carried, owner = None, None
+            for earlier in reversed(prior):
+                segment = (earlier.get('output') or {}).get('research')
+                if isinstance(segment, dict) and segment.get('status') in ('ok', 'carried'):
+                    carried, owner = segment, str(earlier['id'])
+                    break
             rerun_features = (features if carried is not None
                               else {**features, 'company_researcher': False})
             rerun_id = run_agent_unit(unit, now=now, deps=deps, settings=settings,
                                       attempt=len(prior) + 1, run_id=run_id, features=rerun_features,
-                                      carried_research=carried,
-                                      previous_run_id=str(last['id']) if last else None).get('id')
+                                      carried_research=carried, previous_run_id=owner,
+                                      breadth_tickers=breadth_tickers).get('id')
         if rerun_id is None:
             continue
         counts['reruns'] += 1
@@ -1391,101 +1482,189 @@ def _unit_for_request_rerun(conn, ticker: str, signal_date: date, *, prior: list
 
 # ---------------------------------------------------------------- v2.13 research second entrance (§6.3)
 
+RESEARCH_RUN_PREFIX = 'research:'      # the ``run_id`` a dossier's own ``data_requests`` carry (§6.3 ⑦, never NULL)
+
+
+def _research_gate(settings, *, started: float, clock: Callable[[], float], now: datetime) -> tuple[str, str] | None:
+    """§6.3 预算 / R36: no model phase starts after ``RESEARCH_DEADLINE_S`` since the attempt started, nor once the
+    day's tokens are spent (a dossier's tokens count into the same total). ``(reason, detail)`` or None."""
+    if clock() - started >= RESEARCH_DEADLINE_S:
+        return 'stage_budget', f'研究预算 {RESEARCH_DEADLINE_S} 秒已用完'
+    if settings.daily_tokens is not None:
+        with core_tx._tx() as conn:
+            used = analysis_repo.agent_tokens_on(conn, now.astimezone(NY).date())
+        if used >= settings.daily_tokens:
+            return 'token_budget', '当日 token 上限已用完'
+    return None
+
+
+def _advance_request(conn, row: dict, version_status: str) -> None:
+    """The request's state-machine step after a version (D51, §6.3 失败): concluded / waiting_data move on; an error
+    returns it to ``queued`` and the third attempt closes it ``max_attempts``. Guarded by ``WHERE status = running``."""
+    from investment_assistant.analysis import research_requests
+
+    if version_status in ('concluded', 'waiting_data'):
+        analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status=version_status)
+        return
+    attempts = (row.get('attempts') or 0) + 1
+    if attempts >= research_requests.MAX_ATTEMPTS:
+        analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='closed',
+                                             attempts=attempts, closed_reason='max_attempts')
+    else:
+        analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='queued',
+                                             attempts=attempts)
+
+
+def fail_research(row: dict, *, now: datetime, reason: str, started: float | None = None,
+                  clock: Callable[[], float] = time.monotonic) -> dict | None:
+    """A failure outside the model half (collection, configuration, the final write): the request is ``running`` and
+    must not stay so. Writes an ``error`` version carrying the reason and does the same attempts / ``closed /
+    max_attempts`` bookkeeping as ``run_research`` (§6.3 失败). Returns the version, or None when the request is no
+    longer ``running`` (someone already moved it: closed by hand, or the model half finished)."""
+    with core_tx._tx() as conn:
+        current = analysis_repo.research_request(conn, row['id'])
+        if current is None or current['status'] != 'running':
+            return None
+        version = analysis_repo.insert_research_version(conn, {
+            'request_id': row['id'], 'version_no': len(analysis_repo.research_versions(conn, row['id'])) + 1,
+            'agent_run_id': None, 'cutoff_at': now, 'status': 'error', 'action': None,
+            'summary': f'运行失败：{reason}', 'output': None, 'review_when': None, 'tokens': 0,
+            'elapsed_ms': int((clock() - started) * 1000) if started is not None else None, 'created_at': now})
+        _advance_request(conn, current, 'error')
+    return version
+
+
 def run_research(row: dict, *, now: datetime, deps: Deps, collection: dict | None = None,
                  started: float | None = None) -> dict:
-    """One dossier attempt's model half (§6.3 ④⑤): the agent-4 dossier chain, its ``agent_runs``
-    row, one ``research_versions`` row and the request's state-machine outcome — all in one write
-    transaction. ``waiting_data`` only when the researcher found blocked data AND the conclusion
-    says ``wait``; every failure class becomes an error version, the request returns to ``queued``
-    until the third attempt closes it (D51). Dossiers never open chains or write plans (D39 B)."""
-    from investment_assistant.analysis import research_requests
+    """One dossier attempt's model half (§6.3 ④–⑦): the agent-4 dossier chain (researcher + proposer + counter +
+    check), its ``agent_runs`` row, one ``research_versions`` row and the request's state-machine outcome.
+    ``waiting_data`` only when the researcher found blocked data AND the conclusion says ``wait``; every failure
+    class becomes an error version, the request returns to ``queued`` until the third attempt closes it (D51).
+    Dossiers never open chains or write plans (D39 B).
+
+    Budget (§6.3): no model phase starts after ``RESEARCH_DEADLINE_S`` since ``started`` or once the day's tokens are
+    spent (``_research_gate``). §6.3 ⑦: the ``request_data`` calls of the first version are stamped
+    ``research:<request id>`` (never a NULL run), settled synchronously in the remaining budget through the same
+    handler as the batch tail, and when they gained rows the chain runs once more (a second version, pointers on the
+    requests); whatever the last version queued settles ``deferred``. The model half never reruns the researcher's
+    fetch more than once."""
     from investment_assistant.analysis.agent import research as research_phase
-    from investment_assistant.config import load_config
 
     clock = deps.clock or time.monotonic
     started = started if started is not None else clock()
-    agent_run_id = str(uuid.uuid4())
     session = bars.latest_closed_session(now)
     settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
     unit = {'ticker': row['ticker'], 'signal_date': session, 'pool_tier': None}
-    sec_text_dir = Path(load_config().filings.output_dir)
+    request_run = f"{RESEARCH_RUN_PREFIX}{row['id']}"
     ctx = agent_tools.ToolContext(ticker=row['ticker'], session=session, cutoff_at=now,
-                                  read=_read_only, sec_text_dir=sec_text_dir)
-    result: dict = {'status': 'error', 'reason': None, 'output': None, 'research': None,
-                    'calls': [], 'data_requests': [], 'input_tokens': 0, 'output_tokens': 0}
-    failure: tuple[str, str] | None = None
-    try:
-        with ExitStack() as stack:
-            try:
-                factory = deps.agent_checkpointer or (
-                    lambda: agent_model.checkpointer(os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL', '')))
-                checkpointer = stack.enter_context(factory())
-            except Exception as exc:   # noqa: BLE001 — classified below, like every model call here
-                _, detail = agent_model.classify_error(exc, settings.api_key)
-                failure = ('checkpoint_unavailable', detail)
-            else:
-                model_obj = deps.agent_model if deps.agent_model is not None else agent_model.chat_model(settings)
-                try:
-                    result = research_phase.run_chain(unit=unit, ctx=ctx, model=model_obj,
-                                                      checkpointer=checkpointer, run_id=agent_run_id,
-                                                      question=row.get('question') or '', now=lambda: now)
-                except core_tx.Unavailable:
-                    raise
-                except Exception as exc:   # noqa: BLE001 — classify_error names the reason
-                    reason, detail = agent_model.classify_error(exc, settings.api_key)
-                    failure = (reason, detail)
-    except core_tx.Unavailable:
-        raise
-    except Exception as exc:   # noqa: BLE001 — the batch classifies, never propagates a dossier failure
-        reason, detail = agent_model.classify_error(exc, settings.api_key)
-        failure = failure or (reason, detail)
+                                  read=_read_only, sec_text_dir=_sec_text_dir(),
+                                  breadth_tickers=_breadth_for(None, deps))
 
-    segment = result.get('research') or {}
-    blocked = bool(segment.get('status') == 'ok' and (segment.get('output') or {}).get('blocked'))
-    if failure is not None:
-        version_status, action, summary = 'error', None, f"运行失败：{failure[0]}"
-        run_status, reason, detail = 'error', failure[0], failure[1]
-    elif result['status'] == 'rejected':
-        version_status, action, summary = 'error', None, f"校验未过：{result['reason']}"
-        run_status, reason, detail = 'rejected', result['reason'], None
-    else:
-        output = result['output'] or {}
-        action, summary = output.get('action'), output.get('summary')
-        version_status = 'waiting_data' if (blocked and action == 'wait') else 'concluded'
-        run_status, reason, detail = result['status'], result.get('reason'), None
-    tokens = {'input_tokens': result.get('input_tokens') or 0, 'output_tokens': result.get('output_tokens') or 0}
-    run_row = agent_model._agent_run_row(
-        {'ticker': row['ticker'], 'signal_date': session, 'pool': 'main'}, settings=settings, attempt=1,
-        now=now, status=run_status, run_id=agent_run_id, mode='research', agent_version=AGENT_RUN_VERSION,
-        reason=reason, detail=detail, output=result.get('output'), input_tokens=tokens['input_tokens'],
-        output_tokens=tokens['output_tokens'])
-    with core_tx._tx() as conn:
-        analysis_repo.insert_agent_run(conn, run_row, result.get('calls') or [],
-                                       data_requests=result.get('data_requests') or [])
-        versions = analysis_repo.research_versions(conn, row['id'])
-        version = analysis_repo.insert_research_version(conn, {
-            'request_id': row['id'], 'version_no': len(versions) + 1, 'agent_run_id': agent_run_id,
-            'cutoff_at': now, 'status': version_status, 'action': action, 'summary': summary,
-            'output': result.get('output'), 'review_when': None,
-            'tokens': tokens['input_tokens'] + tokens['output_tokens'],
-            'elapsed_ms': int((clock() - started) * 1000), 'created_at': now})
-        attempts = (row.get('attempts') or 0)
-        if version_status == 'concluded':
-            analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='concluded')
-        elif version_status == 'waiting_data':
-            analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='waiting_data')
+    def compute() -> dict:
+        """The chain once, classified: the version and run rows' fields, not yet written."""
+        agent_run_id = str(uuid.uuid4())
+        result: dict = {'status': 'error', 'reason': None, 'output': None, 'research': None,
+                        'calls': [], 'data_requests': [], 'input_tokens': 0, 'output_tokens': 0}
+        failure = _research_gate(settings, started=started, clock=clock, now=now)
+        if failure is None:
+            try:
+                with ExitStack() as stack:
+                    try:
+                        factory = deps.agent_checkpointer or (
+                            lambda: agent_model.checkpointer(os.environ.get('INVESTMENT_ASSISTANT_DATABASE_URL', '')))
+                        checkpointer = stack.enter_context(factory())
+                    except Exception as exc:   # noqa: BLE001 — classified below, like every model call here
+                        _, detail = agent_model.classify_error(exc, settings.api_key)
+                        failure = ('checkpoint_unavailable', detail)
+                    else:
+                        model_obj = (deps.agent_model if deps.agent_model is not None
+                                     else agent_model.chat_model(settings))
+                        try:
+                            result = research_phase.run_chain(
+                                unit=unit, ctx=ctx, model=model_obj, checkpointer=checkpointer, run_id=agent_run_id,
+                                question=row.get('question') or '', now=lambda: now,
+                                expired=lambda: clock() - started >= RESEARCH_DEADLINE_S)
+                        except core_tx.Unavailable:
+                            raise
+                        except Exception as exc:   # noqa: BLE001 — classify_error names the reason
+                            failure = agent_model.classify_error(exc, settings.api_key)
+            except core_tx.Unavailable:
+                raise
+            except Exception as exc:   # noqa: BLE001 — the batch classifies, never propagates a dossier failure
+                failure = failure or agent_model.classify_error(exc, settings.api_key)
+        segment = result.get('research') or {}
+        blocked = bool(segment.get('status') == 'ok' and (segment.get('output') or {}).get('blocked'))
+        if failure is not None:
+            version_status, action, summary = 'error', None, f"运行失败：{failure[0]}"
+            run_status, reason, detail = 'error', failure[0], failure[1]
+        elif result['status'] == 'rejected':
+            version_status, action, summary = 'error', None, f"校验未过：{result['reason']}"
+            run_status, reason, detail = 'rejected', result['reason'], None
         else:
-            attempts += 1
-            if attempts >= research_requests.MAX_ATTEMPTS:
-                analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='closed',
-                                                     attempts=attempts, closed_reason='max_attempts')
-            else:
-                analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='queued',
-                                                     attempts=attempts)
+            output = result['output'] or {}
+            action, summary = output.get('action'), output.get('summary')
+            version_status = 'waiting_data' if (blocked and action == 'wait') else 'concluded'
+            run_status, reason, detail = result['status'], result.get('reason'), None
+        return {'agent_run_id': agent_run_id, 'result': result, 'version_status': version_status,
+                'action': action, 'summary': summary, 'run_status': run_status, 'reason': reason, 'detail': detail}
+
+    def write(attempt: dict, *, final: str | None) -> dict:
+        """The attempt's run, calls, queued requests and version row in one transaction; ``final`` also moves the
+        request (the last write of the attempt)."""
+        result = attempt['result']
+        tokens = {'input_tokens': result.get('input_tokens') or 0, 'output_tokens': result.get('output_tokens') or 0}
+        run_row = agent_model._agent_run_row(
+            {'ticker': row['ticker'], 'signal_date': session, 'pool': 'main'}, settings=settings, attempt=1,
+            now=now, status=attempt['run_status'], run_id=attempt['agent_run_id'], mode='research',
+            agent_version=AGENT_RUN_VERSION, reason=attempt['reason'], detail=attempt['detail'],
+            output=result.get('output') or _research_only(result), input_tokens=tokens['input_tokens'],
+            output_tokens=tokens['output_tokens'])
+        with core_tx._tx() as conn:
+            analysis_repo.insert_agent_run(
+                conn, run_row, result.get('calls') or [],
+                data_requests=[{**item, 'run_id': request_run} for item in result.get('data_requests') or []])
+            version = analysis_repo.insert_research_version(conn, {
+                'request_id': row['id'], 'version_no': len(analysis_repo.research_versions(conn, row['id'])) + 1,
+                'agent_run_id': attempt['agent_run_id'], 'cutoff_at': now, 'status': attempt['version_status'],
+                'action': attempt['action'], 'summary': attempt['summary'], 'output': result.get('output'),
+                'review_when': None, 'tokens': tokens['input_tokens'] + tokens['output_tokens'],
+                'elapsed_ms': int((clock() - started) * 1000), 'created_at': now})
+            if final is not None:
+                _advance_request(conn, row, final)
+        return version
+
+    first = compute()
+    follow_up = first['version_status'] != 'error' and bool(first['result'].get('data_requests'))
+    version = write(first, final=None if follow_up else first['version_status'])
+    agent_run_id, final_status = first['agent_run_id'], first['version_status']
+    if not follow_up and first['result'].get('data_requests'):
+        # a rejected / failed attempt still queued requests (they are stored with the run): nothing follows them
+        defer_leftover_data_requests(request_run, reason='research_not_followed')
+    if follow_up:
+        try:
+            _, settled = _settle_requests(session, run_id=request_run, now=now, deps=deps, features=None,
+                                          budget_left_s=RESEARCH_DEADLINE_S - (clock() - started))
+            if settled and _research_gate(settings, started=started, clock=clock, now=now) is None:
+                second = compute()
+                version = write(second, final=None)
+                agent_run_id = second['agent_run_id']
+                if second['version_status'] != 'error':       # a failed rerun never downgrades the first conclusion
+                    final_status = second['version_status']
+                with core_tx._tx() as conn:
+                    for request in settled:
+                        data_repo.attach_data_request_rerun(conn, request['id'], second['agent_run_id'])
+        except core_tx.Unavailable:
+            raise
+        except Exception:   # noqa: BLE001 — the first version stands; the request must still leave ``running``
+            pass
+        finally:
+            with core_tx._tx() as conn:
+                _advance_request(conn, row, final_status)
+            defer_leftover_data_requests(request_run, reason='research_rerun_limit')
+    with core_tx._tx() as conn:
         request = analysis_repo.research_request(conn, row['id'])
-        assert request is not None
-    return {'id': row['id'], 'status': request['status'], 'version': version,
-            'agent_run_id': agent_run_id}
+    assert request is not None
+    return {'id': row['id'], 'status': request['status'], 'version': version, 'agent_run_id': agent_run_id}
 
 
 def drain_research_requests(session: date, *, now: datetime, deps: Deps, summary: dict[str, Any],
