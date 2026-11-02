@@ -140,10 +140,14 @@ def _holding_levels(out: dict, previous: dict | None, last_close: Decimal) -> No
         raise ValueError('a holding-phase revision needs the previous version')
     levels, before = out['levels'], previous['levels']
     for key in ('entry_low', 'entry_high'):
-        levels[key] = {'value': Decimal(_money(before[key]['value'])), 'refs': levels[key]['refs']}
+        carried = _money(before[key]['value'])
+        assert carried is not None                     # a checked predecessor level is always a money string
+        levels[key] = {'value': Decimal(carried), 'refs': levels[key]['refs']}
     if not levels['entry_high']['value'] < levels['target1']['value']:
         raise Rejected('level_check')
-    stop, previous_stop = levels['stop']['value'], Decimal(_money(before['stop']['value']))
+    carried_stop = _money(before['stop']['value'])
+    assert carried_stop is not None
+    stop, previous_stop = levels['stop']['value'], Decimal(carried_stop)
     if stop < previous_stop:
         raise Rejected('stop_lowered')
     if stop >= last_close:
@@ -152,12 +156,15 @@ def _holding_levels(out: dict, previous: dict | None, last_close: Decimal) -> No
 
 def check_plan(text: str, *, refs: set[str], price_refs: set[str], user_refs: set[str],
                last_close: Decimal, as_of_session: date, previous: dict | None,
-               schema: str = SCHEMA_V2, mode: str = 'entry', via: str | None = None) -> dict:
+               schema: str = SCHEMA_V2, mode: str = 'entry', via: str | None = None,
+               research_refs: set[str] | frozenset[str] | None = None) -> dict:
     """§4.1 in full; previous is the prior version's check_plan output (None = first version).
 
     schema 'agent-3' adds the execution fields and the new gates (module docstring); mode 'holding' applies
     the holding-phase level rules (agent-3 only); via 'retrigger' lets an entry-phase revision renew without
-    touching any model field."""
+    touching any model field. ``research_refs`` (D38/D42) is the researcher-phase call refs of an agent-4
+    FIRST version whose research segment ended ok: at least one thesis must then cite one of them (None —
+    the default and every revision — keeps the rule off; a failed/disabled researcher exempts the run)."""
     if schema not in (SCHEMA_V2, SCHEMA_V3):
         raise ValueError(f'unknown plan schema: {schema!r}')
     if mode not in ('entry', 'holding'):
@@ -186,6 +193,8 @@ def check_plan(text: str, *, refs: set[str], price_refs: set[str], user_refs: se
     }
     if v3:
         out.update(entry_type=None, max_hold_sessions=None)
+    if research_refs is not None and not any(set(item['refs']) & research_refs for item in out['thesis']):
+        raise Rejected('research_not_cited')
     if out['action'] == 'pass':
         return out
 
@@ -278,7 +287,7 @@ def _canon(value: Any) -> str:
 
 
 def _thesis_texts(plan: dict) -> list[str]:
-    return [item.get('text') for item in plan.get('thesis') or [] if isinstance(item, dict)]
+    return [item['text'] for item in plan.get('thesis') or [] if isinstance(item, dict) and 'text' in item]
 
 
 def diff(previous: dict, new: dict, *, schema: str = SCHEMA_V2) -> list[dict]:

@@ -17,6 +17,7 @@ from test_workbench_retro_cards import (D, NOW, SESSION, draft_reply, make_plan,
                                         scenario, stage_deps)
 from test_workbench_service import db  # noqa: F401
 from investment_assistant.core import runner
+from investment_assistant.optimize import roadmap as optimize_roadmap
 from investment_assistant.review import discussion
 from investment_assistant.review.knowledge import my_knowledge
 from investment_assistant.review import retro_cards
@@ -72,7 +73,8 @@ def run_answer(db, discussion_id, asked, make, replies, **settings):
     import investment_assistant.views.reasoning as reasoning
     d = stage_deps(make, replies, **settings)
     out = discussion.answer(discussion_id, asked['turn_id'], now=NOW, deps=d, run_id='discuss-test',
-                            read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in)
+                            read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in,
+                            get_roadmap=optimize_roadmap.get_roadmap)
     db.commit()
     return out, d
 
@@ -118,6 +120,26 @@ def test_create_and_list(db):
     assert discussion.list_for(plan_id=str(plan['id']))[0]['turn_count'] == 1
     with pytest.raises(ValueError):
         discussion.list_for()
+
+
+def test_missing_roadmap_binding_fails_closed_without_a_model_call(db, scripted_model):
+    """R26: the launching host passes ``get_roadmap``; without it the answer is an ``error`` turn and the model is
+    never called (no silent answer that quietly lacks a whitelisted tool)."""
+    import investment_assistant.views.derivation as derivation_view
+    import investment_assistant.views.reasoning as reasoning
+    record, _, _ = make_discussion(db)
+    asked = ask(record['id'])
+    db.commit()
+    d = stage_deps(scripted_model, [answer_reply()])
+    out = discussion.answer(record['id'], asked['turn_id'], now=NOW, deps=d, run_id='discuss-nobind',
+                            read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in,
+                            get_roadmap=None)
+    db.commit()
+    assert out['status'] == 'error' and out['turn_id'] == asked['turn_id']
+    assert d.agent_model.seen == []
+    user, reply = turns(db, record['id'])
+    assert reply['status'] == 'error' and reply['body'] == ''
+    assert 'tool_binding_missing: get_roadmap' in json.dumps(reply['detail'], ensure_ascii=False)
 
 
 def test_card_discussion(db, scripted_model):
@@ -337,7 +359,8 @@ def test_answer_exception_writes_error_turn(db, scripted_model):
     d = stage_deps(scripted_model, [])
     d.agent_model = Exploding()
     out = discussion.answer(record['id'], asked['turn_id'], now=NOW, deps=d, run_id='discuss-x',
-                            read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in)
+                            read_derivation=derivation_view.plan_derivation_in, read_agent_run=reasoning.view_in,
+                            get_roadmap=optimize_roadmap.get_roadmap)
     db.commit()
     assert out == {'status': 'error', 'reason': 'model_error', 'turn_id': asked['turn_id']}
     user, reply = turns(db, record['id'])
@@ -362,7 +385,7 @@ def test_answer_exception_writes_error_turn(db, scripted_model):
     try:
         out = discussion.answer(record['id'], again['turn_id'], now=NOW, deps=stage_deps(scripted_model, []),
                                 run_id='discuss-y', read_derivation=derivation_view.plan_derivation_in,
-                                read_agent_run=reasoning.view_in)
+                                read_agent_run=reasoning.view_in, get_roadmap=optimize_roadmap.get_roadmap)
     finally:
         module._load = original
     db.commit()

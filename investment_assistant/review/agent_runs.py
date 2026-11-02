@@ -17,9 +17,10 @@ from typing import Any, Callable
 
 from langchain_core.language_models import BaseChatModel
 from investment_assistant.core.versions import DISCUSS_AGENT_VERSION, RETRO_AGENT_V1, RETRO_AGENT_V2
+from investment_assistant.analysis.agent import toolsets
 from investment_assistant.analysis.agent.graph import _single_run
 from investment_assistant.analysis.agent.tools import TOOLS, Recorder, ToolContext
-from investment_assistant.review.discuss_tools import DISCUSS_DESCRIPTIONS, DISCUSS_TOOLS, DiscussContext
+from investment_assistant.review.discuss_tools import DISCUSS_DESCRIPTIONS, DiscussContext
 
 from investment_assistant.data.identity import stock_id
 from investment_assistant.core.knowledge import CITATION_FIELDS as FIELDS
@@ -34,6 +35,7 @@ LESSON_LIMITS = {'title': 60, 'body': 1500, 'scope': 300, 'counter_examples': 50
 ANSWER_MAX = 3000
 CONTEXT_REF = 'fact:context'
 RETRO_AGENT_VERSION = RETRO_AGENT_V2
+DISCUSS_TOOLSET = 'discuss@agent-discuss-1'
 
 
 def _text(value: Any, limit: int, *, required: bool = True) -> str:
@@ -296,12 +298,15 @@ def run_discuss(*, discussion: dict, ctx: DiscussContext, model: BaseChatModel, 
                 now: Callable[[], datetime], context_text: str, history_text: str, question: str,
                 attachment_text: str | None, user_refs: frozenset[str], targets: set[str],
                 concept_ids: set[str]) -> dict:
-    """One agent-discuss-1 run (spec §8.4): single phase 'discuss', the ten batch tools plus the three
-    discussion tools, the answer checked by ``growth_check.check_answer`` against this run's calls, the
+    """One agent-discuss-1 run (spec §8.4): single phase 'discuss', the tools of ``DISCUSS_TOOLSET`` (the ten batch
+    tools, the three discussion tools and ``get_roadmap``, D37). The four host tools come from ``ctx.bindings`` (R13,
+    R26): the discussion host binds the three review tools, the launching edge host ``get_roadmap``; a missing one
+    raises ``ToolError`` before the model is called. The answer is checked by ``growth_check.check_answer`` against this run's calls, the
     concept / knowledge refs its tools returned and ``user_refs``. ``targets`` = the ``know:`` refs a knowledge
     draft may rewrite (the attachment's; the returned ones are added here). Returns ``run_review``'s shape with
     ``output`` = ``{answer, refs, knowledge_draft}`` and, when a bad draft was dropped, ``draft_dropped``
     (the reason code, else None). Model exceptions propagate."""
+    toolsets.require_bindings(ctx, DISCUSS_TOOLSET)
     recorder = Recorder(phase='discuss')
     dropped: list[str | None] = [None]
 
@@ -318,6 +323,6 @@ def run_discuss(*, discussion: dict, ctx: DiscussContext, model: BaseChatModel, 
     if attachment_text:
         parts.append(f'## 附件（用户提供，非证据，不可引用）\n{attachment_text}')
     result = _single_run(phase='discuss', ctx=ctx, model=model, checkpointer=checkpointer, run_id=run_id, now=now,
-                         tools=TOOLS | DISCUSS_TOOLS, recorder=recorder, check=check, system=DISCUSS_PROMPT,
+                         tools=DISCUSS_TOOLSET, recorder=recorder, check=check, system=DISCUSS_PROMPT,
                          human='\n\n'.join(parts), descriptions=DISCUSS_DESCRIPTIONS)
     return {**result, 'draft_dropped': dropped[0] if result['status'] == 'ok' else None}

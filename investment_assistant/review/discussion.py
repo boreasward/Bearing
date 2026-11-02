@@ -40,7 +40,7 @@ from investment_assistant.data.adapters import bars as bars_module
 from investment_assistant.core import knowledge
 from investment_assistant.analysis.agent import graph as agent_graph
 from investment_assistant.core.llm import model as agent_model
-from investment_assistant.review.discuss_tools import DiscussContext
+from investment_assistant.review.discuss_tools import DISCUSS_TOOLS, DiscussContext
 from investment_assistant.core.constants import BENCHMARK, AGENT_DEADLINE_S
 from investment_assistant.core import tx as core_tx
 
@@ -450,10 +450,12 @@ def _error_reply(discussion_id: int, turn_id: int, *, reason: str, detail: str |
 
 
 def answer(discussion_id: int, turn_id: int, *, now: datetime, deps: core_tx.Deps | None = None,
-           run_id: str, read_derivation, read_agent_run) -> dict[str, Any]:
+           run_id: str, read_derivation, read_agent_run, get_roadmap) -> dict[str, Any]:
     """The background body of ``POST …/turns`` (spec §8.2.2): read the context at the question's moment, run
     ``agent-discuss-1`` and write the answer. ``run_id`` is the runner's id (kept for the waiting / interrupted
-    reading). Whatever goes wrong, an ``error`` answer is written, so no turn is left hanging. Returns
+    reading). ``read_derivation`` / ``read_agent_run`` / ``get_roadmap`` are the launching edge host's projections of
+    the layers above ``review`` (R13, R26): they are frozen into the run's tool bindings; ``get_roadmap=None`` leaves
+    the tool unbound, so the run fails closed (an ``error`` answer, no model call). Whatever goes wrong, an ``error`` answer is written, so no turn is left hanging. Returns
     ``{status, reason, turn_id}``."""
     deps = deps or core_tx.Deps()
     settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
@@ -473,7 +475,7 @@ def answer(discussion_id: int, turn_id: int, *, now: datetime, deps: core_tx.Dep
         run_key, cutoff = loaded['turn']['run_id'], loaded['cutoff']
         track(run_key, run_id)
         return _answer(discussion_id, turn_id, loaded, now=now, deps=deps, settings=settings,
-                       read_derivation=read_derivation, read_agent_run=read_agent_run)
+                       read_derivation=read_derivation, read_agent_run=read_agent_run, get_roadmap=get_roadmap)
     except Exception as exc:                                # noqa: BLE001 - never leave a turn without an answer
         reason, detail = agent_model.classify_error(exc, settings.api_key)
         try:
@@ -486,7 +488,7 @@ def answer(discussion_id: int, turn_id: int, *, now: datetime, deps: core_tx.Dep
 
 
 def _answer(discussion_id: int, turn_id: int, loaded: dict[str, Any], *, now: datetime, deps: core_tx.Deps,
-            settings, read_derivation, read_agent_run) -> dict[str, Any]:
+            settings, read_derivation, read_agent_run, get_roadmap) -> dict[str, Any]:
     discussion, turn, cutoff = loaded['discussion'], loaded['turn'], loaded['cutoff']
     run_key = turn['run_id']
     unit = {'ticker': discussion['ticker'], 'signal_date': discussion['signal_date'], 'pool': loaded['pool']}
@@ -495,7 +497,8 @@ def _answer(discussion_id: int, turn_id: int, loaded: dict[str, Any], *, now: da
         signal_date=discussion['signal_date'],
         plan_id=str(discussion['plan_id']) if discussion['plan_id'] else None, card_id=discussion['card_id'],
         unit_plan_ids=loaded['plan_ids'], unit_run_ids=loaded['run_ids'],
-        read_derivation=read_derivation, read_agent_run=read_agent_run)
+        read_derivation=read_derivation, read_agent_run=read_agent_run,
+        bindings={**DISCUSS_TOOLS, **({'get_roadmap': get_roadmap} if get_roadmap is not None else {})})
     recording: _Recording | None = None
     result: dict[str, Any] | None = None
     failure: tuple[str, str | None] | None = None

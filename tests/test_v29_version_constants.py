@@ -2,7 +2,8 @@
 
 Offline: imports the constants only. A bump or a rename shows up here before it reaches stored rows.
 Since Task 0 the version constants live in ``investment_assistant/core/versions.py``; the assertions
-below pin the current (pre-stages-6) values — the v2.12–v2.15 upgrades change them only in Task 4."""
+below pin the current values: since Task 4 the stages registry is stages-6, the daily graph daily-3 and the
+Agent-managed account agent-portfolio-2 (their predecessors stay in core.versions for historical rows)."""
 import investment_assistant.review.agent_runs as review_agent_runs
 from investment_assistant.core import versions
 from investment_assistant.data import fetch_policy
@@ -59,9 +60,11 @@ def test_account_release_versions_are_current_and_keep_the_previous_stage_regist
     assert versions.ACCOUNT_VERSION == 'account-1'
     assert versions.PAPER_FILL_VERSION == 'paper-fill-1'
     assert versions.FOLLOW_PLANS_VERSION == 'follow-plans-1'
-    assert stages.STAGES_VERSION == 'stages-5'           # the registry default flips to stages-6 only in Task 4
-    assert workflow.DAILY_GRAPH_VERSION == 'daily-2'     # likewise daily-3 (core.versions carries the future value)
-    assert graph.PORTFOLIO_AGENT_VERSION == paper_accounts.PORTFOLIO_AGENT_VERSION == versions.PORTFOLIO_AGENT_V1 == 'agent-portfolio-1'
+    assert stages.STAGES_VERSION == versions.STAGES_VERSION == 'stages-6'             # flipped in Task 4
+    assert workflow.DAILY_GRAPH_VERSION == versions.DAILY_GRAPH_VERSION == 'daily-3'
+    assert graph.PORTFOLIO_AGENT_VERSION == paper_accounts.PORTFOLIO_AGENT_VERSION == versions.PORTFOLIO_AGENT_VERSION
+    assert versions.PORTFOLIO_AGENT_VERSION == 'agent-portfolio-2' and versions.PORTFOLIO_AGENT_V1 == 'agent-portfolio-1'
+    assert versions.STAGES_VERSION_V5 == 'stages-5' and stages.STAGE_IDS_BY_VERSION['stages-5'] == stages.STAGE_IDS_V5
     assert versions.STAGES_VERSION_V4 == 'stages-4'
     assert stages.STAGE_IDS_BY_VERSION['stages-4'] == (
         'sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'push', 'retro')

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 from datetime import date, datetime
+from collections.abc import Sequence
 from typing import Any
 from psycopg.rows import dict_row
 from investment_assistant.core.idempotency import Conflict
@@ -9,6 +10,7 @@ from investment_assistant.core.dbutil import _one, _all, _canonical, _plan_json
 
 from investment_assistant.core.versions import REGIME_VERSION
 from investment_assistant.data.repo import _REGIME_COLUMNS, _AGENT_RUN_COLUMNS
+from investment_assistant.data import repo as data_repo
 from investment_assistant.execution import repo as execution_repo
 
 _RESEARCH_TRANSITIONS = {
@@ -238,6 +240,7 @@ def insert_screen_run(conn, run: dict[str, Any], results: list[dict[str, Any]]) 
                   (run['session'], run['calc_version'], run['universe_name'], run['universe_as_of'],
                    run['cutoff_at'], run['status'], _plan_json(run['summary']), run.get('run_id'),
                    run.get('created_at')))
+    assert record is not None
     with conn.cursor() as cur:
         cur.executemany('INSERT INTO screen_results (screen_run_id, ticker, screen_group, trigger_rules, filters, '
                         'rs, atr_pct, dollar_volume_20, rank, selected) '
@@ -331,6 +334,7 @@ def insert_attempt_reset(conn, row: dict[str, Any]) -> dict[str, Any]:
         return {**inserted, 'replayed': False}
     existing = _one(conn, f'SELECT {_ATTEMPT_RESET_COLUMNS} FROM agent_attempt_resets WHERE request_id = %s',
                     (row['request_id'],))
+    assert existing is not None
     return {**existing, 'replayed': True}
 
 
@@ -353,9 +357,14 @@ def agent_runs_by_ids(conn, ids) -> list[dict[str, Any]]:
                       'ORDER BY ticker, signal_date, mode, created_at', (list(map(str, ids)),))
 
 
-def insert_agent_run(conn, run: dict[str, Any], calls: list[dict[str, Any]]) -> dict[str, Any]:
-    """The run row and all its tool calls, in the caller's transaction (§3.3 order:
-    plan, run, calls; the plan is inserted by the service before this call)."""
+def insert_agent_run(conn, run: dict[str, Any], calls: list[dict[str, Any]], *,
+                      data_requests: Sequence[dict[str, Any]] = ()) -> dict[str, Any]:
+    """The run row, all its tool calls and (D41/R14) the requests its tools queued, in the caller's
+    transaction (§3.3 order: plan, run, calls; the plan is inserted by the service before this call).
+
+    ``data_requests`` items are the Recorder's ``{'family', 'ticker'}`` entries (optionally with
+    ``run_id`` / ``requested_at``); the run's own id and cutoff fill the rest. Empty keeps the old
+    behavior exactly: no new-table access at all."""
     record = _one(conn,
                   'INSERT INTO agent_runs (id, ticker, signal_date, pool, attempt, mode, agent_version, provider, '
                   'model, cutoff_at, status, reason, detail, output, counter, plan_id, input_tokens, output_tokens, '
@@ -369,11 +378,17 @@ def insert_agent_run(conn, run: dict[str, Any], calls: list[dict[str, Any]]) -> 
                    _plan_json(run['counter']) if run.get('counter') is not None else None,
                    run.get('plan_id'), run['input_tokens'], run['output_tokens'],
                    run['started_at'], run['finished_at']))
+    assert record is not None
     for c in calls:
         conn.execute('INSERT INTO agent_tool_calls (run_id, seq, phase, tool, args, result, result_sha256, '
                      'called_at) VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)',
                      (run['id'], c['seq'], c['phase'], c['tool'], _plan_json(c['args']),
                       _plan_json(c['result']), c['result_sha256'], c['called_at']))
+    if data_requests:
+        data_repo.insert_data_requests(conn, [
+            {'run_id': row.get('run_id'), 'agent_run_id': run['id'], 'family': row['family'],
+             'ticker': row['ticker'], 'requested_at': row.get('requested_at') or run['cutoff_at']}
+            for row in data_requests])
     return record
 
 
@@ -386,6 +401,15 @@ def latest_agent_run(conn, ticker: str, signal_date: date, mode: str = 'propose'
     return _one(conn, f'SELECT {_AGENT_RUN_COLUMNS} FROM agent_runs WHERE ticker = %s AND signal_date = %s '
                       'AND mode = %s ORDER BY created_at DESC, id DESC LIMIT 1',
                 (ticker.upper(), signal_date, mode))
+
+
+def unit_runs_with_research(conn, version: str, start: datetime, end: datetime) -> list[dict[str, Any]]:
+    """Plan-producing runs (propose / revise) of one agent run version whose cutoff falls in ``[start, end)`` and that
+    kept an output: ``id, ticker, signal_date, mode, status`` and the output's ``research`` segment (None when absent)."""
+    return _all(conn, 'SELECT id, ticker, signal_date, mode, status, output -> %s AS research FROM agent_runs '
+                      "WHERE agent_version = %s AND mode IN ('propose', 'revise') AND output IS NOT NULL "
+                      'AND cutoff_at >= %s AND cutoff_at < %s ORDER BY created_at, id',
+                ('research', version, start, end))
 
 
 def agent_tool_calls(conn, run_id) -> list[dict[str, Any]]:

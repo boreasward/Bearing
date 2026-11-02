@@ -145,7 +145,7 @@ def _call_fields(tool: str, data: Any) -> dict[str, str]:
     table = TOOL_CONCEPTS.get(tool, {}).get('fields', {})
     if tool == 'get_trigger':
         seen = [item.get('rule_id') for item in data if isinstance(item, dict)] if isinstance(data, list) else []
-        return {rid: table[rid] for rid in dict.fromkeys(seen) if rid in table}
+        return {rid: table[rid] for rid in dict.fromkeys(seen) if isinstance(rid, str) and rid in table}
     if tool == 'get_concept':
         return {'id': data['id']} if isinstance(data, dict) and isinstance(data.get('id'), str) else {}
     if not isinstance(data, dict):
@@ -181,6 +181,18 @@ def _read(calls: list[dict], phase: str, title: str, empty_note: str) -> dict:
 
 
 # ---------------------------------------------------------------- other steps
+
+def _research_step(run: dict) -> dict | None:
+    """agent-4's researcher segment (§6.1/UI1), read-only from ``output.research`` exactly as checked:
+    status/reason/output with the ORIGINAL call numbers kept (a carried segment keeps its provenance
+    status; its calls belong to the original run, never to this one — R16). None for pre-agent-4 runs."""
+    segment = (run.get('output') or {}).get('research')
+    if not isinstance(segment, dict):
+        return None
+    return {'kind': 'research', 'title': '公司研究', 'concept': 'agent.company_researcher',
+            'status': segment.get('status'), 'reason': segment.get('reason'),
+            'output': segment.get('output')}
+
 
 def _previous_chain(run: dict) -> dict | None:
     """v2.9 D9: the 「同标的上一条链」 block the first version's proposer was given, kept in the run's
@@ -228,8 +240,10 @@ def _proposal(run: dict, *, revise: bool, legacy: bool) -> dict:
     if not isinstance(out, dict):
         return {**base, 'available': False, 'text': _void_text(run)}
     levels = out.get('levels') or {}
-    step = {**base, 'available': True, 'action': out.get('action'),
-            'action_text': ACTION_TEXT.get(out.get('action'), out.get('action')), 'summary': out.get('summary'),
+    action = out.get('action')
+    step = {**base, 'available': True, 'action': action,
+            'action_text': ACTION_TEXT.get(action, action) if isinstance(action, str) else action,
+            'summary': out.get('summary'),
             'levels': [{'key': key, 'label': label, 'value': levels[key].get('value'),
                         'refs': list(levels[key].get('refs') or []), 'concept': concept}
                        for key, label, concept in LEVEL_CONCEPTS if isinstance(levels.get(key), dict)]}
@@ -316,8 +330,9 @@ def _verdict(run: dict) -> dict:
     out = run.get('output')
     if not isinstance(out, dict):
         return _unavailable('verdict', '复查结论', 'agent.review_outcome', run)
+    outcome = out.get('outcome')
     return {'kind': 'verdict', 'title': '复查结论', 'concept': 'agent.review_outcome', 'available': True,
-            'outcome': out.get('outcome'), 'outcome_text': OUTCOME_TEXT.get(out.get('outcome'), out.get('outcome')),
+            'outcome': outcome, 'outcome_text': OUTCOME_TEXT.get(outcome, outcome) if isinstance(outcome, str) else outcome,
             'reason': out.get('reason'), 'refs': list(out.get('refs') or [])}
 
 
@@ -460,6 +475,9 @@ def build(*, run: dict, calls: list[dict], version: dict | None, trigger_review:
     else:
         if mode == 'propose' and (previous := _previous_chain(run)) is not None:        # first versions only (D9)
             steps.append(previous)
+        if (research := _research_step(run)) is not None:       # agent-4: the researcher precedes the proposer (UI1)
+            steps.append(research)
+            steps.append(_read(calls, 'research', '研究员读了什么', NO_CALLS_NOTE))
         steps.append(_read(calls, 'propose', '提议者读了什么', NO_CALLS_NOTE))
         steps.append(_proposal(run, revise=mode == 'revise', legacy=legacy))
         steps.append(_check(run, _check_key(run, legacy)))

@@ -16,7 +16,15 @@ import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Any, Callable
+from pathlib import Path
+from types import MappingProxyType
+from collections.abc import Callable, Mapping
+from typing import Any
+
+from investment_assistant.analysis import repo as analysis_repo
+from investment_assistant.data import registry as data_registry
+from investment_assistant.data.market_constants import SECTOR_ETFS
+from investment_assistant.derivation.indicators import registry as indicator_registry
 from zoneinfo import ZoneInfo
 
 from investment_assistant.execution import plan_levels as plans
@@ -62,12 +70,22 @@ class ToolContext:
     session: date
     cutoff_at: datetime
     read: Callable[[Callable[[Any], Any]], Any]   # runs fn(conn) in a read-only transaction
+    bindings: Mapping[str, Callable] = field(default_factory=dict, kw_only=True)
+    breadth_tickers: tuple[str, ...] | None = field(default=None, kw_only=True)
+    sec_text_dir: Path | None = field(default=None, kw_only=True)
+
+    def __post_init__(self):
+        # Per-run capabilities are snapshotted, never a mutable global tool registry.
+        object.__setattr__(self, 'bindings', MappingProxyType(dict(self.bindings)))
+        if self.breadth_tickers is not None:
+            object.__setattr__(self, 'breadth_tickers', tuple(self.breadth_tickers))
 
 
 @dataclass
 class Recorder:
     phase: str = 'propose'
     calls: list[dict] = field(default_factory=list)
+    data_requests: list[dict] = field(default_factory=list)
     # LangGraph's ToolNode runs the tool calls of one model turn on a thread pool, so records interleave;
     # numbering and appending happen under one lock so ``seq`` is unique, gapless and monotonic
     # (``agent_tool_calls`` has a unique key on ``(run_id, seq)``).
@@ -86,6 +104,10 @@ class Recorder:
             self.calls.append({'seq': seq, 'phase': self.phase, 'tool': tool, 'args': args, 'result': envelope,
                                'result_sha256': result_hash(envelope), 'called_at': now})
         return envelope
+
+    def queue_data_request(self, request: dict) -> None:
+        with self._lock:
+            self.data_requests.append({key: request[key] for key in ('family', 'ticker')})
 
     def refs(self, phase: str | None = None) -> set[str]:
         return {c['result']['ref'] for c in self.calls if phase is None or c['phase'] == phase}
@@ -279,6 +301,52 @@ def get_knowledge(ctx: ToolContext, ticker: str | None = None, concept: str | No
         'omitted': len(seen) - len(shown), 'note': KNOWLEDGE_NOTE}
 
 
+def request_data(ctx: ToolContext, family: str, ticker: str) -> dict:
+    """Validate only; call() caches the accepted request in its own Recorder (D41)."""
+    upper = _allowed(ctx, ticker)
+    try:
+        adapter = data_registry.get(family)
+    except LookupError:
+        raise ToolError(f'未知数据族 {family}') from None
+    if not adapter.per_ticker or not adapter.tool:
+        raise ToolError(f'数据族不支持补查：{family}')
+    return {'family': family, 'ticker': upper, 'status': 'queued', 'note': '本轮不可见；宿主补采后开新一轮'}
+
+
+def get_indicator(ctx: ToolContext, ticker: str, indicator_id: str) -> dict:
+    upper = _allowed(ctx, ticker)
+    try:
+        indicator = indicator_registry.get(indicator_id)
+    except LookupError as exc:
+        raise ToolError(str(exc)) from exc
+    if indicator_id == 'breadth' and ctx.breadth_tickers is None:
+        raise ToolError('indicator_requires_universe')
+    if indicator_id == 'sector_strength' and upper not in SECTOR_ETFS:
+        raise ToolError('indicator_requires_sector_etf')
+
+    def read(conn):
+        def history(symbol):
+            return data_repo.read_bars(conn, symbol, ctx.session, cutoff_at=ctx.cutoff_at)
+        if indicator_id == 'breadth':
+            rows = {symbol: history(symbol) for symbol in ctx.breadth_tickers or ()}
+            dates = [row['price_date'] for series in rows.values() for row in series]
+            return indicator_registry.compute(indicator_id, rows, session=ctx.session), dates
+        rows = history(upper)
+        benchmark = history('QQQ' if indicator_id == 'screen_rs' else 'SPY') if indicator_id in (
+            'rs20', 'rs60', 'screen_rs', 'sector_strength') else None
+        return indicator_registry.compute(indicator_id, rows, session=ctx.session, benchmark_bars=benchmark), [
+            row['price_date'] for row in rows]
+
+    value, dates = ctx.read(read)
+    return _plain({'id': indicator.id, 'basis': indicator.basis, 'window': indicator.window, 'value': value,
+                   'computed_through': max(dates) if dates else None, 'version': indicator.version})
+
+
+def get_research_dossier(ctx: ToolContext, ticker: str) -> dict | None:
+    upper = _allowed(ctx, ticker)
+    return _plain(ctx.read(lambda conn: analysis_repo.latest_dossier_for(conn, upper, cutoff_at=ctx.cutoff_at)))
+
+
 TOOLS: dict[str, Callable] = {
     'get_trigger': get_trigger,
     'get_price_bars': get_price_bars,
@@ -315,6 +383,8 @@ def call(ctx: ToolContext, recorder: Recorder, name: str, args: dict, *, now: da
         if tool is None:
             raise ToolError(f'未知工具 {name}')
         data = tool(ctx, **(args or {}))
+        if tool is request_data:
+            recorder.queue_data_request(data)
     except Exception as exc:  # noqa: BLE001 — the envelope is the only channel to the model
         return recorder.record(name, args, error=str(exc)[:300], now=now)
     return recorder.record(name, args, data=data, now=now)

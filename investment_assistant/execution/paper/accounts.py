@@ -13,11 +13,12 @@ from decimal import ROUND_FLOOR, ROUND_HALF_UP
 from uuid import NAMESPACE_URL, uuid5
 from investment_assistant.config import load_config
 from investment_assistant.core import idempotency as core_idempotency
-from investment_assistant.core.versions import PORTFOLIO_AGENT_V1 as PORTFOLIO_AGENT_VERSION
+from investment_assistant.core.versions import PORTFOLIO_AGENT_VERSION as PORTFOLIO_AGENT_VERSION
 from investment_assistant.data.calendar import add_trading_days, trading_days_between
 from investment_assistant.data.adapters import bars
 from investment_assistant.execution import accounts, ledger, chains, portfolio_check, simulation as plan_shadow
 from investment_assistant.execution.paper import fill as paper_fill, strategies as paper_strategies
+from investment_assistant.execution.portfolio_types import PortfolioResult
 
 ZERO = Decimal(0)
 
@@ -351,8 +352,53 @@ def reconcile_pending_buys(conn, account, *, session, now):
     return changed
 
 
-def decision_facts(conn,account,*,session,now,recent_closed):
-    """Execution facts; the caller supplies the review-layer closed-trade fact reader."""
+_RESULT_FIELDS = ('exposure_by_sector', 'verdicts', 'conflicts', 'order', 'params_used', 'version')
+
+
+def check_result(row) -> PortfolioResult:
+    """The stored ``portfolio_checks.result`` as the result object the order validator and the PM read."""
+    return PortfolioResult(**{key: row['result'][key] for key in _RESULT_FIELDS})
+
+
+def portfolio_check_state(conn, account, *, session, enabled):
+    """What the Agent-managed decision knows about the session's portfolio check (spec §7.3, K2).
+
+    ``disabled``: the ``portfolio_manager`` switch is off for this run — no hard check exists in this branch and a
+    stored row of the same session (an earlier run) is deliberately NOT consulted. ``missing``: the switch is on but
+    the node left no row (it failed, or never ran): nothing blocks. ``ready``: the frozen row, with its result
+    rebuilt for ``validate_orders``."""
+    if not enabled:
+        return {'status': 'disabled', 'result': None, 'row': None}
+    row = execution_repo.portfolio_check_for(conn, account['id'], session) if core_schema.five_layers_ready(conn) else None
+    if row is None:
+        return {'status': 'missing', 'result': None, 'row': None}
+    return {'status': 'ready', 'row': row, 'result': check_result(row)}
+
+
+def portfolio_check_fact(state):
+    """The ``[fact:portfolio_check]`` section for a state (portfolio_check_state)."""
+    if state['status'] == 'disabled':
+        return {'status': 'not_checked', 'reason': 'feature_disabled', 'note': '本版未检查'}
+    if state['status'] == 'missing':
+        return {'status': 'missing', 'note': '本次没有组合检查结果，不据此拦截'}
+    row = state['row']
+    return {'status': 'ready', 'session': row['session'], 'cutoff_at': row['cutoff_at'], 'version': row['version'],
+            **{key: row['result'][key] for key in ('verdicts', 'exposure_by_sector', 'conflicts', 'order')}}
+
+
+def portfolio_inputs(conn, account, *, session, now):
+    """The account's inputs of the host portfolio check (spec §7.1/§7.2): the same cutoff-limited candidates,
+    positions, pending orders, cash and parameters its decision would see. A candidate whose chain is already
+    consumed, or whose version this account already tried, is no candidate and gets no verdict."""
+    facts = decision_facts(conn, account, session=session, now=now, recent_closed=lambda *args, **kwargs: [])
+    return {'plans': [p for p in facts['buyable'] if p.get('blocked_reason') not in ('chain_consumed', 'version_tried')],
+            'positions': facts['positions'], 'pending': facts['pending_orders'], 'cash': facts['account']['cash'],
+            'equity': facts['account']['equity'], 'params': facts['account']['params']}
+
+
+def decision_facts(conn,account,*,session,now,recent_closed,check_state=None):
+    """Execution facts; the caller supplies the review-layer closed-trade fact reader. ``check_state`` is a
+    ``portfolio_check_state`` (agent-portfolio-2): its fact joins the evidence; without one the section is absent."""
     aid=account['id']; params=effective_params(conn,account,session)
     trades,splits,books=account_books(conn,aid,session=session,now=now)
     equity=execution_repo.latest_equity_day(conn,aid,on_or_before=session)
@@ -407,7 +453,8 @@ def decision_facts(conn,account,*,session,now,recent_closed):
         'positions':positions,'pending_orders':pending,'buyable':candidates,
         'rejected_yesterday':[o for o in orders if o['status']=='rejected' and o['placed_on']==add_trading_days(session,-1)],
         'recent_closed':recent_closed(conn,account,session=session,now=now),
-        'market':data_repo.regime_for(conn,session,cutoff_at=now) or {},'_orders':orders}
+        'market':data_repo.regime_for(conn,session,cutoff_at=now) or {},'_orders':orders,
+        **({'portfolio_check':portfolio_check_fact(check_state)} if check_state is not None else {})}
 
 
 def _size_candidates(items, positions, pending, cash, params):
@@ -423,11 +470,12 @@ def _size_candidates(items, positions, pending, cash, params):
         item.update(max_shares=sized['shares'],sizing_status=sized['status'])
 
 
-def _save_decision(conn,account,*,session,now,run_id,output,facts,status='ok',reason=None,agent_run_id=None,evidence=None,skipped=None,host_cancellations=None):
+def _save_decision(conn,account,*,session,now,run_id,output,facts,status='ok',reason=None,agent_run_id=None,evidence=None,skipped=None,host_cancellations=None,check_state=None):
     if evidence is None:
         evidence=portfolio_check.build_evidence({k:v for k,v in facts.items() if not k.startswith('_')})
     check=paper_strategies.validate_orders(output,items=facts['buyable'],positions=facts['positions'],
-        pending_orders=facts['_orders'],cash=facts['account']['cash'],params=facts['account']['params']) if status=='ok' else {'accepted':[],'rejected':[]}
+        pending_orders=facts['_orders'],cash=facts['account']['cash'],params=facts['account']['params'],
+        portfolio_check=check_state['result'] if check_state is not None else None) if status=='ok' else {'accepted':[],'rejected':[]}
     if check.get('schema_error'): status,reason='rejected','schema_invalid'
     accepted=check['accepted'] if status=='ok' else []; rejected=check['rejected'] if status=='ok' else []
     row,inserted=execution_repo.insert_decision(conn,{'account_id':account['id'],'session':session,'status':status,'status_reason':reason,
@@ -437,6 +485,7 @@ def _save_decision(conn,account,*,session,now,run_id,output,facts,status='ok',re
         'holds':output.get('holds') if isinstance(output,dict) else None,
         'detail':{'cutoff_at':now,'orders_placed':len(accepted),'orders_rejected':len(rejected),'skipped':skipped or [],
                   **({'host_cancellations':host_cancellations} if host_cancellations else {}),
+                  **({'portfolio_check':'ready' if check_state['status']=='ready' else 'missing'} if check_state is not None else {}),
                   **({k:data_repo.agent_run_by_id(conn,agent_run_id)[k] for k in ('input_tokens','output_tokens')} if agent_run_id else {})},'run_id':run_id})
     if not inserted: return row
     by_plan={str(i['plan_id']):i for i in facts['buyable']}

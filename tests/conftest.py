@@ -59,11 +59,10 @@ WORKBENCH_MIGRATIONS = ('002_watchlist_items.sql', '006_job_reports.sql', '007_s
                         '018_pool_and_market_context.sql', '019_agent_track.sql', '020_review_expansion.sql',
                         '023_screen_and_beijing_jobs.sql', '024_data_fetch_runs.sql', '025_stage_runs.sql',
                         '026_plan_timeline.sql', '027_growth_loop.sql', '028_daily_workflow.sql',
-                        '029_executable_plans.sql', '030_accounts.sql')
+                        '029_executable_plans.sql', '030_accounts.sql', '031_five_layers.sql')
 
 
-@pytest.fixture
-def workbench_db():
+def _workbench_schema(migrations):
     """Workbench schema in a throwaway Postgres schema, dropped afterwards; explicit test URL only."""
     url = os.environ.get('INVESTMENT_ASSISTANT_TEST_DATABASE_URL')
     if not url:
@@ -73,7 +72,7 @@ def workbench_db():
     with psycopg.connect(url) as conn:
         conn.execute(f'CREATE SCHEMA {schema}')
         conn.execute(f'SET search_path TO {schema}')
-        for name in WORKBENCH_MIGRATIONS:
+        for name in migrations:
             conn.execute(Path('migrations', name).read_text(encoding='utf-8'))
         conn.commit()
         try:
@@ -82,6 +81,19 @@ def workbench_db():
             conn.rollback()
             conn.execute(f'DROP SCHEMA {schema} CASCADE')
             conn.commit()
+
+
+@pytest.fixture
+def workbench_db():
+    """The full workbench schema, migrations 002–031."""
+    yield from _workbench_schema(WORKBENCH_MIGRATIONS)
+
+
+@pytest.fixture
+def workbench_db_pre031():
+    """The schema as it is before migration 031 runs (spec §15: 031 未执行 → 新接口 503、旧接口照常); for the tests
+    that pin the old interfaces' compatibility."""
+    yield from _workbench_schema(tuple(n for n in WORKBENCH_MIGRATIONS if n != '031_five_layers.sql'))
 
 
 @pytest.fixture

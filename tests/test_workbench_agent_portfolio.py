@@ -10,7 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from investment_assistant.analysis.agent import graph
+from investment_assistant.analysis.agent import graph, toolsets
 from investment_assistant.execution.citations import Rejected
 from investment_assistant.analysis.agent.tools import ToolContext
 
@@ -81,9 +81,14 @@ def run(make, messages, monkeypatch):
 
 def test_portfolio_prompt_and_valid_graph(scripted_model, monkeypatch):
     result, model = run(scripted_model, [AIMessage(content=json.dumps(output()))], monkeypatch)
-    assert graph.PORTFOLIO_AGENT_VERSION == 'agent-portfolio-1'
-    assert graph.PORTFOLIO_TOOLS == ('get_price_bars', 'get_indicators', 'get_market_context', 'get_concept', 'get_knowledge')
+    assert graph.PORTFOLIO_AGENT_VERSION == 'agent-portfolio-2'
+    assert graph.PORTFOLIO_TOOLS == ('get_price_bars', 'get_indicators', 'get_market_context', 'get_concept', 'get_knowledge',
+                                     'get_indicator')                  # the v2 whitelist adds the registry indicator
+    assert set(graph.PORTFOLIO_TOOLS) == toolsets.TOOLSETS['portfolio@agent-portfolio-2']
     assert '你管理一个模拟账户，目标是用 Agent 已经给出的交易计划管好一个组合' in graph.PORTFOLIO_PROMPT
+    # v2 paragraph (spec §7.3): the portfolio check is a hard result; blocked plans cannot be ordered
+    assert '组合检查是硬结果' in graph.PORTFOLIO_PROMPT and 'blocked' in graph.PORTFOLIO_PROMPT
+    assert '本版未检查' in graph.PORTFOLIO_PROMPT and 'get_indicator' in graph.PORTFOLIO_PROMPT
     assert result == {'status': 'ok', 'reason': None, 'output': output(), 'calls': [], 'input_tokens': 10, 'output_tokens': 5}
     assert len(model.seen) == 1
 
@@ -105,6 +110,22 @@ def test_tool_and_ticker_allowlists(scripted_model, monkeypatch):
     assert 'error' in recorded['SPY']['result'] and 'error' in recorded['TSLA']['result']
     assert {r['phase'] for r in result['calls']} == {'portfolio'}
     assert any('get_news' in str(m.content) and 'Error' in str(m.content) for m in model.seen[-1])
+
+
+def test_get_indicator_is_scoped_to_held_and_buyable_tickers(scripted_model, monkeypatch):
+    """agent-portfolio-2 whitelist: the registry indicator is served for the account's own tickers only."""
+    calls = [{'name': 'get_indicator', 'args': {'ticker': t, 'indicator_id': 'atr14'}, 'id': t}
+             for t in ('AMD', 'NVDA', 'SPY', 'TSLA')]
+    result, _ = run(scripted_model, [AIMessage(content='', tool_calls=calls),
+                                     AIMessage(content=json.dumps(output()))], monkeypatch)
+    assert result['status'] == 'ok'
+    recorded = {r['args']['ticker']: r for r in result['calls']}
+    assert {r['tool'] for r in result['calls']} == {'get_indicator'}
+    assert set(recorded) == {'AMD', 'NVDA', 'SPY', 'TSLA'}
+    for outside in ('SPY', 'TSLA'):
+        assert '不在本账户持仓与可买计划的标的内' in str(recorded[outside]['result'].get('error'))
+    for inside in ('AMD', 'NVDA'):
+        assert '不在本账户持仓与可买计划的标的内' not in str(recorded[inside]['result'].get('error'))
 
 
 def test_portfolio_round_limit(scripted_model, monkeypatch):
@@ -141,7 +162,8 @@ def test_redaction_preserves_numeric_literals_and_graph_can_read_evidence(script
     assert decoded['account']['notes'] == ['token=***', {'echo': '***'}]
     assert decoded['market']['password'] == decoded['market']['note'] == '***'
     assert list(decoded) == ['account', 'positions', 'pending_orders', 'buyable',
-                             'rejected_yesterday', 'recent_closed', 'market']
+                             'rejected_yesterday', 'recent_closed', 'market', 'portfolio_check']
+    assert decoded['portfolio_check'] == {'status': 'missing'}         # agent-portfolio-2: the eighth section
     monkeypatch.setattr(sys.modules[__name__], 'facts', lambda: payload)
     result, _ = run(scripted_model, [AIMessage(content=json.dumps(output()))], monkeypatch)
     assert result['status'] == 'ok'

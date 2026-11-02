@@ -8,6 +8,7 @@ import investment_assistant.review.repo as review_repo
 import json
 import uuid
 from datetime import UTC, date, datetime
+from typing import Any
 
 import pytest
 
@@ -40,8 +41,9 @@ LEGACY_OUTPUT = {'action': 'buy', 'summary': '回踩修复放量',
                  'levels': OUTPUT['levels'], 'thesis': [{'text': '突破 20 日线', 'refs': ['call:1']}]}
 
 
-def run_row(*, mode='propose', status='ok', reason=None, agent_version='agent-2', output=OUTPUT, counter=COUNTER,
-            plan_id=PLAN_ID, **extra):
+def run_row(*, mode='propose', status='ok', reason=None, agent_version='agent-2',
+            output: dict | None = OUTPUT, counter: dict | None = COUNTER,
+            plan_id: str | None = PLAN_ID, **extra):
     return {'id': RUN_ID, 'ticker': 'AMD', 'signal_date': date(2026, 10, 22), 'pool': 'main', 'attempt': 1,
             'mode': mode, 'agent_version': agent_version, 'provider': 'chatgpt', 'model': 'gpt-test', 'cutoff_at': T,
             'status': status, 'reason': reason, 'detail': None, 'output': output, 'counter': counter,
@@ -49,7 +51,7 @@ def run_row(*, mode='propose', status='ok', reason=None, agent_version='agent-2'
 
 
 def call_row(seq, tool, *, phase='propose', args=None, data=None, error=None):
-    envelope = {'ref': f'call:{seq}'}
+    envelope: dict[str, Any] = {'ref': f'call:{seq}'}
     envelope['error' if error else 'data'] = error or data
     return {'id': seq, 'run_id': RUN_ID, 'seq': seq, 'phase': phase, 'tool': tool, 'args': args or {},
             'result': envelope, 'result_sha256': 'ab12cd34' + '0' * 56, 'called_at': T}
@@ -80,8 +82,8 @@ def review_row(**extra):
 
 
 def build(**kwargs):
-    base = dict(run=run_row(), calls=CALLS, version=VERSION, trigger_review=None, later_reviews=[],
-                plan_state=PLAN_STATE, timeline_ready=True)
+    base: dict[str, Any] = {'run': run_row(), 'calls': CALLS, 'version': VERSION, 'trigger_review': None,
+                            'later_reviews': [], 'plan_state': PLAN_STATE, 'timeline_ready': True}
     base.update(kwargs)
     return reasoning.build(**base)
 
@@ -188,6 +190,32 @@ def test_pass_run_has_no_levels_but_still_checked():
     assert kinds(view) == ['read', 'proposal', 'check', 'read', 'counter']
     assert step(view, 'proposal')['levels'] == [] and step(view, 'proposal')['action'] == 'pass'
     assert {i['result'] for i in step(view, 'check')['items']} == {'pass'}
+
+
+RESEARCH = {'status': 'ok', 'reason': None,
+            'output': {'facts': [{'text': '财报披露营收增长', 'kind': 'disclosure', 'refs': ['call:1']}],
+                       'risks': [], 'blocked': [], 'summary': '基本面已核验'}}
+
+
+def test_research_section_rendered():
+    """UI1: the researcher segment precedes the proposer read, exact shape, original call numbers kept."""
+    calls = [call_row(1, 'get_news', phase='research', args={'days': 30}, data=[]),
+             *CALLS]
+    view = build(run=run_row(agent_version='agent-4', output={'research': RESEARCH, **OUTPUT}), calls=calls)
+    assert kinds(view)[:4] == ['research', 'read', 'read', 'proposal']
+    research = view['steps'][0]
+    assert research == {'kind': 'research', 'title': '公司研究', 'concept': 'agent.company_researcher',
+                        'status': 'ok', 'reason': None, 'output': RESEARCH['output']}
+    read = step(view, 'read', 0)
+    assert read['phase'] == 'research' and [c['ref'] for c in read['calls']] == ['call:1']
+    assert [c['ref'] for c in step(view, 'read', 1)['calls']] == ['call:1', 'call:2']   # propose calls unchanged
+    # a carried segment renders the same shape with its provenance status; no calls of THIS run
+    carried = {**RESEARCH, 'status': 'carried', 'carried_from': 'original-run', 'original_status': 'ok'}
+    view = build(run=run_row(agent_version='agent-4', output={'research': carried, **OUTPUT}), calls=CALLS)
+    assert kinds(view)[:2] == ['research', 'read']
+    assert view['steps'][0]['status'] == 'carried' and view['steps'][0]['output'] == RESEARCH['output']
+    # pre-agent-4 runs keep the old step list exactly
+    assert 'research' not in kinds(build())
 
 
 def test_build_revise_has_evidence_and_diff():
@@ -529,7 +557,9 @@ def _insert_revision_chain(db, scripted_model):
     service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
     first = analysis_repo.latest_agent_run(db, 'AAA', SESSION)
+    assert first is not None and first['plan_id'] is not None
     plan_a = execution_repo.plan_by_id(db, first['plan_id'])
+    assert plan_a is not None
     plan_b = execution_repo.insert_plan(db, {k: v for k, v in plan_a.items() if k not in ('id', 'created_at')})
     review_run, revise_run = str(uuid.uuid4()), str(uuid.uuid4())
     base = {'ticker': 'AAA', 'signal_date': SESSION, 'pool': 'main', 'attempt': 1, 'provider': 'chatgpt', 'model': 'm',
@@ -566,18 +596,22 @@ def test_reasoning_reads_version_and_reviews(db, scripted_model):
     view = reasoning.reasoning(str(first['id']))
     assert view['run']['id'] == str(first['id']) and view['run']['mode'] == 'propose'
     assert view['version']['version_no'] == 0 and view['version']['plan_id'] == str(plan_a['id'])
-    assert kinds(view) == ['previous_chain', 'read', 'proposal', 'check', 'read', 'counter', 'response', 'outcome']
+    assert kinds(view) == ['previous_chain', 'research', 'read', 'read', 'proposal', 'check', 'read',
+                           'counter', 'response', 'outcome']   # agent-4: researcher precedes the proposer
     [item] = step(view, 'response')['items']
     assert item['new_version_no'] == 1 and item['new_plan_id'] == str(plan_b['id'])
     assert item['outcome'] == 'revise' and item['changes'] == [{'field': 'stop', 'before': '95.00', 'after': '96.00'}]
     outcome = step(view, 'outcome')
     assert outcome['plan_id'] == str(plan_a['id']) and outcome['consistency']['status'] == 'consistent'
-    read = step(view, 'read', 0)
+    read = step(view, 'read', 1)          # read #0 is the researcher's (agent-4)
     assert [c['tool'] for c in read['calls']] == ['get_indicators']
     assert read['calls'][0]['concept'] == 'indicator.atr14'
 
     revised = reasoning.reasoning(revise_run)
-    assert kinds(revised) == ['evidence', 'read', 'proposal', 'check', 'read', 'counter', 'response', 'outcome']
+    assert kinds(revised) == ['evidence', 'research', 'read', 'read', 'proposal', 'check', 'read',
+                             'counter', 'response', 'outcome']   # the revision carries the researcher segment
+    assert step(revised, 'research')['status'] in ('ok', 'carried')
+    assert step(revised, 'read', 0)['calls'] == []               # no researcher calls of THIS run (R16)
     evidence = step(revised, 'evidence')
     assert evidence['review_id'] == review['id'] and evidence['review_agent_run_id'] == review_run
     assert evidence['signals'][0]['kind'] == 'new_8k'
@@ -627,6 +661,7 @@ def test_reasoning_without_timeline_tables(db, scripted_model):
     service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
     run = analysis_repo.latest_agent_run(db, 'AAA', SESSION)
+    assert run is not None
     db.execute('DROP TABLE plan_reviews, user_inputs, agent_plan_versions CASCADE')
     db.commit()
     view = reasoning.reasoning(str(run['id']))
@@ -646,6 +681,7 @@ def test_reasoning_derivation_failure_reports_reason(db, scripted_model, monkeyp
     service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
     run = analysis_repo.latest_agent_run(db, 'AAA', SESSION)
+    assert run is not None
 
     def broken(plan, rows):
         raise RuntimeError('derive exploded\nsecond line')
@@ -662,7 +698,9 @@ def test_reasoning_reads_retro_and_discuss_context(db, scripted_model):
     service.run_batch(tickers=['AAA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses('AAA')))
     db.commit()
     first = analysis_repo.latest_agent_run(db, 'AAA', SESSION)
+    assert first is not None and first['plan_id'] is not None
     plan = execution_repo.plan_by_id(db, first['plan_id'])
+    assert plan is not None
     base = {'ticker': 'AAA', 'signal_date': SESSION, 'pool': 'main', 'attempt': 1, 'provider': 'chatgpt', 'model': 'm',
             'cutoff_at': NOW, 'reason': None, 'detail': None, 'counter': None, 'input_tokens': 0, 'output_tokens': 0,
             'started_at': NOW, 'finished_at': NOW, 'plan_id': None, 'status': 'ok'}

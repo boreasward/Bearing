@@ -15,10 +15,9 @@ from __future__ import annotations
 import json
 import re
 
-
 KINDS = frozenset({'disclosure', 'guidance', 'price_fact', 'user', 'inference'})
 CALL_REF = re.compile(r'call:[1-9][0-9]*\Z')
-_FENCE = re.compile(r'\A```(?:json)?\s*\n(.*?)\n```\Z', re.S | re.I)
+_FENCE = re.compile(r'\A```(?:json)?\s*\n(.*?)\n```\Z', re.DOTALL | re.IGNORECASE)
 
 
 class Rejected(ValueError):
@@ -112,3 +111,35 @@ def research_fact_block(output) -> str:
     for title, rows in (('事实', facts), ('风险', risks), ('缺失数据', blocked)):
         parts.extend([f'## {title}', '\n'.join(rows) if rows else '暂无条目'])
     return '\n'.join(parts)
+
+
+CONCLUSION_ACTIONS = frozenset({'buy', 'pass', 'wait'})
+
+
+def check_conclusion(output, *, refs: frozenset) -> dict:
+    """The dossier conclusion of the research second entrance (§6.3/§6.4): one JSON object the
+    conclusion phase emits after the researcher. ``action`` is a *dossier* verdict (D39 B: it never
+    opens a chain or trades); ``wait`` says the data the researcher found missing decides the question.
+    Sections are the dossier's reading structure (催化与时间 / 反证与替代解释 / 价格与情景 / 下一步);
+    a buy conclusion must name at least one catalyst — what would prove it."""
+    raw = _object(output, reason='conclusion_malformed')
+    if set(raw) != {'action', 'summary', 'catalysts', 'counter', 'price_scenarios', 'next_steps'}:
+        raise Rejected('conclusion_malformed')
+    if raw['action'] not in CONCLUSION_ACTIONS:
+        raise Rejected('conclusion_action')
+    if not _text(raw['summary'], 300):
+        raise Rejected('conclusion_summary')
+    out: dict = {'action': raw['action'], 'summary': raw['summary'], 'catalysts': [], 'counter': [],
+                 'price_scenarios': [], 'next_steps': []}
+    for key in ('catalysts', 'counter', 'price_scenarios', 'next_steps'):
+        items = raw[key]
+        if not isinstance(items, list) or len(items) > 6:
+            raise Rejected('conclusion_malformed')
+        for item in items:
+            if (not isinstance(item, dict) or set(item) != {'text', 'refs'}
+                    or not _text(item['text'], 200)):
+                raise Rejected('conclusion_malformed')
+            out[key].append({'text': item['text'], 'refs': _refs(item['refs'], refs)})
+    if out['action'] == 'buy' and not out['catalysts']:
+        raise Rejected('conclusion_catalysts_required')
+    return out

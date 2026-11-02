@@ -34,7 +34,14 @@ def test_reason_text_covers_every_status_reason():
                'review_malformed', 'migration_026_missing', 'review_in_progress', 'plan_invalid',
                'retro_malformed', 'lesson_invalid', 'answer_malformed', 'migration_027_missing',
                'discussion_busy', 'draft_exists', 'not_connected', 'model_unavailable',
-               'invalid_entry_type', 'invalid_max_hold', 'stop_lowered', 'stop_above_close', 'active_chain'}
+               'invalid_entry_type', 'invalid_max_hold', 'stop_lowered', 'stop_above_close', 'active_chain',
+               # v2.12–v2.15: the researcher, portfolio-manager, optimizer and brief rejection codes
+               'research_malformed', 'research_facts_count', 'research_kind', 'research_inference_unsupported',
+               'research_refs_invalid', 'research_summary_length', 'research_blocked_shape',
+               'pm_malformed', 'pm_summary_length', 'pm_levels_forbidden', 'pm_ranking_invalid', 'pm_refs_invalid',
+               'proposal_malformed', 'proposal_source', 'proposal_title', 'proposal_length', 'proposal_refs_invalid',
+               'proposal_duplicate_title', 'proposal_limit', 'brief_empty', 'brief_length',
+               'brief_acceptance_missing'}
     assert set(REASON_TEXT) == reasons
     assert {k: REASON_TEXT[k] for k in ('invalid_entry_type', 'invalid_max_hold', 'stop_lowered', 'stop_above_close',
                                         'active_chain')} == {      # v2.9 spec §5.5 + R3, verbatim

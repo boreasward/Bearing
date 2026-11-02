@@ -279,7 +279,8 @@ def test_get_agent_run_view_and_boundary(db, scripted_model):
     view = get_agent_run(ctx, str(run['id']))
     json.dumps(view, ensure_ascii=False)
     assert view['run']['id'] == str(run['id']) and view['run']['mode'] == 'propose'
-    assert [s['kind'] for s in view['steps']][:3] == ['previous_chain', 'read', 'proposal']      # v2.9 D9
+    kinds = [s['kind'] for s in view['steps']]
+    assert kinds[:2] == ['previous_chain', 'research'] and 'proposal' in kinds[2:]               # v2.9 D9; agent-4 research
     retro_run = insert_run(db, mode='retro', status='ok', reason=None, output={'headline': 'x'})
     discuss_run = insert_run(db, mode='discuss', status='ok', reason=None, output={'answer': 'x'})
     ctx = make_ctx(db, plan_id=plan['id'])

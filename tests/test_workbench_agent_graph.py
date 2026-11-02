@@ -3,6 +3,7 @@ import investment_assistant.review.agent_runs as review_agent_runs
 import investment_assistant.core.schema as core_schema
 import investment_assistant.data.repo as data_repo
 import investment_assistant.review.repo as review_repo
+import dataclasses
 import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -729,14 +730,26 @@ def _spy_tools(monkeypatch):
     return names
 
 
-def _dctx(monkeypatch):
+def _roadmap_stub(calls=None):
+    def get_roadmap(ctx, section, query=None):
+        if calls is not None:
+            calls.append((section, query, ctx.cutoff_at))
+        return {'section': section, 'items': []}
+    return get_roadmap
+
+
+def _dctx(monkeypatch, *, roadmap=True):
+    """A discussion context the way the discussion host builds it: the three review tools bound, and ``get_roadmap``
+    bound by the launching edge host (``roadmap=False``: the edge host did not, R26)."""
     import investment_assistant.views.derivation as derivation_view
     import investment_assistant.views.reasoning as reasoning
     base = _kctx(monkeypatch)
+    bound = _roadmap_stub() if roadmap is True else roadmap
     return DiscussContext(ticker=base.ticker, session=base.session, cutoff_at=base.cutoff_at, read=base.read,
                           signal_date=S, plan_id='p-1', card_id=None, unit_plan_ids=frozenset({'p-1'}),
                           unit_run_ids=frozenset({'r-1'}), read_derivation=derivation_view.plan_derivation_in,
-                          read_agent_run=reasoning.view_in)
+                          read_agent_run=reasoning.view_in,
+                          bindings={**DISCUSS_TOOLS, **({'get_roadmap': bound} if bound else {})})
 
 
 RETRO_CARD = {'id': 7, 'ticker': 'AMD', 'end_session': S, 'end_kind': 'stop'}
@@ -783,16 +796,56 @@ def test_batch_phases_never_bind_discuss_tools(monkeypatch, scripted_model):
         assert not set(tool_names) & set(DISCUSS_TOOLS)
 
 
-def test_discuss_binds_thirteen_tools(monkeypatch, scripted_model):
+def test_discuss_binds_the_discuss_toolset(monkeypatch, scripted_model):
+    """D37/R26: the ten batch tools, the three discussion tools and ``get_roadmap``, taken from the role's toolset."""
     from langgraph.checkpoint.memory import InMemorySaver
+    from investment_assistant.analysis.agent import toolsets
     names = _spy_tools(monkeypatch)
     review_agent_runs.run_discuss(discussion={'id': 1}, ctx=_dctx(monkeypatch),
                       model=scripted_model([AIMessage(content='x')]), checkpointer=InMemorySaver(), run_id='f',
                       now=lambda: NOW, context_text='ctx', history_text='', question='q', attachment_text=None,
                       user_refs=frozenset(), targets=set(), concept_ids=set())
     [tool_names] = names
-    assert len(tool_names) == 13 and set(tool_names) == set(TOOLS) | set(DISCUSS_TOOLS)
-    assert tool_names[-3:] == ['get_plan_context', 'get_derivation', 'get_agent_run']
+    assert len(tool_names) == 14 and set(tool_names) == set(TOOLS) | set(DISCUSS_TOOLS) | {'get_roadmap'}
+    assert set(tool_names) == toolsets.TOOLSETS[review_agent_runs.DISCUSS_TOOLSET]
+
+
+def test_discuss_sees_get_roadmap_through_the_edge_binding(monkeypatch, scripted_model):
+    seen = []
+    ctx = dataclasses.replace(_dctx(monkeypatch), bindings={**DISCUSS_TOOLS, 'get_roadmap': _roadmap_stub(seen)})
+    call = _tool_call('get_roadmap', {'section': 'versions', 'query': 'v2.9'}, 'r1')
+    result, _, _ = discuss(monkeypatch, scripted_model, [call, AIMessage(content=_answer_json(refs=['call:1']))],
+                           ctx=ctx)
+    assert result['status'] == 'ok'
+    [recorded] = result['calls']
+    assert (recorded['phase'], recorded['tool'], recorded['args']) == ('discuss', 'get_roadmap',
+                                                                       {'section': 'versions', 'query': 'v2.9'})
+    assert recorded['result']['data'] == {'section': 'versions', 'items': []}      # the binding's answer, recorded
+    assert seen == [('versions', 'v2.9', ctx.cutoff_at)]                            # called as of the question's moment
+
+
+def test_discuss_without_the_roadmap_binding_fails_closed(monkeypatch, scripted_model):
+    """R26: a host that did not bind ``get_roadmap`` gets no run at all -- not a silent empty answer."""
+    from langgraph.checkpoint.memory import InMemorySaver
+    from investment_assistant.analysis.agent.tools import ToolError
+    model = scripted_model([AIMessage(content=_answer_json())])
+    with pytest.raises(ToolError, match='tool_binding_missing: get_roadmap'):
+        review_agent_runs.run_discuss(discussion={'id': 1}, ctx=_dctx(monkeypatch, roadmap=False), model=model,
+                                      checkpointer=InMemorySaver(), run_id='f', now=lambda: NOW, context_text='ctx',
+                                      history_text='', question='q', attachment_text=None, user_refs=frozenset(),
+                                      targets=set(), concept_ids=set())
+    assert model.seen == []                                                          # the model was never called
+
+
+def test_review_layer_does_not_import_optimize():
+    import ast
+    from pathlib import Path
+    root = Path(review_agent_runs.__file__).parent
+    for path in root.glob('*.py'):
+        imported = {n.module or '' for n in ast.walk(ast.parse(path.read_text(encoding='utf-8')))
+                    if isinstance(n, ast.ImportFrom)} | {a.name for n in ast.walk(ast.parse(path.read_text(encoding='utf-8')))
+                                                         if isinstance(n, ast.Import) for a in n.names}
+        assert not [m for m in imported if m.startswith('investment_assistant.optimize')], path.name
 
 
 def test_run_retro_ok_and_rejected(monkeypatch, scripted_model):
@@ -853,7 +906,7 @@ def test_run_retro_may_cite_concept_returned_this_run(monkeypatch, scripted_mode
 def discuss(monkeypatch, make, responses, **over):
     from langgraph.checkpoint.memory import InMemorySaver
     saver, model = InMemorySaver(), make(responses)
-    args = dict(discussion={'id': 1}, ctx=_dctx(monkeypatch), model=model, checkpointer=saver, run_id='discuss-1',
+    args = dict(discussion={'id': 1}, ctx=over.pop('ctx', None) or _dctx(monkeypatch), model=model, checkpointer=saver, run_id='discuss-1',
                 now=lambda: NOW, context_text='AMD 计划第 0 版，计划当时的截止时间 2026-10-21T22:30Z', history_text='Q1/A1',
                 question='止损为什么是 96？', attachment_text=None, user_refs=frozenset({'user:12'}),
                 targets=set(), concept_ids={'plan.stop'})

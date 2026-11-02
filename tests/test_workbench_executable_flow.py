@@ -223,7 +223,7 @@ def test_agent_node_rechecks_active_chain_under_lock(db, monkeypatch):
     assert model.calls['propose'] == 2                                        # the tool round and the plan
     [skipped] = analysis_repo.agent_runs_for(db, 'SYNTH', day(2))
     assert (skipped['status'], skipped['reason'], skipped['plan_id']) == ('skipped', 'active_chain', None)
-    assert skipped['input_tokens'] > 0 and skipped['agent_version'] == 'agent-3'
+    assert skipped['input_tokens'] > 0 and skipped['agent_version'] == 'agent-4'
     assert len(execution_repo.all_chains(db)) == 1
     [merged] = execution_repo.chain_retriggers_for(db, 'SYNTH')
     assert (merged['unit_signal_date'], merged['chain_signal_date'], merged['chain_state']) == (day(2), S1, 'entry')
@@ -239,7 +239,7 @@ def test_first_version_writes_agent3_rows(db):
     run_row = analysis_repo.latest_agent_run(db, 'SYNTH', S1)
     plan = execution_repo.agent_plan(db, 'SYNTH', S1)
     version = execution_repo.chain_head(db, 'SYNTH', S1)['version']
-    assert run_row['agent_version'] == 'agent-3' and run_row['status'] == 'ok'
+    assert run_row['agent_version'] == 'agent-4' and run_row['status'] == 'ok'
     assert (plan['plan_version'], plan['entry_type'], plan['max_hold_sessions']) == ('agent-3', 'zone_limit', 10)
     assert plan['inputs']['chain_mode'] == 'entry' and plan['inputs']['entry_rules_version'] == 'entry-1'
     assert plan['inputs']['chain_entry_cap'] == add_trading_days(S1, 10).isoformat()

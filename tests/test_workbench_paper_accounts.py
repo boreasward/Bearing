@@ -158,8 +158,8 @@ def test_chinese_maps_and_current_graph_contract():
     assert getattr(accounts,'ORDER_STATUS_TEXT',{}).get('rejected')=='未通过校验'
     assert getattr(paper_strategies,'REJECT_TEXT',{}).get('no_position')=='无可卖持仓'
     assert getattr(paper_fill,'EXIT_REASON_TEXT',{}).get('stop')=='止损触及'
-    assert workflow.DAILY_GRAPH_VERSION=='daily-2' and 'accounts' in workflow.BODIES
-    assert derivation.RUN_STAGE_COUNT['stages-5']==11
+    assert workflow.DAILY_GRAPH_VERSION=='daily-3' and {'portfolio','accounts','propose'} <= set(workflow.BODIES)
+    assert derivation.RUN_STAGE_COUNT['stages-5']==11 and derivation.RUN_STAGE_COUNT['stages-6']==13
 
 
 def test_unknown_plan_intent_is_rejected_and_saved(conn):

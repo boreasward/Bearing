@@ -34,6 +34,7 @@ from investment_assistant.analysis import pool as pool_module
 from investment_assistant.analysis import regime as regime_module
 import investment_assistant.workflow.recorder as stages_module
 from investment_assistant.analysis.agent import graph as agent_graph
+from investment_assistant.analysis.agent import research as research_module
 from investment_assistant.core.llm import model as agent_model_module
 from investment_assistant.data.adapters.universe import Universe
 
@@ -128,6 +129,8 @@ class RoutedModel(BaseChatModel):
             return 'review'
         if system == agent_graph.COUNTER_PROMPT_V2:
             return 'counter'
+        if system == research_module.RESEARCH_PROMPT:
+            return 'research'      # unscripted → the node records a non-blocking error segment (D23)
         if system in (agent_graph.PROPOSE_PROMPT_V2, agent_graph.PROPOSE_PROMPT_V3):
             return 'revise' if '本次是修订' in human else 'propose'
         return 'other'
@@ -424,7 +427,7 @@ def test_signal_triggers_revision(db, monkeypatch, kind):
     assert version['schema_version'] == 'agent-3' and plan['inputs']['chain_mode'] == 'entry'
     assert str(row['new_plan_id']) == str(plan['id'])
     revise_run = data_repo.agent_run_by_id(db, row['revision_agent_run_id'])
-    assert (revise_run['mode'], revise_run['agent_version'], revise_run['status']) == ('revise', 'agent-3', 'ok')
+    assert (revise_run['mode'], revise_run['agent_version'], revise_run['status']) == ('revise', 'agent-4', 'ok')
     assert str(revise_run['plan_id']) == str(plan['id']) and str(version['agent_run_id']) == str(revise_run['id'])
     assert {c['phase'] for c in analysis_repo.agent_tool_calls(db, revise_run['id'])} == {'propose', 'counter'}
     assert [c['phase'] for c in analysis_repo.agent_tool_calls(db, row['review_agent_run_id'])] == ['review']
