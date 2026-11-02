@@ -1,4 +1,4 @@
-"""Trusted seven-section portfolio facts and structural checks; no citation gate."""
+"""Trusted portfolio facts and structural checks; no citation gate."""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,8 @@ from investment_assistant.execution.citations import Rejected, _loads
 REASON_MAX_CHARS = 300
 SUMMARY_MAX_CHARS = 200
 PORTFOLIO_RECENT_SESSIONS = 20
-FACT_KEYS = ('account', 'positions', 'pending_orders', 'buyable', 'rejected_yesterday', 'recent_closed', 'market')
+FACT_KEYS = ('account', 'positions', 'pending_orders', 'buyable', 'rejected_yesterday', 'recent_closed', 'market',
+             'portfolio_check')
 _SENSITIVE_KEYS = frozenset({'api_key', 'apikey', 'secret', 'password', 'token', 'access_token', 'refresh_token',
                               'authorization', 'cookie', 'client_secret', 'credentials'})
 
@@ -40,7 +41,7 @@ def build_evidence(facts: dict) -> str:
     Sensitive-key values are masked; their strings are also redacted from all string
     leaves, including echoed prose. Numeric values retain their exact original digits.
     Optional top-level `secrets` supplies additional sensitive values; it is never
-    emitted as a fact section. Missing sections still appear, keeping exactly seven.
+    emitted as a fact section. Missing sections explicitly carry status=missing.
     """
     secrets = set()
 
@@ -90,7 +91,7 @@ def build_evidence(facts: dict) -> str:
     # Never replace substrings in serialized JSON: a numeric-looking token may
     # also appear in a legitimate cash/quantity literal, which must stay numeric.
     cleaned = redact_strings(cleaned)
-    return '\n\n'.join(f'[fact:{key}]\n' + _json(cleaned.get(key, {} if key in ('account', 'market') else []))
+    return '\n\n'.join(f'[fact:{key}]\n' + _json(cleaned.get(key, {'status': 'missing'}))
                        for key in FACT_KEYS)
 
 

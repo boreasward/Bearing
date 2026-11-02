@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant.data.identity import stock_id
+from investment_assistant.data.adapter_types import Source
+from investment_assistant.data.adapter_support import ONCE, make_adapter
 
 DEFAULT_PATH = Path('config/universes/nasdaq100.json')
 MIN_TICKERS = 90
@@ -65,3 +67,32 @@ def load_for(deps: Any):
     if deps.universe_loader is not None:
         return deps.universe_loader()
     return load()
+
+
+def _fetch(target, *, session, start, end, deps):
+    loaded = load_for(deps)
+    return [{'name': loaded.name, 'as_of': loaded.as_of, 'source': loaded.source, 'tickers': loaded.tickers}]
+
+
+def _store(conn, rows, *, target, source_id, now):
+    # Reading the manual range file creates no new database data.
+    return {'inserted': 0, 'existing': len(rows[0]['tickers']), 'latest': rows[0]['as_of']}
+
+
+def _latest(conn, targets, *, cutoff_at):
+    if 'nasdaq100' not in targets:
+        return {}
+    loaded = load()
+    return {'nasdaq100': loaded.as_of} if loaded.as_of <= cutoff_at.date() else {}
+
+
+def _lagging(latest, session):
+    if latest is None:
+        return True
+    return is_stale(latest if isinstance(latest, Universe) else Universe('', latest, '', ()), session)
+
+
+ADAPTER = make_adapter('universe', '纳指 100 范围', '手工版本化筛选范围', 'config/universes/nasdaq100.json',
+    (Source('file', _fetch, ONCE, '本地范围文件，无网络'),), _store, _latest,
+    per_ticker=False, kind='manual', lock=False, lagging=_lagging,
+    coverage_note='覆盖 = 范围文件成员数（90–105）；超过120天未更新标过期。')

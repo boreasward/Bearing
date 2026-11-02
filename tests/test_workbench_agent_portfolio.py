@@ -35,11 +35,11 @@ def output(**kw):
     return {'orders': [], 'holds': [{'ticker': 'AMD', 'reason': '保持原计划'}], 'summary': '观察', **kw}
 
 
-def test_seven_evidence_blocks_preserve_numbers_and_redact_sensitive_values():
+def test_eight_evidence_blocks_preserve_numbers_and_redact_sensitive_values():
     c = checker()
     text = c.build_evidence(facts())
     assert re.findall(r'^\[fact:([^]]+)\]', text, re.M) == [
-        'account', 'positions', 'pending_orders', 'buyable', 'rejected_yesterday', 'recent_closed', 'market']
+        'account', 'positions', 'pending_orders', 'buyable', 'rejected_yesterday', 'recent_closed', 'market', 'portfolio_check']
     assert '123456789.123456789' in text and 'secret-123' not in text and '***' in text
     assert NOW.isoformat() in text
     assert c.REASON_MAX_CHARS == 300 and c.SUMMARY_MAX_CHARS == 200 and c.PORTFOLIO_RECENT_SESSIONS == 20

@@ -11,6 +11,11 @@ import pandas as pd
 
 from investment_assistant.data import fetch_policy
 from investment_assistant.data.calendar import add_trading_days, is_trading_day
+from investment_assistant.core.constants import BACKUP_FILL_SESSIONS
+from investment_assistant.data import repo
+from investment_assistant.data.adapter_types import Source
+from investment_assistant.data.adapter_support import make_adapter, receipt
+from investment_assistant.data.sources import stooq
 
 NY = ZoneInfo('America/New_York')
 # Daily bars settle after the 16:00 close; one hour of slack also covers 13:00 early closes.
@@ -89,3 +94,49 @@ def latest_closed_session(now: datetime) -> date:
     if is_trading_day(today) and local.time() >= SESSION_SETTLED:
         return today
     return add_trading_days(today, -1)
+
+
+def last_n_sessions(session, n):
+    end = session if is_trading_day(session) else add_trading_days(session, -1)
+    return [add_trading_days(end, -offset) for offset in reversed(range(n))]
+
+
+def fill_from_backup(conn, ticker, *, session, rows, store) -> dict:
+    """D46: validate first, then fill only missing NYSE sessions; never revise existing dates."""
+    rows = stooq.validate_rows(rows, latest_session=session)
+    missing = set(repo.missing_bar_sessions(conn, ticker, last_n_sessions(session, BACKUP_FILL_SESSIONS)))
+    selected = {}
+    for row in rows:
+        day = row['price_date']
+        if day in missing:
+            selected[day] = {**row, 'adj_close': row['close'] * repo.ratio_from_primary(conn, ticker, day)}
+    if not selected:
+        return {'inserted': 0, 'existing': 0, 'latest': None}
+    return store(conn, [selected[d] for d in sorted(selected)])
+
+
+def _fetch(target, *, session, start, end, deps):
+    rows, skipped = normalize_history(fetch_history(target, start, end, fetcher=deps.bar_fetcher))
+    if not rows:
+        raise fetch_policy.FetchError('no valid bars', kind='empty')
+    return rows
+
+
+def fetch_backup(target, *, session, start, end, deps):
+    """Testable D46 source wrapper; intentionally absent from the official sources tuple."""
+    with deps.transaction() as conn:
+        missing = repo.missing_bar_sessions(conn, target, last_n_sessions(session, BACKUP_FILL_SESSIONS))
+    if not missing:
+        return []
+    rows = stooq.fetch_bars(target, start=min(missing), end=session)
+    return [r for r in rows if r['price_date'] in missing]
+
+
+def _store(conn, rows, *, target, source_id, now):
+    return receipt(repo.store_bars(conn, target, rows, now=now, source=source_id), rows, 'price_date')
+
+
+ADAPTER = make_adapter('bars', '日线', '日线价格与复权数据', 'price_bars',
+    (Source('yfinance', _fetch, fetch_policy.FetchPolicy(), '主源复权日线；Stooq spike不可用，未注册'),),
+    _store, repo.latest_bar_dates,
+    coverage_note='覆盖 = 目标中最新日线等于最近已收盘交易日的数量，其余列为滞后。')

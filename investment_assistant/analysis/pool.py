@@ -10,12 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from investment_assistant.data.identity import stock_id
+from investment_assistant.data.market_constants import SECTOR_ETFS as SECTOR_ETFS
 
 MAX_POOL = 100
 MAX_CORE = 15
 CORE_TAG = 'core'
 SECTOR_PREFIX = 'sector:'
-SECTOR_ETFS = ('SMH', 'XLK', 'QQQ')
 
 
 @dataclass(frozen=True)

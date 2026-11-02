@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from investment_assistant.data.adapters.fred import MACRO_CHANGE_OBS
+from investment_assistant.data.market_constants import MACRO_CHANGE_OBS
 
 MA_50_SAMPLES = 50
 MA_200_SAMPLES = 200

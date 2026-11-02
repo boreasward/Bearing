@@ -23,7 +23,7 @@ def module():
 def seed_snapshot(conn, dataset, payload):
     """Stored-source fixtures for read/normalization tests, independent of retired sync."""
     s = module()
-    rows, details = (s._financial_rows if dataset == 'financials' else s._market_rows)(payload)
+    rows, details = (s.research_rows.financial_rows if dataset == 'financials' else s._market_rows)(payload)
     records = data_repo.store_rows(conn, payload['identity']['security_id'], dataset, rows)
     status = 'partial' if details.get('conflicting_fact_keys') else 'ready'
     data_repo.collection_state(conn, payload['identity']['security_id'], dataset,
@@ -70,11 +70,11 @@ def test_raw_snapshot_exact_bytes_and_hash(tmp_path):
     s = module()
     raw = b'{ "a" : 1 }\n'
     digest = hashlib.sha256(raw).hexdigest()
-    result = s.archive_snapshot({'source_url': 'https://data.sec.gov/x', 'source_hash': digest, 'raw_snapshot': raw}, root=tmp_path)
+    result = s.research_rows.archive_snapshot({'source_url': 'https://data.sec.gov/x', 'source_hash': digest, 'raw_snapshot': raw}, root=tmp_path)
     assert Path(result['snapshot_path']).read_bytes() == raw
     assert 'raw_snapshot' not in result
     json.dumps(result)
-    with pytest.raises(ValueError): s.archive_snapshot({'source_hash': 'b'*64, 'raw_snapshot': raw}, root=tmp_path)
+    with pytest.raises(ValueError): s.research_rows.archive_snapshot({'source_hash': 'b'*64, 'raw_snapshot': raw}, root=tmp_path)
 
 
 
@@ -83,7 +83,7 @@ def test_raw_snapshot_exact_bytes_and_hash(tmp_path):
 
 def test_view_asof_is_local_and_filters_all_datasets(research_db, monkeypatch, tmp_path):
     s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     seed_snapshot(research_db, 'financials', financial())
     seed_snapshot(research_db, 'market', market())
     def forbidden(*a, **kw): pytest.fail('GET fetched remote data')
@@ -107,7 +107,7 @@ def test_local_filing_parser_missing_file_is_per_document_and_sources_bound(rese
     path.write_text('<html><body>Business update</body></html>')
     config = AssistantConfig(filings=FilingsConfig(output_dir=root), sec_monitor=SecMonitorConfig(state_dir=str(tmp_path / 'state')))
     monkeypatch.setattr(s, 'load_config', lambda: config)
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path / 'raw')
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path / 'raw')
     for id_, ticker, accession, file_path in [(1, 'MU', '0000000001-26-000001', path),
             (2, 'MU', '0000000001-26-000002', root/'MU'/'missing.html'),
             (3, 'MU', '0000000001-26-000003', root/'NVDA'/'bad.html')]:
@@ -131,7 +131,7 @@ def test_lock_covers_source_io_and_is_released_after_failure(research_db, monkey
     from test_us_research_postgres import URL
     import psycopg
     from contextlib import contextmanager
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     outer = core_tx.connection
     def local_rows(conn, ticker, **kwargs):
             @contextmanager
@@ -172,7 +172,7 @@ def test_original_monitor_exhibit_metadata_is_used_without_url_inference(researc
         'ticker':'MU','form':'8-K','accession_number':'0000999999-26-000001','path':str(primary),
         'attachments':[str(exhibit)],'document_urls':{str(primary):primary_url,str(exhibit):exhibit_url}}}}}))
     monkeypatch.setattr(s, 'load_config', lambda: AssistantConfig(filings=FilingsConfig(output_dir=root),sec_monitor=SecMonitorConfig(state_dir=str(state))))
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path/'raw')
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path/'raw')
     research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)', ('MU','8-K','2026-10-01','0000999999-26-000001',str(primary)))
     research_db.commit()
     s.refresh_local_filings(['MU'])
@@ -225,7 +225,7 @@ def test_sec_local_hook_failure_is_sanitized_and_preserves_original_success(monk
 
 def test_market_observation_retains_its_original_snapshot_mapping(research_db, monkeypatch, tmp_path):
     s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     seed_snapshot(research_db, 'market', market())
     bar = next(r for r in data_repo.read_rows(research_db, 'US:stock:MU', 'market') if r['kind'] == 'bar')
     assert Path(bar['snapshot_path']).read_bytes() == b'{ "chart": 1 }'
@@ -236,7 +236,7 @@ def test_market_observation_retains_its_original_snapshot_mapping(research_db, m
 
 def test_dataset_rollback_keeps_prior_values_and_other_commits(research_db, monkeypatch, tmp_path):
     s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     seed_snapshot(research_db, 'financials', financial())
     class BadFinancial(Source):
         def companyfacts(self, ticker):
@@ -257,7 +257,7 @@ def test_dataset_rollback_keeps_prior_values_and_other_commits(research_db, monk
 
 def test_get_reads_persisted_rows_without_source_or_database_writes(research_db, monkeypatch, tmp_path, client):
     s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     seed_snapshot(research_db, 'financials', financial())
     seed_snapshot(research_db, 'market', market())
     def forbidden(*a, **kw): pytest.fail('read endpoint touched remote source')
@@ -272,7 +272,7 @@ def test_get_reads_persisted_rows_without_source_or_database_writes(research_db,
 
 def test_market_view_reads_price_bar_revisions_and_ignores_old_dataset(research_db, monkeypatch, tmp_path):
     s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     seed_snapshot(research_db, 'market', market())  # old dataset says 100; it is no longer the read source.
     first = datetime(2026, 10, 16, 22, tzinfo=UTC)
     later = datetime(2026, 10, 19, 22, tzinfo=UTC)
@@ -301,7 +301,7 @@ def test_market_view_reads_price_bar_revisions_and_ignores_old_dataset(research_
 def test_conflicting_same_filing_facts_remain_unavailable_until_correction(research_db, monkeypatch, tmp_path):
     s = module()
     from investment_assistant.data import repo
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     class Frozen(datetime):
         current = datetime(2026,6,1,tzinfo=UTC)
         @classmethod
@@ -333,7 +333,7 @@ def test_conflicting_same_filing_facts_remain_unavailable_until_correction(resea
 def test_unrelated_fact_change_updates_acquisition_without_revising_existing_fact(research_db, monkeypatch, tmp_path):
     s = module()
     from investment_assistant.data import repo
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     seed_snapshot(research_db, 'financials', financial())
     before = repo.read_rows(research_db,'US:stock:MU','financials')[0]
     class AddedFact(Source):
@@ -389,7 +389,7 @@ def test_sec_hook_uses_supplied_config_for_real_local_files_and_exhibits(researc
     default = AssistantConfig(filings=FilingsConfig(output_dir=tmp_path/'different-default-library'),
         sec_monitor=SecMonitorConfig(state_dir=str(tmp_path/'different-default-state')))
     monkeypatch.setattr(s,'load_config',lambda:default)
-    monkeypatch.setattr(s,'RAW_ROOT',tmp_path/'raw')
+    monkeypatch.setattr(s.research_rows,'RAW_ROOT',tmp_path/'raw')
     def forbidden(*a,**kw): pytest.fail('local SEC hook invoked a remote research source')
     monkeypatch.setattr(source_module,'USSources',forbidden)
     research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)',
@@ -414,7 +414,7 @@ def test_financial_source_identity_survives_storage_view_and_watchlist_enrichmen
     from investment_assistant.services import watchlist as wl
     from investment_assistant.data.sources.fundamentals import USSources
     s = module()
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path)
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
     raw = {'cik': 723125, 'entityName': 'Micron Technology', 'facts': {'us-gaap': {'Revenues': {'units': {'USD': [
         {'start': '2026-01-01', 'end': '2026-03-31', 'val': 10, 'filed': '2026-05-01', 'form': '10-Q', 'accn': '0000723125-26-000001'}]}}}}}
     adapter = USSources()
@@ -451,7 +451,7 @@ def test_manual_task_explicit_config_controls_actual_local_source_root(research_
     primary.write_bytes(b'<html><body>Company outlook and results</body></html>')
     supplied = AssistantConfig(filings=FilingsConfig(output_dir=root))
     monkeypatch.setattr(s, 'load_config', lambda: AssistantConfig(filings=FilingsConfig(output_dir=tmp_path / 'wrong-root')))
-    monkeypatch.setattr(s, 'RAW_ROOT', tmp_path / 'raw')
+    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path / 'raw')
     research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)',
         ('MU', '8-K', '2026-10-01', '0000999999-26-000001', str(primary)))
     research_db.commit()

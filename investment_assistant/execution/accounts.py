@@ -29,7 +29,7 @@ ZERO = Decimal(0)
 def default_params(cfg: WorkbenchConfig) -> dict:
     return {'risk_pct': cfg.risk_pct, 'single_cap': cfg.single_cap, 'total_cap': cfg.total_cap,
             'fee_per_trade': 0, 'max_positions': 8, 'reconcile_tolerance_pct': .01,
-            'reconcile_tolerance_abs': 100}
+            'reconcile_tolerance_abs': 100, 'sector_cap': .35, 'max_per_sector': 3}
 
 
 def _number(value: Any, field: str, *, positive: bool = False) -> Decimal:
@@ -64,13 +64,16 @@ def validate_params(payload: dict) -> dict:
         raise ValueError('unknown account parameter')
     out = {}
     for key, value in payload.items():
-        if key == 'max_positions':
-            if type(value) is not int or not 1 <= value <= 30:
-                raise ValueError('max_positions must be an integer in 1..30')
+        if key in ('max_positions', 'max_per_sector'):
+            upper = 30 if key == 'max_positions' else 10
+            if type(value) is not int or not 1 <= value <= upper:
+                raise ValueError(f'{key} must be an integer in 1..{upper}')
             out[key] = value
             continue
         positive = key in ('risk_pct', 'single_cap', 'total_cap')
         number = _number(value, key, positive=positive)
+        if key == 'sector_cap' and not Decimal('.05') <= number <= Decimal(1):
+            raise ValueError('sector_cap must be in .05..1.0')
         upper = Decimal('.05') if key == 'risk_pct' else Decimal(1)
         if positive and number > upper:
             raise ValueError(f'{key} exceeds {upper}')

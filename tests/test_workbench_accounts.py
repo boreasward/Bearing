@@ -39,7 +39,8 @@ def test_defaults_and_new_account(ledger):
     assert ledger.STRATEGIES == ('manual', 'agent_managed', 'follow_plans')
     assert ledger.STRATEGY_TEXT == {'manual': '手动', 'agent_managed': 'Agent 自管', 'follow_plans': '照计划执行'}
     assert defaults == {'risk_pct': .02, 'single_cap': .3, 'total_cap': .8, 'fee_per_trade': 0,
-                        'max_positions': 8, 'reconcile_tolerance_pct': .01, 'reconcile_tolerance_abs': 100}
+                        'max_positions': 8, 'reconcile_tolerance_pct': .01, 'reconcile_tolerance_abs': 100,
+                        'sector_cap': .35, 'max_per_sector': 3}
     rid = uuid4()
     got = ledger.validate_new_account({'request_id': str(rid), 'name': ' 对照 ', 'strategy': 'follow_plans',
                                        'opened_on': '2026-10-20', 'params': {'max_positions': 3}}, defaults=defaults)
@@ -75,6 +76,27 @@ def test_opening_positions_and_partial_params(ledger):
                     {'opening_cash': 1, 'opened_on': S, 'opening_positions': [{'ticker': 'AMD', 'quantity': 1, 'cost_per_share': 'NaN'}]}):
         with pytest.raises(ValueError):
             ledger.validate_opening(payload)
+
+
+@pytest.mark.parametrize('update,want', [
+    ({'sector_cap': '.05'}, {'sector_cap': D('.05')}),
+    ({'sector_cap': 1.0}, {'sector_cap': D('1')}),
+    ({'max_per_sector': 1}, {'max_per_sector': 1}),
+    ({'max_per_sector': 10}, {'max_per_sector': 10}),
+])
+def test_sector_parameter_boundaries(ledger, update, want):
+    assert ledger.validate_params(update) == want
+
+
+@pytest.mark.parametrize('update', [
+    {'sector_cap': .049}, {'sector_cap': 1.001}, {'sector_cap': 0}, {'sector_cap': -1},
+    {'sector_cap': True}, {'sector_cap': 'NaN'}, {'sector_cap': 'Infinity'},
+    {'max_per_sector': 0}, {'max_per_sector': 11}, {'max_per_sector': True},
+    {'max_per_sector': 3.0}, {'max_per_sector': '3'}, {'max_per_sector': None},
+])
+def test_invalid_sector_parameters(ledger, update):
+    with pytest.raises(ValueError):
+        ledger.validate_params(update)
 
 
 def test_cash_excludes_void_future_and_opening_positions(ledger):
@@ -179,4 +201,3 @@ def test_reconcile_either_tolerance_strict_boundary(ledger, equity, diff, status
                        'snapshot_equity': snap['equity'], 'ledger_equity': D(equity), 'diff': D(diff),
                        'pct': D(diff)/D(equity), 'status': status}]
     assert ledger.reconcile([old], [], {})[0]['status'] == 'no_ledger'
-

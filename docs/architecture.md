@@ -40,7 +40,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 
 箭头表示依赖：每层只能依赖自身或左边的层，`workflow` 与 `views` 位于业务层之上，API、服务、任务、通知位于最外层。`db.py`、`config.py`、`runtime_paths.py`、`migrate.py` 是底层设施。守护测试检查全部 import（含函数内）与顶层模块环。SQL 按层归属，事务由调用方管理，公共事务入口唯一定义在 `core/tx.py`。
 
-五层代码布局与迁移 031 的仓储已准备，现行 `stages-5`、`daily-2`、`agent-portfolio-1` 保持；研究、组合经理、提案节点与新接口尚未接入。工作台规则、计划、影子引擎、纪律、月度收益、三方对比、账户账本和订单校验仍是纯函数。下列路径相对于 `investment_assistant/`；各包 `__init__.py` 仅作包标识，Agent 包另保留公共版本与原因文案。
+五层代码布局、迁移 031 仓储与纯函数注册表 / 校验器已准备。数据菜单手动采集已调用统一适配器；现行 `stages-5`、`daily-2`、`agent-portfolio-1` 保持，批处理、研究、组合经理、提案节点与新指标接口仍待接线。工作台规则、计划、影子引擎、纪律、月度收益、三方对比、账户账本和订单校验仍是纯函数。下列路径相对于 `investment_assistant/`；各包 `__init__.py` 仅作包标识，Agent 包另保留公共版本与原因文案。
 
 ### core：共享底座
 
@@ -72,18 +72,28 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `data/identity.py` | 美股身份与代码校验 |
 | `data/fetch_policy.py` | fetch-1 数据端口及 yfinance 两层截止时间 |
 | `data/http.py` | 数据 HTTP JSON 读取 |
-| `data/families.py` | 六族目录、状态与覆盖口径 |
-| `data/collect.py` | 逐族拉取、Tally、fetch-run 写入与族锁 |
+| `data/registry.py` | 九族有序注册与唯一主备调度；Stooq 未启用、Nasdaq 为财报日备源 |
+| `data/adapter_types.py` | Source / Adapter / AdapterDeps / TargetFacts 的唯一定义；宿主显式注入事实、事务和配置 |
+| `data/adapter_support.py` | 唯一目标集合算法、滞后、存储回执与 SEC 真实尝试次数 |
+| `data/families.py` | 读取 Adapter 的目录与覆盖投影；ATR 不再是数据族 |
+| `data/tally.py`、`data/fetch_status.py` | 唯一目标计账、状态分类；全目标末次成功来源汇总后才截断明细 |
+| `data/market_constants.py` | 原行业 ETF、宏观序列与窗口常量；指标不再为读常量引入采集栈 |
+| `data/collect.py` | 旧批处理逐只采集、共享 Tally 导出、fetch-run 写入与族锁（批处理接线待后续任务） |
 | `data/fundamentals.py` | SEC 财务身份、规范化与保留申报版本 |
-| `data/acquisition.py` | 原始字节归档、财季 / 行情旧记录归一化、本地 SEC 研究刷新 |
+| `data/research_rows.py` | 原始字节归档与财务观察包装的唯一实现 |
+| `data/acquisition.py` | 行情旧记录归一化、本地 SEC 研究刷新；共用下沉后的字节归档 |
 | `data/repo.py` | 日线、新闻、申报、财报日、宏观、采集记录与只读事实 SQL；补查队列一次结算 / 补重跑指针、行业截止读取、缺失交易日查询 |
 | `data/adapters/bars.py` | yfinance 日线采集与存储形状 |
 | `data/adapters/news.py` | 新闻标题与 SEC 8-K 列表 |
 | `data/adapters/earnings.py` | 下次财报日 |
 | `data/adapters/fred.py` | 信用利差与收益率曲线 |
 | `data/adapters/universe.py` | 纳指范围文件与滞后检查 |
-| `data/adapters/sec_text.py` | SEC 下载适配器：代码到 CIK、申报列表与原文下载 |
-| `data/sources/edgar.py` | SEC 源、观察名单与受理时间截止 |
+| `data/adapters/sec_listing.py` | SEC 目录与接受时间填充，保留原披露截止 |
+| `data/adapters/fundamentals.py` | companyfacts 原归一化与财务观察版本存储 |
+| `data/adapters/sector.py` | SIC 配置覆盖优先、两位分组；仅答案变化追加 |
+| `data/adapters/sec_text.py` | 最新 K/Q 与财报 8-K 主文；配置目录下持久日预算，每只每 session 最多三份，超时次 session 再试 |
+| `data/sources/stooq.py`、`data/sources/nasdaq.py` | 离线验证的 CSV / 财报日解析；Stooq 仅保留机制，不登记为可用备源 |
+| `data/sources/edgar.py` | SEC 源、观察名单、SIC 与受理时间截止；旧监控 TSLA 年报默认不变 |
 | `data/sources/fundamentals.py` | 基本面公共来源、原始字节与安全传输错误 |
 | `data/sec/storage.py` | 配置驱动的 SEC 批量下载编排与文件索引持久化 |
 | `data/sec/extraction.py` | 原文财务与指引提取；缺失值不推测 |
@@ -95,7 +105,9 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | 模块 | 做什么 |
 | --- | --- |
 | `derivation/chain.py` | derivation-1 独立重算、冻结触发条件与一致性核对；import 不带入 psycopg / tx / views |
-| `derivation/indicators/price.py` | ATR14、价格指标、相对强度与滚动均线 |
+| `derivation/indicators/registry.py` | 22 项 indicator-1 指标、窗口与截止；close / adj_close 均线、SPY / QQQ 基准分别登记 |
+| `derivation/indicators/_price_math.py` | 原价格数值公式唯一实现，精度与运算顺序不变 |
+| `derivation/indicators/price.py` | 保留原价格接口，indicators 经注册表输出原键序与数值 |
 | `derivation/indicators/breadth.py` | 广度、行业强弱与宏观数值 |
 | `derivation/indicators/screen_metrics.py` | screen-1 收益率、均线与成交额 |
 | `derivation/indicators/fiscal.py` | 实际财季、累计值差分、TTM、FCF 与精确口径计算 |
@@ -112,7 +124,8 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `execution/conditions.py` | condition-2 条件校验与 met / not_met / unknown |
 | `execution/plan_check.py` | Agent 计划、复查与修订的宿主校验、差异 |
 | `execution/citations.py` | 提议与反方引用校验 |
-| `execution/portfolio_check.py` | 组合事实结构、订单与 holds 覆盖校验 |
+| `execution/portfolio.py`、`execution/portfolio_types.py` | portfolio-check-1 纯硬检查与唯一结果类型；共享 max_shares、行业敞口与贪心现金顺序；只对入场链头给裁决 |
+| `execution/portfolio_check.py` | 八段组合事实、订单与 holds 校验；缺段明确 missing，新增 portfolio_check |
 | `execution/adoption.py` | execution-1：从成交推出采纳与执行状态 |
 | `execution/timeline.py` | 链状态、版本有效期、系统信号、宿主结论与持仓状态纯计算 |
 | `execution/chains.py` | 链事实、复查对象、持仓状态读取与写入；不调模型 |
@@ -145,6 +158,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `analysis/agent/graph.py` | 提议 + 反方、解读、逐链复查与组合决策子图 |
 | `analysis/agent/tools.py` | 十个只读工具与并发安全调用记录 |
 | `analysis/agent/evidence.py` | 复查提示证据与上一条链证据块 |
+| `analysis/agent/research_check.py`、`analysis/agent/pm_check.py` | 纯研究 / PM 输出校验与研究事实块；不调模型、不写计划 |
 | `analysis/agent/runner.py` | 单元、解读、复查、组合模型调用及原子记账；recent_closed 显式注入 |
 | `analysis/agent/__main__.py` | Agent setup / run CLI |
 | `analysis/repo.py` | 候选、简报、池、筛选、区制、Agent 运行、工具调用与引用写入 SQL；研究请求前态守护、FIFO 重试队列与只追加档案版本 / 截止读取 |
@@ -177,6 +191,9 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | --- | --- |
 | `optimize/backcheck.py` | backcheck-2 历史规则检查、用例与 CLI |
 | `optimize/repo.py` | 上线前检查、四类 roadmap 版本记录、提案一次决定、brief 历史与证据聚合 SQL；提案生成与审批入口尚未接入 |
+| `optimize/evidence.py` | SQL 聚合行的五段纯汇总与稳定引用；备源不完整时明示下界，counter 比例只代表运行级成功后继 |
+| `optimize/proposal_check.py`、`optimize/brief_check.py` | 逐条提案引用 / 长度 / 去重校验；实施说明须有验收小节 |
+| `optimize/export.py` | 固定六段 Markdown 导出，决策编号与用户原话保留 |
 
 ### workflow：编排与记账
 
@@ -188,7 +205,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `workflow/batch.py` | 原 run_batch 薄壳 |
 | `workflow/recorder.py` | StageRecorder 与 stage_runs 写入，每阶段独立事务 |
 | `workflow/repo.py` | 阶段、运行、恢复、推送窗口与证据行 SQL；可按 stages-6 历史顺序读取，但当前图不升版 |
-| `workflow/targets.py` | 跨层组装数据族目标清单 |
+| `workflow/targets.py` | 按显式 session / now 调原池、持仓、活跃链算法；冻结 TargetFacts 后委托适配器选目标，保留降级说明与旧库能力边界 |
 | `workflow/screen_collection.py` | 范围日线与筛选新成员补采 |
 | `workflow/check.py` | 原推导 check / 阶段 stages 数据库只读 CLI 实现 |
 | `workflow/__main__.py` | `python -m investment_assistant.workflow check / stages` 入口 |
@@ -215,7 +232,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `views/instrument.py` | 标的跨层用例、关注焦点、关键数据与背景 |
 | `views/chart.py` | 拆股调整 K 线、均线与候选 / 成交 / 计划标注 |
 | `views/account.py` | 账户、权益、持仓、订单、决策、对账、比较与只读 show CLI |
-| `views/data.py` | 数据菜单总览 / 详情 / 浏览与显式手动采集入口 |
+| `views/data.py` | 手动采集投影 AdapterDeps 与冻结开关；031 就绪显示九族，旧库保留原五族与 ATR 视图；新增四族原始浏览暂明确拒绝，待 Task4 |
 | `views/derivation.py` | 按冻结 inputs 读取推导事实、trigger_note、运行证据与批量核对记账 |
 | `views/reasoning.py` | Agent 运行的证据、提议、校验、反方、回应与结果阅读视图 |
 | `views/agent_runs.py` | Agent 运行列表、覆盖率与详情 |

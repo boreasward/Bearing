@@ -3,18 +3,20 @@ from investment_assistant.data import families as data_families
 from datetime import date, datetime, UTC
 
 import investment_assistant.workflow.targets as families
-from investment_assistant.tasks import catalog
+import pytest
+from investment_assistant.data import registry
 
 S = date(2026, 10, 22)
 
-def test_six_families_in_order_and_described():
-    assert [f.id for f in data_families.FAMILIES] == ['bars', 'sec_filings', 'news', 'atr', 'fred', 'universe']
-    for f in data_families.FAMILIES:
-        assert f.title and f.purpose and f.kind in ('fetched', 'derived', 'manual')
-        assert catalog.describe(f.job) is not None
-    assert data_families.get('atr').fetch_via == 'bars' and data_families.get('atr').kind == 'derived'
+def test_nine_families_are_the_ordered_registry_not_a_second_catalog():
+    assert data_families.FAMILIES is registry.ADAPTERS
+    assert tuple(f.id for f in data_families.FAMILIES) == registry.ids()
+    assert all(f.title and f.purpose and f.kind in ('fetched', 'manual') for f in data_families.FAMILIES)
+    with pytest.raises(LookupError):
+        data_families.get('atr')
     assert data_families.get('universe').kind == 'manual'
-    assert {f.id for f in data_families.FAMILIES if f.per_ticker} == {'bars', 'news', 'sec_filings'}
+    assert {f.id for f in data_families.FAMILIES if f.per_ticker} == {
+        'bars', 'news', 'sec_filings', 'earnings', 'fundamentals', 'sec_text', 'sector'}
 
 def test_classify():
     assert data_families.classify(2, 0, 'FRED_API_KEY 未配置') == 'skipped'
@@ -30,8 +32,6 @@ def test_sanitize_reason_redacts_and_truncates(monkeypatch):
 def test_lagging_edges():
     assert data_families.lagging('bars', S, session=S) is False
     assert data_families.lagging('bars', date(2026, 10, 21), session=S) is True
-    assert data_families.lagging('atr', S, session=S, bar_count=15) is False
-    assert data_families.lagging('atr', S, session=S, bar_count=14) is True
     assert data_families.lagging('fred', date(2026, 10, 15), session=S) is False   # 第 7 天
     assert data_families.lagging('fred', date(2026, 10, 14), session=S) is True    # 第 8 天
     assert data_families.lagging('sec_filings', date(2026, 6, 24), session=S) is False  # 120 天

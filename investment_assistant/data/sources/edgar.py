@@ -15,6 +15,7 @@ from lxml import html
 
 from investment_assistant.data import fetch_policy
 from investment_assistant.data.fetch_policy import FetchError, FetchPolicy
+from investment_assistant.core.constants import SEC_EVIDENCE_DIR
 
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_TICKERS_TARGET = "sec:company_tickers"
@@ -109,6 +110,7 @@ class EdgarSource:
         self.session = session or fetch_policy.policy_session(policy)
         self.last_request = 0.0
         self.evidence: list[dict] = []
+        self.fetch_outcomes: list = []  # actual HTTP outcomes, for adapter accounting
         self._sleep = sleep
         # Resumed runs ignore filings accepted after the original cutoff (spec §5.5); ``after_cutoff_dropped``
         # counts them for the node's detail.
@@ -159,7 +161,13 @@ class EdgarSource:
                 raise ValueError(f"SEC 返回空正文: {url}")
             return content
 
-        content = fetch_policy.fetch(target_label(url), attempt, policy=self.policy, sleep=self._sleep).value
+        try:
+            outcome = fetch_policy.fetch(target_label(url), attempt, policy=self.policy, sleep=self._sleep)
+        except FetchError as exc:
+            self.fetch_outcomes.append(exc)
+            raise
+        self.fetch_outcomes.append(fetch_policy.Fetched(None, outcome.attempts, outcome.elapsed_ms))
+        content = outcome.value
         digest = hashlib.sha256(content).hexdigest()
         dest = self.evidence_dir / (digest + ".response")
         if not dest.exists():
@@ -209,7 +217,8 @@ class EdgarSource:
             raise self._cik_error from None
         return self._cik_by_ticker
 
-    def discover_one(self, ticker: str, start: str, end: str, *, drop_after: datetime | None = None) -> list[dict]:
+    def discover_one(self, ticker: str, start: str, end: str, *, drop_after: datetime | None = None,
+                     include_annual: bool = False) -> list[dict]:
         """One ticker's 10-Q / 10-K / 8-K filings in ``[start, end]`` (a failure here never touches the others)."""
         cik_by_ticker = self._company_tickers()
         if ticker not in cik_by_ticker:
@@ -233,7 +242,7 @@ class EdgarSource:
             form, accession = row["form"], row["accessionNumber"]
             if form not in {"10-Q", "10-K", "8-K"} or not start <= row["filingDate"] <= end:
                 continue
-            if ticker == "TSLA" and form == "10-K":
+            if ticker == "TSLA" and form == "10-K" and not include_annual:
                 continue
             if accession in seen:
                 continue
@@ -303,3 +312,35 @@ class EdgarSource:
             for url in dict.fromkeys(exhibits):
                 documents.append((Path(urlparse(url).path).name, self.get(url)))
         return selected, documents
+
+
+def fetch_sic(ticker, *, deps) -> dict:
+    """Read SIC through existing SEC transport, evidence and CIK cache (Task3B)."""
+    source = getattr(deps, 'filing_source', None)
+    if source is None:
+        source = EdgarSource(SEC_EVIDENCE_DIR)
+    ticker = ticker.upper()
+    cik = source._company_tickers().get(ticker)
+    if cik is None:
+        raise FetchError(f'SEC 未找到 {ticker} 的 CIK', kind='empty', target=COMPANY_TICKERS_TARGET)
+    url = f'https://data.sec.gov/submissions/CIK{cik:010d}.json'
+    try:
+        payload = source.json(url)
+        sic = payload.get('sic')
+        description = payload.get('sicDescription')
+        if sic is not None:
+            if isinstance(sic, bool) or not isinstance(sic, (str, int)):
+                raise ValueError('sic')
+            sic = str(sic).strip()
+            if sic and not re.fullmatch(r'[0-9]{1,4}', sic):
+                raise ValueError('sic')
+            sic = sic.zfill(4) if sic else None
+            if sic == '0000':
+                sic = None
+        if description is not None:
+            if not isinstance(description, str):
+                raise ValueError('sicDescription')
+            description = description.strip() or None
+    except (ValueError, TypeError):
+        raise FetchError('SEC SIC 响应无效', kind='parse', target=target_label(url)) from None
+    return {'sic': sic, 'sic_description': description}

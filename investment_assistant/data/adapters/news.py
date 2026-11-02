@@ -5,6 +5,9 @@ from datetime import UTC, datetime
 from typing import Any, Callable
 
 from investment_assistant.data import fetch_policy
+from investment_assistant.data import repo
+from investment_assistant.data.adapter_types import Source
+from investment_assistant.data.adapter_support import make_adapter, receipt
 
 NewsFetcher = Callable[[str], list]
 NEWS_COUNT = 20
@@ -88,3 +91,19 @@ def filing_news(metas: list[dict[str, Any]]) -> list[tuple[dict[str, Any], list[
         out.append(({'source': 'sec_8k', 'title': title, 'url': meta['edgar_url'], 'publisher': 'SEC EDGAR',
                      'published_at': datetime.fromisoformat(accepted) if accepted else None}, [meta['ticker']]))
     return out
+
+
+def _fetch(target, *, session, start, end, deps):
+    rows, _ = normalize_yfinance(fetch_yfinance(target, fetcher=deps.news_fetcher), ticker=target)
+    return rows
+
+
+def _store(conn, rows, *, target, source_id, now):
+    rows = [row for row in rows if row['published_at'] is None or row['published_at'] <= now]
+    return receipt(repo.store_news(conn, [(r, [target]) for r in rows], now=now), rows, 'published_at')
+
+
+ADAPTER = make_adapter('news', '资讯', '资讯标题供研究读取', 'news_items',
+    (Source('yfinance', _fetch, fetch_policy.FetchPolicy(), 'yfinance Search；发布时间为UTC'),),
+    _store, repo.latest_news_at, days=7,
+    coverage_note='覆盖 = 近 7 天有资讯标题的标的数（按 UTC 零点计窗口）。')

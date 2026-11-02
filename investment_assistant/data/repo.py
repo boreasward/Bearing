@@ -11,6 +11,8 @@ from psycopg.rows import dict_row
 from investment_assistant.core import knowledge, schema
 from investment_assistant.core.dbutil import _one, _all, _plan_json
 from investment_assistant.core.versions import REGIME_VERSION
+from investment_assistant.data.identity import stock_id
+from investment_assistant.data.sec.extraction import analyze_files
 
 
 def plan_knowledge_refs(conn, plan_ids) -> dict[str, list[dict]]:
@@ -673,3 +675,100 @@ def missing_bar_sessions(conn, ticker, sessions: list[date]) -> list[date]:
         'SELECT DISTINCT price_date FROM price_bars WHERE ticker = %s AND price_date = ANY(%s)',
         (ticker.upper(), sessions))}
     return [day for day in sessions if day not in found]
+
+
+def ratio_from_primary(conn, ticker, price_date) -> Decimal:
+    """Most recent visible primary ratio no later than the missing price date; backups never anchor it."""
+    row = _one(conn, "SELECT adj_close / close AS ratio FROM price_bars WHERE ticker = %s "
+               "AND source = 'yfinance' AND price_date <= %s AND close > 0 "
+               'ORDER BY price_date DESC, revision DESC, fetched_at DESC, id DESC LIMIT 1',
+               (ticker.upper(), price_date))
+    return Decimal(row['ratio']) if row else Decimal(1)
+
+
+def collection_request_tickers(conn) -> list[str]:
+    """Read queue facts only; concluded/closed requests no longer demand daily collection."""
+    return [r['ticker'] for r in _all(conn,
+        "SELECT DISTINCT ticker FROM research_requests WHERE status IN ('queued','running','waiting_data') "
+        'ORDER BY ticker', ())]
+
+
+def pending_paper_tickers(conn) -> list[str]:
+    """Pending buy intents of active simulated accounts; position math stays in the host."""
+    return [r['ticker'] for r in _all(conn,
+        'SELECT DISTINCT o.ticker FROM paper_orders o JOIN accounts a ON a.id = o.account_id '
+        "WHERE a.kind = 'paper' AND a.status = 'active' AND o.status = 'pending' AND o.action = 'buy' "
+        'ORDER BY o.ticker', ())]
+
+
+def store_observation_rows(conn, sid, dataset, rows, *, now):
+    """Keep store_rows' economic revision semantics, count only IDs created by this call."""
+    conn.execute('SELECT pg_advisory_xact_lock(hashtext(%s))', ('us-research:' + sid + ':' + dataset,))
+    high_water_row = _one(conn, 'SELECT COALESCE(max(id), 0) AS id FROM us_research_observations '
+                          'WHERE security_id = %s AND dataset = %s', (sid, dataset))
+    assert high_water_row is not None  # aggregate without GROUP BY always returns a row
+    high_water = high_water_row['id']
+    normalized = []
+    for row in rows:
+        disclosed = row.get('disclosed_at')
+        if isinstance(disclosed, str) and len(disclosed) == 10:
+            disclosed = datetime.fromisoformat(disclosed).replace(tzinfo=UTC)
+        elif isinstance(disclosed, date) and not isinstance(disclosed, datetime):
+            disclosed = datetime(disclosed.year, disclosed.month, disclosed.day, tzinfo=UTC)
+        normalized.append({**row, 'disclosed_at': disclosed})
+    stored = store_rows(conn, sid, dataset, normalized, now=now)
+    inserted = sum(id_ > high_water for id_ in {r['id'] for r in stored})
+    return {'inserted': inserted, 'existing': len(stored) - inserted,
+            'latest': max((r['disclosed_at'] for r in stored if r.get('disclosed_at')), default=None)}
+
+
+def latest_observation_dates(conn, targets, *, dataset, cutoff_at):
+    identities = {stock_id(t): t for t in targets}
+    rows = _all(conn, 'SELECT security_id, max(disclosed_at) AS latest FROM us_research_observations '
+        'WHERE security_id = ANY(%s) AND dataset = %s AND first_seen_at <= %s AND disclosed_at <= %s '
+        'GROUP BY security_id', (list(identities), dataset, cutoff_at, cutoff_at))
+    return {identities[r['security_id']]: r['latest'] for r in rows}
+
+
+def indexed_filing_paths(conn, ticker) -> dict:
+    return {r['accession_number']: r['file_path'] for r in _all(conn,
+        'SELECT accession_number, file_path FROM filings WHERE ticker = %s ORDER BY id', (ticker.upper(),))}
+
+
+def store_filing_texts(conn, rows, *, target, now):
+    observations = []
+    for row in rows:
+        filing = _one(conn, 'INSERT INTO filings '
+            '(ticker,form,filing_date,accession_number,primary_document,file_path,downloaded_at,created_at,accepted_at,items) '
+            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (accession_number,primary_document) '
+            'DO NOTHING RETURNING id',
+            (target.upper(), row['form'], row['filing_date'], row['accession_number'], row['primary_document'],
+             row['path'], now, now, row.get('accepted_at'), row.get('items')))
+        if filing is None:
+            filing = _one(conn, 'SELECT id FROM filings WHERE accession_number = %s AND primary_document = %s',
+                          (row['accession_number'], row['primary_document']))
+        assert filing is not None  # inserted here or read back after the unique conflict
+        analysis = analyze_files(row)
+        payload = {'filing_id': filing['id'], 'ticker': target.upper(), 'form': row['form'],
+                   'accession_number': row['accession_number'], 'filing_date': str(row['filing_date']),
+                   'source_url': row['edgar_url'], 'path': row['path'], 'analysis': analysis,
+                   'snapshots': [{'source_url': s['url'], 'source_hash': s['sha256'], 'snapshot_path': s['path']}
+                                 for s in analysis['sources']], 'limitations': []}
+        observations.append({'natural_key': row['accession_number'], 'payload': payload,
+            'disclosed_at': row['filing_date'], 'source_url': row['edgar_url'],
+            'source_hash': analysis['sources'][0]['sha256']})
+    fill_filing_acceptance(conn, rows)
+    result = store_observation_rows(conn, stock_id(target), 'filings', observations, now=now)
+    # An existing local text parsed/indexed again is not newly downloaded data.
+    result['inserted'] = min(result['inserted'], sum(bool(r['downloaded']) for r in rows))
+    result['existing'] = len(rows) - result['inserted']
+    return result
+
+
+def latest_text_filing_dates(conn, targets, *, cutoff_at):
+    identities = {stock_id(t): t for t in targets}
+    rows = _all(conn, 'SELECT security_id, max(disclosed_at) AS latest FROM us_research_observations '
+        "WHERE security_id = ANY(%s) AND dataset = 'filings' AND payload->>'form' IN ('10-K','10-Q') "
+        'AND first_seen_at <= %s AND disclosed_at <= %s GROUP BY security_id',
+        (list(identities), cutoff_at, cutoff_at))
+    return {identities[r['security_id']]: r['latest'] for r in rows}

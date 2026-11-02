@@ -119,7 +119,7 @@ def test_fetch_family_uses_targets(db):
     sources = Sources()
     data_view.run_fetch('news', None, run_id='run-2', now=NOW, deps=deps(sources))
     called = {ticker for kind, ticker in sources.calls if kind == 'news'}
-    assert called == set(families.targets(db, 'news')[0])
+    assert called == set(families.targets(db, 'news', session=NOW.date(), now=NOW)[0])
 
 
 def test_validation_errors():
@@ -240,3 +240,86 @@ def test_probe_unlock_failure_discards_connection(db, monkeypatch):
     with pytest.raises(RuntimeError, match='unlock boom'):
         data_view.start_fetch('bars', None, now_fn=lambda: NOW, deps=deps(Sources()))
     assert len(discarded) == 1 and discarded[0] is db
+
+
+def test_pre031_manual_uses_primary_only_without_feature_queries(db, monkeypatch):
+    def unavailable(*args, **kwargs):
+        pytest.fail('pre031 cannot read new feature/request tables')
+    monkeypatch.setattr(data_view.features, 'frozen', unavailable)
+    from investment_assistant.data import repo
+    monkeypatch.setattr(repo, 'collection_request_tickers', unavailable)
+    actual = data_view.registry.run_adapter
+    contexts = []
+    def traced(adapter, selected, **kwargs):
+        contexts.append(kwargs['features'])
+        return actual(adapter, selected, **kwargs)
+    monkeypatch.setattr(data_view.registry, 'run_adapter', traced)
+    out = data_view.run_fetch('news', 'MU', run_id='pre031', now=NOW, deps=deps(Sources()))
+    assert out['status'] == 'success'
+    assert contexts == [{'backup_sources': False}]
+    assert out['row']['detail']['feature_context'] == 'pre_031_primary_only'
+
+
+@pytest.mark.parametrize('family', ['earnings', 'fundamentals', 'sec_text', 'sector'])
+def test_new_manual_and_detail_require_031_before_any_work(db, monkeypatch, family):
+    from investment_assistant.api.routes.data import _call
+    from fastapi import HTTPException
+    def forbidden(*args, **kwargs):
+        pytest.fail('missing031 must be rejected before source, feature read or submit')
+    monkeypatch.setattr(data_view.registry, 'run_adapter', forbidden)
+    monkeypatch.setattr(data_view.features, 'frozen', forbidden)
+    monkeypatch.setattr(data_view.runner, 'submit', forbidden)
+    for call in (
+        lambda: data_view.start_fetch(family, 'MU'),
+        lambda: data_view.run_fetch(family, 'MU', run_id='missing', now=NOW, deps=deps(Sources())),
+        lambda: data_view.family_detail(family, now=NOW),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            _call(call)
+        assert exc.value.status_code == 503 and exc.value.detail == '需执行迁移 031'
+    assert db.execute('SELECT count(*) FROM data_fetch_runs').fetchone()[0] == 0
+
+
+def test_ready_manual_sector_uses_adapter_and_one_frozen_context(db, tmp_path, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+    from investment_assistant.data import repo
+    db.execute(Path('migrations/031_five_layers.sql').read_text())
+    db.commit()
+    monkeypatch.setattr(data_view, 'load_config', lambda: SimpleNamespace(
+        filings=SimpleNamespace(output_dir=tmp_path/'persistent-texts')))
+    source_calls = []
+    class SectorSource(Sources):
+        def _company_tickers(self):
+            source_calls.append('cik')
+            return {'MU': 1}
+        def json(self, url):
+            source_calls.append(url)
+            return {'sic': '3571', 'sicDescription': 'hardware'}
+        def news(self, ticker):
+            pytest.fail('sector must never fall through to news')
+    source = SectorSource()
+    freeze, dispatch = data_view.features.frozen, data_view.registry.run_adapter
+    snapshots, contexts = [], []
+    def frozen(conn):
+        value = freeze(conn)
+        snapshots.append(value)
+        return value
+    def traced(adapter, selected, **kwargs):
+        contexts.append((adapter.id, selected, kwargs))
+        return dispatch(adapter, selected, **kwargs)
+    monkeypatch.setattr(data_view.features, 'frozen', frozen)
+    monkeypatch.setattr(data_view.registry, 'run_adapter', traced)
+    out = data_view.run_fetch('sector', 'mu', run_id='new-sector', now=NOW, deps=deps(source))
+    assert out['status'] == 'success' and len(snapshots) == len(contexts) == 1
+    family, selected, context = contexts[0]
+    assert (family, selected, context['scope']) == ('sector', ['MU'], 'manual')
+    assert context['features'] is snapshots[0] and context['features']['backup_sources'] is True
+    assert context['deps'].transaction is core_tx._tx
+    assert context['deps'].filing_source is source
+    assert context['deps'].sec_text_dir == tmp_path/'persistent-texts'
+    assert context['deps'].news_fetcher == source.news
+    row = repo.latest_sectors(db, ['MU'], cutoff_at=NOW)['MU']
+    assert row['sic'] == '3571' and row['group'] == '科技硬件'
+    assert len(source_calls) == 2
+    assert out['row']['detail']['targets'][0]['source_used'] == 'sec'

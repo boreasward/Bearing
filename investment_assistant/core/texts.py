@@ -82,6 +82,28 @@ AGENT_REASON_TEXT: dict[str, str] = {
     'stop_lowered': '持仓期不能下移止损',
     'stop_above_close': '持仓期止损不能高于最新收盘',
     'active_chain': '已有进行中的计划链，这次触发已并入',
+    'research_malformed': '研究输出格式无效',
+    'research_facts_count': '研究事实数量不符',
+    'research_kind': '研究事实种类无效',
+    'research_inference_unsupported': '研究推断缺少事实支持',
+    'research_refs_invalid': '研究引用无效',
+    'research_summary_length': '研究摘要长度不符',
+    'research_blocked_shape': '研究缺失数据说明无效',
+    'pm_malformed': '组合评论格式无效',
+    'pm_summary_length': '组合摘要长度不符',
+    'pm_levels_forbidden': '组合评论不得修改价位或股数',
+    'pm_ranking_invalid': '组合排序无效',
+    'pm_refs_invalid': '组合评论引用无效',
+    'proposal_malformed': '提案格式无效',
+    'proposal_source': '提案来源无效',
+    'proposal_title': '提案标题为空',
+    'proposal_length': '提案字段长度不符',
+    'proposal_refs_invalid': '提案证据引用无效',
+    'proposal_duplicate_title': '提案标题重复',
+    'proposal_limit': '超出每次三条提案上限',
+    'brief_empty': '实施说明为空',
+    'brief_length': '实施说明过长',
+    'brief_acceptance_missing': '实施说明缺少验收小节',
 }
 
 # Run-overview reason / degradation-kind texts (was run_overview.REASON_TEXT) that AGENT_REASON_TEXT does
@@ -128,7 +150,22 @@ REJECT_TEXT: dict[str, str] = {'schema_invalid': '订单格式无效', 'plan_not
                                'chain_consumed': '计划链已使用', 'duplicate_order': '重复订单',
                                'exceeds_max_shares': '超过计划股数上限', 'max_positions': '达到持仓数量上限',
                                'insufficient_cash': '现金不足', 'no_position': '无可卖持仓',
-                               'cannot_halve': '持仓不足以卖出一半', 'order_not_pending': '订单已不在待成交状态'}
+                               'cannot_halve': '持仓不足以卖出一半', 'order_not_pending': '订单已不在待成交状态',
+                               'sector_cap': '超过行业集中度上限', 'max_per_sector': '超过同行业标的数量上限',
+                               'single_cap': '超过单笔风险或单票敞口上限', 'total_cap': '超过组合总敞口上限',
+                               'held_ticker': '已持有、在挂或重复的标的'}
+
+# Informational portfolio reasons are not order rejection codes.
+PORTFOLIO_REASON_TEXT = {**REJECT_TEXT, 'sector_unknown': '行业未归类',
+                         'deferred_by_cash': '现金不足，暂缓执行'}
+RESEARCH_STATUS_TEXT = {'queued': '排队中', 'running': '研究中', 'waiting_data': '等待数据',
+                        'concluded': '已得结论', 'closed': '已结束', 'error': '出错'}
+PROPOSAL_STATUS_TEXT = {'proposed': '待决定', 'approved': '已批准', 'rejected': '已驳回', 'superseded': '已取代'}
+PORTFOLIO_VERDICT_TEXT = {'ok': '可执行', 'blocked': '被拦截', 'deferred': '暂缓'}
+DATA_REQUEST_STATUS_TEXT = {'queued': '排队中', 'fetched': '已补采', 'failed': '失败', 'deferred': '暂缓'}
+FEATURE_FLAG_TEXT = {'enabled': '已开启', 'disabled': '已关闭'}
+ROADMAP_VERSION_STATUS_TEXT = {'planned': '已规划', 'in_progress': '实施中', 'engineering_done': '工程完成',
+                               'user_acceptance_pending': '待用户验收', 'done': '已完成', 'dropped': '已放弃'}
 
 # Paper-order cancellation / void / chain-end texts (was paper_fill.py).
 CANCEL_REASON_TEXT: dict[str, str] = {'superseded_by_revision': '计划出了新版本，旧订单撤销',

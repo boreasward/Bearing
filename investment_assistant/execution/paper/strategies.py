@@ -8,12 +8,14 @@ from investment_assistant.config import WorkbenchConfig
 from investment_assistant.core.texts import REJECT_TEXT as REJECT_TEXT
 from investment_assistant.core.versions import FOLLOW_PLANS_VERSION as FOLLOW_PLANS_VERSION
 from investment_assistant.execution import plan_levels as plans
-from investment_assistant.execution import portfolio_check
+from investment_assistant.execution import portfolio_check as schema_check
 from investment_assistant.execution.citations import Rejected
+from investment_assistant.execution.portfolio_types import PortfolioResult
 
 REJECT_CODES = ('schema_invalid', 'plan_not_buyable', 'chain_consumed', 'duplicate_order',
                 'exceeds_max_shares', 'max_positions', 'insufficient_cash', 'no_position',
-                'cannot_halve', 'order_not_pending')
+                'cannot_halve', 'order_not_pending', 'sector_cap', 'max_per_sector',
+                'single_cap', 'total_cap', 'held_ticker')
 ZERO = Decimal(0)
 
 
@@ -195,7 +197,7 @@ def _reservation(order: dict, items_by_id: dict, fee: Decimal) -> tuple[Decimal,
 
 
 def validate_orders(output: dict, *, items: list[dict], positions: list[dict], pending_orders: list[dict],
-                    cash, params: dict) -> dict:
+                    cash, params: dict, portfolio_check: PortfolioResult | None = None) -> dict:
     """Never resize invalid orders. Structural errors reject all; other gates are per-order.
 
     Inputs are scoped to one account. Pending buys must carry `entry_high` from their
@@ -206,12 +208,14 @@ def validate_orders(output: dict, *, items: list[dict], positions: list[dict], p
     """
     held = {p['ticker'].strip().upper(): p for p in positions if _dec(p['quantity']) > 0}
     try:
-        portfolio_check.validate_schema(output, expected_positions=held)
+        schema_check.validate_schema(output, expected_positions=held)
     except Rejected as exc:
         orders = output.get('orders', []) if isinstance(output, dict) else []
         return {'accepted': [], 'rejected': [{'order': o, 'code': 'schema_invalid'} for o in orders]
                 if isinstance(orders, list) else [], 'schema_error': exc.reason}
     orders = output['orders']
+    blocked = {str(v['plan_id']): v['reasons'][0] for v in portfolio_check.verdicts
+               if v['verdict'] == 'blocked'} if portfolio_check is not None else {}
     candidates = {str(i['plan_id']): i for i in items}
     active = {str(o['id']): o for o in pending_orders
               if o.get('status', 'pending') == 'pending' and o.get('action', 'buy') == 'buy'}
@@ -260,7 +264,9 @@ def validate_orders(output: dict, *, items: list[dict], positions: list[dict], p
             seen_sells.add(ticker)
         else:
             item = candidates.get(order['plan_id'])
-            if item is None:
+            if order['plan_id'] in blocked:
+                code = blocked[order['plan_id']]
+            elif item is None:
                 code = 'plan_not_buyable'
             else:
                 key, reason, shares = _chain(item), item.get('blocked_reason'), order['shares']

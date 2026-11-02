@@ -4,6 +4,12 @@
 
 设计：[P3 Agent 轨道](../specs/2026-10-24-p3-agent-track-design.md)、[P4 复盘扩展](../specs/2026-10-25-p4-review-expansion-design.md)（解读并入 Agent 轨道）、[v2.5 计划时间线](../specs/2026-10-28-v2.5-plan-timeline-design.md)（`agent-2` 结构与版本链）。
 
+## 纯校验准备（五层发布 Task3）
+
+已加入 `research_check` 与 `pm_check`，当前模型图尚未激活研究员 / PM 阶段。研究事实须 1–12 条、推断最多三条且引用本段非推断事实所用的有效 `call:N`；研究摘要、风险、blocked 结构分别校验，事实块保留原调用编号。PM 只能排序宿主 `ok` 计划，不得写价位 / 股数，引用只认本次调用与 `fact:portfolio_check`。
+
+标准指标已有 22 项注册：close 与 adj_close 三组均线分别登记，Agent 相对强弱用 SPY、筛选用 QQQ，既有工具 dict 的键序 / 数值不变；独立推导仍不调注册表计算。优化层已有证据汇总、提案 / brief 校验与 Markdown 导出纯函数，但尚无提案节点激活。counter 的可观测比例仅为「带反方意见运行后来出现成功修订后继」的比例，不证明逐条意见采纳或因果关系；提案引用必须落在生成时的证据行 ID，坏条目单独丢弃。
+
 ## 怎么工作
 
 - **运行时**：LangGraph，模型走你的 ChatGPT 订阅（v2.8，Sign in with ChatGPT，见下面「模型层」），检查点存在本库（PostgresSaver）。

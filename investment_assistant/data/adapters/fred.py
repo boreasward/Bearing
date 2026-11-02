@@ -7,17 +7,22 @@ messages — redacted to *** wherever it could leak.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from investment_assistant.core.redact import redact as redact
-from investment_assistant.data.fetch_policy import FetchError
+from investment_assistant.data.fetch_policy import FetchError, Fetched
 from investment_assistant.data.http import get_json
+from investment_assistant.data import repo
+from investment_assistant.data.adapter_types import Source
+from investment_assistant.data.adapter_support import ONCE, make_adapter, receipt
+
+from investment_assistant.data.market_constants import (
+    MACRO_SERIES as MACRO_SERIES, MACRO_LOOKBACK_DAYS as MACRO_LOOKBACK_DAYS,
+    MACRO_CHANGE_OBS as MACRO_CHANGE_OBS,
+)
 
 FRED_URL = 'https://api.stlouisfed.org/fred/series/observations'
-MACRO_SERIES = ('BAMLH0A0HYM2', 'T10Y2Y')
-MACRO_LOOKBACK_DAYS = 120
-MACRO_CHANGE_OBS = 20
 
 
 class NotConfigured(RuntimeError):
@@ -64,3 +69,26 @@ def fetch_series(series_id: str, *, start: date, end: date, api_key: str | None,
         rows.append({'obs_date': date.fromisoformat(obs['date']), 'value': value})
     rows.sort(key=lambda r: r['obs_date'])
     return rows
+
+
+def _fetch(target, *, session, start, end, deps):
+    metadata = {}
+    def transport(url, *, params):
+        value, meta = (deps.macro_fetcher(url, params=params) if deps.macro_fetcher else
+                       _default_fetcher(url, params=params, api_key=deps.fred_api_key))
+        metadata.update(meta)
+        return value, meta
+    rows = fetch_series(target, start=session - timedelta(days=MACRO_LOOKBACK_DAYS), end=end,
+                        api_key=deps.fred_api_key, fetcher=transport)
+    attempts = metadata.get('attempts', [])
+    return Fetched(rows, attempts, sum(a.get('elapsed_ms', 0) for a in attempts)) if attempts else rows
+
+
+def _store(conn, rows, *, target, source_id, now):
+    return receipt(repo.store_macro(conn, target, rows, now=now), rows, 'obs_date')
+
+
+ADAPTER = make_adapter('fred', 'FRED 利差', '宏观利差观测值', 'macro_observations',
+    (Source('fred', _fetch, ONCE, 'FRED观测日；get_json内部fetch-1'),), _store, repo.latest_macro_dates,
+    days=7, per_ticker=False,
+    coverage_note='覆盖 = 有观测值的序列数；最新观测早于 session 前7天独立标滞后。')

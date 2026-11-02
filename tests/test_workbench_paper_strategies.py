@@ -137,7 +137,8 @@ def test_follow_plan_place_replace_end_skip_and_no_retry():
 def test_all_rejection_codes_are_fixed():
     assert strategies().REJECT_CODES == ('schema_invalid', 'plan_not_buyable', 'chain_consumed', 'duplicate_order',
                                          'exceeds_max_shares', 'max_positions', 'insufficient_cash', 'no_position',
-                                         'cannot_halve', 'order_not_pending')
+                                         'cannot_halve', 'order_not_pending', 'sector_cap', 'max_per_sector',
+                                         'single_cap', 'total_cap', 'held_ticker')
 
 
 @pytest.mark.parametrize('bad,kw,code', [
@@ -280,3 +281,89 @@ def test_host_rejected_order_does_not_consume_version_but_others_do():
     for status in ('expired', 'cancelled'):
         assert validate(output([buy()]), pending=[order(status=status)])['rejected'][0]['code'] == 'chain_consumed'
         assert s.follow_plans_orders([item()], pending_orders=[order(status=status)], session=S)['place'] == []
+
+
+@pytest.mark.parametrize('params_update,held_ticker,held_value,cash,same_sector,shares,reasons', [
+    ({'max_per_sector': 1}, 'HELD', '30000', '70000', True, 166, ['sector_cap', 'max_per_sector']),
+    ({'max_per_sector': 1}, 'HELD', '1000', '99000', True, 166, ['max_per_sector']),
+    ({'single_cap': .0005}, None, '0', '100000', False, 0, ['single_cap']),
+    ({'risk_pct': .000001}, None, '0', '100000', False, 0, ['single_cap']),
+    ({'total_cap': .2}, 'HELD', '20000', '80000', False, 0, ['total_cap']),
+    ({}, 'NVDA', '1000', '99000', True, 166, ['held_ticker']),
+    ({'max_positions': 1}, 'HELD', '1000', '99000', False, 0, ['max_positions']),
+    ({'fee_per_trade': 5}, 'HELD', '99895', '105', False, 0, ['insufficient_cash']),
+], ids=['sector_cap', 'max_per_sector', 'single_cap', 'risk_under_one_share',
+        'total_cap', 'held_ticker', 'max_positions', 'insufficient_cash'])
+def test_blocked_plan_rejected_with_first_reason(params_update, held_ticker, held_value, cash,
+                                                same_sector, shares, reasons):
+    from investment_assistant.execution.portfolio import check, verdict_for
+
+    params = {**PARAMS, **params_update}
+    positions = [{'ticker': held_ticker, 'quantity': 10, 'market_value': D(held_value)}] if held_ticker else []
+    held_values = {held_ticker: D(held_value)} if held_ticker else {}
+    equity = D(cash) + D(held_value)
+    sizing = strategies().max_shares(item(), equity=equity, params=params, cash=D(cash),
+                                     positions_value_by_ticker=held_values, total_positions_value=D(held_value),
+                                     pending_reserved=0, positions_count=len(positions), pending_count=0)
+    assert sizing['shares'] == shares
+    candidate = item(max_shares=sizing['shares'])
+    sectors = {'NVDA': '科技', **({held_ticker: '科技' if same_sector else '金融'} if held_ticker else {})}
+    hard = check(session=S, plans=[candidate], positions=positions, pending=[], cash=D(cash), equity=equity,
+                 params=params, sectors=sectors)
+    verdict = verdict_for(hard, candidate['plan_id'])
+    assert verdict is not None
+    assert verdict['verdict'] == 'blocked' and verdict['reasons'] == reasons
+    data = output([buy(shares=1)], holds=[{'ticker': p['ticker'], 'reason': '持有'} for p in positions])
+    args = {'items': [candidate], 'positions': positions, 'pending_orders': [], 'cash': D(cash), 'params': params}
+    got = strategies().validate_orders(data, **args, portfolio_check=hard)
+    assert got == {'accepted': [], 'rejected': [{'order': buy(shares=1), 'code': reasons[0]}], 'schema_error': None}
+    assert got['rejected'][0]['code'] in strategies().REJECT_CODES
+    assert strategies().validate_orders(data, **args, portfolio_check=None) == strategies().validate_orders(data, **args)
+
+
+def test_none_check_does_not_block():
+    data = output([buy()])
+    got = strategies().validate_orders(data, items=[item()], positions=[], pending_orders=[],
+                                        cash=D('10000'), params=PARAMS, portfolio_check=None)
+    assert got == validate(data) == {'accepted': [buy()], 'rejected': [], 'schema_error': None}
+
+
+def test_deferred_check_does_not_block_but_cash_gate_still_applies():
+    from investment_assistant.execution.portfolio import PortfolioResult
+
+    hard = PortfolioResult(exposure_by_sector={}, verdicts=[
+        {'plan_id': 'p', 'verdict': 'deferred', 'reasons': ['deferred_by_cash']}],
+        conflicts=[], order=[], params_used={})
+    args = {'items': [item()], 'positions': [], 'pending_orders': [], 'params': PARAMS, 'portfolio_check': hard}
+    assert strategies().validate_orders(output([buy()]), cash=D('10000'), **args)['accepted'] == [buy()]
+    assert strategies().validate_orders(output([buy()]), cash=D('100'), **args)['rejected'][0]['code'] == 'insufficient_cash'
+
+
+def test_portfolio_gate_does_not_block_sells_or_cancellations():
+    from investment_assistant.execution.portfolio import PortfolioResult
+
+    hard = PortfolioResult(exposure_by_sector={}, verdicts=[
+        {'plan_id': 'p', 'verdict': 'blocked', 'reasons': ['sector_cap']}], conflicts=[], order=[], params_used={})
+    sell = {'action': 'sell', 'ticker': 'NVDA', 'portion': 'all', 'reason': '退出'}
+    cancel = {'action': 'cancel', 'order_id': 'o', 'reason': '撤销'}
+    got = strategies().validate_orders(output([sell, cancel]), items=[item()],
+                                        positions=[{'ticker': 'NVDA', 'quantity': 10}], pending_orders=[order()],
+                                        cash=D('10000'), params=PARAMS, portfolio_check=hard)
+    assert got['accepted'] == [sell, cancel] and got['rejected'] == []
+
+
+def test_portfolio_reason_texts_and_status_words_match_contract():
+    from investment_assistant.core import texts
+    assert set(strategies().REJECT_CODES) == set(texts.REJECT_TEXT)
+    assert {key: texts.REJECT_TEXT[key] for key in (
+        'sector_cap', 'max_per_sector', 'single_cap', 'total_cap', 'held_ticker')} == {
+        'sector_cap': '超过行业集中度上限', 'max_per_sector': '超过同行业标的数量上限',
+        'single_cap': '超过单笔风险或单票敞口上限', 'total_cap': '超过组合总敞口上限',
+        'held_ticker': '已持有、在挂或重复的标的'}
+    assert not {'sector_unknown', 'deferred_by_cash'} & set(strategies().REJECT_CODES)
+    assert texts.RESEARCH_STATUS_TEXT == {'queued': '排队中', 'running': '研究中', 'waiting_data': '等待数据',
+        'concluded': '已得结论', 'closed': '已结束', 'error': '出错'}
+    assert texts.PROPOSAL_STATUS_TEXT == {'proposed': '待决定', 'approved': '已批准', 'rejected': '已驳回', 'superseded': '已取代'}
+    assert texts.PORTFOLIO_VERDICT_TEXT == {'ok': '可执行', 'blocked': '被拦截', 'deferred': '暂缓'}
+    assert texts.DATA_REQUEST_STATUS_TEXT == {'queued': '排队中', 'fetched': '已补采', 'failed': '失败', 'deferred': '暂缓'}
+    assert texts.FEATURE_FLAG_TEXT == {'enabled': '已开启', 'disabled': '已关闭'}

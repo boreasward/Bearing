@@ -602,6 +602,22 @@ def test_evidence_sql_aggregates(db):
     )
 
 
+    from investment_assistant.optimize import evidence
+    pack = evidence.summarize(**inputs)
+    assert all(pack[key] for key in evidence.EVIDENCE_KEYS)
+    quality = pack['agent_quality']
+    assert any(r.get('mode') == 'data_request' and r['reason'] == 'deferred' and r['count'] == 1 for r in quality)
+    assert not any(r.get('reason') in {'not_connected', 'old'} for r in quality)
+    counter = next(r for r in quality if r['kind'] == 'counter_adoption')
+    assert counter['ratio'] == 0.5
+    assert counter['measurement'] == 'counter_followed_by_successful_revision'
+    assert counter['note'] == '运行级后续修订比例，不证明逐条反方意见被采纳或因果关系'
+    assert pack['open_proposals'][0]['id'] == str(pending['id'])
+    blocks = evidence.fact_blocks(pack)
+    assert blocks.count('[fact:') == 5 and counter['note'] in blocks
+    assert sum(r['backup_incomplete_runs'] for r in pack['data_failures']) == 0
+
+
 def test_empty_evidence_and_repeat_threshold(db):
     assert optimize.fetch_failures_since(db, NOW) == []
     assert optimize.agent_reasons_since(db, NOW) == []
@@ -699,6 +715,25 @@ def test_fetch_failures_counts_all_final_tally_sources_before_clipping(db):
     assert sum(r["backup_used"] for r in historic) == 0
     assert sum(r["backup_incomplete_runs"] for r in historic) == 1
     assert sum(r["partial"] for r in historic) == 1
+
+    from investment_assistant.optimize.evidence import EVIDENCE_KEYS, summarize, fact_blocks
+    common = dict(agent_reasons=[], research_blocked=[], counter_adoption=[], lesson_repeats=[],
+                  stale_versions=[], open_proposals=[])
+    exact = summarize(fetch_failures=evidence, **common)
+    incomplete = summarize(fetch_failures=historic, **common)
+    assert tuple(exact) == EVIDENCE_KEYS
+    exact_row = next(r for r in exact['data_failures'] if r['error_kind'] is None)
+    legacy_row = next(r for r in incomplete['data_failures'] if r['error_kind'] is None)
+    assert (exact_row['backup_used'], exact_row['backup_incomplete_runs']) == (1, 0)
+    assert 'note' not in exact_row
+    assert (legacy_row['backup_used'], legacy_row['backup_incomplete_runs']) == (0, 1)
+    assert '下界' in legacy_row['note'] and '不完整' in legacy_row['note']
+    for pack in (exact, incomplete):
+        blocks = fact_blocks(pack)
+        assert blocks.count('[fact:') == 5
+        for row in pack['data_failures']:
+            assert row['id'] in blocks
+    assert legacy_row['note'] in fact_blocks(incomplete)
 
 
 @pytest.mark.parametrize(

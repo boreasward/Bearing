@@ -1611,7 +1611,7 @@ def test_manual_targets_exclude_closed_positions_but_batch_keeps_them(db):
                    [uuid.uuid4(), f'flat-{side}', 'FLAT', side, NOW - timedelta(days=offset)])
     db.commit()
 
-    manual, _ = families.targets(db, 'news')
+    manual, _ = families.targets(db, 'news', session=NOW.date(), now=NOW)
     assert manual == ['AMD']                                   # FLAT 已清仓：手动目标不含
     service.run_batch(now=NOW, deps=_universe_deps(Sources(), []), record_trigger='scheduled')
     target_count = db.execute("SELECT target_count FROM data_fetch_runs "

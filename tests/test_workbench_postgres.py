@@ -1079,31 +1079,32 @@ def test_targets_bars_union_and_notes(workbench_db):
     _trade(conn, 'GGG', 'buy', executed_at=NOW - timedelta(days=1))   # 已清仓：不进目标
     _trade(conn, 'GGG', 'sell')
     loader = lambda: _test_universe('ZZZ', 'AAA')
-    bars, notes = families.targets(conn, 'bars', universe_loader=loader)
+    bars, notes = families.targets(conn, 'bars', session=NOW.date(), now=NOW, universe_loader=loader)
     assert bars[:4] == ['SPY', 'SMH', 'XLK', 'QQQ']
     assert set(bars) == {'SPY', 'SMH', 'XLK', 'QQQ', 'AAA', 'BBB', 'CCC', 'EEE', 'ZZZ'}
     assert bars[4:] == sorted(bars[4:]) and notes == []
     assert 'GGG' not in bars and 'EEE' in bars   # 持仓 = 未平仓标的，已清仓的 GGG 不算
-    assert families.targets(conn, 'atr', universe_loader=loader)[0] == bars
-    news, news_notes = families.targets(conn, 'news', universe_loader=loader)
+    with pytest.raises(LookupError):
+        families.targets(conn, 'atr', session=NOW.date(), now=NOW, universe_loader=loader)
+    news, news_notes = families.targets(conn, 'news', session=NOW.date(), now=NOW, universe_loader=loader)
     assert set(news) == {'AAA', 'BBB', 'CCC', 'EEE'} and news_notes == []
     assert 'GGG' not in news
-    assert families.targets(conn, 'sec_filings', universe_loader=loader)[0] == news
-    assert families.targets(conn, 'fred') == (['BAMLH0A0HYM2', 'T10Y2Y'], [])
-    assert families.targets(conn, 'universe') == ([], [])
+    assert families.targets(conn, 'sec_filings', session=NOW.date(), now=NOW, universe_loader=loader)[0] == news
+    assert families.targets(conn, 'fred', session=NOW.date(), now=NOW) == (['BAMLH0A0HYM2', 'T10Y2Y'], [])
+    assert families.targets(conn, 'universe', session=NOW.date(), now=NOW) == (['nasdaq100'], [])
     with pytest.raises(LookupError):
-        families.targets(conn, 'nope')
+        families.targets(conn, 'nope', session=NOW.date(), now=NOW)
 
     def broken_loader():
         raise UniverseError('cannot read universe file')
-    again, notes2 = families.targets(conn, 'bars', universe_loader=broken_loader)
+    again, notes2 = families.targets(conn, 'bars', session=NOW.date(), now=NOW, universe_loader=broken_loader)
     assert 'ZZZ' not in again and {'AAA', 'BBB', 'CCC', 'EEE'} <= set(again)
     assert 'universe_unavailable' in notes2
 
 
 def test_targets_empty_watchlist_is_a_note(workbench_db):
     import investment_assistant.workflow.targets as families
-    assert families.targets(workbench_db, 'news') == ([], ['pool_empty'])
+    assert families.targets(workbench_db, 'news', session=NOW.date(), now=NOW) == ([], ['pool_empty'])
 
 
 def test_targets_invalid_pool_is_its_own_note(workbench_db):
@@ -1113,7 +1114,7 @@ def test_targets_invalid_pool_is_its_own_note(workbench_db):
     workbench_db.execute('INSERT INTO watchlist_items (ticker, status, tags) VALUES '
                          + ', '.join(['(%s, \'active\', %s)'] * len(rows)),
                          [v for row in rows for v in row])
-    targets, notes = families.targets(workbench_db, 'news')
+    targets, notes = families.targets(workbench_db, 'news', session=NOW.date(), now=NOW)
     assert targets == [] and notes == ['pool_invalid']
 
 

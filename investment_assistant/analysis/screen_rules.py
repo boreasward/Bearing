@@ -13,8 +13,9 @@ from typing import Any
 
 from investment_assistant.core.versions import SCREEN_VERSION as SCREEN_VERSION
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.derivation.indicators.screen_metrics import _ret, _ma, _dollar_volume_20
-from investment_assistant.derivation.indicators.price import atr14
+from investment_assistant.derivation.indicators.screen_metrics import (
+    _ret, _ma, _dollar_volume_20, screen_rs, atr_pct as _atr_pct,
+)
 from investment_assistant.analysis import rules
 from investment_assistant.execution import plan_levels as plans
 
@@ -81,10 +82,8 @@ def evaluate(*, session: date, bars_by_ticker: dict[str, list[dict[str, Any]]],
             row['filters']['earnings'] = 'earnings_unknown'
 
         close = _dec(bars[-1]['adj_close'])
-        row['rs'] = float(Decimal('0.5') * (_ret(bars, 20) - bench_r20)
-                          + Decimal('0.5') * (_ret(bars, 60) - bench_r60))
-        atr = atr14(bars)
-        atr_pct = (atr / _dec(bars[-1]['close'])) if atr is not None else None
+        row['rs'] = float(screen_rs(bars, bench_r20, bench_r60))
+        atr_pct = _atr_pct(bars)
         row['atr_pct'] = float(atr_pct) if atr_pct is not None else None
 
         outcome = rules.evaluate(ticker, session, bars, [], None)

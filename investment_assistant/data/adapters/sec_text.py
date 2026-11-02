@@ -4,13 +4,22 @@ import json
 import os
 import re
 import time
+import fcntl
+from copy import copy
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
 from investment_assistant.data import fetch_policy
+from investment_assistant.data import http as data_http
 from investment_assistant.data.fetch_policy import FetchError, FetchPolicy
 from investment_assistant.data.sources.edgar import edgar_acceptance, edgar_items
+from investment_assistant.data.sources.edgar import EdgarSource, atomic_write, ACCESSION
+from investment_assistant.data import repo
+from investment_assistant.data.adapter_types import Source
+from investment_assistant.data.adapter_support import ONCE, make_adapter, sec_outcome, sec_source
+
+SEC_TEXT_DAILY_MAX = 3
 
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -52,9 +61,7 @@ def _failed(status: dict[str, Any], target: str) -> FetchError:
 class SecEdgarDownloader:
     def __init__(self, *, getter: Getter | None = None, cache_dir: Path | None = None):
         if getter is None:
-            from investment_assistant.data import http
-
-            getter = http.get_json
+            getter = data_http.get_json
         self._get = getter
         self._cache_dir = Path(cache_dir) if cache_dir else None
         # company_tickers.json is fetched once per downloader (a failure is remembered too), spec §6.2 row 7.
@@ -143,3 +150,94 @@ class SecEdgarDownloader:
                 "items": edgar_items(items[i] if i < len(items) else None),
             })
         return out
+
+
+def select_filings(rows):
+    ordered = sorted(rows, key=lambda r: (str(r['filing_date']), r['accession_number']), reverse=True)
+    selected, counts, seen = [], {'10-K': 0, '10-Q': 0}, set()
+    for row in ordered:
+        if row['accession_number'] in seen:
+            continue
+        seen.add(row['accession_number'])
+        form = row['form']
+        if form in counts:
+            cap = 1 if form == '10-K' else 2
+            if counts[form] >= cap:
+                continue
+            counts[form] += 1
+        elif form != '8-K' or '2.02' not in (row.get('items') or []):
+            continue
+        selected.append(row)
+    return selected
+
+
+def _fetch(target, *, session, start, end, deps):
+    if deps.sec_text_dir is None:
+        raise ValueError('sec_text_dir must be the configured persistent filings.output_dir')
+    root = Path(deps.sec_text_dir)
+    source = sec_source(deps)
+    if isinstance(source, EdgarSource):
+        # A private policy view: never mutate another family's shared retry policy.
+        source = copy(source)
+        source.policy = ONCE
+        source.fetch_outcomes = []
+
+    def fetch():
+        budget_dir = root / '.budgets'
+        budget_dir.mkdir(parents=True, exist_ok=True)
+        budget_path = budget_dir / f'{target}-{session.isoformat()}.json'
+        rows = []
+        with budget_path.with_suffix('.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            budget = json.loads(budget_path.read_text()) if budget_path.exists() else {'attempted': [], 'timeout': False}
+            if budget['timeout']:
+                raise FetchError('SEC text target timed out this session; retry next session', kind='timeout')
+            try:
+                if isinstance(source, EdgarSource):
+                    found = source.discover_one(target, start.isoformat(), end.isoformat(), include_annual=True)
+                else:
+                    found = source.discover_one(target, start.isoformat(), end.isoformat())
+                selected = select_filings(found)
+                with deps.transaction() as conn:
+                    indexed = repo.indexed_filing_paths(conn, target)
+                for meta in selected:
+                    accession, doc = meta['accession_number'], meta['primary_document']
+                    if not ACCESSION.fullmatch(accession) or not re.fullmatch(r'[A-Za-z0-9_.-]+', doc):
+                        raise FetchError('invalid SEC filing identity', kind='parse')
+                    existing = indexed.get(accession)
+                    dest = (Path(existing) if existing and Path(existing).is_file()
+                            else root / target / meta['form'] / f'{accession}-{doc}')
+                    downloaded = False
+                    if not dest.is_file():
+                        if accession in budget['attempted'] or len(budget['attempted']) >= SEC_TEXT_DAILY_MAX:
+                            continue
+                        # Reserve before I/O: failures and interrupted processes also consume the cap.
+                        budget['attempted'].append(accession)
+                        atomic_write(budget_path, json.dumps(budget).encode())
+                        content = source.get(meta['edgar_url'])
+                        if not content:
+                            raise FetchError('SEC text is empty', kind='empty')
+                        atomic_write(dest, content)
+                        downloaded = True
+                    rows.append({**meta, 'path': str(dest), 'downloaded': downloaded})
+            except Exception as exc:
+                if fetch_policy.classify_exception(exc)[0] == 'timeout':
+                    budget['timeout'] = True
+                    atomic_write(budget_path, json.dumps(budget).encode())
+                raise
+        return rows
+    return sec_outcome(source, fetch)
+
+
+def _store(conn, rows, *, target, source_id, now):
+    return repo.store_filing_texts(conn, rows, target=target, now=now)
+
+
+def _latest(conn, targets, *, cutoff_at):
+    return repo.latest_text_filing_dates(conn, targets, cutoff_at=cutoff_at)
+
+
+ADAPTER = make_adapter('sec_text', 'SEC 原文', '最新10-K/10-Q与财报8-K原文',
+    'filings + us_research_observations(filings)',
+    (Source('sec', _fetch, ONCE, '每只每交易日最多3份，超时次日再试；复用已有正文'),),
+    _store, _latest, days=120, coverage_note='覆盖 = 最近已存10-Q/10-K不早于session前120天。')

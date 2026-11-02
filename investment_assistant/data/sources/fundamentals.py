@@ -212,3 +212,25 @@ class USSources:
         return {'identity': {'ticker': ticker, 'security_id': stock_id(ticker)}, 'bars': bars, 'benchmarks': benchmarks,
                 'quote': quote, 'source_url': origin['source_url'], 'collected_at': origin['collected_at'],
                 'source_hash': origin['source_hash'], 'raw_snapshots': snapshots, 'limitations': limitations}
+
+
+class PolicyUSSources(USSources):
+    """Reuse companyfacts parsing with EdgarSource's one retry/evidence stack.
+
+    The legacy USSources transport remains available to its existing consumers.
+    """
+    def __init__(self, source):
+        self.sec = source
+        super().__init__(session=source.session, max_retries=0)
+
+    def _get(self, url, *, headers=None, params=None):
+        raw = self.sec.get(url)
+        try:
+            payload = json.loads(raw, parse_constant=lambda _: None)
+        except (ValueError, UnicodeError):
+            raise SourceError('Public source returned invalid JSON') from None
+        if not isinstance(payload, dict):
+            raise SourceError('Public source returned invalid object')
+        return payload, {'source_url': url, 'source_hash': hashlib.sha256(raw).hexdigest(),
+                         'raw_snapshot': raw, 'request_params': dict(params or {}),
+                         'collected_at': datetime.now(timezone.utc).isoformat()}

@@ -77,7 +77,7 @@ def test_overview_has_six_cards_and_evidence(db):
 
     bars_card = cards['bars']
     assert set(bars_card) == CARD_KEYS
-    assert bars_card['coverage']['targets'] == len(families.targets(db, 'bars')[0])
+    assert bars_card['coverage']['targets'] == len(families.targets(db, 'bars', session=NOW.date(), now=NOW)[0])
     assert bars_card['coverage']['covered'] == 1 and 'NVDA' not in bars_card['coverage']['lagging']
     assert set(bars_card['job']) == {'name', 'enabled', 'next_run_at'}
     assert bars_card['job']['name'] == 'daily' and bars_card['job']['enabled'] is True
@@ -91,11 +91,11 @@ def test_overview_has_six_cards_and_evidence(db):
     assert bars_card['coverage_note'] == data_families.COVERAGE_NOTES['bars']
 
     assert {card['job']['name'] for card in cards.values()} == {'daily'}
-    assert {family.job for family in data_families.FAMILIES} == {'daily'}
+    assert 'atr' not in {family.id for family in data_families.FAMILIES}
     assert 'no_filing_is_not_missing' in cards['sec_filings']['notes']
     assert 'pool_empty' in cards['news']['notes']
 
-    assert cards['atr']['evidence'] == data_families.EVIDENCE + ' ' + data_families.ATR_EVIDENCE
+    assert cards['atr']['evidence'] == data_families.EVIDENCE + ' `plan-1` 的计算输入，规则 `gate_hold`'
     assert cards['atr']['last_run'] == bars_card['last_run']      # ATR 取 bars 的拉取记录
     assert cards['atr']['last_success_at'] == bars_card['last_success_at']
     assert cards['news']['last_run'] is None
@@ -180,7 +180,7 @@ def test_overview_without_fetch_runs_table(db):
         assert card['last_run'] is None and card['last_success_at'] is None
         assert card['last_ticker_run'] is None
     bars_card = next(card for card in out['families'] if card['id'] == 'bars')
-    assert bars_card['coverage']['targets'] == len(families.targets(db, 'bars')[0])
+    assert bars_card['coverage']['targets'] == len(families.targets(db, 'bars', session=NOW.date(), now=NOW)[0])
     assert bars_card['coverage']['covered'] == 1
 
 
@@ -437,3 +437,31 @@ def test_browse_marks_sec_8k_without_acceptance_as_unknown_filing_date(db):
     assert len(sec['sec_8k']) == 1
     assert sec['sec_8k'][0]['published_at'] is None
     assert sec['sec_8k'][0]['filing_date_note'] == '申报日未知'
+
+
+@pytest.mark.parametrize('family', ['earnings', 'fundamentals', 'sec_text', 'sector'])
+def test_registered_without_raw_browser_is_explicitly_rejected(family, monkeypatch):
+    def unrelated(*args, **kwargs):
+        pytest.fail('unsupported family must not read universe or open a transaction')
+    monkeypatch.setattr(data_view, '_browse_universe', unrelated)
+    monkeypatch.setattr(core_tx, 'read_only_tx', unrelated)
+    with pytest.raises(ValueError, match=f'数据族暂不支持原始浏览：{family}'):
+        data_view.browse(family, now=NOW, ticker='NVDA')
+
+
+def test_ready_overview_uses_nine_real_adapters_and_new_latest_facts(db):
+    from pathlib import Path
+    from investment_assistant.data import registry
+    db.execute(Path('migrations/014_us_research.sql').read_text())
+    db.execute(Path('migrations/031_five_layers.sql').read_text())
+    db.execute("INSERT INTO watchlist_items (ticker,status,tags) VALUES ('MU','active','{}')")
+    data_repo.insert_sector_classification(db, dict(ticker='MU', sic='3571', sic_description='hardware',
+        group='科技硬件', source='sec', fetched_at=NOW))
+    db.commit()
+    cards = data_view.overview(now=NOW)['families']
+    assert [c['id'] for c in cards] == list(registry.ids())
+    assert 'atr' not in {c['id'] for c in cards}
+    sector = next(c for c in cards if c['id'] == 'sector')
+    assert sector['latest_at'] == NOW and sector['coverage']['covered'] == 1
+    assert sector['job'] is None  # No Task4 daily activation yet.
+    assert data_view.family_detail('sector', now=NOW)['rows']
