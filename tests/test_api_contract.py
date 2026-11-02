@@ -76,6 +76,34 @@ def test_plan_derivation_response_top_level_keys(client, monkeypatch):
                                        "checks", "consistency", "evidence", "run"}
 
 
+FIVE_LAYER_ROUTES = {
+    "/api/settings/features": {"get"}, "/api/settings/features/{flag}": {"post"},
+    "/api/research": {"get", "post"}, "/api/research/{request_id}": {"get"},
+    "/api/research/{request_id}/close": {"post"},
+    "/api/roadmap": {"get"}, "/api/roadmap/export.md": {"get"}, "/api/roadmap/proposals": {"get"},
+    "/api/roadmap/proposals/{proposal_id}/decide": {"post"}, "/api/roadmap/versions/{version_id}": {"get"},
+    "/api/roadmap/decisions/{decision_no}": {"get"}, "/api/roadmap/briefs/{version_id}/retry": {"post"},
+    "/api/accounts/{account_id}/portfolio-check": {"get"}, "/api/data/indicators": {"get"},
+}
+
+
+def test_five_layer_routes_in_openapi(client):
+    """spec §12.1: the v2.12–v2.15 routes and their methods (the front end names the same paths in `api.ts`)."""
+    paths = client.get("/openapi.json").json()["paths"]
+    for path, methods in FIVE_LAYER_ROUTES.items():
+        assert set(paths[path]) == methods, path
+
+
+def test_five_layer_routes_answer_without_a_database(client):
+    """Each new interface answers 503 (never a 500) when no database is configured; `use_data_menu` stays 410."""
+    for path in ("/api/settings/features", "/api/research", "/api/roadmap", "/api/roadmap/proposals",
+                 "/api/roadmap/export.md"):
+        assert client.get(path).status_code == 503, path
+    assert client.get("/api/data/indicators").status_code == 200        # the registry needs no database
+    resp = client.post("/api/us-research/sync")
+    assert resp.status_code == 410 and resp.json() == {"error": "use_data_menu"}
+
+
 TIMELINE_ROUTES = {
     "/api/workbench/chains": {"get"},
     "/api/workbench/chains/{ticker}/{signal_date}": {"get"},

@@ -644,17 +644,17 @@ def test_a_closed_stages_4_run_is_recognised():
 
 def test_overview_of_a_stages_5_run_has_accounts_between_review_and_push():
     rows = [row(stage, version='stages-5', i=1, o=1, started=T0 + timedelta(seconds=n))
-            for n, stage in enumerate(stages_module.STAGE_IDS)]
+            for n, stage in enumerate(stages_module.STAGE_IDS_V5)]
     view = run_overview.build(rows, session=SESSION, run_id=None, ready=True)
     ids = [s['id'] for s in view['stages']]
-    assert ids == list(stages_module.STAGE_IDS) and len(ids) == 11
+    assert ids == list(stages_module.STAGE_IDS_V5) and len(ids) == 11
     assert ids[7:10] == ['review', 'accounts', 'push']
     assert view['stages'][8]['sentence'] == '处理 1 个账户，完成 1 个'
     assert view['runs'][0]['rows'] == 11
 
 
 def test_stages_5_headline_resumes_from_accounts():
-    ids = stages_module.STAGE_IDS
+    ids = stages_module.STAGE_IDS_V5
     rows = [row(stage, version='stages-5', i=1, o=1, run_id='daily-account',
                 started=T0 + timedelta(seconds=n)) for n, stage in enumerate(ids)]
     later = T0 + timedelta(hours=1)
@@ -664,6 +664,27 @@ def test_stages_5_headline_resumes_from_accounts():
     assert view['headline'].endswith('（第 2 次执行，从「账户」续跑）')
     assert [s['status'] for s in view['stages']].count('success') == 11
     assert view['runs'][0]['rows'] == 14
+
+
+def test_overview_of_a_stages_6_run_has_portfolio_before_accounts_and_propose_last():
+    rows = [row(stage, version='stages-6', i=1, o=1, started=T0 + timedelta(seconds=n))
+            for n, stage in enumerate(stages_module.STAGE_IDS)]
+    view = run_overview.build(rows, session=SESSION, run_id=None, ready=True)
+    ids = [s['id'] for s in view['stages']]
+    assert ids == list(stages_module.STAGE_IDS) and len(ids) == 13
+    assert ids[7:10] == ['review', 'portfolio', 'accounts'] and ids[-1] == 'propose'
+    assert view['stages'][8]['sentence'] == '检查 1 个账户，写入 1 份组合检查'
+    assert view['stages'][12]['sentence'] == '写入 1 条优化提案'
+    assert view['runs'][0]['rows'] == 13
+
+
+def test_portfolio_sentence_counts_blocked_deferred_and_commentary():
+    out = describe(row('portfolio', i=2, o=2, detail={'accounts': [
+        {'blocked': 1, 'deferred': 0, 'commentary_status': 'ok'}, {'blocked': 0, 'deferred': 2, 'commentary_status': None}]}))
+    assert out['sentence'] == '检查 2 个账户，写入 2 份组合检查；被拦 1 条、暂缓 2 条；真实账户组合评论：已写入'
+    failed = describe(row('portfolio', i=1, o=1, detail={'accounts': [{'commentary_status': 'rejected'}]}))
+    assert failed['sentence'].endswith('真实账户组合评论：只有硬结果')
+    assert describe(row('propose', i=0, o=0, detail={'reason': 'no_evidence'}))['sentence'] == '没有可用的证据，未起草提案'
 
 
 # --- v2.9 (spec §6.3, §4.2, §4.3): the new ended breakdown and the new counts of plan / agent / review ---

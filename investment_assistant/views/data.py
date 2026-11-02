@@ -19,7 +19,6 @@ import investment_assistant.core.schema as core_schema
 import investment_assistant.data.repo as data_repo
 
 import json
-import os
 from contextlib import ExitStack
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -36,18 +35,23 @@ from investment_assistant.data import collect
 from investment_assistant.workflow import targets as families
 from investment_assistant.core import tx as service
 from investment_assistant.core.constants import MIN_BARS_ATR, NY
-from investment_assistant.derivation.indicators import price
+from investment_assistant.core.versions import INDICATOR_VERSION
+from investment_assistant.derivation.indicators import price, registry as indicator_registry
 from investment_assistant.data.adapters import fred as macro_module
 from investment_assistant.data.adapters import universe as universe_module
 from investment_assistant.core import tx as core_tx
 from investment_assistant.core.redact import sanitize_reason
 from investment_assistant.data import families as data_families
+from investment_assistant.data.adapter_support import adapter_deps_from_service
 
 
-# Scheduling remains pre-Task4: do not label manual-only new adapters as already scheduled.
-DAILY_FAMILIES = frozenset({'bars', 'news', 'sec_filings', 'earnings', 'fred', 'universe'})
+# The daily ``collect`` node runs every registered family (spec D15, §10).
+DAILY_FAMILIES = frozenset(registry.ids())
 LEGACY_FAMILIES = ('bars', 'sec_filings', 'news', 'fred', 'universe')
+# Raw browse: the pre-v2.12 families work before migration 031; the v2.12 ones (spec §5.6) need it.
 RAW_FAMILIES = frozenset(LEGACY_FAMILIES)
+NEW_RAW_FAMILIES = frozenset({'earnings', 'fundamentals', 'sec_text', 'sector'})
+INDICATORS_ID = 'indicators'
 
 
 def _require_family_ready(conn, family_id):
@@ -58,15 +62,8 @@ def _require_family_ready(conn, family_id):
 
 
 def _adapter_deps(deps: service.Deps) -> AdapterDeps:
-    config = load_config()
-    return AdapterDeps(transaction=core_tx._tx, bar_fetcher=deps.bar_fetcher,
-                       news_fetcher=deps.news_fetcher, earnings_fetcher=deps.earnings_fetcher,
-                       macro_fetcher=deps.macro_fetcher, filing_source=deps.filing_source,
-                       universe=deps.universe, universe_loader=deps.universe_loader,
-                       fred_api_key=os.environ.get('FRED_API_KEY'),
-                       sec_text_dir=config.filings.output_dir,
-                       sec_monitor_state_dir=Path(config.sec_monitor.state_dir) if config.sec_monitor.state_dir else None,
-                       sleep=collect.FETCH_SLEEP)
+    return adapter_deps_from_service(deps, transaction=core_tx._tx, config=load_config(),
+                                     sleep=collect.FETCH_SLEEP)
 
 
 class FetchBusy(RuntimeError):
@@ -259,6 +256,28 @@ def _run_facts(conn, ready: bool) -> dict[str, dict[str, Any]]:
             'success_at': data_repo.last_success_at(conn, scope='family')}
 
 
+def _sources_view(family: Adapter) -> list[dict[str, str]]:
+    return [{'id': source.id, 'note': source.note} for source in family.sources]
+
+
+def _today_sources(family: Adapter, row: dict[str, Any] | None, session: date) -> dict[str, int]:
+    """「今日来源」(spec §5.6): how many of the session's targets the family's newest family-scope run took from the
+    primary source, from a backup, or could not get at all. Final-source totals come from the run's own tally
+    (``detail.source_counts``, counted before the target list is clipped; a row from before v2.12 has none and all
+    its successes came from the only source). No run of this session — or a skipped one — counts nothing."""
+    counts = {'primary': 0, 'backup': 0, 'failed': 0}
+    if row is None or row.get('session') != session or row['status'] == 'skipped':
+        return counts
+    by_source = (row.get('detail') or {}).get('source_counts')
+    if not isinstance(by_source, dict):
+        by_source = {family.sources[0].id: row['ok_count']}
+    primary = family.sources[0].id
+    counts['primary'] = int(by_source.get(primary, 0))
+    counts['backup'] = sum(int(n) for source, n in by_source.items() if source != primary)
+    counts['failed'] = max(0, int(row['target_count']) - int(row['ok_count']))
+    return counts
+
+
 def _atr_lagging(latest, count, session):
     return latest is None or latest < session or count is None or count < MIN_BARS_ATR
 
@@ -322,11 +341,34 @@ def _card(conn, family: Adapter, *, session: date, now: datetime, jobs, run_fact
         'notes': notes,
         'current_error': current_error,
         'fetch_runs_ready': ready,
+        'sources': [] if atr else _sources_view(family),
+        'today_sources': None if atr else _today_sources(family, family_run, session),
     }
 
 
+def indicators_card() -> dict[str, Any]:
+    """The special card of the indicator registry (spec §5.6, D12): ATR and the other standard indicators are
+    derived from the daily bars — projections, never data families — listed with their basis, window, version and
+    the rules that use them."""
+    return {'id': INDICATORS_ID, 'title': '标准指标', 'kind': 'derived',
+            'purpose': '由日线现算的标准指标；口径只此一份，规则与 Agent 工具共用。不入库，不拉取。',
+            'version': INDICATOR_VERSION, 'evidence': data_families.EVIDENCE, 'notes': [],
+            'items': [indicator_item(i) for i in indicator_registry.INDICATORS]}
+
+
+def indicator_item(indicator) -> dict[str, Any]:
+    return {'id': indicator.id, 'title': indicator.title, 'basis': indicator.basis, 'window': indicator.window,
+            'used_by': list(indicator.used_by), 'concept': indicator.concept}
+
+
+def indicators() -> dict[str, Any]:
+    """``GET /api/data/indicators``: the indicator registry's list (no database)."""
+    return {'version': INDICATOR_VERSION, 'items': [indicator_item(i) for i in indicator_registry.INDICATORS]}
+
+
 def overview(*, now: datetime) -> dict[str, Any]:
-    """Registry cards when 031-ready; old data/ATR projections remain readable before migration."""
+    """Registry cards when 031-ready — the nine adapters and the indicator card; old data/ATR projections remain
+    readable before migration."""
     session = bars_module.latest_closed_session(now)
     with core_tx.read_only_tx() as conn:
         jobs = {job['name']: job for job in db.list_scheduled_jobs(conn)}
@@ -340,6 +382,8 @@ def overview(*, now: datetime) -> dict[str, Any]:
         if len(adapters) == len(LEGACY_FAMILIES):
             cards.insert(3, _card(conn, registry.get('bars'), session=session, now=now, jobs=jobs,
                                   run_facts=run_facts, ready=ready, atr=True))
+        else:
+            cards.append(indicators_card())
     return {'session': session, 'evidence': data_families.EVIDENCE, 'fetch_runs_ready': ready,
             'families': cards}
 
@@ -387,15 +431,35 @@ def _detail_rows(conn, family: Adapter, *, runs: list[dict[str, Any]],
     counts = (data_repo.bar_counts(conn, targets, end_date=session, cutoff_at=now)
               if atr else None)
     failure = _last_failures(runs, targets)
+    used = _last_sources(runs)
     return [{'target': target,
              'latest_at': latest.get(target),
              'lagging': (_atr_lagging(latest.get(target), (counts or {}).get(target), session) if atr
                          else family.lagging(latest.get(target), session)),
-             'last_failure': failure.get(target)} for target in targets]
+             'last_failure': failure.get(target),
+             'source_used': used.get(target, {}).get('source_used'),
+             'fallback': used.get(target, {}).get('fallback')} for target in targets]
+
+
+def _last_sources(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per target the source its newest recorded outcome came from (``detail.targets[i].source_used`` /
+    ``fallback``; spec §5.6's 「来源」 column). ``runs`` are newest first; a run that never booked the target
+    says nothing about it, and a row from before v2.12 has no source to show."""
+    found: dict[str, dict[str, Any]] = {}
+    for row in runs:
+        for item in (row.get('detail') or {}).get('targets') or []:
+            target = item.get('target')
+            if target not in found and 'fallback' in item:
+                found[target] = {'source_used': item.get('source_used'), 'fallback': item.get('fallback')}
+    return found
 
 
 def family_detail(family_id: str, *, now: datetime) -> dict[str, Any]:
     """One family's card plus its last 20 fetch runs and per-target coverage table."""
+    if family_id == INDICATORS_ID:
+        with core_tx.read_only_tx() as conn:
+            _require_family_ready(conn, family_id)
+        return {'card': indicators_card(), 'runs': [], 'rows': []}
     family = data_families.get('bars' if family_id == 'atr' else family_id)   # 未知族 LookupError
     session = bars_module.latest_closed_session(now)
     recorded = family.id
@@ -418,7 +482,7 @@ def browse(family_id: str, *, now: datetime, ticker: str | None = None,
     A never-collected ticker is an empty result, not an error; a per-ticker family
     without its ``ticker`` argument and an unknown FRED series are ValueErrors."""
     family = data_families.get('bars' if family_id == 'atr' else family_id)
-    if family.id not in RAW_FAMILIES:
+    if family.id not in RAW_FAMILIES | NEW_RAW_FAMILIES:
         raise ValueError(f'数据族暂不支持原始浏览：{family_id}')
     session = bars_module.latest_closed_session(now)
     if family.id == 'fred':
@@ -434,6 +498,7 @@ def browse(family_id: str, *, now: datetime, ticker: str | None = None,
     else:
         key = None
     with core_tx.read_only_tx() as conn:
+        _require_family_ready(conn, family_id)      # the v2.12 families need migration 031 (503 before any read)
         if family.id == 'universe':
             return _browse_universe(conn, now=now)
         assert key is not None  # every non-universe branch validated ticker or series above
@@ -447,17 +512,55 @@ def browse(family_id: str, *, now: datetime, ticker: str | None = None,
             return _browse_filings(conn, key, session=session, now=now)
         if family.id == 'fred':
             return _browse_fred(conn, key, session=session, now=now)
+        if family.id == 'earnings':
+            return _browse_earnings(conn, key, now=now)
+        if family.id == 'fundamentals':
+            return _browse_fundamentals(conn, key, now=now)
+        if family.id == 'sec_text':
+            return _browse_sec_text(conn, key, now=now)
+        if family.id == 'sector':
+            return _browse_sector(conn, key, now=now)
         raise ValueError(f'数据族暂不支持原始浏览：{family_id}')
+
+
+# Spec §5.6: the raw views of the v2.12 families. Like every browse they read what was stored and visible at ``now``.
+BROWSE_HISTORY_LIMIT = 20
+
+
+def _browse_earnings(conn, ticker: str, *, now: datetime) -> dict[str, Any]:
+    rows = [{'earnings_date': row['earnings_date'], 'status': row['status'], 'source': row['source'],
+             'fetched_at': row['fetched_at']}
+            for row in data_repo.read_earnings_history(conn, ticker, cutoff_at=now, limit=BROWSE_HISTORY_LIMIT)]
+    return {'family': 'earnings', 'key': ticker, 'has_data': bool(rows), 'rows': rows}
+
+
+def _browse_fundamentals(conn, ticker: str, *, now: datetime) -> dict[str, Any]:
+    """The latest fiscal quarters of the SEC financial facts: ``metric / value / period`` and where they came from."""
+    rows = data_repo.financial_quarters(conn, ticker, cutoff_at=now)
+    return {'family': 'fundamentals', 'key': ticker, 'has_data': bool(rows), 'rows': rows,
+            'note': f'最近 {data_repo.FINANCIAL_QUARTERS} 个财季；来源 SEC companyfacts，按披露时点截取'}
+
+
+def _browse_sec_text(conn, ticker: str, *, now: datetime) -> dict[str, Any]:
+    """Each stored original (the file list) with the summary of the facts the text analysis extracted from it."""
+    rows = data_repo.read_filing_texts(conn, ticker, cutoff_at=now, limit=BROWSE_HISTORY_LIMIT)
+    return {'family': 'sec_text', 'key': ticker, 'has_data': bool(rows), 'rows': rows}
+
+
+def _browse_sector(conn, ticker: str, *, now: datetime) -> dict[str, Any]:
+    rows = data_repo.read_sector_history(conn, ticker, cutoff_at=now, limit=BROWSE_HISTORY_LIMIT)
+    return {'family': 'sector', 'key': ticker, 'has_data': bool(rows), 'rows': rows}
 
 
 def _browse_bars(conn, ticker: str, *, session: date, now: datetime) -> dict[str, Any]:
     bars_ = data_repo.read_bars(conn, ticker, session, cutoff_at=now, limit=BROWSE_BARS_LIMIT)
     revisions = (data_repo.bar_revision_counts(conn, ticker, since=bars_[0]['price_date'],
                                                 cutoff_at=now) if bars_ else {})
+    sources = (data_repo.bar_sources(conn, ticker, since=bars_[0]['price_date'], cutoff_at=now) if bars_ else {})
     rows = [{'price_date': bar['price_date'], 'open': bar['open'], 'high': bar['high'],
              'low': bar['low'], 'close': bar['close'], 'adj_close': bar['adj_close'],
              'volume': bar['volume'], 'split_factor': bar['split_factor'],
-             'revisions': revisions.get(bar['price_date'], 0),
+             'revisions': revisions.get(bar['price_date'], 0), 'source': sources.get(bar['price_date']),
              'fetched_at': bar['fetched_at'], 'note': BAR_NOTE}
             for bar in reversed(bars_)]   # 新到旧；每日取截至现在的最新修订
     return {'family': 'bars', 'key': ticker, 'has_data': bool(rows), 'rows': rows}

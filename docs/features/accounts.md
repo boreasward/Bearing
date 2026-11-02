@@ -73,6 +73,10 @@
 
 复盘页移除「交易与持仓」「资金」页签；旧地址 `#review/trades` 重定向到真实账户成交页，`#review/account` 重定向到真实账户概览。「纪律」「轨道对比」使用 `?account=` 保存账户选择，默认真实账户，选择只影响这两个页签。
 
+### 对比页的分界（`markers`，D4）
+
+`GET /api/accounts/compare` 与 `/{id}/equity` 返回 `markers: [{session, kind, label}]`（旧到新；同日按 `feature`、`version`、`params` 排）：`feature` 是功能开关的每次翻动（`feature_flag_changes`，标开关名与开 / 关；非交易日顺延到下一个交易日）；`version` 是一个账户的决策里第一次出现某个 `agent_version`（照计划执行账户用 `strategy_version`，如 `follow-plans-1`）的交易日，含该账户第一个版本，标「账户名 · 版本」；`params` 是 `account_param_changes` 里 `kind='params'` 的生效日，标改动的参数名（开账行不算）。开关属于所有账户，版本与参数只属于它们写给的账户；`from` 之前的分界不返回。`/api/accounts/{id}/decisions` 每项带 `agent_version`（照计划执行账户为 `null`）。
+
 ## 接口与命令行
 
 金额与股数统一返回十进制字符串。账户对象统一保留原 `opened_on`，并返回由现有交易日历确定的首个交易日 `opening_session`（未开账为 `null`）；允许周末、节假日开户，归一化曲线以该首个交易日为 100。读取接口使用只读事务，不拉取行情或调用模型。
@@ -87,7 +91,8 @@
 | `POST /api/accounts/{id}/params` | `{request_id,params,reason}`，返回 `{account,change}` |
 | `POST /api/accounts/{id}/close` | `{reason}`，返回账户 |
 | `GET /api/accounts/{id}` | 账户、权益、当前与已平持仓、待成交、决策摘要、对账与表单权限 |
-| `GET /api/accounts/{id}/equity?from=&to=` | 权益行与相同日期的 SPY 收盘 |
+| `GET /api/accounts/{id}/equity?from=&to=` | 权益行与相同日期的 SPY 收盘，加 `markers`（该账户可见的分界，见下） |
+| `GET /api/accounts/{id}/portfolio-check?session=` | 该账户某交易日的组合检查，形状同「今日」的 `portfolio_check`：`{status, reason, session, cutoff_at, result, commentary, account}`；缺行 `not_computed`，只有硬结果 `degraded`，加上组合经理评论 `ready` |
 | `GET /api/accounts/{id}/trades` | 本账户成交及计划标签 |
 | `GET /api/accounts/{id}/orders?status=` | 订单、宿主校验文本与当前成交结果 |
 | `GET /api/accounts/{id}/decisions?session=` | 无日期取摘要列表；指定日期取证据、原输出、holds 及订单结果 |

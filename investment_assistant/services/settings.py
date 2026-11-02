@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from investment_assistant import db
 from investment_assistant.config import NotifyConfig
+from investment_assistant.core import features as core_features, schema as core_schema, tx as core_tx
 from investment_assistant.db import connect
 from investment_assistant.notify.discord import DiscordChannel, DiscordClient
 from investment_assistant.notify.email import EmailClient
@@ -148,3 +149,36 @@ def _test_email(override: dict[str, Any], *, client=None) -> dict[str, Any]:
 
 def read_env_status() -> dict[str, bool]:
     return {key: bool(os.environ.get(key)) for key in _ENV_KEYS}
+
+
+# --- feature switches (v2.12–v2.15 spec §9, UI1): append-only changes, a flag without history is on ---
+
+def _features_conn(conn) -> None:
+    if not core_schema.five_layers_ready(conn):
+        raise core_tx.Unavailable('migration_031_missing')
+
+
+def read_features() -> dict[str, Any]:
+    """``{'flags': [{flag, enabled, changed_at, reason, history_count}], 'history': [FeatureChange…]}``: the current
+    values and the real change rows (oldest first) — a default is never shown as a history row."""
+    with core_tx._tx() as conn:
+        _features_conn(conn)
+        history = core_features.history(conn)
+        current = core_features.current(conn)
+    flags = []
+    for flag in core_features.FLAGS:
+        own = [row for row in history if row['flag'] == flag]
+        last = own[-1] if own else None
+        flags.append({'flag': flag, 'enabled': current[flag],
+                      'changed_at': last['created_at'] if last else None,
+                      'reason': last['reason'] if last else None, 'history_count': len(own)})
+    return core_tx._jsonable({'flags': flags, 'history': history})
+
+
+def set_feature(flag: str, *, enabled: Any, reason: Any, request_id: Any) -> dict[str, Any]:
+    """Record one switch change (reason required for on and off alike) and return ``{flag, enabled, changed_at}``;
+    the same ``request_id`` and content replays the first answer, other content conflicts (``Conflict``)."""
+    with core_tx._tx() as conn:
+        _features_conn(conn)
+        row = core_features.record_change(conn, flag=flag, enabled=enabled, reason=reason, request_id=request_id)
+    return core_tx._jsonable({'flag': row['flag'], 'enabled': row['enabled_after'], 'changed_at': row['created_at']})

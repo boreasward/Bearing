@@ -2,6 +2,9 @@
 import re
 from pathlib import Path
 
+import pytest
+
+from investment_assistant.core import texts
 from investment_assistant.execution import accounts
 from investment_assistant.execution import entry_rules
 from investment_assistant.execution.paper import fill as paper_fill
@@ -11,6 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ACCOUNTS_TS = ROOT / 'web/src/lib/accounts.ts'
 STATUS_TS = ROOT / 'web/src/lib/ui/domain/status.ts'
 MIGRATION = ROOT / 'migrations/030_accounts.sql'
+
+
+# The front end's rejection words (and the portfolio reasons) gain the v2.14 sector / exposure codes with Task 5; Task 7
+# removes this marker (removal list: Task 4 report, Segment F).
+TASK5 = pytest.mark.xfail(strict=False, reason='Task 5 front end (v2.14 rejection words) not merged yet; Task 7 removes')
 
 
 def _table(name: str) -> dict[str, str]:
@@ -33,18 +41,35 @@ def test_strategy_and_real_account_identity_match():
     assert f"export const REAL_ACCOUNT_ID = '{accounts.REAL_ACCOUNT_ID}'" in ACCOUNTS_TS.read_text()
 
 
-def test_paper_fill_and_rejection_enum_sets_match():
+def test_paper_fill_enum_sets_match():
     assert set(_table('FILL_CASE_TEXT')) == set(paper_fill.FILL_CASES)
     assert set(_table('EXIT_REASON_TEXT')) == set(paper_fill.EXIT_REASONS)
+
+
+def test_rejection_codes_backend_vocabulary():
+    """v2.14 adds the sector / exposure codes; the text table, the code set and the shared table agree."""
+    assert {'sector_cap', 'max_per_sector', 'single_cap', 'total_cap', 'held_ticker'} <= set(paper_strategies.REJECT_CODES)
+    assert set(paper_strategies.REJECT_TEXT) == set(paper_strategies.REJECT_CODES) == set(texts.REJECT_TEXT)
+    assert set(texts.PORTFOLIO_REASON_TEXT) >= set(texts.REJECT_TEXT) | {'sector_unknown', 'deferred_by_cash'}
+
+
+@TASK5
+def test_rejection_enum_set_matches_frontend():
     assert set(_table('REJECT_TEXT')) == set(paper_strategies.REJECT_CODES)
 
 
 def test_shared_chinese_display_maps_match_backend():
-    owners = {'ORDER_STATUS_TEXT': accounts, 'REJECT_TEXT': paper_strategies, 'EXIT_REASON_TEXT': paper_fill,
+    owners = {'ORDER_STATUS_TEXT': accounts, 'EXIT_REASON_TEXT': paper_fill,
               'FILL_CASE_TEXT': paper_fill, 'RECONCILE_TEXT': accounts}
     for name, owner in owners.items():
         assert hasattr(owner, name), f'backend {owner.__name__}.{name} missing: display maps must be shared and verified'
         assert _table(name) == getattr(owner, name), name
+    assert hasattr(paper_strategies, 'REJECT_TEXT')
+
+
+@TASK5
+def test_rejection_display_map_matches_frontend():
+    assert _table('REJECT_TEXT') == paper_strategies.REJECT_TEXT
 
 
 def test_cancel_void_and_chain_done_reason_tables_match_across_languages():

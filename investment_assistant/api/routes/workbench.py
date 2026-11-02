@@ -13,6 +13,7 @@ from fastapi import APIRouter, Body, HTTPException
 from investment_assistant.tasks import daily, ports
 from investment_assistant.core import locks, runner
 from investment_assistant.views import derivation as derivation_view
+from investment_assistant.optimize import roadmap as optimize_roadmap
 from investment_assistant.review import discussion
 from investment_assistant.review.knowledge import my_knowledge
 from investment_assistant.workflow.nodes import review as plan_review, push as push_node, retro as retro_node
@@ -533,7 +534,7 @@ def discussion_turn(discussion_id: int, payload: dict[str, Any] = Body(default_f
     try:
         run_id = runner.submit('discuss', lambda run_id: discussion.answer(discussion_id, asked['turn_id'], now=now,
             run_id=run_id, read_derivation=derivation_view.plan_derivation_in,
-            read_agent_run=reasoning.view_in), with_run_id=True)
+            read_agent_run=reasoning.view_in, get_roadmap=optimize_roadmap.get_roadmap), with_run_id=True)
     except Exception:
         discussion.release(asked['run_id'])
         raise

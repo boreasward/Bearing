@@ -43,10 +43,13 @@ STAGE_CONCEPTS: dict[str, tuple[str, ...]] = {
     'plan': ('plan.entry_zone', 'plan.stop', 'plan.target1', 'plan.status', 'plan.derivation'),
     'agent': ('agent.action_levels', 'agent.thesis', 'agent.counter', 'agent.reject_reasons'),
     'review': ('agent.review_outcome', 'agent.signals', 'review.chain_state'),
+    # Task 6 retargets these two to the new concept cards (a dangling id fails test_knowledge_attachments).
+    'portfolio': ('account.agent_portfolio',),
     'accounts': ('account.ledger', 'account.paper', 'account.fill_rules', 'account.follow_plans',
                  'account.agent_portfolio'),
     'retro': ('review.retro_card', 'review.retro_end'),
     'push': ('system.push',),
+    'propose': ('system.daily_workflow',),
 }
 
 NOT_READY_NOTE = '迁移 025 未执行，暂无阶段证据'
@@ -284,8 +287,30 @@ def _accounts(r: dict) -> str:
     return f"处理 {r['input_count']} 个账户，完成 {r['output_count']} 个"
 
 
+def _portfolio(r: dict) -> str:
+    """v2.14: accounts checked, the verdict totals over them and the PM commentary of the real account."""
+    items = [i for i in _get(r['detail'], 'accounts') or [] if isinstance(i, dict)]
+    text = f"检查 {r['input_count']} 个账户，写入 {r['output_count']} 份组合检查"
+    blocked, deferred = sum(int(i.get('blocked') or 0) for i in items), sum(int(i.get('deferred') or 0) for i in items)
+    if blocked or deferred:
+        text += f"；被拦 {blocked} 条、暂缓 {deferred} 条"
+    states = {i.get('commentary_status') for i in items} - {None}
+    if states:
+        text += '；真实账户组合评论：' + ('已写入' if states == {'ok'} else '只有硬结果')
+    return text
+
+
+def _propose(r: dict) -> str:
+    """v2.15: how many proposals this Saturday's run wrote (spec §8.3)."""
+    reason = _get(r['detail'], 'reason')
+    if reason == 'no_evidence':
+        return '没有可用的证据，未起草提案'
+    return f"写入 {r['output_count']} 条优化提案"
+
+
 TEMPLATES = {'sec_monitor': _sec_monitor, 'collect': _collect, 'screen': _screen, 'regime': _regime, 'signals': _signals, 'plan': _plan,
-             'agent': _agent, 'review': _review, 'accounts': _accounts, 'retro': _retro, 'push': _push}
+             'agent': _agent, 'review': _review, 'portfolio': _portfolio, 'accounts': _accounts, 'retro': _retro,
+             'push': _push, 'propose': _propose}
 
 
 def _suffixes(skips: list[dict], failures: list[dict], degradations: list[dict]) -> str:

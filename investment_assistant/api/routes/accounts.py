@@ -62,6 +62,11 @@ def equity(account_id: str, from_: str | None = Query(default=None, alias='from'
                 from_session=_date(from_, 'from'), to_session=_date(to, 'to'))
 
 
+@router.get('/{account_id}/portfolio-check')
+def portfolio_check(account_id: str, session: str | None = None):
+    return _run(account_views.portfolio_check, account_id, now=_now(), session=_date(session, 'session'))
+
+
 @router.get('/{account_id}/trades')
 def trades(account_id: str):
     return _run(account_views.trades, account_id, now=_now())

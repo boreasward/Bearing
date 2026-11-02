@@ -22,6 +22,7 @@ import investment_assistant.views.data as data_view
 import investment_assistant.workflow.targets as families
 import investment_assistant.core.tx as service
 from investment_assistant.data import families as data_families
+from investment_assistant.data import registry
 from investment_assistant.execution import plan_levels as plans
 from investment_assistant.data.adapters import fred as macro_module
 from investment_assistant.data.adapters import news as news_module
@@ -32,17 +33,34 @@ NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)     # 18:30 New York
 
 CARD_KEYS = {'id', 'title', 'purpose', 'kind', 'fetch_via', 'per_ticker', 'job', 'coverage',
              'latest_at', 'coverage_note', 'last_run', 'last_ticker_run', 'last_success_at',
-             'evidence', 'notes', 'current_error', 'fetch_runs_ready'}
+             'evidence', 'notes', 'current_error', 'fetch_runs_ready', 'sources', 'today_sources'}
 BUSINESS_TABLES = core_dbutil.WORKBENCH_TABLES + ('data_fetch_runs',)
 
 
 @pytest.fixture
 def db(workbench_db, monkeypatch):
+    """The 031-ready schema. Migration 014 (the US research tables the fundamentals / sec_text cards read) is part
+    of every real database but not of the shared fixture's list, so it is applied here."""
+    from pathlib import Path
+    workbench_db.execute(Path('migrations/014_us_research.sql').read_text())
+    workbench_db.commit()
+
     @contextmanager
     def connection():
         yield workbench_db
     monkeypatch.setattr(core_tx, 'connection', connection)
     return workbench_db
+
+
+@pytest.fixture
+def db_pre031(workbench_db_pre031, monkeypatch):
+    """The schema before migration 031 (spec §15: the old interfaces keep working): the legacy six-card overview
+    with its ATR projection."""
+    @contextmanager
+    def connection():
+        yield workbench_db_pre031
+    monkeypatch.setattr(core_tx, 'connection', connection)
+    return workbench_db_pre031
 
 
 def _bar(conn, **overrides):
@@ -63,7 +81,9 @@ def _run(db, **overrides):
     data_repo.insert_fetch_run(db, row)
 
 
-def test_overview_has_six_cards_and_evidence(db):
+def test_overview_has_six_cards_and_evidence(db_pre031):
+    """Before migration 031 the overview is the v2.8 one: six cards with the ATR projection (R10)."""
+    db = db_pre031
     _bar(db)
     _run(db, run_id='r-ov', finished_at=NOW + timedelta(hours=1))
     # v2.8: the workbench / filings rows are replaced by one ``daily`` row (028); every family card shows it
@@ -121,7 +141,8 @@ def test_card_uses_latest_run(db):
     assert card['last_success_at'] == success_at
 
 
-def test_card_keeps_family_run_and_shows_newer_ticker_run_apart(db):
+def test_card_keeps_family_run_and_shows_newer_ticker_run_apart(db_pre031):
+    db = db_pre031
     """2026-10-27 (after acceptance): a single-ticker probe must not stand in for the
     family. last_run is the newest family-scope row; a newer ticker row shows on its
     own line; last_success_at counts family rows only."""
@@ -169,7 +190,8 @@ def test_only_ticker_runs_leave_family_run_empty(db):
     assert bars_card['last_ticker_run']['ticker'] == 'MU'
 
 
-def test_overview_without_fetch_runs_table(db):
+def test_overview_without_fetch_runs_table(db_pre031):
+    db = db_pre031
     _bar(db)
     db.execute('DROP TABLE data_fetch_runs')
     db.commit()
@@ -194,7 +216,9 @@ def test_detail_rows_and_last_failure(db):
     assert [run['status'] for run in detail['runs']] == ['failed']
     assert detail['rows']
     for row in detail['rows']:
-        assert set(row) == {'target', 'latest_at', 'lagging', 'last_failure'}
+        # spec §5.6: the target rows gain the source column; a run without recorded targets has none to show
+        assert set(row) == {'target', 'latest_at', 'lagging', 'last_failure', 'source_used', 'fallback'}
+        assert row['source_used'] is None and row['fallback'] is None
         assert row['last_failure'] == 'whole family down'   # workbench 全族 '*' 覆盖本次目标
     nvda = next(row for row in detail['rows'] if row['target'] == 'NVDA')
     assert nvda['latest_at'] == SESSION and nvda['lagging'] is False
@@ -340,7 +364,7 @@ def test_browse_unknown_ticker_is_empty_not_error(db, monkeypatch):
     monkeypatch.setattr(bars_module, 'fetch_history', recorder('bars'))
     monkeypatch.setattr(news_module, 'fetch_yfinance', recorder('news'))
     monkeypatch.setattr(macro_module, 'fetch_series', recorder('fred'))
-    monkeypatch.setattr(collect, 'sec_listing', recorder('sec'))
+    monkeypatch.setattr(registry, 'run_adapter', recorder('adapter'))
     db.commit()
 
     out = data_view.browse('bars', now=NOW, ticker='ZZZZ')
@@ -440,13 +464,19 @@ def test_browse_marks_sec_8k_without_acceptance_as_unknown_filing_date(db):
 
 
 @pytest.mark.parametrize('family', ['earnings', 'fundamentals', 'sec_text', 'sector'])
-def test_registered_without_raw_browser_is_explicitly_rejected(family, monkeypatch):
-    def unrelated(*args, **kwargs):
-        pytest.fail('unsupported family must not read universe or open a transaction')
-    monkeypatch.setattr(data_view, '_browse_universe', unrelated)
-    monkeypatch.setattr(core_tx, 'read_only_tx', unrelated)
-    with pytest.raises(ValueError, match=f'数据族暂不支持原始浏览：{family}'):
+def test_new_family_browse_needs_031_before_any_read(db_pre031, family):
+    """R8's interim rejection is closed (spec §5.6): the v2.12 families have raw views, and before migration 031 they
+    answer 503 (`Unavailable`) instead of reading tables that are not there."""
+    with pytest.raises(service.Unavailable, match='031'):
         data_view.browse(family, now=NOW, ticker='NVDA')
+
+
+def test_new_family_browse_validates_ticker_and_empty_is_not_an_error(db):
+    for family in ('earnings', 'fundamentals', 'sec_text', 'sector'):
+        with pytest.raises(ValueError, match='ticker'):
+            data_view.browse(family, now=NOW)
+        out = data_view.browse(family, now=NOW, ticker=' zzzz ')
+        assert (out['family'], out['key'], out['has_data'], out['rows']) == (family, 'ZZZZ', False, [])
 
 
 def test_ready_overview_uses_nine_real_adapters_and_new_latest_facts(db):
@@ -459,9 +489,9 @@ def test_ready_overview_uses_nine_real_adapters_and_new_latest_facts(db):
         group='科技硬件', source='sec', fetched_at=NOW))
     db.commit()
     cards = data_view.overview(now=NOW)['families']
-    assert [c['id'] for c in cards] == list(registry.ids())
+    assert [c['id'] for c in cards] == [*registry.ids(), 'indicators']      # nine adapters, then the indicator card
     assert 'atr' not in {c['id'] for c in cards}
     sector = next(c for c in cards if c['id'] == 'sector')
     assert sector['latest_at'] == NOW and sector['coverage']['covered'] == 1
-    assert sector['job'] is None  # No Task4 daily activation yet.
+    assert sector['job']['name'] == 'daily'   # the daily collect node runs every registered family (D15)
     assert data_view.family_detail('sector', now=NOW)['rows']

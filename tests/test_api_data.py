@@ -96,7 +96,8 @@ def test_unreachable_database_is_503_for_post_too(client, monkeypatch):
     assert resp.status_code == 503 and resp.json()['error'] == '数据库不可达'
 
 
-def test_post_checks_tables_and_024_before_submitting(workbench_db, monkeypatch):
+def test_post_checks_tables_and_024_before_submitting(workbench_db_pre031, monkeypatch):
+    workbench_db = workbench_db_pre031
     """提交前在同一安全事务里检查工作台表与 024：缺任一 → 503 且不提交后台任务（I06b）。"""
     import os
     from pathlib import Path

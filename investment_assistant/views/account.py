@@ -9,9 +9,10 @@ import investment_assistant.execution.repo as execution_repo
 
 from datetime import date, timedelta
 from decimal import Decimal
+from investment_assistant.core import features as core_features
 
 from investment_assistant.core import tx as core_tx
-from investment_assistant.data.calendar import add_trading_days
+from investment_assistant.data.calendar import add_trading_days, is_trading_day
 from investment_assistant.review import monthly
 from investment_assistant.review import outcomes as review
 from investment_assistant.core import tx as service, schema as core_schema
@@ -68,7 +69,7 @@ def _positions(conn,account,*,session,now):
 def _decision(conn,row,*,full=False):
     if row is None: return None
     orders=[o for o in execution_repo.orders_for(conn,row['account_id'],limit=100000) if o['decision_id']==row['id']]
-    data={k:row.get(k) for k in ('id','session','status','status_reason','summary')}
+    data={k:row.get(k) for k in ('id','session','status','status_reason','summary','agent_version')}
     data['cutoff_at']=(row.get('detail') or {}).get('cutoff_at')
     data.update(orders_placed=(row.get('detail') or {}).get('orders_placed',sum(o['status']!='rejected' for o in orders)),
                 orders_rejected=(row.get('detail') or {}).get('orders_rejected',sum(o['status']=='rejected' for o in orders)))
@@ -105,6 +106,46 @@ def detail(account_id,*,now):
             'forms':{'can_record_trades':account['kind']=='real' and account['status']=='active'},'cutoff_at':now,'calc_versions':CALC_VERSIONS})
 
 
+# D4 (spec §3.1, §12.1): where a forward experiment changed its rules, so a curve is never read across a seam.
+MARKER_ORDER={'feature':0,'version':1,'params':2}
+
+
+def _on_session(day):
+    """The first trading day on or after ``day``: a chart's x axis is the trading days."""
+    while not is_trading_day(day): day+=timedelta(days=1)
+    return day
+
+
+def markers(conn,accounts_,*,now,from_session=None):
+    """The seams of the comparison, oldest first: ``[{session, kind, label}]`` with ``kind`` one of
+    ``feature`` (a ``feature_flag_changes`` row, labelled with the flag), ``version`` (the session an account's
+    ``paper_decisions.agent_version`` — the strategy version for a follow-plans account — takes a value it never had
+    before, the first value included) and ``params`` (an ``account_param_changes`` row's ``effective_from``, with the
+    parameters it changed). Feature switches belong to every account; the other two to the account they were written
+    for. Everything visible at ``now`` and, with ``from_session``, from that session on."""
+    found=[]
+    if core_schema.five_layers_ready(conn):
+        for change in core_features.history(conn):
+            if change['created_at']>now: continue
+            found.append({'session':_on_session(change['created_at'].astimezone(accounts.NY).date()),'kind':'feature',
+                          'label':f"功能开关 {change['flag']} {'开启' if change['enabled_after'] else '关闭'}"})
+    for account in accounts_:
+        seen=set()
+        for decision in reversed(execution_repo.decisions_for(conn,account['id'],limit=100000)):
+            version=decision.get('agent_version') or decision.get('strategy_version')
+            if version is None or version in seen or decision['created_at']>now: continue
+            seen.add(version)
+            found.append({'session':decision['session'],'kind':'version','label':f"{account['name']} · {version}"})
+        for change in execution_repo.param_changes(conn,account['id']):
+            if change['kind']!='params' or change['created_at']>now: continue
+            before,after=change['params_before'] or {},change['params_after'] or {}
+            changed=[key for key in sorted(set(before)|set(after)) if before.get(key)!=after.get(key)]
+            found.append({'session':_on_session(change['effective_from']),'kind':'params',
+                          'label':f"{account['name']} 参数调整：{'、'.join(changed) or '—'}"})
+    return sorted((m for m in found if from_session is None or m['session']>=from_session),
+                  key=lambda m:(m['session'],MARKER_ORDER[m['kind']],m['label']))
+
+
 def equity(account_id,*,now,from_session=None,to_session=None):
     end=min(to_session or bars.latest_closed_session(now),bars.latest_closed_session(now))
     with core_tx.read_only_tx() as conn:
@@ -112,7 +153,19 @@ def equity(account_id,*,now,from_session=None,to_session=None):
         rows=execution_repo.equity_days(conn,account['id'],from_session=from_session,to_session=end,cutoff_at=now)
         days={r['session'] for r in rows}
         spy=[{'session':b['price_date'],'close':b['adj_close']} for b in data_repo.read_bars(conn,'SPY',end,cutoff_at=now,limit=100000) if b['price_date'] in days]
-        return service._jsonable({'rows':rows,'spy':spy})
+        return service._jsonable({'rows':rows,'spy':spy,
+            'markers':[m for m in markers(conn,[account],now=now,from_session=from_session) if m['session']<=end]})
+
+
+def portfolio_check(account_id,*,now,session=None):
+    """``GET /api/accounts/{id}/portfolio-check?session=``: the account's hard check of a session and its commentary,
+    in 「今日」's shape (spec §12.1, UI1); a missing row is ``not_computed``, never an empty successful check."""
+    from investment_assistant.views import today as today_views
+    session=min(session or bars.latest_closed_session(now),bars.latest_closed_session(now))
+    with core_tx.read_only_tx() as conn:
+        account=execution_paper_accounts.require_account(conn,account_id)
+        view=today_views.portfolio_check_view(conn,session,account_id=account['id'])
+        return service._jsonable({**view,'account':{'id':account['id'],'name':account['name'],'kind':account['kind']}})
 
 
 def trades(account_id,*,now):
@@ -243,6 +296,7 @@ def compare(*,now,from_session=None):
         dd=accounts.max_drawdown(spy_rows)
         spy={'inception_return':_pct(spy_return),'month_return':_pct(spy_month),'max_drawdown':f"{dd['pct']:.1%}" if dd else '—'}
         return service._jsonable({'columns':columns,'rows':[{'key':k,'label':label,'values':values[k],'spy':spy.get(k)} for k,label in zip(keys,labels)],
+            'markers':markers(conn,execution_repo.list_accounts(conn),now=now,from_session=from_session),
             'cutoff_at':now,'calc_versions':CALC_VERSIONS})
 
 

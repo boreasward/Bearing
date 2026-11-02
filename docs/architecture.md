@@ -72,16 +72,16 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `data/identity.py` | 美股身份与代码校验 |
 | `data/fetch_policy.py` | fetch-1 数据端口及 yfinance 两层截止时间 |
 | `data/http.py` | 数据 HTTP JSON 读取 |
-| `data/registry.py` | 九族有序注册与唯一主备调度；Stooq 未启用、Nasdaq 为财报日备源 |
+| `data/registry.py` | 九族有序注册与唯一主备调度；Stooq 未启用、Nasdaq 为财报日备源；`python -m investment_assistant.data.registry list / fetch <family> [--ticker T]`（逐只族必须给 `--ticker`：整族目标集合在工作流层解析，整族请用数据菜单或日批；写一行 `manual_family` 拉取记录） |
 | `data/adapter_types.py` | Source / Adapter / AdapterDeps / TargetFacts 的唯一定义；宿主显式注入事实、事务和配置 |
 | `data/adapter_support.py` | 唯一目标集合算法、滞后、存储回执与 SEC 真实尝试次数 |
 | `data/families.py` | 读取 Adapter 的目录与覆盖投影；ATR 不再是数据族 |
 | `data/tally.py`、`data/fetch_status.py` | 唯一目标计账、状态分类；全目标末次成功来源汇总后才截断明细 |
 | `data/market_constants.py` | 原行业 ETF、宏观序列与窗口常量；指标不再为读常量引入采集栈 |
-| `data/collect.py` | 旧批处理逐只采集、共享 Tally 导出、fetch-run 写入与族锁（批处理接线待后续任务） |
+| `data/collect.py` | 共享 Tally 导出、fetch-run 写入与族锁；所有采集都是 `registry.run_adapter` 调用，逐族函数（`bars_one` / `news_one` / `sec_listing` / `fred_series`）与 `collect_range` 已无调用方而删除（R23） |
 | `data/fundamentals.py` | SEC 财务身份、规范化与保留申报版本 |
 | `data/research_rows.py` | 原始字节归档与财务观察包装的唯一实现 |
-| `data/acquisition.py` | 行情旧记录归一化、本地 SEC 研究刷新；共用下沉后的字节归档 |
+| `data/acquisition.py` | 行情旧记录归一化；共用下沉后的字节归档（本地 SEC 研究刷新已由 `sec_text` 适配器取代，R28） |
 | `data/repo.py` | 日线、新闻、申报、财报日、宏观、采集记录与只读事实 SQL；补查队列一次结算 / 补重跑指针、行业截止读取、缺失交易日查询 |
 | `data/adapters/bars.py` | yfinance 日线采集与存储形状 |
 | `data/adapters/news.py` | 新闻标题与 SEC 8-K 列表 |
@@ -107,6 +107,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | --- | --- |
 | `derivation/chain.py` | derivation-1 独立重算、冻结触发条件与一致性核对；import 不带入 psycopg / tx / views |
 | `derivation/indicators/registry.py` | 22 项 indicator-1 指标、窗口与截止；close / adj_close 均线、SPY / QQQ 基准分别登记 |
+| `derivation/indicators/__main__.py` | `python -m investment_assistant.derivation.indicators list / compute <id> <ticker>`：只读，按最近已收盘交易日现算；`breadth` 需要宿主冻结的样本，命令行拒绝（`indicator_requires_universe`），`sector_strength` 只限行业 ETF |
 | `derivation/indicators/_price_math.py` | 原价格数值公式唯一实现，精度与运算顺序不变 |
 | `derivation/indicators/price.py` | 保留原价格接口，indicators 经注册表输出原键序与数值 |
 | `derivation/indicators/breadth.py` | 广度、行业强弱与宏观数值 |
@@ -156,6 +157,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `analysis/units.py` | 单元、池同步、活跃链合并与再触发 |
 | `analysis/fundamentals.py` | 财季 / 申报 / 指引读取与指引用例；行情投影只读 price_bars |
 | `analysis/fundamental_templates.py` | 基本面开放问题模板 |
+| `analysis/research_requests.py` | 研究请求的创建（幂等、配额、开关）、前台 / 后台运行、结束与详情；`python -m investment_assistant.analysis.research_requests run <request_id> / show <request_id>`（`run` 前台跑一次排队中或等数据的请求，`show` 打印请求与各版结论） |
 | `analysis/agent/graph.py` | 提议 + 反方、解读、逐链复查与组合决策子图 |
 | `analysis/agent/tools.py` | 十个只读工具与并发安全调用记录 |
 | `analysis/agent/evidence.py` | 复查提示证据与上一条链证据块 |
@@ -191,7 +193,11 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | 模块 | 做什么 |
 | --- | --- |
 | `optimize/backcheck.py` | backcheck-2 历史规则检查、用例与 CLI |
-| `optimize/repo.py` | 上线前检查、四类 roadmap 版本记录、提案一次决定、brief 历史与证据聚合 SQL；提案生成与审批入口尚未接入 |
+| `optimize/repo.py` | 上线前检查、四类 roadmap 版本记录、提案一次决定（带 `request_id`）、brief 历史与证据聚合 SQL |
+| `optimize/roadmap.py` | 四类记录的幂等导入（`python -m investment_assistant.optimize.roadmap import --dir DIR`）、Markdown 导出（`… export [--out FILE]`，与 `GET /api/roadmap/export.md` 同一函数）、版本 / 决策详情含历史与 brief 状态、`get_roadmap` 工具（宿主经 `ToolContext.bindings` 注入，只读、按运行截止时间过滤） |
+| `optimize/proposals.py` | 周六证据包（7 / 30 天窗口，空就是空）、`agent-optimize-1` 起草（0–3 条，逐条校验，证据包随运行冻结在 `agent_runs.output.evidence_pack`）、批准 / 驳回（同事务建版本与决策编号，`request_id` 重放无副作用）、「批准前无变更」核对（全部 proposed 减去干净集合）、提案列表的冻结证据行 |
+| `optimize/briefs.py` | `agent-impl-brief-1` 写实施 brief（每次尝试追加一行 ok / error，页面可重试），经 `core.runner` 后台提交 |
+| `optimize/runs.py` | 两个优化角色共用的运行壳：可用性、`get_roadmap` 绑定、单阶段运行与 `agent_runs` 行 |
 | `optimize/evidence.py` | SQL 聚合行的五段纯汇总与稳定引用；备源不完整时明示下界，counter 比例只代表运行级成功后继 |
 | `optimize/proposal_check.py`、`optimize/brief_check.py` | 逐条提案引用 / 长度 / 去重校验；实施说明须有验收小节 |
 | `optimize/export.py` | 固定六段 Markdown 导出，决策编号与用户原话保留 |
@@ -207,12 +213,12 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `workflow/recorder.py` | StageRecorder 与 stage_runs 写入，每阶段独立事务 |
 | `workflow/repo.py` | 阶段、运行、恢复、推送窗口与证据行 SQL；可按 stages-6 历史顺序读取，但当前图不升版 |
 | `workflow/targets.py` | 按显式 session / now 调原池、持仓、活跃链算法；冻结 TargetFacts 后委托适配器选目标，保留降级说明与旧库能力边界 |
-| `workflow/screen_collection.py` | 范围日线与筛选新成员补采 |
-| `workflow/check.py` | 原推导 check / 阶段 stages 数据库只读 CLI 实现 |
-| `workflow/__main__.py` | `python -m investment_assistant.workflow check / stages` 入口 |
-| `workflow/nodes/sec_monitor.py` | 调用 SEC 端口、族锁、采集记账与本地研究刷新 |
-| `workflow/nodes/collect.py` | 数据采集节点与原 Collector |
-| `workflow/nodes/screen.py` | 筛选节点与新成员补采接线 |
+| `workflow/screen_collection.py` | 筛选新成员补采（`backfill_new_members`，`registry.run_adapter`，`scope='screen_new_members'`）；范围日线由 `collect` 节点采 |
+| `workflow/check.py` | 汇总核对（D45）：`run_checks(conn, *, session, now)` 七项——推导、持仓状态、账户、`portfolio_checks`（节点实际运行过的日子每个活跃账户一行）、`proposals_without_changes`（`optimize.proposals.violations` 为空）、`data_requests`（无排队超一天）、`agent-4` 研究员状态 ∈ ok / rejected / error / disabled / carried；`check --since` 逐份核对计划与推导，`check --session` 汇总七项，`stages` 核对阶段证据 |
+| `workflow/__main__.py` | `python -m investment_assistant.workflow check [--since D] [--session D] / stages` 入口 |
+| `workflow/nodes/sec_monitor.py` | 调用 SEC 端口扫描 / 通知，再由 `sec_text` 适配器（`scope='sec_monitor'`）下载并建索引未失败的标的；持 `sec_filings` + `sec_text` 两把族锁，一行 `data_fetch_runs`（族 `sec_text`、`detail.scope='sec_monitor'`，D47） |
+| `workflow/nodes/collect.py` | 数据采集节点：按注册表顺序对每个已取族调 `registry.run_adapter`（主源 → 开关开时备源 → 降级），目标来自冻结的宿主事实，再按旧形状拼出 summary |
+| `workflow/nodes/screen.py` | 筛选节点与新成员补采接线（`screen_collection.backfill_new_members` 与日批 / 数据菜单同走 `registry.run_adapter`，`scope='screen_new_members'`，D15） |
 | `workflow/nodes/regime.py` | 区制节点 |
 | `workflow/nodes/signals.py` | 规则候选与逐只计划生成循环 |
 | `workflow/nodes/plan.py` | 计划节点与推导核对 |
@@ -221,8 +227,8 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `workflow/nodes/accounts.py` | 模拟结算 → 真实权益 → 模拟持仓状态 → 当日决策；recent_closed 提供者 |
 | `workflow/nodes/push.py` | 每日发送时机、去重、窗口与记账，调用注入的 send |
 | `workflow/nodes/retro.py` | 复盘阶段、周 / 月发送时机、去重与记账，调用注入的 send |
-| `workflow/nodes/portfolio.py` | 预留占位，不接入当前图 |
-| `workflow/nodes/propose.py` | 预留占位，不接入当前图 |
+| `workflow/nodes/portfolio.py` | 组合检查节点：每个活跃账户每天一行硬结果，真实账户再加 PM 评语；开关关则整节点跳过 |
+| `workflow/nodes/propose.py` | 优化提案节点：开关关 → `feature_disabled`；非北京周六（运行 cutoff 的北京日期，唯一定义在 `optimize/evidence.py: is_proposal_day`，夏 / 冬令时都是周五收盘后的那次运行）且无 `--force-propose` → `not_proposal_day`；无证据 → 成功且不调模型；否则起草并写入提案（`daily run --force-propose` 只解除日期限制） |
 
 ### views：跨层投影
 
@@ -243,7 +249,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 
 ### 边缘接线与 CLI
 
-`tasks/daily.py` 使用 `core.locks`，向 graph 的 run / resume 显式传入有效通知设置、`tasks.ports.send` 与 `tasks.filings._scan`，每次执行写运行报告并处理失败 / 连接失效通知。`tasks/ports.py` 渲染原模板并调用 notifier，签名为 `send(kind, payload, notify_cfg, *, client=None)`；节点拥有发送时机、去重与记账。`tasks/filings.py` 持有 SEC 扫描 / 投递边缘与只手动的 backfill。`services/settings.py` 提供有效设置；API 手动推送走同一端口。
+`tasks/daily.py` 使用 `core.locks`，向 graph 的 run / resume 显式传入有效通知设置、`tasks.ports.send` 与 `tasks.filings._scan`，每次执行写运行报告并处理失败 / 连接失效通知。`tasks/ports.py` 渲染原模板并调用 notifier，签名为 `send(kind, payload, notify_cfg, *, client=None)`；节点拥有发送时机、去重与记账。`tasks/filings.py` 持有 SEC 扫描 / 投递边缘与只手动的 backfill。`services/settings.py` 提供有效设置与四个功能开关的读取 / 变更（`api/routes/features.py`：`GET /api/settings/features` 返回当前值与真实变更历史，`POST …/{flag}` 开关两个方向都必须写理由，同一 `request_id` 重放原结果；一次运行在开始时冻结开关，运行中或续跑前的翻动不影响它）；API 手动推送走同一端口。
 
 数据库驱动的推导核对与阶段证据统一在 `python -m investment_assistant.workflow check / stages`，纯推导留在 `derivation.chain`。账户只读入口为 `python -m investment_assistant.views.account show`，复查入口为 `python -m investment_assistant.workflow.nodes.review chain / recheck / check`，计划表为 `python -m investment_assistant.views.plan_table show`。这些上层 CLI 避免纯计算层反向依赖视图与编排。
 

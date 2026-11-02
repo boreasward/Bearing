@@ -157,5 +157,7 @@ def test_lifespan_scheduler_skipped_without_database(monkeypatch):
 def test_legacy_routes_removed(client):
     for path in ("/api/hermes/agents", "/api/market/signals", "/api/tickers/trends",
                  "/api/strategies/scores", "/api/research/event-study/kinds",
-                 "/api/research/observation-cards/MU", "/api/research/us-references"):
+                 "/api/research/observation-cards/MU"):
         assert client.get(path).status_code == 404, path
+    # v2.13 owns /api/research/{id}: the retired path is now read as a (malformed) research request id
+    assert client.get("/api/research/us-references").status_code == 400

@@ -41,6 +41,12 @@ FRESH_RUN = (timedelta(hours=6), timedelta(minutes=5))      # how old / how far 
 RERUN_END = ('error',)                              # a unit can be re-run when its latest run ended like this ...
 RERUN_SKIP = 'max_attempts'                         # ... or was skipped for this reason (analysis_agent_runner.rerun_agent's rule)
 PENDING_NOTE = '这一节点还没有执行'
+PORTFOLIO_ITEM_KEYS = ('account_id', 'name', 'ok', 'blocked', 'deferred', 'commentary_status')   # per account (UI1)
+PROPOSAL_ITEM_KEYS = ('id', 'title', 'source', 'status')
+# The daily graph each stages version was booked by (spec §24 版本推断); the stages version decides, a report's own
+# ``graph_version`` wins when it has one.
+GRAPH_BY_STAGES = {'stages-4': 'daily-1', 'stages-5': 'daily-2', 'stages-6': 'daily-3'}
+DAILY_STAGES = tuple(GRAPH_BY_STAGES)
 
 
 # ---------------------------------------------------------------- small helpers
@@ -150,6 +156,11 @@ def _tick_items(detail: dict) -> list[dict]:
     return items
 
 
+def _kind(stage_id: str) -> str:
+    """The ``results.kind`` of a node: its id, except ``propose`` whose results are ``proposals`` (UI1)."""
+    return 'proposals' if stage_id == 'propose' else stage_id
+
+
 def _results(conn, stage_id: str, row: dict, *, rerun: bool = False, resets_ready: bool = False,
              summary: dict | None = None) -> dict:
     """The result list of one node (spec §7.1 table): at most ``RESULTS_MAX`` items, ``total`` the real count.
@@ -162,7 +173,7 @@ def _results(conn, stage_id: str, row: dict, *, rerun: bool = False, resets_read
     total: int | None = None
     truncated: bool | None = None      # id-based lists: cut by the cap, not by a reference that has no row (never happens)
     if row.get('status') == 'skipped' and stage_id != 'push':
-        return {'kind': stage_id, 'items': [], 'total': 0, 'truncated': False}
+        return {'kind': _kind(stage_id), 'items': [], 'total': 0, 'truncated': False}
     if stage_id == 'sec_monitor':
         items = [dict(item) for item in outputs.get('filings') or [] if isinstance(item, dict)]
         total = row.get('output_count')
@@ -219,6 +230,9 @@ def _results(conn, stage_id: str, row: dict, *, rerun: bool = False, resets_read
         items = [{'ticker': r['ticker'], 'signal_date': _ts(r['signal_date']), 'outcome': r['outcome'],
                   'review_id': r['id'], 'plan_id': _text(r['new_plan_id'] or r['head_plan_id'])}
                  for i in ordered[:RESULTS_MAX] if (r := found.get(int(i))) is not None]
+    elif stage_id == 'portfolio':
+        items = [{key: item.get(key) for key in PORTFOLIO_ITEM_KEYS} for item in detail.get('accounts') or []
+                 if isinstance(item, dict)]
     elif stage_id == 'accounts':
         items = [dict(item) for item in detail.get('accounts') or [] if isinstance(item, dict)]
     elif stage_id == 'push':
@@ -238,9 +252,12 @@ def _results(conn, stage_id: str, row: dict, *, rerun: bool = False, resets_read
         items = cards + _tick_items(detail)
         total = len(ordered) + len(_tick_items(detail))
         truncated = len(ordered) > RESULTS_MAX
+    elif stage_id == 'propose':
+        items = [{key: item.get(key) for key in PROPOSAL_ITEM_KEYS} for item in detail.get('proposals') or []
+                 if isinstance(item, dict)]
     # 'collect' lists nothing: the fetch block already has every target
     page, count = _page(items, total)
-    return {'kind': stage_id, 'items': page, 'total': count,
+    return {'kind': _kind(stage_id), 'items': page, 'total': count,
             'truncated': count > len(page) if truncated is None else truncated}
 
 
@@ -312,7 +329,8 @@ def _node(conn, stage_id: str, version: str, view: dict, members: list[dict], ef
     status = 'pending' if view['status'] in ('missing', 'not_recorded') else view['status']
     detail = (row or {}).get('detail') if isinstance((row or {}).get('detail'), dict) else {}
     results = (_results(conn, stage_id, row, rerun=rerun, resets_ready=resets_ready, summary=summary)
-               if row is not None else {'kind': stage_id, 'items': [], 'total': 0, 'truncated': False})
+               if row is not None else {'kind': _kind(stage_id), 'items': [],
+                                        'total': 0, 'truncated': False})
     fetch = None
     if stage_id in FETCH_NODES:
         fetch = (_fetch_block(conn, row) if row is not None else None) or {'families': []}
@@ -330,7 +348,9 @@ def _node(conn, stage_id: str, version: str, view: dict, members: list[dict], ef
         'duration_ms': row['duration_ms'] if row is not None else None,
         'did': {'sentence': view['sentence'], 'input_count': view['input_count'], 'output_count': view['output_count'],
                 'skips': view['skips'], 'failures': view['failures'], 'degradations': view['degradations'],
-                'retry': detail.get('retry'), 'timings': detail.get('timings') or {}},
+                'retry': detail.get('retry'), 'timings': detail.get('timings') or {},
+                **({key: detail[key] for key in ('data_requests', 'research_requests') if key in detail}
+                   if stage_id == 'agent' else {})},
         'fetch': fetch, 'results': results,
         'actions': {'resume': bool(resume['allowed'] and resume['node'] == stage_id), 'rerun_agent': again},
     }
@@ -381,7 +401,7 @@ def detail(run_id: str, *, now: datetime, checkpointer_factory=None) -> dict:
         rows = ([] if not ready else workflow_repo.stage_rows_for_run(conn, run_id) if modern
                 else workflow_repo.stage_runs_for_run(conn, run_id))
         reports = workflow_repo.job_reports_for_run(conn, run_id)
-        daily_rows = bool(rows) and rows[0]['stages_version'] in ('stages-4', 'stages-5')
+        daily_rows = bool(rows) and rows[0]['stages_version'] in DAILY_STAGES
         busy = _executing(run_id)
         locked = _locked() if (daily_rows or (not rows and not reports and _fresh(run_id, now))) else False
         if not rows and not reports and not (busy or (locked and _fresh(run_id, now))):
@@ -395,7 +415,7 @@ def _assemble(conn, run_id: str, rows: list[dict], reports: list[dict], *, now: 
     latest = reports[-1] if reports else None
     summary = (latest or {}).get('summary') or {}
     version = rows[0]['stages_version'] if rows else None
-    is_daily = version in ('stages-4', 'stages-5') or (not rows and (latest is None or latest['task'] == 'daily'))
+    is_daily = version in DAILY_STAGES or (not rows and (latest is None or latest['task'] == 'daily'))
     task = latest['task'] if latest else (rows[0]['job'] if rows else 'daily')
     base = {'run_id': run_id, 'task': task, 'executions': _executions(reports), 'resume': _no_resume(),
             'raw_summary': summary, 'nodes': []}
@@ -449,6 +469,6 @@ def _assemble(conn, run_id: str, rows: list[dict], reports: list[dict], *, now: 
                            rerun=is_daily and not locked, resets_ready=resets_ready, summary=summary))
     trigger = rows[0]['trigger'] if rows else (first_report or {}).get('trigger_source')
     return {**base, 'kind': 'daily' if is_daily else 'batch',
-            'graph_version': (summary.get('graph_version') or ('daily-1' if version == 'stages-4' else workflow.DAILY_GRAPH_VERSION)) if is_daily else None, 'stages_version': version,
+            'graph_version': (summary.get('graph_version') or GRAPH_BY_STAGES.get(version, workflow.DAILY_GRAPH_VERSION)) if is_daily else None, 'stages_version': version,
             'session': _ts(session), 'cutoff_at': cutoff, 'trigger': trigger, 'status': status,
             'headline': headline, 'resume': resume, 'nodes': nodes}

@@ -136,7 +136,8 @@ def test_degraded_real_run_has_fetch_targets_and_results(daily_db, clock, notice
     assert bars['title'] == '日线' and bars['target_count'] == bars['ok_count'] == len(bars['targets'])
     assert set(bars['targets'][0]) == TARGET_KEYS and bars['targets'][0]['ok'] is True and bars['scope'] is None
     [sec] = node(detail, 'sec_monitor')['fetch']['families']
-    assert sec['family'] == 'sec_filings'
+    # D47: the monitor node's row is the sec_text family's, scope sec_monitor
+    assert sec['family'] == 'sec_text' and sec['scope'] == 'sec_monitor'
     assert node(detail, 'sec_monitor')['results'] == {
         'kind': 'sec_monitor', 'items': [{'ticker': 'NVDA', 'form': '8-K', 'filing_date': '2026-10-22',
                                           'accession': '0001-26-1', 'notified': True}], 'total': 1, 'truncated': False}
@@ -172,7 +173,7 @@ def test_failed_run_can_be_resumed_and_resumed_run_shows_both_executions(daily_d
     failed = view(factory=factory)
     assert failed['status'] == 'failed' and failed['resume'] == {
         'allowed': True, 'node': 'screen', 'deadline_at': DEADLINE.astimezone(UTC).isoformat(), 'reason': None}
-    assert [n['status'] for n in failed['nodes']][2:] == ['failed'] + ['skipped'] * 8
+    assert [n['status'] for n in failed['nodes']][2:] == ['failed'] + ['skipped'] * 10
     assert {failed['nodes'][0]['status'], failed['nodes'][1]['status']} <= {'success', 'degraded'}
     screen = node(failed, 'screen')
     assert screen['reason'] == 'aborted: flaky screen' and screen['reason_text'] == '运行中断：flaky screen'
@@ -180,7 +181,7 @@ def test_failed_run_can_be_resumed_and_resumed_run_shows_both_executions(daily_d
     assert node(failed, 'regime')['reason_text'] == '上游节点失败，未执行'
     assert [n['id'] for n in failed['nodes'] if n['actions']['resume']] == ['screen']
     assert failed['headline'].startswith(
-        '10 月 22 日的运行在「筛选 `screen-1`」失败（已自动重试 1 次）：运行中断：flaky screen；其后 8 个节点未执行')
+        '10 月 22 日的运行在「筛选 `screen-1`」失败（已自动重试 1 次）：运行中断：flaky screen；其后 10 个节点未执行')
     assert [e['status'] for e in failed['executions']] == ['error'] and failed['executions'][0]['attempt'] == 1
     assert failed['raw_summary']['failed_node'] == 'screen'
     assert resume(clock, factory, 'screen')['run_status'] in ('success', 'degraded')
@@ -190,7 +191,7 @@ def test_failed_run_can_be_resumed_and_resumed_run_shows_both_executions(daily_d
         'allowed': False, 'node': None, 'deadline_at': None, 'reason': 'not_failed'}
     assert [(e['trigger_source'], e['status'], e['resume_node'], e['attempt']) for e in done['executions']] == [
         ('manual', 'error', None, 1), ('resume', done['executions'][1]['status'], 'screen', 2)]
-    assert [n['attempt'] for n in done['nodes']] == [1, 1] + [2] * 9
+    assert [n['attempt'] for n in done['nodes']] == [1, 1] + [2] * 11
     assert [(a['attempt'], a['status']) for a in node(done, 'screen')['attempts']] == [(1, 'failed'),
                                                                                    (2, node(done, 'screen')['status'])]
     assert len(node(done, 'sec_monitor')['attempts']) == 1                       # completed nodes did not run again
@@ -313,7 +314,7 @@ def test_executing_run_without_any_row_is_a_skeleton_whatever_its_age(daily_db):
     old = 'daily-20200101000000-0c0c0c0c'
     with locks._active(old):
         detail = view(old, now=NOW)
-    assert detail['status'] == 'running' and [n['status'] for n in detail['nodes']] == ['pending'] * 11
+    assert detail['status'] == 'running' and [n['status'] for n in detail['nodes']] == ['pending'] * 13
 
 
 def test_just_started_run_is_a_running_skeleton(daily_db):
@@ -327,14 +328,14 @@ def test_just_started_run_is_a_running_skeleton(daily_db):
         with pytest.raises(LookupError):
             view('workbench-' + NOW.strftime('%Y%m%d%H%M%S') + '-0c0c0c0c', now=NOW)
     assert detail['status'] == 'running' and detail['kind'] == 'daily' and set(detail) == TOP_KEYS
-    assert [n['status'] for n in detail['nodes']] == ['pending'] * 11 and detail['executions'] == []
+    assert [n['status'] for n in detail['nodes']] == ['pending'] * 13 and detail['executions'] == []
 
 
 def test_refused_run_without_rows(daily_db):
     report(daily_db, RUN_ID, status='error', summary={'error': 'migration_028_missing', 'run_status': 'failed'})
     detail = view()
     assert detail['kind'] == 'daily' and detail['status'] == 'failed' and detail['resume']['allowed'] is False
-    assert [n['status'] for n in detail['nodes']] == ['pending'] * 11
+    assert [n['status'] for n in detail['nodes']] == ['pending'] * 13
     assert 'migration_028_missing' in detail['headline'] and detail['raw_summary']['error'] == 'migration_028_missing'
 
 
@@ -474,7 +475,7 @@ def test_agent_results_can_rerun(daily_db):
 
 def test_agent_node_lists_rerunnable_units_in_actions(daily_db):
     failed = booked_agent_run(daily_db, 'BBB', 'error', 'model_error')
-    book(daily_db, RUN_ID, only=stages_module.STAGE_IDS[:-1], rows_by_stage={'agent': agent_row([failed])})
+    book(daily_db, RUN_ID, only=stages_module.STAGE_IDS_V4[:-1], rows_by_stage={'agent': agent_row([failed])})
     detail = view()                                               # the run stopped before its last node: interrupted
     assert detail['status'] == 'failed'
     assert node(detail, 'agent')['actions']['rerun_agent'] == [
@@ -672,7 +673,7 @@ def test_run_detail_never_calls_fetchers(daily_db, clock, notices, job_reports, 
     import requests
 
     from investment_assistant.data import fetch_policy
-    import investment_assistant.data.collect as collect
+    import investment_assistant.data.registry as data_registry
     from investment_assistant.core.llm import connection as agent_connection, model as agent_model
 
     seed_watchlist(daily_db, [('NVDA', ['core'])])
@@ -687,12 +688,12 @@ def test_run_detail_never_calls_fetchers(daily_db, clock, notices, job_reports, 
                          (agent_connection, ('read_for_settings', 'status_view', 'access_token', 'models',
                                              'first_failure_since_ok')),
                          (fetch_policy, ('fetch', 'policy_session')),
-                         (collect, ('bars_one', 'news_one', 'sec_listing', 'fred_series')),
+                         (data_registry, ('run_adapter',)),
                          (httpx.Client, ('send',)), (requests.Session, ('request',))):
         for name in names:
             monkeypatch.setattr(owner, name, forbidden)
     detail = view(factory=factory)
-    assert detail['status'] == 'degraded' and len(detail['nodes']) == 11
+    assert detail['status'] == 'degraded' and len(detail['nodes']) == 13
 
 
 def test_detail_json_is_serialisable(daily_db, clock, notices, job_reports, scripted_model):
@@ -714,3 +715,53 @@ def test_accounts_results_expose_settlement_equity_holdings_and_decision(daily_d
     report(daily_db,RUN_ID,summary={'graph_version':'daily-2','run_status':'success'})
     result=view()
     assert len(result['nodes'])==11 and node(result,'accounts')['results']['items']==[record]
+
+
+# ------------------------------------------------------------------------------------------------ stages-6 runs (daily-3)
+
+@pytest.mark.parametrize('version, graph', [('stages-4', 'daily-1'), ('stages-5', 'daily-2'), ('stages-6', 'daily-3')])
+def test_graph_version_follows_the_stages_version(daily_db, version, graph):
+    book(daily_db, RUN_ID, version=version)
+    report(daily_db, RUN_ID, summary={'cutoff_at': NOW.isoformat()})            # a report without a graph_version
+    detail = view()
+    assert (detail['kind'], detail['stages_version'], detail['graph_version']) == ('daily', version, graph)
+    assert [n['id'] for n in detail['nodes']] == list(stages_module.STAGE_IDS_BY_VERSION[version])
+
+
+def test_stages_6_portfolio_proposals_and_agent_request_counts(daily_db):
+    accounts = [{'account_id': 'real', 'name': '真实账户', 'ok': 2, 'blocked': 1, 'deferred': 0,
+                 'commentary_status': 'ok', 'commentary_reason': None},
+                {'account_id': 'paper', 'name': '模拟', 'ok': 1, 'blocked': 0, 'deferred': 1,
+                 'commentary_status': None}]
+    proposals = [{'id': 7, 'title': '补采财报', 'source': 'data_failures', 'status': 'proposed', 'body': 'x'}]
+    requests = {'queued': 3, 'fetched': 2, 'failed': 1, 'deferred': 0, 'reruns': 1}
+    book(daily_db, RUN_ID, version='stages-6', rows_by_stage={
+        'portfolio': {'detail': {'accounts': accounts}, 'input_count': 2, 'output_count': 2},
+        'propose': {'detail': {'proposals': proposals}, 'output_count': 1},
+        'agent': {'detail': {'data_requests': requests, 'research_requests': 2}}})
+    report(daily_db, RUN_ID, summary={'cutoff_at': NOW.isoformat()})
+    detail = view()
+    assert len(detail['nodes']) == 13
+    assert node(detail, 'portfolio')['results'] == {
+        'kind': 'portfolio', 'total': 2, 'truncated': False,
+        'items': [{key: item.get(key) for key in ('account_id', 'name', 'ok', 'blocked', 'deferred',
+                                                   'commentary_status')} for item in accounts]}
+    assert node(detail, 'propose')['results'] == {
+        'kind': 'proposals', 'total': 1, 'truncated': False,
+        'items': [{'id': 7, 'title': '补采财报', 'source': 'data_failures', 'status': 'proposed'}]}
+    did = node(detail, 'agent')['did']
+    assert did['data_requests'] == requests and did['research_requests'] == 2
+    assert 'data_requests' not in node(detail, 'review')['did']          # the counts belong to the agent node
+    assert 'portfolio' in node(detail, 'portfolio')['did']['sentence'] or '账户' in node(detail, 'portfolio')['did']['sentence']
+
+
+def test_skipped_stages_6_nodes_list_nothing_with_their_kind(daily_db):
+    book(daily_db, RUN_ID, version='stages-6', rows_by_stage={
+        'portfolio': {'status': 'skipped', 'reason': 'feature_disabled'},
+        'propose': {'status': 'skipped', 'reason': 'not_proposal_day'}})
+    report(daily_db, RUN_ID, summary={'cutoff_at': NOW.isoformat()})
+    detail = view()
+    assert node(detail, 'portfolio')['results'] == {'kind': 'portfolio', 'items': [], 'total': 0, 'truncated': False}
+    assert node(detail, 'propose')['results'] == {'kind': 'proposals', 'items': [], 'total': 0, 'truncated': False}
+    assert node(detail, 'portfolio')['reason_text'] == '功能开关已关闭'
+    assert node(detail, 'propose')['reason_text'] == '今天不是提案日（北京时间周六）'

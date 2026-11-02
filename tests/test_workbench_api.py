@@ -994,8 +994,8 @@ def test_discussion_turn_route_checks_submits_and_tracks(client, monkeypatch):
     monkeypatch.setattr(discussion, 'ask_check', lambda discussion_id, payload, *, now: asked.append(
         (discussion_id, payload, now)) or {'turn_id': 11, 'run_id': 'uuid-1', 'replayed': False})
     monkeypatch.setattr(discussion, 'answer', lambda discussion_id, turn_id, *, now, deps=None, run_id,
-                        read_derivation, read_agent_run:
-                        ran.append((discussion_id, turn_id, now, run_id)) or {'status': 'ok'})
+                        read_derivation, read_agent_run, get_roadmap:
+                        ran.append((discussion_id, turn_id, now, run_id, get_roadmap)) or {'status': 'ok'})
     monkeypatch.setattr(discussion, 'track', lambda key, runner_id: tracked.append((key, runner_id)))
     monkeypatch.setattr(runner, 'submit', lambda kind, fn, *, with_run_id=False:
                         submitted.append((kind, fn, with_run_id)) or 'discuss-1')
@@ -1006,7 +1006,9 @@ def test_discussion_turn_route_checks_submits_and_tracks(client, monkeypatch):
     [(kind, fn, with_run_id)] = submitted
     assert kind == 'discuss' and with_run_id is True and ran == []
     fn('discuss-1')
-    assert ran == [(5, 11, t0, 'discuss-1')]
+    from investment_assistant.optimize import roadmap as optimize_roadmap
+    # R26: the edge host that launches the discussion binds get_roadmap (review never imports optimize)
+    assert ran == [(5, 11, t0, 'discuss-1', optimize_roadmap.get_roadmap)]
 
 
 def test_discussion_turn_replay_and_failed_submit(client, monkeypatch):
@@ -1190,7 +1192,8 @@ def test_existing_keys_unchanged(seeded, client):
     assert OLD_KEYS | NEW_KEYS <= set(instrument) and set(instrument) == OLD_KEYS | NEW_KEYS | {'knowledge'}
     today = client.get('/api/workbench/today').json()
     assert {'session', 'units', 'extended_units', 'holdings', 'market', 'screen', 'chains', 'timeline_ready',
-            'retired'} == set(today)
+            'retired', 'portfolio_check'} == set(today)               # v2.14 §7.4 adds the portfolio check block
+    assert today['portfolio_check']['status'] in ('not_computed', 'degraded', 'ready')
     assert today['units'] == [] and today['extended_units'] == [] and today['retired'] is True      # D34
     unit = next(u for u in client_json(d_views_today.unit_cards(now=BATCH_NOW))['units'] if u['ticker'] == 'AAA')
     assert {'id', 'status', 'model', 'agent_version', 'output', 'counter', 'plan', 'input_tokens', 'output_tokens',

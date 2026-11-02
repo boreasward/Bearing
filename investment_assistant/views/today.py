@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from investment_assistant.core import schema as core_schema, tx as core_tx
-from investment_assistant.core.constants import OPEN_UNIT_DAYS, NEWS_LOOKBACK_DAYS
+from investment_assistant.core import features as core_features, schema as core_schema, tx as core_tx
+from investment_assistant.core.constants import OPEN_UNIT_DAYS, NEWS_LOOKBACK_DAYS, REAL_ACCOUNT_ID
+from investment_assistant.core.texts import RUN_REASON_TEXT
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.adapters import bars
 from investment_assistant.execution import chains as execution_chains, plan_context as execution_plan_context, repo as execution_repo
@@ -94,6 +95,37 @@ def _unit_cards(conn, session: date, *, now: datetime, ready: bool) -> tuple[lis
     _attach_knowledge_refs(conn, [unit.get('agent') for unit in units])
     return units, extended_units
 
+PORTFOLIO_FLAG = 'portfolio_manager'
+_PORTFOLIO_REASONS = {'migration_031_missing': '需执行迁移 031', 'feature_disabled': RUN_REASON_TEXT['feature_disabled'],
+                      'not_run': '组合检查节点尚未运行', 'agent_unavailable': RUN_REASON_TEXT['agent_unavailable']}
+
+
+def portfolio_check_view(conn, session: date, *, account_id=REAL_ACCOUNT_ID, enabled: bool | None = None) -> dict[str, Any]:
+    """The account's portfolio check of ``session`` as 「今日」 shows it (spec §7.4, K2):
+    ``{status, reason, session, cutoff_at, result, commentary}``.
+
+    ``not_computed``: migration 031 has not run; the ``portfolio_manager`` switch is off (the whole node was skipped, so
+    a stored row of the same session from an earlier run is deliberately NOT shown as this version's check); or the
+    switch is on but the node left no row (it has not run yet, or failed). ``degraded``: the hard result exists but has
+    no successful PM commentary (model unavailable, rejected or failed). ``ready``: hard result and commentary.
+    ``enabled`` is the switch the caller reads (the current one by default; the push passes the run's frozen one)."""
+    view: dict[str, Any] = {'status': 'not_computed', 'reason': None, 'session': session, 'cutoff_at': None,
+                            'result': None, 'commentary': None}
+    if not core_schema.five_layers_ready(conn):
+        return {**view, 'reason': _PORTFOLIO_REASONS['migration_031_missing']}
+    if enabled is None:
+        enabled = core_features.current(conn)[PORTFOLIO_FLAG]
+    if not enabled:
+        return {**view, 'reason': _PORTFOLIO_REASONS['feature_disabled']}
+    row = execution_repo.portfolio_check_for(conn, account_id, session)
+    if row is None:
+        return {**view, 'reason': _PORTFOLIO_REASONS['not_run']}
+    view.update(cutoff_at=row['cutoff_at'], result=row['result'], commentary=row['commentary'])
+    if row['commentary'] is None:
+        return {**view, 'status': 'degraded', 'reason': _PORTFOLIO_REASONS['agent_unavailable']}
+    return {**view, 'status': 'ready'}
+
+
 def _today_view(conn, session: date, *, now: datetime, cards: bool) -> dict[str, Any]:
     ready = core_schema.timeline_ready(conn)      # once per request (v2.5 §6.5)
     units, extended_units = _unit_cards(conn, session, now=now, ready=ready) if cards else ([], [])
@@ -107,7 +139,8 @@ def _today_view(conn, session: date, *, now: datetime, cards: bool) -> dict[str,
     screen_report = screening.report(conn, session, now=now)
     view = {'session': session, 'units': units, 'extended_units': extended_units,
             'holdings': holdings, 'market': market, 'screen': screen_report,
-            'chains': chains, 'timeline_ready': ready}
+            'chains': chains, 'timeline_ready': ready,
+            'portfolio_check': portfolio_check_view(conn, session)}
     if not cards:
         view['retired'] = True
     return view

@@ -64,6 +64,16 @@ def db(workbench_db, monkeypatch):
     return workbench_db
 
 
+@pytest.fixture
+def db_pre031(workbench_db_pre031, monkeypatch):
+    """The schema before migration 031 (spec §15: new interfaces 503, old ones as before)."""
+    @contextmanager
+    def connection():
+        yield workbench_db_pre031
+    monkeypatch.setattr(core_tx, 'connection', connection)
+    return workbench_db_pre031
+
+
 def deps(sources, **overrides):
     return service.Deps(bar_fetcher=sources.bars, news_fetcher=sources.news,
                         filing_source=sources, **overrides)
@@ -212,7 +222,8 @@ def test_lock_released_when_connection_closes(db, monkeypatch):
     assert submitted == [('data:bars', True)]
 
 
-def test_start_fetch_needs_migration(db):
+def test_start_fetch_needs_migration(db_pre031):
+    db = db_pre031
     db.execute('DROP TABLE data_fetch_runs')
     with pytest.raises(service.Unavailable, match='024'):
         data_view.start_fetch('bars', None, now_fn=lambda: NOW, deps=deps(Sources()))
@@ -242,7 +253,7 @@ def test_probe_unlock_failure_discards_connection(db, monkeypatch):
     assert len(discarded) == 1 and discarded[0] is db
 
 
-def test_pre031_manual_uses_primary_only_without_feature_queries(db, monkeypatch):
+def test_pre031_manual_uses_primary_only_without_feature_queries(db_pre031, monkeypatch):
     def unavailable(*args, **kwargs):
         pytest.fail('pre031 cannot read new feature/request tables')
     monkeypatch.setattr(data_view.features, 'frozen', unavailable)
@@ -261,7 +272,8 @@ def test_pre031_manual_uses_primary_only_without_feature_queries(db, monkeypatch
 
 
 @pytest.mark.parametrize('family', ['earnings', 'fundamentals', 'sec_text', 'sector'])
-def test_new_manual_and_detail_require_031_before_any_work(db, monkeypatch, family):
+def test_new_manual_and_detail_require_031_before_any_work(db_pre031, monkeypatch, family):
+    db = db_pre031
     from investment_assistant.api.routes.data import _call
     from fastapi import HTTPException
     def forbidden(*args, **kwargs):

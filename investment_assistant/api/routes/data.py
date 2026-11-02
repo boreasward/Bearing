@@ -39,6 +39,11 @@ def overview():
     return _call(data_view.overview, now=_now())
 
 
+@router.get('/api/data/indicators')
+def indicators():
+    return _call(data_view.indicators)
+
+
 @router.get('/api/data/families/{family_id}')
 def family_detail(family_id: str):
     return _call(data_view.family_detail, family_id, now=_now())

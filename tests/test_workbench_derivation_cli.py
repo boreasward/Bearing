@@ -168,7 +168,7 @@ def test_stages_missing_row_fails(wired, monkeypatch, capsys):
 
 def test_run_stage_count_by_version():
     assert derivation.RUN_STAGE_COUNT == {'stages-1': 7, 'stages-2': 8, 'stages-3': 9, 'stages-4': 10,
-                                          'stages-5': 11}
+                                          'stages-5': 11, 'stages-6': 13}
     assert {v: len(ids) for v, ids in stages_module.STAGE_IDS_BY_VERSION.items()} == derivation.RUN_STAGE_COUNT
 
 
@@ -336,9 +336,23 @@ def test_derivation_stages_5_counts_account_node(db28, capsys):
     # Repository consumers use their owning layers below.
 
     run_id = 'daily-20261023033000-dddddddd'
-    for stage in stages_module.STAGE_IDS:
+    for stage in stages_module.STAGE_IDS_V5:
         workflow_repo.insert_stage_run(db28, {**_row(run_id, stage, 1, 'success'), 'stages_version': 'stages-5'})
     _insert_report(db28, run_id, datetime(2026, 10, 23, 3, 30, tzinfo=UTC), task='daily')
     db28.commit()
     code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())
     assert code == 0 and '11 行' in _line(out, run_id) and 'stages-5' in _line(out, run_id)
+
+
+def test_derivation_stages_6_counts_portfolio_and_propose(db28, capsys):
+    run_id = 'daily-20261023033000-eeeeeeee'
+    for stage in stages_module.STAGE_IDS:
+        workflow_repo.insert_stage_run(db28, {**_row(run_id, stage, 1, 'success'), 'stages_version': 'stages-6'})
+    _insert_report(db28, run_id, datetime(2026, 10, 23, 3, 30, tzinfo=UTC), task='daily')
+    db28.commit()
+    code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())
+    assert code == 0 and '13 行' in _line(out, run_id) and 'stages-6' in _line(out, run_id)
+    db28.execute("DELETE FROM stage_runs WHERE run_id = %s AND stage = 'portfolio'", [run_id])
+    db28.commit()
+    code, out = _run(capsys, 'stages', '--session', SESSION.isoformat())
+    assert code == 1 and 'portfolio' in _line(out, '缺少阶段')
