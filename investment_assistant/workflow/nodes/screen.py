@@ -4,7 +4,8 @@ from contextlib import ExitStack
 from datetime import date, datetime
 from typing import Any
 
-from investment_assistant.core import stages as stages_module, tx as core_tx
+from investment_assistant.config import AssistantConfig
+from investment_assistant.core import features as core_features, schema as core_schema, stages as stages_module, tx as core_tx
 from investment_assistant.data import collect
 from investment_assistant.analysis import pool as pool_module, screening, units as analysis_units
 from investment_assistant.workflow import screen_collection as workflow_screen_collection
@@ -65,6 +66,14 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
         _stage_finish(ctx, 'screen', failed=failed)
     return {'summary': summary, 'pool': _pool_state(pool), 'manual_pool': _pool_state(manual_pool), 'held': held}
 
+def _run_features(state: dict[str, Any]) -> dict[str, bool]:
+    """The run's frozen switches; the v2.7 shell has none, so the current ones (default on) — as the collect node reads them."""
+    frozen = state.get('features')
+    if frozen is not None:
+        return dict(frozen)
+    with core_tx._tx() as conn:
+        return core_features.frozen(conn) if core_schema.five_layers_ready(conn) else dict.fromkeys(core_features.FLAGS, True)
+
 def _backfill_members(new_members: list[str], *, state: dict[str, Any], ctx, acc, summary: dict[str, Any],
                       now: datetime, session: date, fetched: set[str], job: str,
                       record_trigger: str | None, run_id: str | None) -> None:
@@ -81,7 +90,9 @@ def _backfill_members(new_members: list[str], *, state: dict[str, Any], ctx, acc
             locks.enter_context(collect.family_locks(['news', 'sec_filings']))
         got = workflow_screen_collection.backfill_new_members(
             new_members, session=session, now=now, deps=ctx.deps, drop_after=drop_after, fetched=fetched,
-            ny_date=date.fromisoformat(state['ny_date']),
+            ny_date=date.fromisoformat(state['ny_date']), features=_run_features(state),
+            config=ctx.config if isinstance(ctx.config, AssistantConfig) else None,
+            trigger=record_trigger or 'scheduled', run_id=run_id,
             news_tally=tallies['news'] if tallies is not None else None,
             sec_tally=tallies['sec_filings'] if tallies is not None else None)
     for ticker in new_members:
@@ -104,16 +115,19 @@ def _backfill_members(new_members: list[str], *, state: dict[str, Any], ctx, acc
             entry['error'] = '; '.join(problems)
             summary['errors'].extend(f'{ticker} {p}' for p in problems)
         summary['tickers'][ticker] = entry
-    if got['filings_error'] is not None:
+    filings_error, listed = got['filings_error'], got['filings']
+    if filings_error is None and listed is not None and listed.get('errors') and not listed.get('by_ticker'):
+        filings_error, listed = next(iter(listed['errors'].values())), None     # nothing listed: the v2.7 whole-call failure
+    if filings_error is not None:
         if 'error' not in (summary.get('filings') or {}):       # one failure line, however many calls failed
-            summary['errors'].append(f"SEC listings: {got['filings_error']}")
+            summary['errors'].append(f"SEC listings: {filings_error}")
         summary['sources']['sec'] = ['all']
         if not isinstance(summary.get('filings'), dict) or 'error' not in summary['filings']:
-            summary['filings'] = {'error': got['filings_error']}
-    elif got['filings'] is not None:
-        _merge_filings(summary, got['filings'])
+            summary['filings'] = {'error': filings_error}
+    elif listed is not None:
+        _merge_filings(summary, listed)
         if 'error' not in (summary.get('filings') or {}):
-            _note_sec_errors(summary, got['filings'], whole_call=False)
+            _note_sec_errors(summary, listed, whole_call=False)
     if tallies is not None:
         finished_at = wall()
         rows = [tallies[family].row(trigger=record_trigger or 'scheduled', run_id=run_id, session=session,

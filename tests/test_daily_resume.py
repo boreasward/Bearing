@@ -65,11 +65,11 @@ def test_resume_appends_attempt_rows_only_for_rerun_nodes(daily_db, clock, notic
     before = {r['id'] for r in rows(daily_db)}
     resume(clock, factory, 'signals')
     new = [r for r in rows(daily_db) if r['id'] not in before]
-    assert [r['stage'] for r in new] == ['signals', 'plan', 'agent', 'review', 'accounts', 'push', 'retro'] and {r['attempt'] for r in new} == {2}
+    assert [r['stage'] for r in new] == ['signals', 'plan', 'agent', 'review', 'portfolio', 'accounts', 'push', 'retro', 'propose'] and {r['attempt'] for r in new} == {2}
     old = [r for r in rows(daily_db) if r['id'] in before]
-    assert {r['stage'] for r in old if r['attempt'] == 1} == set(workflow.NODES)          # the failed run's eleven rows stay
+    assert {r['stage'] for r in old if r['attempt'] == 1} == set(workflow.NODES)          # the failed run's thirteen rows stay
     eff = effective(daily_db)
-    assert len(eff) == 11 and all(r['attempt'] == (1 if i < 4 else 2) for i, r in enumerate(eff.values()))
+    assert len(eff) == 13 and all(r['attempt'] == (1 if i < 4 else 2) for i, r in enumerate(eff.values()))
     assert eff['signals']['status'] in ('success', 'degraded', 'partial')
 
 
@@ -248,7 +248,7 @@ def test_derivation_stages_accepts_resumed_runs(daily_db, clock, notices, job_re
                  checkpointer_factory=factory, sleep=clock.sleep, notify_cfg=NotifyCfg())
     lines: list[str] = []
     assert derivation._stages(SimpleNamespace(session=SESSION), lines.append) == 0, '\n'.join(lines)
-    assert any('stages-5' in line and '11 行' in line and '含重试' in line for line in lines)
+    assert any('stages-6' in line and '13 行' in line and '含重试' in line for line in lines)
     # a counterfeit: a completed node "ran again" with attempt 2
     row = {key: value for key, value in effective(daily_db)['collect'].items() if key not in ('id', 'created_at')}
     workflow_repo.insert_stage_run(daily_db, {**row, 'attempt': 2})

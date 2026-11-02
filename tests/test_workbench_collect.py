@@ -1,7 +1,7 @@
 """Offline tests for collect.py's tally and fetch-run writing (v2.3 Task 5, design §6.2)."""
 import investment_assistant.data.repo as data_repo
 import contextlib
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
@@ -12,6 +12,7 @@ from investment_assistant.core import tx as core_tx
 from investment_assistant.data import fetch_policy as fp
 import investment_assistant.data.collect as collect
 import investment_assistant.core.tx as service
+from _adapter_calls import adapter_run
 
 SESSION = date(2026, 10, 22)
 NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)
@@ -264,7 +265,7 @@ def stored(monkeypatch):
         yield object()
 
     monkeypatch.setattr(core_tx, '_tx', tx)
-    monkeypatch.setattr(data_repo, 'store_bars', lambda conn, t, rows, *, now: {'inserted': len(rows) - 1,
+    monkeypatch.setattr(data_repo, 'store_bars', lambda conn, t, rows, *, now, source='yfinance': {'inserted': len(rows) - 1,
                                                                                    'unchanged': 1})
     monkeypatch.setattr(data_repo, 'store_news', lambda conn, entries, *, now: {'inserted': len(entries),
                                                                                    'existing': 0})
@@ -290,18 +291,20 @@ def test_rows_and_latest_per_family(stored):
          'edgar_url': 'https://www.sec.gov/a', 'accepted_at': None},
         {'ticker': tickers[0], 'form': '8-K', 'filing_date': '2026-10-25', 'accession_number': 'b', 'items': None,
          'edgar_url': 'https://www.sec.gov/b', 'accepted_at': None}])
-    deps = SimpleNamespace(
-        bar_fetcher=lambda *a: frame, news_fetcher=lambda t: raw, filing_source=source,
+    kwargs = dict(
+        bar_fetcher=lambda *a: frame, news_fetcher=lambda t: raw, filing_source=source, fred_api_key='K',
         macro_fetcher=lambda url, *, params: ({'observations': [{'date': '2026-10-26', 'value': '1'},
                                                                  {'date': '2026-10-27', 'value': '2'}]}, {'ok': True}))
-    bars, news, sec, fred = (collect.Tally(f, 'daily') for f in ('bars', 'news', 'sec_filings', 'fred'))
-    collect.bars_one('NVDA', session=SESSION, now=NOW, deps=deps, lookback_days=10, tally=bars)
-    collect.news_one('NVDA', now=NOW, deps=deps, tally=news)
-    collect.sec_listing(['NVDA'], session=SESSION, now=NOW, deps=deps, tally=sec)
-    collect.fred_series('T10Y2Y', session=SESSION, now=NOW, deps=deps, api_key='K', tally=fred)
+    later = published + timedelta(days=1)          # the stores cut at the run's cutoff: the news must be behind it
+    runs = {family: adapter_run(family, [target], session=SESSION, now=later, **kwargs)
+            for family, target in (('bars', 'NVDA'), ('news', 'NVDA'), ('sec_filings', 'NVDA'), ('fred', 'T10Y2Y'))}
+    bars, news, sec, fred = (runs[f].tally for f in ('bars', 'news', 'sec_filings', 'fred'))
     assert (_targets(bars)['NVDA']['rows'], _targets(bars)['NVDA']['latest']) == (2, '2026-10-28')   # newly written
     assert (_targets(news)['NVDA']['rows'], _targets(news)['NVDA']['latest']) == (2, published.isoformat())
-    assert (_targets(sec)['NVDA']['rows'], _targets(sec)['NVDA']['latest']) == (2, '2026-10-27')     # filings found
+    # the SEC listing books what the store wrote (new news rows + filled acceptance times); the filings found and the
+    # newest filing date are in the store receipt
+    assert runs['sec_filings'].stored['NVDA'][2]['listed'] == 2                                      # filings found
+    assert (_targets(sec)['NVDA']['latest']) == '2026-10-27'
     assert (_targets(fred)['T10Y2Y']['rows'], _targets(fred)['T10Y2Y']['latest']) == (3, '2026-10-27')
     for tally in (bars, news, sec, fred):
         item = next(iter(_targets(tally).values()))
@@ -309,15 +312,12 @@ def test_rows_and_latest_per_family(stored):
 
 
 def test_failures_after_a_good_fetch_keep_the_attempts(stored, monkeypatch):
-    def broken_store(conn, t, rows, *, now):
+    def broken_store(conn, t, rows, *, now, source='yfinance'):
         raise RuntimeError('disk full')
 
     monkeypatch.setattr(data_repo, 'store_bars', broken_store)
     frame = pd.DataFrame({'Open': 10.0, 'High': 11.0, 'Low': 9.0, 'Close': 10.5, 'Adj Close': 10.5,
                           'Volume': 1000, 'Stock Splits': 0.0}, index=pd.DatetimeIndex(['2026-10-28']))
-    tally = collect.Tally('bars', 'daily', ['NVDA'])
-    with pytest.raises(RuntimeError, match='disk full'):
-        collect.bars_one('NVDA', session=SESSION, now=NOW, deps=SimpleNamespace(bar_fetcher=lambda *a: frame),
-                         lookback_days=10, tally=tally)
+    tally = adapter_run('bars', ['NVDA'], session=SESSION, now=NOW, bar_fetcher=lambda *a: frame).tally
     item = _targets(tally)['NVDA']
     assert item['ok'] is False and item['reason'] == 'disk full' and item['attempts'] == 1

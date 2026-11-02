@@ -1,4 +1,4 @@
-"""The ``daily`` graph (v2.8): eleven nodes, rows, node retry, holidays, budgets, locks, the fault drill.
+"""The ``daily`` graph (v2.8, thirteen nodes since daily-3): rows, node retry, holidays, budgets, locks, the fault drill.
 
 SQL tests on the disposable database (``daily_db``: the workbench schema plus migration 028). Fetchers, the model,
 the checkpointer, ``sleep``, the clocks, the notifier and ``job_reports`` are fakes; nothing leaves the process."""
@@ -22,6 +22,7 @@ from investment_assistant.tasks import filings, ports
 from investment_assistant.core import locks
 import investment_assistant.core.tx as service
 import investment_assistant.core.stages as stages
+import investment_assistant.data.registry as data_registry
 import investment_assistant.workflow.graph as workflow
 import investment_assistant.analysis.regime as d_analysis_regime
 import investment_assistant.workflow.batch as d_workflow_batch
@@ -83,7 +84,7 @@ def statuses(conn, run_id=RUN_ID):
 # ------------------------------------------------------------------------------------------------ rows per path
 
 @pytest.mark.parametrize('path', ['scheduled', 'manual', 'holiday', 'explicit_pool', 'failed_midway'])
-def test_daily_eleven_rows_each_path(daily_db, clock, notices, path, monkeypatch):
+def test_daily_thirteen_rows_each_path(daily_db, clock, notices, path, monkeypatch):
     kwargs: dict = {}
     if path == 'scheduled':
         kwargs.update(trigger='scheduled')
@@ -96,17 +97,18 @@ def test_daily_eleven_rows_each_path(daily_db, clock, notices, path, monkeypatch
         monkeypatch.setitem(workflow.BODIES, 'regime', d_workflow_nodes_regime.run)
     result = go(daily_db, clock, **kwargs)
     eff = effective(daily_db)
-    assert list(eff) == list(workflow.NODES) and len(eff) == 11          # exactly eleven effective rows, in stages-5 order
-    assert [r['stage'] for r in rows(daily_db)[:11]] == list(stages.STAGE_IDS)
-    assert {r['stages_version'] for r in rows(daily_db)} == {'stages-5'} and {r['job'] for r in rows(daily_db)} == {'daily'}
+    assert list(eff) == list(workflow.NODES) and len(eff) == 13          # exactly thirteen effective rows, in stages-6 order
+    assert [r['stage'] for r in rows(daily_db)[:13]] == list(stages.STAGE_IDS)
+    assert {r['stages_version'] for r in rows(daily_db)} == {'stages-6'} and {r['job'] for r in rows(daily_db)} == {'daily'}
     if path == 'failed_midway':
         assert result['status'] == 'failed' and result['failed_node'] == 'regime'
-        assert [eff[s]['status'] for s in workflow.NODES[4:]] == ['skipped'] * 7
+        assert [eff[s]['status'] for s in workflow.NODES[4:]] == ['skipped'] * 9
         assert {eff[s]['reason'] for s in workflow.NODES[4:]} == {'upstream_failed'}
-        assert len(rows(daily_db)) == 11 and eff['regime']['status'] == 'failed'
+        assert len(rows(daily_db)) == 13 and eff['regime']['status'] == 'failed'
         assert eff['regime']['detail']['retry']['waited_s'] == 60 and clock.sleeps == [60]
     if path == 'holiday':
-        assert [eff[s]['reason'] for s in workflow.NODES[:9]] == ['not_trading_day'] * 9
+        assert [eff[s]['reason'] for s in workflow.NODES[:10]] == ['not_trading_day'] * 10
+        assert eff['propose']['reason'] != 'upstream_failed'            # judges its own day, like push and retro
 
 
 @pytest.fixture(autouse=True)
@@ -156,7 +158,7 @@ def test_node_failed_twice_stops_chain(daily_db, clock, notices, monkeypatch):
     eff = effective(daily_db)
     assert eff['regime']['status'] == 'failed' and eff['regime']['reason'] == 'aborted: flaky regime'
     assert eff['regime']['detail']['retry']['waited_s'] == 60
-    assert [eff[s]['reason'] for s in workflow.NODES[4:]] == ['upstream_failed'] * 7
+    assert [eff[s]['reason'] for s in workflow.NODES[4:]] == ['upstream_failed'] * 9
     assert result['summary']['run_status'] == 'failed' and result['summary']['failed_node'] == 'regime'
     assert result['summary']['error'] == 'regime: aborted: flaky regime'
     assert daily_db.execute('SELECT count(*) FROM signal_candidates').fetchone()[0] == 0   # nothing after the stop
@@ -178,7 +180,7 @@ def test_a_state_read_failing_after_a_node_failure_keeps_that_failure(daily_db, 
     eff = effective(daily_db)
     assert [eff[s]['status'] for s in workflow.NODES if eff[s]['status'] == 'failed'] == ['failed']
     assert eff['regime']['reason'] == 'aborted: flaky regime'
-    assert [eff[s]['reason'] for s in workflow.NODES[4:]] == ['upstream_failed'] * 7
+    assert [eff[s]['reason'] for s in workflow.NODES[4:]] == ['upstream_failed'] * 9
 
 
 def test_unavailable_not_retried(daily_db, clock, notices, monkeypatch):
@@ -219,8 +221,8 @@ def test_target_failure_never_fails_node(daily_db, clock, notices):
 def test_holiday_skips_before_push_and_retro_judges_due(daily_db, clock, notices):
     result = go(daily_db, clock, trigger='scheduled', now=HOLIDAY, no_seed=True)
     eff = effective(daily_db)
-    assert [eff[s]['status'] for s in workflow.NODES[:9]] == ['skipped'] * 9
-    assert {eff[s]['reason'] for s in workflow.NODES[:9]} == {'not_trading_day'}
+    assert [eff[s]['status'] for s in workflow.NODES[:10]] == ['skipped'] * 10
+    assert {eff[s]['reason'] for s in workflow.NODES[:10]} == {'not_trading_day'}
     assert eff['push']['status'] == 'success' and eff['push']['detail']['closed'] is True
     assert any('休市' in title for title in notices.titles('workbench'))
     # the retro node judged the weekly / monthly review on a day without trading: the due week was generated
@@ -301,9 +303,9 @@ def test_collect_includes_universe_bars(daily_db, clock, notices):
     assert 'MU' in {t['target'] for t in bars_row[0]['targets']}            # the range's bars are the collect node's
     assert ('bars', 'MU') in sources.calls
     families = {r[0] for r in daily_db.execute("SELECT family FROM data_fetch_runs WHERE job = 'daily'")}
-    assert families == {'bars', 'news', 'sec_filings', 'fred', 'universe'} | {'sec_filings'}
+    assert families == set(data_registry.ids())                     # the nine registered families, one row each
     collect = effective(daily_db)['collect']
-    assert len(collect['outputs']['data_fetch_runs']) == 5
+    assert len(collect['outputs']['data_fetch_runs']) == 9
 
 
 def test_screen_backfills_new_members(daily_db, clock, notices):
@@ -387,8 +389,14 @@ def test_migration_028_missing_refuses(plain_db, clock, notices, job_reports):
     assert len([t for t in notices.titles('workbench') if '每日工作流失败' in t]) == 1
 
 
-def test_sec_monitor_node_records_fetch_row_and_lock(daily_db, clock, notices, fake_sec, monkeypatch):
+def test_sec_monitor_node_records_fetch_row_and_lock(daily_db, clock, notices, fake_sec, monkeypatch, tmp_path):
     import investment_assistant.data.collect as collect
+    from investment_assistant.config import AssistantConfig, FilingsConfig
+    # the sec_text adapter writes its originals and the per-session budget under the configured library
+    monkeypatch.setitem(globals(), 'daily_config', lambda: AssistantConfig(filings=FilingsConfig(output_dir=tmp_path)))
+    from pathlib import Path
+    daily_db.execute(Path('migrations/014_us_research.sql').read_text())      # the US research tables of every real database
+    daily_db.commit()
 
     fake_sec.result = {'tickers': ['NVDA', 'MU'], 'errors': {'MU': 'sec timeout'}, 'downloaded_count': 1,
                        'event_ids': ['a'], 'delivery': {'status': 'sent', 'receipts': [{'status': 'sent'}]},
@@ -406,15 +414,26 @@ def test_sec_monitor_node_records_fetch_row_and_lock(daily_db, clock, notices, f
             yield
 
     monkeypatch.setattr(collect, 'family_locks', recording)
-    go(daily_db, clock)
-    assert held[0] == ['sec_filings']                                  # the node holds the family lock first
+    d = world(clk=clock)
+    d.filing_source.discover_one = lambda *args, **kwargs: []         # the adapter's per-ticker listing: nothing new
+    go(daily_db, clock, d=d)
+    assert held[0] == ['sec_filings', 'sec_text']                      # the node holds both family locks first (D47)
     row = effective(daily_db)['sec_monitor']
     assert row['status'] == 'partial' and (row['input_count'], row['output_count']) == (2, 1)
     assert row['outputs']['filings'] == [{'ticker': 'NVDA', 'form': '8-K', 'filing_date': '2026-10-22',
                                           'accession': '0001-26-000001', 'notified': True}]
+    # D47: the monitor's one row is the sec_text family's, written by scope sec_monitor (collect's own sec_text row
+    # of the run carries no scope)
     fetch = daily_db.execute("SELECT id, job, run_id, session, trigger, status FROM data_fetch_runs "
-                             "WHERE family = 'sec_filings' AND session IS NULL").fetchone()
-    assert fetch[1:] == ('daily', RUN_ID, None, 'manual_batch', 'partial')
+                             "WHERE family = 'sec_text' AND detail->>'scope' = 'sec_monitor'").fetchone()
+    assert fetch[1:] == ('daily', RUN_ID, date(2026, 10, 22), 'manual_batch', 'partial')
+    assert daily_db.execute("SELECT count(*) FROM data_fetch_runs WHERE family = 'sec_filings' "
+                            "AND detail->>'scope' = 'sec_monitor'").fetchone()[0] == 0
+    # D47: collect's own sec_text row covers the remaining targets and skips the ones the monitor handled this run:
+    # the pool's NVDA was fetched by the monitor's adapter pass, so nothing is left for it
+    own = daily_db.execute("SELECT target_count, detail FROM data_fetch_runs WHERE family = 'sec_text' "
+                           "AND detail->>'scope' IS NULL").fetchone()
+    assert own[0] == 0 and not own[1].get('targets')
     assert row['outputs']['data_fetch_runs'] == [fetch[0]]
     assert row['detail']['mode'] == 'monitor' and row['detail']['notifications'] == {'delivery': 'sent', 'sent': 1}
 

@@ -5,7 +5,7 @@ import investment_assistant.data.repo as data_repo
 import contextlib
 import json
 import time
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pandas as pd
@@ -24,7 +24,9 @@ from investment_assistant.notify.discord_bot import DeliveryError, DiscordBotCli
 import investment_assistant.data.collect as collect
 import investment_assistant.core.tx as service
 from investment_assistant.data.adapters import bars, earnings, fred as macro, news
+from _adapter_calls import adapter_run, item
 from test_fetch_policy import FAST, FAST_POST, FakeServer, closed_port, reply
+from investment_assistant.workflow.nodes.collect import _Family, sec_listing_summary
 
 SESSION = date(2026, 10, 28)
 NOW = datetime(2026, 10, 28, 22, 30, tzinfo=UTC)
@@ -56,7 +58,7 @@ def fake_db(monkeypatch):
         yield object()
 
     monkeypatch.setattr(core_tx, '_tx', tx)
-    monkeypatch.setattr(data_repo, 'store_bars', lambda conn, ticker, rows, *, now: (
+    monkeypatch.setattr(data_repo, 'store_bars', lambda conn, ticker, rows, *, now, source='yfinance': (
         stored.bars.append((ticker, rows)) or {'inserted': len(rows), 'unchanged': 0}))
     monkeypatch.setattr(data_repo, 'store_news', lambda conn, entries, *, now: (
         stored.news.append(entries) or {'inserted': len(entries), 'existing': 0}))
@@ -87,24 +89,25 @@ def test_row1_bars_timeout_is_retried_twice(sleeps):
         calls.append(ticker)
         raise requests.ReadTimeout('slow')
 
-    with pytest.raises(fp.FetchError) as caught:
-        collect.bars_one('NVDA', session=SESSION, now=NOW, deps=deps(bar_fetcher=fetcher), lookback_days=10)
-    assert caught.value.kind == 'timeout' and len(caught.value.attempts) == 3 and calls == ['NVDA'] * 3
-    assert sleeps == [2, 8]
+    booked = item(adapter_run('bars', ['NVDA'], session=SESSION, now=NOW, bar_fetcher=fetcher), 'NVDA')
+    assert booked['ok'] is False and booked['error_kind'] == 'timeout' and booked['attempts'] == 3
+    assert calls == ['NVDA'] * 3 and sleeps == [2, 8]
 
 
 def test_row1_empty_frame_is_not_retried(sleeps):
-    with pytest.raises(fp.FetchError) as caught:
-        collect.bars_one('NVDA', session=SESSION, now=NOW, lookback_days=10,
-                         deps=deps(bar_fetcher=lambda *a: pd.DataFrame()))
-    assert caught.value.kind == 'empty' and len(caught.value.attempts) == 1 and sleeps == []
-    assert 'no bars returned for NVDA' in str(caught.value)
+    booked = item(adapter_run('bars', ['NVDA'], session=SESSION, now=NOW, bar_fetcher=lambda *a: pd.DataFrame()),
+                  'NVDA')
+    assert booked['error_kind'] == 'empty' and booked['attempts'] == 1 and sleeps == []
+    assert 'no bars returned for NVDA' in booked['reason']
 
 
 def test_row1_success_is_one_attempt_and_return_shape_is_unchanged(sleeps, fake_db):
-    out = collect.bars_one('NVDA', session=SESSION, now=NOW, lookback_days=10,
-                           deps=deps(bar_fetcher=lambda *a: frame()))
-    assert set(out) == {'counts', 'skipped'} and out['counts'] == {'inserted': 2, 'unchanged': 0}
+    run = adapter_run('bars', ['NVDA'], session=SESSION, now=NOW, bar_fetcher=lambda *a: frame())
+    source, rows, result = run.stored['NVDA']
+    assert source == 'yfinance' and result['inserted'] == 2 and result['existing'] == 0
+    assert list(rows.facts) == ['skipped'] and rows.facts['skipped'] == []
+    booked = item(run, 'NVDA')
+    assert booked['ok'] and booked['attempts'] == 1 and booked['rows'] == 2
     assert sleeps == [] and fake_db.bars[0][0] == 'NVDA'
 
 
@@ -162,16 +165,17 @@ def test_row2_news_5xx_is_retried(sleeps):
     def fetcher(ticker):
         raise fp.http_error(503, 'Yahoo 503')
 
-    with pytest.raises(fp.FetchError) as caught:
-        collect.news_one('NVDA', now=NOW, deps=deps(news_fetcher=fetcher))
-    assert caught.value.kind == 'http_5xx' and len(caught.value.attempts) == 3 and sleeps == [2, 8]
+    booked = item(adapter_run('news', ['NVDA'], session=SESSION, now=NOW, news_fetcher=fetcher), 'NVDA')
+    assert booked['error_kind'] == 'http_5xx' and booked['attempts'] == 3 and sleeps == [2, 8]
 
 
 def test_row2_news_success_shape(sleeps, fake_db):
     raw = [{'title': 'a', 'link': 'https://x/1', 'relatedTickers': ['NVDA'],
             'providerPublishTime': 1792000000}]
-    out = collect.news_one('NVDA', now=NOW, deps=deps(news_fetcher=lambda t: raw))
-    assert out == {'inserted': 1, 'existing': 0, 'fetched': 1, 'skipped': 0}
+    run = adapter_run('news', ['NVDA'], session=SESSION, now=NOW, news_fetcher=lambda t: raw)
+    _, rows, result = run.stored['NVDA']
+    assert (result['inserted'], result['existing']) == (1, 0)
+    assert rows.facts == {'fetched': 1, 'skipped': 0}
 
 
 # ---------------------------------------------------------------- row 3: earnings
@@ -304,49 +308,59 @@ def filing_source(tmp_path, *, accepted=('2026-10-28T21:00:00.000Z', '2026-10-29
     return source
 
 
+# both filings of the fake source were accepted by then (21:00Z and 03:00Z of the next day)
+AFTER_BOTH = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
+
+
+def sec_run(source, targets, *, now=NOW):
+    """The SEC listing as the daily node runs it (one adapter call per target; the ticker directory is the whole-call
+    target) and the summary it builds from what was stored."""
+    run = adapter_run('sec_filings', targets, session=SESSION, now=now, filing_source=source)
+    family = _Family('sec_filings', 'daily', targets)
+    family.tally, family.stored = run.tally, run.stored
+    return run, sec_listing_summary(family, drop_after=now)
+
+
 def test_sec_listing_per_ticker(tmp_path, fake_db):
     source = filing_source(tmp_path)
-    tally = collect.Tally('sec_filings', 'daily', ['NVDA', 'ZZZZ', 'MU'])
-    out = collect.sec_listing(['NVDA', 'ZZZZ', 'MU'], session=SESSION, now=NOW, tally=tally,
-                              deps=deps(filing_source=source))
-    assert out['errors'] == {'ZZZZ': 'SEC 未找到 ZZZZ 的 CIK'}
+    run, (out, whole_call) = sec_run(source, ['NVDA', 'ZZZZ', 'MU'], now=AFTER_BOTH)
+    assert whole_call is None and out['errors'] == {'ZZZZ': 'SEC 未找到 ZZZZ 的 CIK'}
     assert set(out['by_ticker']) == {'NVDA', 'MU'}
     assert out['by_ticker']['NVDA'] == {'rows': 2, 'latest': '2026-10-28'}
-    assert out['inserted'] == 4 and out['acceptance_filled'] == 4 and out['existing'] == 0   # the old keys stay
-    row = tally.row(trigger='scheduled', run_id='r', session=SESSION, started_at=NOW, finished_at=NOW)
+    assert out['inserted'] == 2 + 2 and out['acceptance_filled'] == 4 and out['existing'] == 0   # filled rows are apart
+    row = run.tally.row(trigger='scheduled', run_id='r', session=SESSION, started_at=NOW, finished_at=NOW)
     assert row['status'] == 'partial' and row['target_count'] == 3 and row['ok_count'] == 2
     assert row['failures'] == [{'target': 'ZZZZ', 'reason': 'SEC 未找到 ZZZZ 的 CIK'}]
     by_target = {t['target']: t for t in row['detail']['targets']}
-    assert by_target['NVDA']['ok'] and by_target['NVDA']['rows'] == 2 and by_target['MU']['ok']
-    assert by_target['ZZZZ']['ok'] is False and by_target['ZZZZ']['error_kind'] == 'other'
+    assert by_target['NVDA']['ok'] and by_target['NVDA']['rows'] == 4 and by_target['MU']['ok']
+    # (the adapter path classes a missing CIK — a ValueError out of the SEC source — as parse, the legacy path as other)
+    assert by_target['ZZZZ']['ok'] is False and by_target['ZZZZ']['error_kind'] == 'parse'
 
 
 def test_company_tickers_fetched_once(tmp_path, fake_db):
     source = filing_source(tmp_path)
-    collect.sec_listing(['NVDA', 'MU', 'NVDA'], session=SESSION, now=NOW, tally=collect.Tally('sec_filings', 'daily'),
-                        deps=deps(filing_source=source))
+    sec_run(source, ['NVDA', 'MU', 'NVDA'])
     assert sum('company_tickers' in url for url in source.fetched) == 1
-    assert sum('submissions' in url for url in source.fetched) == 3
+    assert sum('submissions' in url for url in source.fetched) == 2          # a repeated target is listed once
 
 
 def test_company_tickers_failure_is_the_whole_call_and_costs_one_fetch(tmp_path, fake_db):
     source = filing_source(tmp_path, fail='company_tickers')
-    tally = collect.Tally('sec_filings', 'daily', ['NVDA', 'MU'])
-    out = collect.sec_listing(['NVDA', 'MU'], session=SESSION, now=NOW, tally=tally, deps=deps(filing_source=source))
-    assert list(out['errors']) == ['*'] and out['by_ticker'] == {}
+    run, (out, whole_call) = sec_run(source, ['NVDA', 'MU'])
+    assert out is None and whole_call and run.tally.call_failure == whole_call
     assert sum('company_tickers' in url for url in source.fetched) == 1       # no retry per ticker
-    row = tally.row(trigger='scheduled', run_id='r', session=SESSION, started_at=NOW, finished_at=NOW)
+    row = run.tally.row(trigger='scheduled', run_id='r', session=SESSION, started_at=NOW, finished_at=NOW)
     assert row['status'] == 'failed' and row['failures'][0]['target'] == '*'
     # EdgarSource.discover re-raises the whole-call failure instead of listing it per ticker
     with pytest.raises(fp.FetchError):
         filing_source(tmp_path, fail='company_tickers').discover(['NVDA'], '2026-10-01', '2026-10-28')
 
 
-def test_sec_listing_without_tally_raises_like_the_single_call_version(tmp_path, fake_db):
+def test_sec_listing_a_failed_ticker_stores_nothing_and_does_not_stop_the_others(tmp_path, fake_db):
     source = filing_source(tmp_path, fail='CIK0001045810')
-    with pytest.raises(fp.FetchError):
-        collect.sec_listing(['NVDA', 'MU'], session=SESSION, now=NOW, deps=deps(filing_source=source))
-    assert fake_db.news == []                                         # nothing stored by a failed legacy call
+    run, (out, whole_call) = sec_run(source, ['NVDA', 'MU'])
+    assert whole_call is None and list(out['errors']) == ['NVDA'] and set(out['by_ticker']) == {'MU'}
+    assert len(fake_db.news) == 1                                     # only MU's listing reached the store
 
 
 def test_sec_listing_accepts_sources_that_only_have_discover(fake_db):
@@ -356,8 +370,9 @@ def test_sec_listing_accepts_sources_that_only_have_discover(fake_db):
             return [{'ticker': tickers[0], 'form': '8-K', 'filing_date': '2026-10-27', 'accession_number': 'a',
                      'edgar_url': 'https://www.sec.gov/x', 'items': None, 'accepted_at': None}]
 
-    out = collect.sec_listing(['NVDA', 'MU'], session=SESSION, now=NOW, deps=deps(filing_source=Legacy()))
-    assert out['inserted'] == 2 and out['errors'] == {}
+    run, (out, whole_call) = sec_run(Legacy(), ['NVDA', 'MU'])
+    assert whole_call is None and out['errors'] == {} and out['inserted'] + out['acceptance_filled'] >= 2
+    assert set(out['by_ticker']) == {'NVDA', 'MU'}
 
 
 def test_edgar_discover_returns_metas_and_errors(tmp_path):
@@ -370,27 +385,27 @@ def test_edgar_discover_returns_metas_and_errors(tmp_path):
 # ---------------------------------------------------------------- spec §5.5: drop_after
 
 def test_news_drop_after_cutoff(fake_db):
+    """Every store cuts at the run's immutable cutoff ``now`` (the adapters have no second ``drop_after``)."""
     cutoff = datetime(2026, 10, 28, 22, 0, tzinfo=UTC)
     before, after = int(cutoff.timestamp()) - 3600, int(cutoff.timestamp()) + 3600
     raw = [{'title': 'before', 'link': 'https://x/1', 'relatedTickers': ['NVDA'], 'providerPublishTime': before},
            {'title': 'after', 'link': 'https://x/2', 'relatedTickers': ['NVDA'], 'providerPublishTime': after},
            {'title': 'undated', 'link': 'https://x/3', 'relatedTickers': ['NVDA']}]
-    tally = collect.Tally('news', 'daily', ['NVDA'])
-    out = collect.news_one('NVDA', now=NOW, deps=deps(news_fetcher=lambda t: raw), drop_after=cutoff, tally=tally)
-    assert out['after_cutoff_dropped'] == 1 and out['inserted'] == 2
+    run = adapter_run('news', ['NVDA'], session=SESSION, now=cutoff, news_fetcher=lambda t: raw)
+    result = run.stored['NVDA'][2]
+    assert result['after_cutoff_dropped'] == 1 and result['inserted'] == 2
     assert [entry[0]['title'] for entry in fake_db.news[0]] == ['before', 'undated']
-    assert tally.row(trigger='scheduled', run_id=None, session=SESSION, started_at=NOW,
-                     finished_at=NOW)['detail']['targets'][0]['latest'] == datetime.fromtimestamp(before, UTC).isoformat()
-    plain = collect.news_one('NVDA', now=NOW, deps=deps(news_fetcher=lambda t: raw))
-    assert 'after_cutoff_dropped' not in plain and plain['inserted'] == 3
+    assert item(run, 'NVDA')['latest'] == datetime.fromtimestamp(before, UTC).isoformat()
+    plain = adapter_run('news', ['NVDA'], session=SESSION, now=cutoff + timedelta(hours=2),
+                        news_fetcher=lambda t: raw).stored['NVDA'][2]
+    assert plain['after_cutoff_dropped'] == 0 and plain['inserted'] == 3
 
 
 def test_sec_drop_after_cutoff(tmp_path, fake_db):
     source = filing_source(tmp_path)                       # accepted 2026-10-28 21:00Z and 2026-10-29 03:00Z
     cutoff = datetime(2026, 10, 28, 22, 0, tzinfo=UTC)
-    out = collect.sec_listing(['NVDA', 'MU'], session=SESSION, now=NOW, deps=deps(filing_source=source),
-                              drop_after=cutoff)
-    assert out['after_cutoff_dropped'] == 2 and out['inserted'] == 2
+    run, (out, _) = sec_run(source, ['NVDA', 'MU'], now=cutoff)
+    assert out['after_cutoff_dropped'] == 2 and out['acceptance_filled'] == 2
     assert out['by_ticker']['NVDA']['rows'] == 1
     assert {m['accepted_at'] for m in fake_db.acceptance[0]} == {'2026-10-28T21:00:00+00:00'}
     # the monitor path: the source itself drops, counts and keeps filings without an acceptance time
@@ -422,11 +437,10 @@ def test_row6_fred_failure_carries_error_kind_and_attempts_without_the_key(sleep
         return None, {'ok': False, 'error': f'http 503: {params["api_key"]}', 'status_code': 503,
                       'attempts': attempts, 'error_kind': 'http_5xx'}
 
-    with pytest.raises(fp.FetchError) as caught:
-        collect.fred_series('T10Y2Y', session=SESSION, now=NOW, api_key=secret, deps=deps(macro_fetcher=fetcher))
-    err = caught.value
-    assert err.kind == 'http_5xx' and err.status == 503 and len(err.attempts) == 3 and err.target == 'T10Y2Y'
-    assert secret not in str(err) and sleeps == []                   # the inner get_json already retried
+    run = adapter_run('fred', ['T10Y2Y'], session=SESSION, now=NOW, fred_api_key=secret, macro_fetcher=fetcher)
+    booked = item(run, 'T10Y2Y')
+    assert booked['error_kind'] == 'http_5xx' and booked['http_status'] == 503 and booked['attempts'] == 3
+    assert secret not in booked['reason'] and sleeps == []                   # the inner get_json already retried
 
 
 def test_row6_fred_success_with_tally_books_rows_and_latest(sleeps, fake_db):
@@ -434,14 +448,15 @@ def test_row6_fred_success_with_tally_books_rows_and_latest(sleeps, fake_db):
         return {'observations': [{'date': '2026-10-26', 'value': '1.5'}, {'date': '2026-10-27', 'value': '1.6'}]}, \
             {'ok': True}
 
-    tally = collect.Tally('fred', 'daily', ['T10Y2Y'])
-    out = collect.fred_series('T10Y2Y', session=SESSION, now=NOW, api_key='K', deps=deps(macro_fetcher=fetcher),
-                              tally=tally)
-    assert out == {'inserted': 2, 'unchanged': 0}
-    item = tally.row(trigger='scheduled', run_id=None, session=SESSION, started_at=NOW,
-                     finished_at=NOW)['detail']['targets'][0]
-    assert item['rows'] == 2 and item['latest'] == '2026-10-27'
-    assert collect.fred_series('T10Y2Y', session=SESSION, now=NOW, api_key=None, deps=deps()) == 'not_configured'
+    run = adapter_run('fred', ['T10Y2Y'], session=SESSION, now=NOW, fred_api_key='K', macro_fetcher=fetcher)
+    assert run.stored['T10Y2Y'][2]['inserted'] == 2 and run.stored['T10Y2Y'][2]['existing'] == 0
+    booked = item(run, 'T10Y2Y')
+    assert booked['rows'] == 2 and booked['latest'] == '2026-10-27'
+    # no key: a skipped row, no request at all
+    keyless = adapter_run('fred', ['T10Y2Y'], session=SESSION, now=NOW, fred_api_key=None,
+                          macro_fetcher=lambda *a, **k: pytest.fail('no key, no request'))
+    assert keyless.tally.row(trigger='scheduled', run_id=None, session=SESSION, started_at=NOW,
+                             finished_at=NOW)['status'] == 'skipped'
 
 
 def test_fred_default_fetcher_goes_through_get_json_with_series_target(monkeypatch):

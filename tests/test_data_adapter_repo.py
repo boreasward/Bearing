@@ -234,19 +234,14 @@ def test_sec_text_restores_missing_owned_index_path_and_reader(db, tmp_path, mon
     indexed = repo.indexed_filing_paths(db, 'NVDA')[meta['accession_number']]
     assert indexed == str(path) and Path(indexed).is_file()
     assert repo.read_rows(db, 'US:stock:NVDA', 'filings')[0]['path'] == indexed
-    from investment_assistant.config import AssistantConfig, FilingsConfig, SecMonitorConfig
-    from investment_assistant.data import acquisition, research_rows
-    monkeypatch.setattr(research_rows, 'RAW_ROOT', tmp_path/'raw')
-    rows, details = acquisition._local_filing_rows(db, 'NVDA', config=AssistantConfig(
-        filings=FilingsConfig(output_dir=tmp_path), sec_monitor=SecMonitorConfig(state_dir=str(tmp_path/'state'))))
-    assert details['document_errors'] == [] and rows[0]['payload']['path'] == indexed
 
 
-@pytest.mark.parametrize('seed_observation', [False, True])
-def test_sec_text_reuses_monitor_exhibit_and_does_not_publish_poorer_successor(db, tmp_path, monkeypatch, seed_observation):
+def test_sec_text_reuses_monitor_exhibit_and_does_not_publish_poorer_successor(db, tmp_path, monkeypatch):
+    """The monitor's archived exhibit is reused (nothing downloaded but the index pages); when its metadata later
+    disappears, the rerun that only sees the primary document does not publish a poorer analysis over it (R28: the
+    baseline used to come from the retired ``_local_filing_rows``; it is the adapter's own first result now)."""
     import json
-    from investment_assistant.config import AssistantConfig, FilingsConfig, SecMonitorConfig
-    from investment_assistant.data import acquisition, research_rows
+    from investment_assistant.data import research_rows
     root, state_dir = tmp_path/'library', tmp_path/'state'
     meta = filing_meta(form='8-K')
     primary = index_text(db, root, meta)
@@ -258,20 +253,20 @@ def test_sec_text_reuses_monitor_exhibit_and_does_not_publish_poorer_successor(d
     state_dir.mkdir()
     (state_dir/'state.json').write_text(json.dumps({'version': 1, 'files': {
         'NVDA:'+meta['accession_number']: {'meta': archived, 'status': 'ready'}}}))
-    config = AssistantConfig(filings=FilingsConfig(output_dir=root), sec_monitor=SecMonitorConfig(state_dir=str(state_dir)))
     monkeypatch.setattr(research_rows, 'RAW_ROOT', tmp_path/'raw')
-    rows, _ = acquisition._local_filing_rows(db, 'NVDA', config=config)
-    if seed_observation:
-        repo.store_observation_rows(db, 'US:stock:NVDA', 'filings', rows, now=NOW)
-    before = rows[0]['payload']
     source.calls.clear()
     result = collect_text(db, root, source, state_dir=state_dir)
-    after = repo.read_rows(db, 'US:stock:NVDA', 'filings')[0]
-    assert result['ok']
-    assert after['analysis'] == before['analysis']
-    assert after['analysis']['guidance'][0]['url'].endswith('/ex99.htm')
-    assert len(after['analysis']['sources']) == 2
+    before = repo.read_rows(db, 'US:stock:NVDA', 'filings')[0]
+    assert result['ok'] and result['rows'] == 1
+    assert before['analysis']['guidance'][0]['url'].endswith('/ex99.htm')
+    assert len(before['analysis']['sources']) == 2
     assert all(url.endswith('-index.html') for url in source.calls)
+    (state_dir/'state.json').write_text(json.dumps({'version': 1, 'files': {}}))     # the exhibit's provenance is gone
+    again = collect_text(db, root, FilingSource([meta]), state_dir=state_dir)
+    after = repo.read_rows(db, 'US:stock:NVDA', 'filings')[0]
+    assert again['ok']
+    assert after['analysis'] == before['analysis'] and len(after['analysis']['sources']) == 2
+    assert len(repo.read_history(db, 'US:stock:NVDA', 'filings')) == 1
 
 
 def test_sec_text_new_exhibits_share_budget_and_keep_provenance(db, tmp_path):

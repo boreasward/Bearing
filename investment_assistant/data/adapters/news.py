@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from investment_assistant.data import fetch_policy
 from investment_assistant.data import repo
-from investment_assistant.data.adapter_types import Source
+from investment_assistant.data.adapter_types import Rows, Source
 from investment_assistant.data.adapter_support import make_adapter, receipt
 
 NewsFetcher = Callable[[str], list]
@@ -94,13 +94,15 @@ def filing_news(metas: list[dict[str, Any]]) -> list[tuple[dict[str, Any], list[
 
 
 def _fetch(target, *, session, start, end, deps, now):
-    rows, _ = normalize_yfinance(fetch_yfinance(target, fetcher=deps.news_fetcher), ticker=target)
-    return rows
+    raw = fetch_yfinance(target, fetcher=deps.news_fetcher)
+    rows, skipped = normalize_yfinance(raw, ticker=target)
+    return Rows(rows, fetched=len(raw), skipped=skipped)
 
 
 def _store(conn, rows, *, target, source_id, now):
-    rows = [row for row in rows if row['published_at'] is None or row['published_at'] <= now]
-    return receipt(repo.store_news(conn, [(r, [target]) for r in rows], now=now), rows, 'published_at')
+    kept = [row for row in rows if row['published_at'] is None or row['published_at'] <= now]
+    return {**receipt(repo.store_news(conn, [(r, [target]) for r in kept], now=now), kept, 'published_at'),
+            'after_cutoff_dropped': len(rows) - len(kept)}
 
 
 ADAPTER = make_adapter('news', '资讯', '资讯标题供研究读取', 'news_items',

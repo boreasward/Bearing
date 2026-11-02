@@ -747,9 +747,26 @@ def _agent_buy(ref='call:1'):
                                          'refs': [ref]}]}, ensure_ascii=False)
 
 
+def _research_ok(ref='call:1'):
+    """A checked researcher conclusion (§6.1) citing the researcher's own call."""
+    return AIMessage(content=json.dumps({'facts': [{'text': '财报披露营收增长', 'kind': 'disclosure', 'refs': [ref]}],
+                                         'risks': [], 'blocked': [], 'summary': '基本面已核验'}, ensure_ascii=False))
+
+
+def _agent4_buy(research_ref='call:1', price_ref='call:2'):
+    """``_agent_buy`` for the agent-4 flow: levels cite the plan's own price tool, the thesis also cites
+    the researcher's call (§6.1's first-version citation rule)."""
+    plan = json.loads(_agent_buy(price_ref))
+    plan['thesis'][0]['refs'] = [research_ref, price_ref]
+    return json.dumps(plan, ensure_ascii=False)
+
+
 def _ok_responses(ticker='NVDA', ref='call:1'):
-    """An agent-2 first version (v2.5 §4.1): tool, plan, counter tool, per-thesis counter."""
-    return [_tool_msg('get_indicators', {'ticker': ticker}), AIMessage(content=_agent_buy(ref)),
+    """An agent-4 first version (v2.13 §6.1): researcher tool + conclusion, propose tool + plan,
+    counter tool + reply. The researcher's call is ``call:1``, the plan's own tool ``call:2``
+    and the counter's ``call:3``; ``ref`` is kept for the callers that read it back."""
+    return [_tool_msg('get_news', {'days': 30}), _research_ok(),
+            _tool_msg('get_indicators', {'ticker': ticker}), AIMessage(content=_agent4_buy()),
             _tool_msg('get_news', {'days': 7}), AIMessage(content=json.dumps(
                 {'counter': [{'thesis': 1, 'text': '财报临近', 'refs': [ref]}], 'risks': []},
                 ensure_ascii=False))]
@@ -786,12 +803,12 @@ def test_agent_ok_writes_plan_run_calls(db, scripted_model):
     assert plan['kind'] == 'agent' and plan['plan_version'] == 'agent-3'
     run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     assert run['status'] == 'ok' and str(run['plan_id']) == str(plan['id'])
-    assert run['agent_version'] == 'agent-3'
+    assert run['agent_version'] == 'agent-4'
     [version] = execution_repo.chain_versions(db, 'NVDA', SESSION)
     assert version['version_no'] == 0 and str(version['agent_run_id']) == str(run['id'])
     calls = analysis_repo.agent_tool_calls(db, run['id'])
     assert [(c['seq'], c['phase'], c['tool']) for c in calls] == \
-        [(1, 'propose', 'get_indicators'), (2, 'counter', 'get_news')]
+        [(1, 'research', 'get_news'), (2, 'propose', 'get_indicators'), (3, 'counter', 'get_news')]
 
 
 def test_existing_ok_or_pass_not_rerun(db, scripted_model):
@@ -1033,7 +1050,10 @@ def test_ok_and_skipped_runs_have_no_detail(db, scripted_model):
 def test_summary_agent_keys(db, scripted_model):
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
     assert summary['agent'] == {'runs': {'NVDA': 'ok'}, 'briefs': {'NVDA': 'ok'},
-                                'tokens': {'input': 40, 'output': 20}, 'quota_exhausted': False, 'merged': {}}
+                                'tokens': {'input': 60, 'output': 30}, 'quota_exhausted': False, 'merged': {},
+                                'research_requests': 0,      # v2.13: the node's tails (empty queues here)
+                                'data_requests': {'queued': 0, 'fetched': 0, 'failed': 0, 'deferred': 0,
+                                                  'reruns': 0}}
     assert 'agent' in summary['sources'] and 'agent' in summary['timings']
 
 
@@ -1051,7 +1071,7 @@ def test_manual_run_conflict_and_not_buy(db, scripted_model):
         analysis_agent_runner.run_agent('MU', SESSION, now=NOW)               # 不存在
     run = analysis_agent_runner.run_agent('NVDA', SESSION, now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
     assert run['status'] == 'ok' and run['plan_id'] is not None
-    assert run['agent_version'] == 'agent-3'
+    assert run['agent_version'] == 'agent-4'
     [version] = execution_repo.chain_versions(db, 'NVDA', SESSION)       # 手动重跑也只生成首版
     assert (version['version_no'], version['origin']) == (0, 'signal')
     assert str(version['plan_id']) == str(run['plan_id'])
@@ -1069,7 +1089,7 @@ def test_today_unit_has_agent_ok_view(db, scripted_model):
                                   'input_tokens', 'output_tokens', 'created_at', 'chain', 'knowledge_refs'}
     assert unit['agent']['knowledge_refs'] == []                       # v2.7 §6.2: nothing cited by this plan
     assert unit['agent']['status'] == 'ok' and unit['agent']['model'] == 'gpt-test'
-    assert unit['agent']['plan']['kind'] == 'agent' and unit['agent']['agent_version'] == 'agent-3'
+    assert unit['agent']['plan']['kind'] == 'agent' and unit['agent']['agent_version'] == 'agent-4'
     assert unit['agent']['output']['levels']['entry_low']['value'] == '98.50'
     chain = unit['agent']['chain']
     assert set(chain) == {'version_no', 'head_plan_id', 'cutoff_at', 'diff', 'state', 'mode', 'basis',
@@ -1085,6 +1105,7 @@ def test_today_hides_rejected_output(db, scripted_model):
                                  (('entry_low', 98.5), ('entry_high', 101.5), ('stop', 96.0), ('target1', 108.0))},
                       'thesis': [{'text': 't', 'refs': ['call:99']}]})
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, [
+        _tool_msg('get_news', {'days': 7}), AIMessage(content='非JSON研究结论'),   # the researcher fails softly (D23)
         _tool_msg('get_indicators', {'ticker': 'NVDA'}), AIMessage(content=bad)]))
     unit = unit_cards(now=NOW)['units'][0]
     assert set(unit['agent']) == {'id', 'status', 'reason', 'created_at'}
@@ -1123,7 +1144,7 @@ def test_agent_run_detail_has_calls_and_hashes(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
     run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     detail = agent_run_detail(str(run['id']))
-    assert [c['seq'] for c in detail['tool_calls']] == [1, 2]
+    assert [c['seq'] for c in detail['tool_calls']] == [1, 2, 3]   # researcher, propose, counter
     assert all(len(c['result_sha256']) == 64 for c in detail['tool_calls'])
     with pytest.raises(LookupError):
         agent_run_detail(str(uuid.uuid4()))
@@ -1197,7 +1218,7 @@ def test_buy_unit_brief_derived_from_proposal(db, scripted_model):
     service.run_batch(tickers=['NVDA'], now=NOW, deps=agent_deps(scripted_model, _ok_responses()))
     run = analysis_repo.latest_agent_run(db, 'NVDA', SESSION)
     brief = analysis_repo.latest_brief(db, 'NVDA', SESSION)
-    assert brief['prompt_version'] == 'agent-3' and brief['status'] == 'ok'
+    assert brief['prompt_version'] == 'agent-4' and brief['status'] == 'ok'
     assert brief['agent_run_id'] == run['id']
     assert brief['output']['summary'] == '回踩修复放量'
     # agent-2 (v2.5 Task 6): the brief carries the summary and the first per-thesis counter
@@ -1250,7 +1271,8 @@ def test_stage_order_main_propose_interpret_extended(db, scripted_model):
     db.execute('INSERT INTO pool_tiers (ticker, tier, effective_session, recorded_at) '
                "VALUES ('CCC', 'extended', %s, %s)", [SESSION - timedelta(days=1), NOW])
     def unit_replies(ticker):
-        return [_tool_msg('get_indicators', {'ticker': ticker}), AIMessage(content=_agent_buy()),
+        return [_tool_msg('get_news', {'days': 7}), _research_ok(),          # the researcher phase (§6.1)
+                _tool_msg('get_indicators', {'ticker': ticker}), AIMessage(content=_agent4_buy()),
                 AIMessage(content=json.dumps({'counter': [], 'risks': []}))]
     d = _mixed_deps(scripted_model, unit_replies('AAA') + _interpret_reply() + unit_replies('CCC'),
                     flat=('WTCH',))
@@ -1258,8 +1280,8 @@ def test_stage_order_main_propose_interpret_extended(db, scripted_model):
     service.run_batch(pool=pool_module.Pool(core=('AAA', 'WTCH'), extended=('CCC',)), now=NOW, deps=d)
     tickers_seen = [m.content.split(' ')[1] for messages in model.seen for m in messages
                     if m.type == 'human' and str(m.content).startswith('标的 ')]
-    # counter replies carry no unit human message, so a propose counts twice here
-    assert tickers_seen == ['AAA'] * 2 + ['WTCH'] * 2 + ['CCC'] * 2
+    # counter replies carry no unit human message; agent-4 units show research + propose humans
+    assert tickers_seen == ['AAA'] * 4 + ['WTCH'] * 2 + ['CCC'] * 4
 
 
 def test_quota_exhausted_skips_interpret_and_extended(db, scripted_model):
@@ -1416,14 +1438,16 @@ def _universe_deps(sources, members):
     return d
 
 
-def test_batch_records_five_families(db):
+def test_batch_records_nine_families(db):
+    """v2.12 (spec §10): one row per registered family — the five of the v2.3 collection, the earnings date row and
+    the registry families fundamentals / sec_text / sector."""
     import investment_assistant.workflow.targets as families
     seed_watchlist(db, [('NVDA', ['core'])])
     summary = service.run_batch(now=NOW, deps=_universe_deps(Sources(fail={'MU'}), ['MU']),
                                 record_trigger='scheduled')
     rows = db.execute('SELECT family, job, trigger, run_id, scope, session, status, failures '
                       'FROM data_fetch_runs ORDER BY family').fetchall()
-    assert len(rows) == 5
+    assert len(rows) == 9
     by_family = {row[0]: row for row in rows}
     assert set(by_family) == set(data_families.RECORDED)
     for row in rows:
@@ -1432,7 +1456,7 @@ def test_batch_records_five_families(db):
     assert {'target': 'MU', 'reason': 'provider down'} in by_family['bars'][7]
     assert by_family['fred'][6] == 'skipped'
     assert by_family['universe'][6] == 'success'
-    assert summary['data_status'] == {'written': 5, 'error': None}
+    assert summary['data_status'] == {'written': 9, 'error': None}
 
 
 def test_rerun_appends_new_status_rows(db):
@@ -1440,7 +1464,7 @@ def test_rerun_appends_new_status_rows(db):
     d = _universe_deps(Sources(), ['MU'])
     service.run_batch(now=NOW, deps=d, record_trigger='scheduled')
     service.run_batch(now=NOW, deps=d, record_trigger='scheduled')
-    assert db.execute('SELECT count(*) FROM data_fetch_runs').fetchone()[0] == 10
+    assert db.execute('SELECT count(*) FROM data_fetch_runs').fetchone()[0] == 18
 
 
 def test_fred_failure_reason_is_redacted(db, monkeypatch):
@@ -1463,7 +1487,7 @@ def test_batch_survives_missing_fetch_runs_table(db):
     seed_watchlist(db, [('NVDA', ['core'])])
     d = _universe_deps(Sources(fail={'MU'}), ['MU'])
     baseline = service.run_batch(now=NOW, deps=d, record_trigger='scheduled')
-    db.execute('DROP TABLE data_fetch_runs')
+    db.execute('DROP TABLE data_fetch_runs CASCADE')   # 031: data_requests points at it; the simulation drops both
     again = service.run_batch(now=NOW, deps=d, record_trigger='scheduled')
     assert again['errors'] == baseline['errors']               # 记账失败不进 summary['errors']
     assert again['data_status']['written'] == 0 and again['data_status']['error']
@@ -1476,12 +1500,12 @@ def test_no_record_trigger_writes_nothing(db):
     assert db.execute('SELECT count(*) FROM data_fetch_runs').fetchone()[0] == 0
 
 
-def test_explicit_tickers_write_four_families_only(db):
+def test_explicit_tickers_write_eight_families_without_universe(db):
     summary = service.run_batch(tickers=['NVDA'], now=NOW, deps=deps(Sources()),
                                 record_trigger='scheduled')
     recorded = {row[0] for row in db.execute('SELECT family FROM data_fetch_runs').fetchall()}
-    assert recorded == {'bars', 'news', 'sec_filings', 'fred'}   # 没有筛选就没有 universe 行
-    assert summary['data_status'] == {'written': 4, 'error': None}
+    assert recorded == {'bars', 'news', 'sec_filings', 'fred', 'earnings', 'fundamentals', 'sec_text', 'sector'}
+    assert summary['data_status'] == {'written': 8, 'error': None}      # 没有筛选就没有 universe 行
 
 
 def test_task_run_passes_trigger(db):
@@ -1518,7 +1542,7 @@ def test_batch_waits_for_family_lock(db):
             other.execute("SELECT pg_advisory_unlock(hashtext('data_family:news'))")
         thread.join(10)
         assert not thread.is_alive()
-    assert out['summary']['data_status'] == {'written': 5, 'error': None}
+    assert out['summary']['data_status'] == {'written': 9, 'error': None}
 
 
 def test_batch_sec_listing_is_per_ticker(db):

@@ -353,3 +353,82 @@ def test_malformed_acceptance_time_is_unknown_not_guessed(tmp_path):
     source = _submission_source(tmp_path, acceptanceDateTime=["not-a-time", None], items=[None, 5])
     out, _ = source.discover(["NVDA"], "2026-08-01", "2026-08-31")
     assert all(x["accepted_at"] is None and x["items"] is None for x in out)
+
+
+# ------------------------------------------------------------------------------------------------ D47: the sec_text adapter
+
+def test_uses_sec_text_adapter_with_scope(workbench_db, tmp_path, monkeypatch):
+    """Spec D47: after the scan the node's downloads and its research refresh are the ``sec_text`` adapter's work with
+    ``scope = 'sec_monitor'``; the fetch-run row's family is ``sec_text`` with ``detail.scope = 'sec_monitor'``. A ticker
+    whose scan failed is booked from the scan and not fetched again, and (R27) so is one whose scan found no new filing:
+    the adapter pass covers only the tickers with new filings in this scan, the collect node's row covers the rest."""
+    from contextlib import contextmanager
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    import investment_assistant.core.stages as stages
+    import investment_assistant.core.tx as core_tx
+    from investment_assistant.workflow.nodes import sec_monitor
+
+    workbench_db.execute(Path("migrations/014_us_research.sql").read_text())
+    workbench_db.commit()
+
+    @contextmanager
+    def connection():
+        yield workbench_db
+    monkeypatch.setattr(core_tx, "connection", connection)
+
+    class TextSource:
+        def __init__(self):
+            self.discovered, self.downloads = [], []
+
+        def discover_one(self, ticker, start, end, **kwargs):
+            self.discovered.append(ticker)
+            return [{"ticker": ticker, "form": "10-Q", "filing_date": "2026-10-01", "accession_number": ACC,
+                     "primary_document": "q.htm", "items": None,
+                     "edgar_url": "https://www.sec.gov/Archives/edgar/data/1/000104581026000001/q.htm"}]
+
+        def get(self, url):
+            self.downloads.append(url)
+            return b"<html><body><p>Revenue was strong in the quarter and cash flow improved.</p></body></html>"
+
+    cfg = AssistantConfig(
+        filings=FilingsConfig(output_dir=tmp_path / "filings"),
+        sec_monitor=SecMonitorConfig(enabled=True, start_date="2026-10-01", state_dir=str(tmp_path / "state"),
+                                     watchlist_path=str(tmp_path / "watchlist.md")))
+    source = TextSource()
+    ctx = SimpleNamespace(
+        config=cfg, deps=core_tx.Deps(filing_source=source), resumed=False, notify_cfg=object(),
+        wall_now=lambda: datetime(2026, 10, 22, 23, tzinfo=UTC),
+        sec_scan=lambda config, **kwargs: ({"tickers": ["NVDA", "MU", "AMD"], "errors": {"MU": "sec timeout"},
+                                            "filings": [{"ticker": "NVDA", "form": "10-Q", "filing_date": "2026-10-01",
+                                                         "accession_number": ACC}],
+                                            "downloaded_count": 0, "event_ids": []}, "monitor"))
+    state = {"run_id": "daily-r1", "trigger": "scheduled", "ny_date": "2026-10-22", "session": "2026-10-22",
+             "cutoff_at": "2026-10-22T22:30:00+00:00", "summary": {}, "features": {"backup_sources": True}}
+    acc = stages.StageAcc()
+
+    out = sec_monitor.run(state, ctx, acc)
+
+    # MU's scan failed (booked from the scan) and AMD's found nothing new (R27): neither is fetched again
+    assert source.discovered == ["NVDA"]
+    assert out["refs"]["sec_monitor"] == {"sec_text": ["NVDA"]}     # D47: the collect node's row skips only this
+    assert len(source.downloads) == 1
+    rows = workbench_db.execute("SELECT family, job, trigger, run_id, scope, session, status, target_count, ok_count, "
+                                "failures, detail FROM data_fetch_runs").fetchall()
+    assert len(rows) == 1                                   # one row, and no sec_filings row any more
+    family, job, trigger, run_id, scope, session, status, targets, ok, failures, detail = rows[0]
+    assert (family, job, trigger, run_id, scope, status) == ("sec_text", "daily", "scheduled", "daily-r1", "family", "partial")
+    assert (targets, ok, session) == (3, 2, date(2026, 10, 22))        # NVDA fetched, AMD ok from the scan, MU failed
+    assert failures == [{"target": "MU", "reason": "sec timeout"}]
+    assert detail["scope"] == "sec_monitor" and detail["mode"] == "monitor"
+    assert detail["source_counts"] == {"sec": 2} and detail["source_counts_complete"] is True   # NVDA fetched + AMD scanned
+    nvda = next(t for t in detail["targets"] if t["target"] == "NVDA")
+    assert nvda["ok"] is True and nvda["source_used"] == "sec" and nvda["rows"] == 1
+    # the originals are indexed (filings row + analysis observation): what the old local-research refresh produced
+    assert workbench_db.execute("SELECT ticker, form FROM filings").fetchall() == [("NVDA", "10-Q")]
+    assert len(list((tmp_path / "filings" / "NVDA").rglob("*q.htm"))) == 1
+    assert workbench_db.execute("SELECT security_id, dataset, natural_key FROM us_research_observations").fetchall() \
+        == [("US:stock:NVDA", "filings", ACC)]
+    assert acc.detail["research"]["results"][0]["ticker"] == "NVDA"
+    assert acc.detail["research"]["results"][0]["status"] == "ready" and acc.detail["research"]["errors"] == []

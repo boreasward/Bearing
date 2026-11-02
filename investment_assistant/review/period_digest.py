@@ -87,7 +87,10 @@ def _overview_of(stats):
             'unsignaled': len(stats.get('unsignaled_trades') or []), 'closed': closed}
 
 
-def weekly(review: dict[str, Any], *, public_url: str) -> dict[str, Any]:
+def weekly(review: dict[str, Any], *, public_url: str, proposals: int | None = None) -> dict[str, Any]:
+    """The weekly review's push payload. ``proposals`` (v2.15 spec §8.3 ④) is how many optimisation proposals the
+    ``propose`` node wrote since the previous weekly push — the Saturday run pushes the review before ``propose``
+    runs, so a proposal reaches the next one; None (no migration 031) keeps the message as it was."""
     stats = review['stats']
     start = review['week_start']
     return {'kind': 'weekly', 'period': start, 'start': start.isoformat(),
@@ -95,7 +98,7 @@ def weekly(review: dict[str, Any], *, public_url: str) -> dict[str, Any]:
             'overview': _overview_of(stats),
             'tracks': _tracks_of(stats), 'rules': _rules_of(stats),
             'discipline': _discipline_of(stats), 'learning': stats.get('learning'),
-            'note': NOTE_TEXT, 'evidence': EVIDENCE_TEXT,
+            'note': NOTE_TEXT, 'evidence': EVIDENCE_TEXT, 'proposals': proposals,
             'url': public_url.rstrip('/') + '/#review/weekly'}
 
 

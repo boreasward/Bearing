@@ -59,8 +59,10 @@ def build(*, session: date, units: list[dict[str, Any]], holdings: list[dict[str
           screen: dict[str, Any] | None = None, plan_updates: list[dict[str, Any]] | None = None,
           retro: dict[str, Any] | None = None, fetch_status: list[dict[str, Any]] | None = None,
           holding_status: list[dict[str, Any]] | None = None, merged: set[tuple] | None = None,
-          session_units: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """{'session', 'overview', 'plans', 'plan_updates', 'holdings', 'pending', 'errors', 'errors_by_source'}
+          session_units: list[dict[str, Any]] | None = None,
+          portfolio: dict[str, Any] | None = None) -> dict[str, Any]:
+    """{'session', 'overview', 'plans', 'plan_updates', 'holdings', 'pending', 'errors', 'errors_by_source',
+    'portfolio'}
     for the day's push. `units` are the new-plan entries the service assembled (v2.9 §11: each entry-phase chain
     and the day's rule baselines; there is no 「undecided」 notion any more). `plan_updates` are the review rows of
     the D25 window, each with its chain's `pool`, `from_version` / `to_version`, `changes` (texts), the new
@@ -71,7 +73,10 @@ def build(*, session: date, units: list[dict[str, Any]], holdings: list[dict[str
     the day's units the overview's Agent counts read (default `units`). `retro` (v2.8 D3:
     ``{new_cards, to_review}``) feeds the overview's 「复盘卡 上次推送后新增 a · 待审定 b」 line; None keeps the
     overview without it. `fetch_status` (the collect node's ``[{family, status, ok_count, target_count}]``) feeds
-    the overview's data line for the (at most three) families that fetched partially or failed (v2.8 §13.1)."""
+    the overview's data line for the (at most three) families that fetched partially or failed (v2.8 §13.1).
+    ``portfolio`` (v2.14 §7.4) is the real account's portfolio check as 「今日」 shows it
+    (``views.today.portfolio_check_view``); the digest keeps its short form, or None when there is no hard result
+    (switch off, node not run), in which case no message is sent."""
     plans = []
     expiring = []
     tomorrow = add_trading_days(session, 1)
@@ -182,7 +187,31 @@ def build(*, session: date, units: list[dict[str, Any]], holdings: list[dict[str
         'errors': errors,
         'errors_by_source': errors_by_source,
         'screen': screen,
+        'portfolio': _portfolio_field(portfolio),
     }
+
+
+def _portfolio_field(view: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The 「🧩 组合检查」 message's data (spec §7.4): how many plans can be done together, how many the check blocked
+    (and why), the order the host would fill them in and the PM's one sentence. Only a hard result makes one;
+    ``not_computed`` (switch off, node not run, migration missing) says nothing rather than a false all-clear."""
+    if not view or view.get('status') not in ('ready', 'degraded') or not view.get('result'):
+        return None
+    result = view['result']
+    verdicts = result.get('verdicts') or []
+    by_plan = {str(v['plan_id']): v for v in verdicts}
+    commentary = view.get('commentary') or {}
+    ranking = sorted(commentary.get('ranking') or [], key=lambda r: r.get('rank', 0))
+    return {'status': view['status'], 'session': str(view.get('session')),
+            'ok': sum(v['verdict'] == 'ok' for v in verdicts),
+            'deferred': sum(v['verdict'] == 'deferred' for v in verdicts),
+            'blocked': sum(v['verdict'] == 'blocked' for v in verdicts),
+            'blocked_items': [{'ticker': v['ticker'], 'reasons': list(v.get('reasons') or [])}
+                              for v in verdicts if v['verdict'] == 'blocked'],
+            'order': [by_plan[str(plan_id)]['ticker'] for plan_id in result.get('order') or []
+                      if str(plan_id) in by_plan],
+            'summary': commentary.get('summary'),
+            'first_reason': ranking[0].get('reason') if ranking else None}
 
 
 def _earnings_eve(holdings: list[dict[str, Any]], ticker: str, tomorrow: date) -> bool:

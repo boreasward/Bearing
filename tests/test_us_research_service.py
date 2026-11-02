@@ -64,6 +64,8 @@ def test_acquisition_has_no_legacy_sync_entrypoint():
     s = module()
     assert not hasattr(s, 'sync')
     assert not hasattr(s, 'validate_request')
+    # R28: the local-filing refresh is the sec_text adapter's work now (spec D47); nothing keeps a second copy
+    assert not hasattr(s, 'refresh_local_filings') and not hasattr(s, '_local_filing_rows')
 
 
 def test_raw_snapshot_exact_bytes_and_hash(tmp_path):
@@ -98,129 +100,68 @@ def test_view_asof_is_local_and_filters_all_datasets(research_db, monkeypatch, t
     with pytest.raises(ValueError): fundamentals.view('MU', as_of='2026-01-01')
 
 
-def test_local_filing_parser_missing_file_is_per_document_and_sources_bound(research_db, monkeypatch, tmp_path):
-    s = module()
-    from investment_assistant.config import AssistantConfig, FilingsConfig, SecMonitorConfig
-    root = tmp_path / 'library'
-    path = root / 'MU' / '8-K' / '0000000001-26-000001-report.html'
-    path.parent.mkdir(parents=True)
-    path.write_text('<html><body>Business update</body></html>')
-    config = AssistantConfig(filings=FilingsConfig(output_dir=root), sec_monitor=SecMonitorConfig(state_dir=str(tmp_path / 'state')))
-    monkeypatch.setattr(s, 'load_config', lambda: config)
-    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path / 'raw')
-    for id_, ticker, accession, file_path in [(1, 'MU', '0000000001-26-000001', path),
-            (2, 'MU', '0000000001-26-000002', root/'MU'/'missing.html'),
-            (3, 'MU', '0000000001-26-000003', root/'NVDA'/'bad.html')]:
-        research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (%s,%s,%s,%s,%s,%s)', (id_,ticker,'8-K','2026-10-01',accession,str(file_path)))
-    research_db.commit()
-    result = s.refresh_local_filings(['MU'])
-    assert result['results'][0]['status'] == 'partial'
-    v = fundamentals.view('MU')
-    assert len(v['filings']) == 1
-    assert v['filings'][0]['analysis']['sources'][0]['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
-    state = next(r for r in v['statuses'] if r['dataset']=='filings')
-    assert len(state['details']['document_errors']) == 2
-    assert v['filings'][0]['limitations']  # no fabricated URL from accession prefix
-    assert fundamentals.view('MU', as_of='2026-10-02T00:00:00Z')['filings'] == []
+def _scan_result(tickers, errors=None, **extra):
+    return {'summary': {'tickers': tickers, 'filings': [], 'errors': errors or {}, 'delivery': {'status': 'sent'},
+                        **extra}}
 
 
-
-
-def test_lock_covers_source_io_and_is_released_after_failure(research_db, monkeypatch, tmp_path):
-    s = module()
-    from test_us_research_postgres import URL
-    import psycopg
-    from contextlib import contextmanager
-    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path)
-    outer = core_tx.connection
-    def local_rows(conn, ticker, **kwargs):
-            @contextmanager
-            def second_connection():
-                with psycopg.connect(URL) as other:
-                    other.execute('SET search_path TO pg_temp')
-                    yield other
-            monkeypatch.setattr(core_tx, 'connection', second_connection)
-            try:
-                with pytest.raises(ValueError, match='正在运行'):
-                    s.refresh_local_filings(['MU'])
-            finally:
-                monkeypatch.setattr(core_tx, 'connection', outer)
-            raise RuntimeError('secret source exception')
-    monkeypatch.setattr(s, '_local_filing_rows', local_rows)
-    result = s.refresh_local_filings(['MU'])
-    assert result['results'][0]['status'] == 'failed'
-    with psycopg.connect(URL) as other:
-        assert other.execute("SELECT pg_try_advisory_lock(hashtext('us-research-sync'))").fetchone() == (True,)
-        other.execute("SELECT pg_advisory_unlock(hashtext('us-research-sync'))")
-
-
-
-
-def test_original_monitor_exhibit_metadata_is_used_without_url_inference(research_db, monkeypatch, tmp_path):
-    s = module()
-    from investment_assistant.config import AssistantConfig, FilingsConfig, SecMonitorConfig
-    root, state = tmp_path/'library', tmp_path/'state'
-    primary = root/'MU'/'8-K'/'0000999999-26-000001-report.html'
-    exhibit = primary.with_name('0000999999-26-000001-ex99.html')
-    primary.parent.mkdir(parents=True)
-    primary.write_text('<html><body>Item 2.02 see exhibit</body></html>')
-    exhibit.write_text('<html><body><p>We expect revenue of $120 million in the next quarter based on the current business outlook.</p></body></html>')
-    state.mkdir()
-    primary_url = 'https://www.sec.gov/Archives/edgar/data/723125/000099999926000001/report.html'
-    exhibit_url = 'https://www.sec.gov/Archives/edgar/data/723125/000099999926000001/ex99.html'
-    (state/'state.json').write_text(json.dumps({'version':1,'files':{'MU:0000999999-26-000001':{'status':'ready','meta':{
-        'ticker':'MU','form':'8-K','accession_number':'0000999999-26-000001','path':str(primary),
-        'attachments':[str(exhibit)],'document_urls':{str(primary):primary_url,str(exhibit):exhibit_url}}}}}))
-    monkeypatch.setattr(s, 'load_config', lambda: AssistantConfig(filings=FilingsConfig(output_dir=root),sec_monitor=SecMonitorConfig(state_dir=str(state))))
-    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path/'raw')
-    research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)', ('MU','8-K','2026-10-01','0000999999-26-000001',str(primary)))
-    research_db.commit()
-    s.refresh_local_filings(['MU'])
-    filing = fundamentals.view('MU')['filings'][0]
-    assert [x['url'] for x in filing['analysis']['sources']] == [primary_url,exhibit_url]
-    assert filing['analysis']['guidance'][0]['url'] == exhibit_url
-    assert Path(filing['snapshots'][1]['snapshot_path']).read_bytes() == exhibit.read_bytes()
+def _record_with(collect_text, result, monitor, monkeypatch):
+    """The monitor row of one scan result with a recording ``collect_text`` hook; returns the booked rows."""
+    from investment_assistant.config import AssistantConfig, SecMonitorConfig
+    import investment_assistant.data.collect as collect
+    rows = []
+    monkeypatch.setattr(collect, 'write_runs_with_ids', lambda new_rows: (rows.extend(new_rows) or {'written': 1, 'error': None}, [1]))
+    sec_monitor._record_fetch_run(result, config=AssistantConfig(watchlist=['MU', 'NVDA'], sec_monitor=SecMonitorConfig(enabled=monitor)),
+                                  trigger_source='scheduled', started_at=datetime(2026, 10, 22, tzinfo=UTC),
+                                  collect_text=collect_text)
+    return rows
 
 
 @pytest.mark.parametrize('monitor', [False, True])
 def test_sec_success_hook_retains_original_result_and_runs_local_extraction(monkeypatch, monitor):
+    """D47 (was ``_local_research_after_success``): after the scan the ``sec_text`` adapter hook gets the tickers the
+    scan left standing AND found new filings for (R27); the scan's own result (filings, delivery, errors) is never
+    replaced."""
     module()
-    from dataclasses import replace
-    from investment_assistant.tasks import filings
-    from investment_assistant.config import AssistantConfig, SecMonitorConfig
-    from investment_assistant.data import acquisition as service
-    original = {'run_id':'existing','status':'success','summary':{'downloaded_count':1,'filings':[{'ticker':'MU','path':'local'}], 'errors':{},'delivery':{'status':'sent'}}}
-    # Local refresh is the I/O boundary here; its database/parser path has real TEMP tests above.
-    monkeypatch.setattr(sec_monitor, 'refresh_local_filings', lambda tickers, **kw: {'tickers':tickers,'notifications':'disabled'})
-    # v2.8: the hook is ``filings._local_research_after_success``, run inside the sec_monitor node after the SEC pass
-    result = sec_monitor._local_research_after_success(copy.deepcopy(original), AssistantConfig(sec_monitor=SecMonitorConfig(enabled=monitor)))
-    assert {k:v for k,v in result.items() if k not in ('research','data_status')} == original
-    assert result['research'] == {'tickers':['MU'],'notifications':'disabled'}
+    seen = []
+    original = _scan_result(['MU'] if monitor else None, filings=[{'ticker': 'MU', 'path': 'local'}])
+    before = copy.deepcopy(original)
+    rows = _record_with(lambda tally, tickers: (seen.append(list(tickers)), [tally.ok(t) for t in tickers]),
+                        original, monitor, monkeypatch)
+    assert seen == [['MU']]                                  # NVDA (monitor off: watchlist) had no new filing
+    assert original == before and rows[0]['family'] == 'sec_text' and rows[0]['detail']['scope'] == 'sec_monitor'
 
 
-def test_failed_sec_run_does_not_add_research_or_replace_original_error(monkeypatch):
-    module()
-    from investment_assistant.tasks import filings
-    from investment_assistant.config import AssistantConfig
-    from investment_assistant.data import acquisition as service
-    original = {'run_id':'existing','status':'error','summary':{'errors':{'MU':'original'}, 'filings':[]}}
-    def forbidden(*a): pytest.fail('failed original SEC job started extraction')
-    monkeypatch.setattr(sec_monitor, 'refresh_local_filings', forbidden)
-    result = sec_monitor._local_research_after_success(copy.deepcopy(original), AssistantConfig())
-    assert {k: v for k, v in result.items() if k != 'data_status'} == original
+def test_failed_sec_run_does_not_start_extraction_for_the_failed_tickers(monkeypatch):
+    seen = []
+    result = _scan_result(['MU'], errors={'MU': 'original'})
+    rows = _record_with(lambda tally, tickers: seen.append(list(tickers)), result, True, monkeypatch)
+    assert seen == [[]]                                       # nothing left standing: no extraction
+    assert rows[0]['failures'] == [{'target': 'MU', 'reason': 'original'}] and rows[0]['status'] == 'failed'
+    seen.clear()
+    whole = {'summary': {'errors': {'collection': 'edgar down'}, 'filings': []}}
+    _record_with(lambda tally, tickers: seen.append(list(tickers)), whole, True, monkeypatch)
+    assert seen == [[]]                                       # a whole-scan failure: no target is fetched either
 
 
-def test_sec_local_hook_failure_is_sanitized_and_preserves_original_success(monkeypatch):
-    module()
-    from investment_assistant.tasks import filings
-    from investment_assistant.config import AssistantConfig
-    from investment_assistant.data import acquisition as service
-    original = {'status':'success','summary':{'filings':[{'ticker':'MU'}], 'errors':{}}}
-    def bad(*a, **kw): raise ValueError('proxy://user:secret@host')
-    monkeypatch.setattr(sec_monitor, 'refresh_local_filings', bad)
-    result = sec_monitor._local_research_after_success(copy.deepcopy(original), AssistantConfig())
-    assert result['status']=='success' and result['summary']==original['summary']
-    assert result['research']['errors'] and 'secret' not in json.dumps(result)
+def test_sec_local_hook_failure_is_a_failed_result_and_preserves_original_success(monkeypatch):
+    """An adapter failure for one ticker is that ticker's failed result (the node then only degrades); the scan's own
+    result stands. (The old refresh replaced every failure by a generic sentence; the adapter path books the same
+    sanitised reason every family's row carries — ``redact.sanitize_reason``.)"""
+    from investment_assistant.data.collect import Tally
+    original = _scan_result(['MU', 'NVDA'], filings=[{'ticker': 'MU'}])
+    before = copy.deepcopy(original)
+
+    def hook(tally, tickers):
+        tally.fail('MU', ValueError('parse failed'))
+        tally.ok('NVDA')
+    rows = _record_with(hook, original, True, monkeypatch)
+    assert original == before and rows[0]['status'] == 'partial'
+    tally = Tally('sec_text', 'daily', ['MU', 'NVDA'])
+    hook(tally, ['MU', 'NVDA'])
+    research = sec_monitor.research_summary(tally, ['MU', 'NVDA'])
+    assert [r['status'] for r in research['results']] == ['failed', 'ready']
+    assert [e['ticker'] for e in research['errors']] == ['MU'] and research['errors'][0]['error'] == 'parse failed'
 
 
 def test_market_observation_retains_its_original_snapshot_mapping(research_db, monkeypatch, tmp_path):
@@ -356,22 +297,31 @@ def test_unrelated_fact_change_updates_acquisition_without_revising_existing_fac
 
 def test_partial_sec_collection_derives_successful_documents_and_preserves_error(monkeypatch):
     module()
-    from investment_assistant.tasks import filings
-    from investment_assistant.config import AssistantConfig
-    from investment_assistant.data import acquisition as service
-    original={'status':'error','summary':{'filings':[{'ticker':'MU'}],'errors':{'NVDA':'original source failure'}}}
-    monkeypatch.setattr(sec_monitor,'refresh_local_filings',lambda tickers,**kw:{'tickers':tickers,'notifications':'disabled'})
-    result=sec_monitor._local_research_after_success(copy.deepcopy(original), AssistantConfig())
-    assert result['status']=='error' and result['summary']==original['summary']
-    assert result['research']['tickers']==['MU']
+    seen = []
+    original = _scan_result(['MU', 'NVDA'], errors={'NVDA': 'original source failure'}, filings=[{'ticker': 'MU'}])
+    before = copy.deepcopy(original)
+    rows = _record_with(lambda tally, tickers: (seen.append(list(tickers)), [tally.ok(t) for t in tickers]),
+                        original, True, monkeypatch)
+    assert seen == [['MU']] and original == before            # the successful ticker is extracted, NVDA keeps its error
+    assert rows[0]['status'] == 'partial' and rows[0]['failures'] == [{'target': 'NVDA', 'reason': 'original source failure'}]
 
 
 @pytest.mark.parametrize('monitor_enabled', [False, True])
-def test_sec_hook_uses_supplied_config_for_real_local_files_and_exhibits(research_db, monkeypatch, tmp_path, monitor_enabled):
-    s = module()
+def test_sec_hook_uses_supplied_config_for_real_local_files_and_exhibits(workbench_db, monkeypatch, tmp_path, monitor_enabled):
+    """D47: the sec_text adapter (scope sec_monitor) indexes the originals the monitor archived — the primary and its
+    verified exhibit, under the SUPPLIED config's library and state directory, not the process default's — without any
+    remote research source or download."""
+    from contextlib import contextmanager
     from investment_assistant.config import AssistantConfig, FilingsConfig, SecMonitorConfig
-    from investment_assistant.tasks import filings
-    from investment_assistant.tasks import filings as monitor_module
+    from investment_assistant.data import registry
+    import investment_assistant.core.tx as service
+    workbench_db.execute(Path('migrations/014_us_research.sql').read_text())
+    workbench_db.commit()
+
+    @contextmanager
+    def connection():
+        yield workbench_db
+    monkeypatch.setattr(core_tx, 'connection', connection)
     root, state = tmp_path/'supplied-library', tmp_path/'supplied-state'
     primary = root/'MU'/'8-K'/'0000999999-26-000001-report.html'
     exhibit = primary.with_name('0000999999-26-000001-ex99.html')
@@ -388,23 +338,40 @@ def test_sec_hook_uses_supplied_config_for_real_local_files_and_exhibits(researc
         sec_monitor=SecMonitorConfig(enabled=monitor_enabled,state_dir=str(state)))
     default = AssistantConfig(filings=FilingsConfig(output_dir=tmp_path/'different-default-library'),
         sec_monitor=SecMonitorConfig(state_dir=str(tmp_path/'different-default-state')))
-    monkeypatch.setattr(s,'load_config',lambda:default)
-    monkeypatch.setattr(s.research_rows,'RAW_ROOT',tmp_path/'raw')
+    monkeypatch.setattr('investment_assistant.config.load_config', lambda *a, **k: default)
+
+    class Source:
+        downloads = []
+
+        def discover_one(self, ticker, start, end, **kwargs):
+            return [{'ticker': 'MU', 'form': '8-K', 'filing_date': '2026-10-01', 'items': ['2.02'],
+                     'accession_number': '0000999999-26-000001', 'primary_document': 'report.html',
+                     'edgar_url': primary_url}]
+
+        def get(self, url):
+            if url.endswith('-index.html'):
+                return b'<table summary="Document Format Files"></table>'
+            self.downloads.append(url)
+            raise AssertionError('the archived originals must not be downloaded again')
+
     def forbidden(*a,**kw): pytest.fail('local SEC hook invoked a remote research source')
     monkeypatch.setattr(source_module,'USSources',forbidden)
-    research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)',
-        ('MU','8-K','2026-10-01','0000999999-26-000001',str(primary)))
-    research_db.commit()
-    original = {'run_id':'original-sec-job','status':'success','summary':{'filings':[{'ticker':'MU','path':str(primary)}],'errors':{},'delivery':{'status':'sent'}}}
-    result = sec_monitor._local_research_after_success(copy.deepcopy(original), supplied)
-    assert result['research']['results'][0]['status']=='ready'
-    assert {k:v for k,v in result.items() if k not in ('research','data_status')}==original
+    from investment_assistant.workflow.nodes.sec_monitor import text_collector
+    from investment_assistant.data.collect import Tally
+    tally = Tally('sec_text', 'daily', ['MU'])
+    text_collector(deps=service.Deps(filing_source=Source()), config=supplied, trigger='scheduled', run_id='r1',
+                   session=date(2026, 10, 22), now=datetime(2026, 10, 22, 22, 30, tzinfo=UTC), features={})(tally, ['MU'])
+    assert tally.outcomes == {'MU': None} and Source.downloads == []
+    assert sec_monitor.research_summary(tally, ['MU'])['results'][0]['status'] == 'ready'
+    assert tally.record_for('MU')['source_used'] == 'sec'
     parsed = fundamentals.view('MU')['filings']
-    assert len(parsed)==1 and parsed[0]['path']==str(primary)
+    assert len(parsed)==1 and parsed[0]['path']==str(primary.resolve())
     assert [x['url'] for x in parsed[0]['analysis']['sources']]==[primary_url,exhibit_url]
     assert parsed[0]['analysis']['guidance'][0]['url']==exhibit_url
     assert parsed[0]['analysis']['guidance'][0]['sha256']==hashlib.sha256(exhibit.read_bytes()).hexdigest()
     assert Path(parsed[0]['snapshots'][1]['snapshot_path']).read_bytes()==exhibit.read_bytes()
+    assert not (tmp_path/'different-default-library').exists()          # the default config's library is never touched
+
 
 
 
@@ -442,19 +409,17 @@ def test_financial_source_identity_survives_storage_view_and_watchlist_enrichmen
 
 
 
-def test_manual_task_explicit_config_controls_actual_local_source_root(research_db, monkeypatch, tmp_path):
+def test_manual_task_explicit_config_controls_actual_local_source_root(monkeypatch, tmp_path):
+    """The supplied config (not the loaded default) decides where the ``sec_text`` adapter reads and writes originals
+    (R28: this was ``refresh_local_filings(config=)``; the monitor, the backfill and the Data menu all project the host's
+    config through ``adapter_deps_from_service``)."""
+    import investment_assistant.config as config_module
     from investment_assistant.config import AssistantConfig, FilingsConfig
-    s = module()
+    from investment_assistant.data.adapter_support import adapter_deps_from_service
     root = tmp_path / 'supplied-library'
-    primary = root / 'MU' / '8-K' / '0000999999-26-000001-report.html'
-    primary.parent.mkdir(parents=True)
-    primary.write_bytes(b'<html><body>Company outlook and results</body></html>')
     supplied = AssistantConfig(filings=FilingsConfig(output_dir=root))
-    monkeypatch.setattr(s, 'load_config', lambda: AssistantConfig(filings=FilingsConfig(output_dir=tmp_path / 'wrong-root')))
-    monkeypatch.setattr(s.research_rows, 'RAW_ROOT', tmp_path / 'raw')
-    research_db.execute('INSERT INTO filings(id,ticker,form,filing_date,accession_number,file_path) VALUES (1,%s,%s,%s,%s,%s)',
-        ('MU', '8-K', '2026-10-01', '0000999999-26-000001', str(primary)))
-    research_db.commit()
-    result = s.refresh_local_filings(['MU'], config=supplied)
-    assert result['results'][0]['status'] == 'ready'
-    assert fundamentals.view('MU')['filings'][0]['path'] == str(primary)
+    monkeypatch.setattr(config_module, 'load_config',
+                        lambda: AssistantConfig(filings=FilingsConfig(output_dir=tmp_path / 'wrong-root')))
+    projected = adapter_deps_from_service(core_tx.Deps(), transaction=core_tx._tx, config=supplied)
+    assert projected.sec_text_dir == root
+    assert adapter_deps_from_service(core_tx.Deps(), transaction=core_tx._tx).sec_text_dir == tmp_path / 'wrong-root'

@@ -11,6 +11,7 @@ from test_workbench_service import NOW, SESSION, _agent_settings, _ok_responses,
 
 from investment_assistant.tasks import daily, filings
 from investment_assistant.core import locks
+import investment_assistant.core.tx as service
 import investment_assistant.workflow.graph as workflow
 
 
@@ -33,8 +34,8 @@ def test_job_report_row_per_execution(daily_db, clock, notices, job_reports, mon
     assert [(r['task'], r['run_id']) for r in reports] == [('daily', RUN_ID)] * 2
     assert [r['trigger_source'] for r in reports] == ['manual', 'resume']
     assert all(r['target_start_date'] == SESSION for r in reports)
-    assert reports[0]['summary']['graph_version'] == 'daily-2' and reports[0]['summary']['failed_node'] == 'regime'
-    assert reports[0]['summary']['stage_status']['written'] == 11
+    assert reports[0]['summary']['graph_version'] == 'daily-3' and reports[0]['summary']['failed_node'] == 'regime'
+    assert reports[0]['summary']['stage_status']['written'] == 13
 
 
 def test_status_mapping_success_degraded_error(daily_db, clock, notices, job_reports, monkeypatch):
@@ -105,12 +106,16 @@ def test_cli_resume_reports_rejections(daily_db, clock, notices, capsys, monkeyp
 
 def test_sec_backfill_job_report_task(daily_db, clock, notices, job_reports, fake_sec):
     fake_sec.result = {'tickers': ['NVDA'], 'filings': [], 'errors': {}, 'downloaded_count': 0, 'event_ids': []}
-    out = filings.backfill(daily_config(), start_date=date(2026, 10, 1), end_date=date(2026, 10, 5))
+    class Source:
+        def discover_one(self, *args, **kwargs):
+            return []
+    out = filings.backfill(daily_config(), start_date=date(2026, 10, 1), end_date=date(2026, 10, 5),
+                           deps=service.Deps(filing_source=Source()))
     assert out['task'] == 'sec_backfill' and out['status'] == 'success'
     assert [(r['task'], r['trigger_source']) for r in job_reports.rows()] == [('sec_backfill', 'manual')]
     assert job_reports.rows()[0]['target_start_date'] == date(2026, 10, 1)
-    fetch = daily_db.execute("SELECT job, trigger, run_id, family FROM data_fetch_runs").fetchall()
-    assert fetch == [('sec_backfill', 'manual_family', out['run_id'], 'sec_filings')]
+    fetch = daily_db.execute("SELECT job, trigger, run_id, family, detail->>'scope' FROM data_fetch_runs").fetchall()
+    assert fetch == [('sec_backfill', 'manual_family', out['run_id'], 'sec_text', 'sec_monitor')]       # D47
     assert daily_db.execute('SELECT count(*) FROM stage_runs').fetchone()[0] == 0           # outside the graph
     with locks.exclusive():                                                                  # and under the daily lock
         with pytest.raises(locks.DailyBusy):
@@ -145,7 +150,7 @@ def test_other_exceptions_still_get_a_report_rows_and_one_notice(daily_db, clock
     assert out['status'] == 'error' and 'aborted' in out['summary']['error'] and 'closed the connection' in out['summary']['error']
     assert [r['status'] for r in job_reports.rows()] == ['error']                       # the execution has its row
     eff = workflow.effective_rows(rows(daily_db))
-    assert list(eff) == list(workflow.NODES)                                              # still ten effective rows
+    assert list(eff) == list(workflow.NODES)                                              # still thirteen effective rows
     assert [n for n in workflow.NODES if eff[n]['status'] == 'failed'] and eff['retro']['reason'] == 'upstream_failed'
     assert len([t for t in notices.titles('workbench') if '每日工作流失败' in t]) == 1
 
@@ -466,3 +471,17 @@ def test_migration_031_ready_allows_precheck_run_and_resume(daily_db, clock, not
     assert resumed['run_status'] != 'failed'
     assert [r['trigger_source'] for r in job_reports.rows()] == ['manual', 'resume']
     assert set(effective(daily_db)) == set(workflow.NODES)
+
+
+def test_not_connected_is_detected_in_every_model_calling_node():
+    """spec §10: ``portfolio`` (the PM), ``accounts`` and ``propose`` join ``agent`` / ``review`` in the lost-connection look."""
+    def row(stage, **kw):
+        return {'stage': stage, 'attempt': 1, 'status': 'success', 'reason': None, 'failures': [], 'skips': [],
+                'degradations': [], **kw}
+
+    assert daily._hit_not_connected([row('portfolio', skips=[{'reason': 'not_connected', 'count': 1}])], 1)
+    assert daily._hit_not_connected([row('accounts', failures=[{'target': 'a', 'reason': 'x: not_connected'}])], 1)
+    assert daily._hit_not_connected([row('propose', status='skipped', reason='agent_unavailable: not_connected')], 1)
+    assert not daily._hit_not_connected([row('portfolio', skips=[{'reason': 'disabled', 'count': 1}])], 1)
+    assert not daily._hit_not_connected([row('portfolio', skips=[{'reason': 'not_connected', 'count': 1}], attempt=2)], 1)
+    assert not daily._hit_not_connected([row('push', skips=[{'reason': 'not_connected', 'count': 1}])], 1)

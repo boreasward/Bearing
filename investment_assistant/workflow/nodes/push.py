@@ -7,13 +7,13 @@ from investment_assistant.config import load_config
 from investment_assistant.core import schema as core_schema, stages as stages_module, redact as families, tx as core_tx
 from investment_assistant.core.constants import NY
 from investment_assistant.workflow import recorder, repo as workflow_repo
-from investment_assistant.workflow.state import _moment, _wall, _stage_skip
+from investment_assistant.workflow.state import _moment, _wall, _stage_skip, feature_enabled
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.adapters import bars
 from investment_assistant.execution import chains as execution_chains, repo as execution_repo
 from investment_assistant.analysis import repo as analysis_repo
 from investment_assistant.review import repo as review_repo, push_digest as digest_module
-from investment_assistant.views.today import unit_cards, _brief_view, _agent_view
+from investment_assistant.views.today import unit_cards, _brief_view, _agent_view, portfolio_check_view, PORTFOLIO_FLAG
 
 def account_push(recorder: recorder.StageRecorder | None, acc: stages_module.StageAcc,
                  out: dict[str, Any]) -> None:
@@ -67,7 +67,8 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
         else:
             summary['push'] = push(now=now, force=False, summary=summary, notify_cfg=ctx.notify_cfg, send=ctx.send,
                                    retro_counts=retro_push_counts(now=_wall(ctx)()),
-                                   fetch_status=(state.get('refs') or {}).get('collect', {}).get('families'))
+                                   fetch_status=(state.get('refs') or {}).get('collect', {}).get('families'),
+                                   features=state.get('features'))
     account_push(ctx.recorder, acc, summary['push'])
     return {'summary': summary}
 
@@ -77,13 +78,15 @@ def _last_push_failed(conn, session: date) -> bool:
                 and last.get('reason') not in (None, 'already_pushed'))
 
 def push(*, now: datetime, force: bool, summary: dict[str, Any] | None = None, notify_cfg, send, client=None,
-         retro_counts: dict[str, Any] | None = None, fetch_status: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+         retro_counts: dict[str, Any] | None = None, fetch_status: list[dict[str, Any]] | None = None,
+         features: dict[str, bool] | None = None) -> dict[str, Any]:
     """Send the day's digest; scheduled runs skip when today already pushed successfully.
 
     ``retro_counts`` (v2.8 D3: ``{'new_cards', 'to_review'}``, see ``retro_push_counts``) feeds the overview's retro-card
     line; ``fetch_status`` (the collect node's family list) the one line for families that fetched partially or failed.
     Both None (the manual push) keep the digest without those lines — except that a ``summary['retro']`` (the v2.7
-    ``run_batch`` shell sets one before the push) still feeds the retro line."""
+    ``run_batch`` shell sets one before the push) still feeds the retro line. ``features`` is the run's frozen switch
+    set: the 「🧩 组合检查」 message follows the run's ``portfolio_manager`` (None: the current switch)."""
     session = bars.latest_closed_session(now)
     with core_tx._tx() as conn:
         if not force:
@@ -108,6 +111,9 @@ def push(*, now: datetime, force: bool, summary: dict[str, Any] | None = None, n
             # undecided units any more); the holdings are the day's status rows, quiet days included
             units, merged = _push_units(conn, session, view['units'], now=now, plan_updates=plan_updates)
             holding_rows = execution_repo.holding_status_for(conn, session=session)
+        portfolio = view.get('portfolio_check')
+        if features is not None:          # a switch flipped during the run does not change what this run pushes
+            portfolio = portfolio_check_view(conn, session, enabled=feature_enabled({'features': features}, PORTFOLIO_FLAG))
         payload = digest_module.build(
             session=session, units=units, holdings=view.get('holdings', []), summary=summary or {},
             last_push_failed=_last_push_failed(conn, session),
@@ -116,7 +122,8 @@ def push(*, now: datetime, force: bool, summary: dict[str, Any] | None = None, n
             market=view.get('market'), agent_summary=(summary or {}).get('agent'),
             screen=view.get('screen'), plan_updates=plan_updates,
             retro=retro_counts if retro_counts is not None else (summary or {}).get('retro'),
-            fetch_status=fetch_status, holding_status=holding_rows, merged=merged, session_units=view['units'])
+            fetch_status=fetch_status, holding_status=holding_rows, merged=merged, session_units=view['units'],
+            portfolio=portfolio)
     out = send('digest', payload, notify_cfg, client=client)
     result = {'session': session.isoformat(), **out}
     if reviews_until is not None:

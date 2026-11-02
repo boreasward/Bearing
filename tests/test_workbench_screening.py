@@ -4,7 +4,6 @@ Universe: U00-U29 fabricated range tickers plus SYNTH on the manual list.
 U00-U02 trigger trend_reclaim on S1, U03-U24 form the setup band with
 descending relative strength, U25-U29 fail the setup band; QQQ is flat.
 """
-import investment_assistant.workflow.screen_collection as workflow_screen_collection
 import investment_assistant.analysis.units as analysis_units
 import investment_assistant.analysis.repo as analysis_repo
 import investment_assistant.data.repo as data_repo
@@ -262,12 +261,21 @@ def test_collect_returns_failure_reasons(offline):
     deps = make_deps(RateLimitedSources(),
                      universe=universe_module.Universe('test', S1, 'test', ('XXX', 'U00')))
     # run_stage reads the benchmark from the store; outside run_batch nothing collected QQQ yet.
-    import investment_assistant.data.collect as collect
-    collect.bars_one('QQQ', session=S1, now=evening(S1), deps=deps,
-                     lookback_days=screening.COLLECT_LOOKBACK_DAYS)
-    # v2.8 D4: the range is collected by the collect node (``collect_range``); run_stage only reads and carries the outcomes
-    fetched, failures, reasons = workflow_screen_collection.collect_range(core_tx.connection, session=S1, now=evening(S1),
-                                                          targets=['XXX', 'U00'], deps=deps)
+    # v2.8 D4: the range is collected by the collect node, every fetch one ``registry.run_adapter`` call (R23); here
+    # the same call stands in for it. run_stage only reads and carries the outcomes.
+    from investment_assistant.data import registry
+    from investment_assistant.data.adapter_support import adapter_deps_from_service
+    projected = adapter_deps_from_service(deps, transaction=core_tx._tx, sleep=lambda seconds: None)
+    bars_adapter = registry.get('bars')
+
+    def collect_bars(targets):
+        return registry.run_adapter(bars_adapter, targets, scope='daily', trigger='scheduled', run_id=None,
+                                    session=S1, now=evening(S1), deps=projected, features={})
+    collect_bars(['QQQ'])
+    tally = collect_bars(['XXX', 'U00'])
+    fetched = {t for t in tally.targets if tally.outcomes[t] is None}
+    failures = [t for t in tally.targets if tally.outcomes[t] is not None]
+    reasons = {t: tally.outcomes[t] for t in failures}
     assert (fetched, failures, reasons) == ({'U00'}, ['XXX'], {'XXX': 'rate limited'})
     stage = screening.run_stage(session=S1, now=evening(S1),
                                 manual=pool_module.Pool(core=('SYNTH',), extended=(), sectors={}),

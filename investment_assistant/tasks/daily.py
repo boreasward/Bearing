@@ -119,12 +119,17 @@ def _effective_notify(config: AssistantConfig) -> Any:
     return effective_notify_config(config.notify)
 
 
+# The nodes that call the model: ``agent`` / ``review`` (units), ``portfolio`` (PM commentary), ``accounts`` and
+# ``propose`` (spec §10).
+NOT_CONNECTED_NODES = ('agent', 'review', 'portfolio', 'accounts', 'propose')
+
+
 def _hit_not_connected(rows: list[dict[str, Any]], attempt: int) -> bool:
-    """Whether this execution's ``agent`` or ``review`` rows (``attempt`` is the execution's own number, so a resume
+    """Whether this execution's model-calling rows (``NOT_CONNECTED_NODES``; ``attempt`` is the execution's own number, so a resume
     that did not re-run them does not count) show the Agent connection as unusable: the node skipped for
     ``agent_unavailable: not_connected``, or a unit that hit ``not_connected`` mid-node."""
     for row in rows:
-        if row['stage'] not in ('agent', 'review') or int(row.get('attempt') or 1) != attempt:
+        if row['stage'] not in NOT_CONNECTED_NODES or int(row.get('attempt') or 1) != attempt:
             continue
         if row['status'] == 'skipped' and row.get('reason') == 'agent_unavailable: not_connected':
             return True
@@ -252,7 +257,7 @@ def _five_layers_ready() -> bool:
 
 def run(config: AssistantConfig | None = None, *, trigger_source: str = 'scheduled', now: datetime | None = None,
         deps: service.Deps | None = None, run_id: str | None = None, checkpointer_factory=None, sleep=time.sleep,
-        notify_cfg: Any = None, explicit_pool=None) -> dict[str, Any]:
+        notify_cfg: Any = None, explicit_pool=None, force_propose: bool = False) -> dict[str, Any]:
     """One ``daily`` execution (the scheduler's and the manual entry's): lock → graph → report. ``DailyBusy`` for a
     manual run while another execution holds the lock; a scheduled one records ``error / daily_running`` instead.
     Returns ``{'run_id', 'task', 'status', 'summary', 'run_status'}`` (``status`` = the ``job_reports`` status)."""
@@ -279,7 +284,8 @@ def run(config: AssistantConfig | None = None, *, trigger_source: str = 'schedul
                 result = workflow.run(run_id=rid, trigger=_trigger(trigger_source), now=moment, deps=deps,
                                       explicit_pool=explicit_pool, checkpointer_factory=checkpointer_factory,
                                       sleep=sleep, notify_cfg=notify_cfg if notify_cfg is not None else _effective_notify(effective),
-                                      config=effective, send=ports.send, sec_scan=filings._scan)
+                                      config=effective, send=ports.send, sec_scan=filings._scan,
+                                      force_propose=force_propose)
             except workflow.CheckpointUnavailable:
                 return _refused(rid, 'checkpoint_unavailable', started_at=started_at, trigger_source=trigger_source,
                                 config=effective, notify_cfg=notify_cfg)
@@ -361,6 +367,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest='command', required=True)
     run_cmd = commands.add_parser('run', help='前台跑一次')
     run_cmd.add_argument('--manual', action='store_true', help='按手动运行（不推送）')
+    run_cmd.add_argument('--force-propose', action='store_true',
+                         help='不等周六，这次运行也起草优化提案（开关关着时仍然跳过）')
     resume_cmd = commands.add_parser('resume', help='从失败的节点续跑')
     resume_cmd.add_argument('--run-id', required=True)
     resume_cmd.add_argument('--node', required=True)
@@ -371,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == 'show':
             return _show(args.run_id)
         if args.command == 'run':
-            out = run(trigger_source='manual' if args.manual else 'scheduled')
+            out = run(trigger_source='manual' if args.manual else 'scheduled', force_propose=args.force_propose)
         else:
             out = resume(args.run_id, args.node)
     except locks.DailyBusy:

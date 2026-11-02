@@ -1,188 +1,25 @@
-"""Per-ticker collectors shared by the batch and the screen stage.
+"""The fetch-run bookkeeping the batch, the screen backfill and the manual fetch feed (v2.3 §6): the per-family
+``Tally``, the append-only ``data_fetch_runs`` write and the per-family advisory locks.
 
-Each function owns exactly one fetch -> normalize -> store step and its own
-transaction (``service._tx``), so every caller keeps its try/except and its
-summary writes where they are. Exceptions always propagate unchanged.
-
-The rest of this module is the fetch-run bookkeeping the batch and the manual
-fetch feed (v2.3 §6): the per-family Tally, the append-only write, and the
-per-family advisory locks.
-"""
+Every fetch itself is a ``registry.run_adapter`` call (spec D15, R23): the per-family collector functions that lived here
+(``bars_one`` / ``news_one`` / ``sec_listing`` / ``fred_series``) have no caller any more and are gone."""
 from __future__ import annotations
 from investment_assistant.data.tally import Tally as Tally, TARGETS_MAX as TARGETS_MAX
-from investment_assistant.data.fetch_status import iso as _iso
-from investment_assistant.data.adapter_support import discover_one as _discover_one
-from investment_assistant.core.constants import FILING_LOOKBACK_DAYS, SEC_EVIDENCE_DIR
-from investment_assistant.data.sources import edgar as monitor_source
 import investment_assistant.data.repo as data_repo
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from contextlib import contextmanager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
-from investment_assistant.data import fetch_policy
-from investment_assistant.data.fetch_policy import FetchError, Fetched
-from investment_assistant.data.adapters import bars as bars_module
 from investment_assistant.core import redact as families
-from investment_assistant.data.adapters import fred as macro_module
-from investment_assistant.data.adapters import news as news_module
-# Repository consumers use their owning layers below.
-from investment_assistant.data.adapters import universe as universe_module
 from investment_assistant.core import tx as core_tx
 
 
-# fetch-1 hooks (spec §6): every external request of this module runs under FETCH_POLICY; tests shorten it and
-# swap the sleep. ``deps``-injected fetchers are wrapped too, so a fake that raises is classified, not special-cased.
-FETCH_POLICY = fetch_policy.FetchPolicy()
+# fetch-1 hooks (spec §6): the sleep every host hands to the adapters (``AdapterDeps.sleep``); tests swap it so a retry
+# backoff costs nothing. The policy itself lives on each adapter's sources (``registry.run_adapter``).
 FETCH_SLEEP = time.sleep
-
-
-def _fetch(target: str, fn: Callable[[], Any]) -> Fetched:
-    return fetch_policy.fetch(target, fn, policy=FETCH_POLICY, sleep=lambda seconds: FETCH_SLEEP(seconds))
-
-
-def _fail(tally: 'Tally | None', target: str, exc: BaseException, outcome: Fetched | None = None) -> None:
-    """Book a failure on the tally. A failure after a successful fetch (normalise, store) keeps that fetch's
-    attempt records; the caller still re-raises the original exception."""
-    if tally is None:
-        return
-    if not isinstance(exc, FetchError):
-        kind, status = fetch_policy.classify_exception(exc)
-        exc = FetchError(str(exc) or type(exc).__name__, kind=kind, status=status,
-                         attempts=outcome.attempts if outcome else [], target=target)
-    tally.record(target, exc)
-
-
-def bars_one(ticker: str, *, session: date, now: datetime, deps: Any, lookback_days: int,
-             tally: 'Tally | None' = None) -> dict:
-    """One ticker's daily bars, stored in their own transaction.
-
-    Returns ``{'counts': store_bars result, 'skipped': list[date]}``. The request runs under the fetch-1 policy;
-    a failure raises ``FetchError``. With ``tally`` the outcome is booked there (target = ticker, ``rows`` = bars
-    newly written, ``latest`` = newest ``trade_date`` fetched) and the caller must not book it again."""
-    outcome: Fetched | None = None
-    try:
-        outcome = _fetch(ticker, lambda: bars_module.fetch_history(
-            ticker, session - timedelta(days=lookback_days), session, fetcher=deps.bar_fetcher))
-        rows, skipped = bars_module.normalize_history(outcome.value)
-        with core_tx._tx() as conn:
-            counts = data_repo.store_bars(conn, ticker, rows, now=now)
-    except Exception as exc:
-        _fail(tally, ticker, exc, outcome)
-        raise
-    if tally is not None:
-        tally.record(ticker, outcome, rows=counts['inserted'],
-                     latest=_iso(max((row['price_date'] for row in rows), default=None)))
-    return {'counts': counts, 'skipped': skipped}
-
-
-def news_one(ticker: str, *, now: datetime, deps: Any, drop_after: datetime | None = None,
-             tally: 'Tally | None' = None) -> dict:
-    """One ticker's yfinance news, stored in its own transaction.
-
-    ``drop_after`` (a resumed run's ``cutoff_at``, spec §5.5) drops items published after it; the count is
-    returned as ``after_cutoff_dropped`` (the key only exists when ``drop_after`` is given). Items without a
-    publication time cannot be judged and are kept."""
-    outcome: Fetched | None = None
-    try:
-        outcome = _fetch(ticker, lambda: news_module.fetch_yfinance(ticker, fetcher=deps.news_fetcher))
-        raw = outcome.value
-        items, bad = news_module.normalize_yfinance(raw, ticker=ticker)
-        dropped = 0
-        if drop_after is not None:
-            kept = [i for i in items if i['published_at'] is None or i['published_at'] <= drop_after]
-            dropped, items = len(items) - len(kept), kept
-        with core_tx._tx() as conn:
-            counts = data_repo.store_news(conn, [(i, [ticker]) for i in items], now=now)
-    except Exception as exc:
-        _fail(tally, ticker, exc, outcome)
-        raise
-    if tally is not None:
-        tally.record(ticker, outcome, rows=counts['inserted'],
-                     latest=_iso(max((i['published_at'] for i in items if i['published_at'] is not None),
-                                     default=None)))
-    result = {**counts, 'fetched': len(raw), 'skipped': bad}
-    if drop_after is not None:
-        result['after_cutoff_dropped'] = dropped
-    return result
-
-
-def sec_listing(tickers: list[str], *, session: date, now: datetime, deps: Any, tally: 'Tally | None' = None,
-                drop_after: datetime | None = None) -> dict:
-    """SEC 8-K listings over the filing lookback, stored as news plus acceptance fill — one ticker at a time.
-
-    Every ticker is its own target: a missing CIK or a dropped connection fails only that ticker. The result keeps
-    the old keys (``inserted`` / ``existing`` / ``acceptance_filled``) and adds ``by_ticker`` (``{ticker: {'rows',
-    'latest'}}`` for the ones that worked), ``errors`` (``{ticker: reason}``) and, when ``drop_after`` is given,
-    ``after_cutoff_dropped`` (filings accepted after that cutoff are left out, spec §5.5).
-
-    With ``tally`` each ticker's outcome is booked there and failures do not raise; a ``company_tickers.json``
-    failure (nothing can be resolved) is booked as the whole-call ``'*'`` and listing stops. Without ``tally``
-    (older callers) any failure raises and nothing is stored, as the single-call version did."""
-    source = deps.filing_source
-    if source is None:
-        source = monitor_source.EdgarSource(SEC_EVIDENCE_DIR)
-    start = (session - timedelta(days=FILING_LOOKBACK_DAYS)).isoformat()
-    end = session.isoformat()
-    once = fetch_policy.FetchPolicy(backoff_s=())      # EdgarSource.get retries each request itself
-    metas: list[dict] = []
-    by_ticker: dict[str, dict] = {}
-    errors: dict[str, str] = {}
-    dropped = 0
-    for ticker in tickers:
-        try:
-            outcome = fetch_policy.fetch(ticker, lambda ticker=ticker: _discover_one(source, ticker, start, end),
-                                         policy=once, sleep=lambda seconds: FETCH_SLEEP(seconds))
-        except Exception as exc:
-            if tally is None:
-                raise
-            if isinstance(exc, FetchError) and exc.target == monitor_source.COMPANY_TICKERS_TARGET:
-                errors['*'] = families.sanitize_reason(exc)
-                tally.record('*', exc)
-                break
-            errors[ticker] = families.sanitize_reason(exc)
-            tally.record(ticker, exc)
-            continue
-        found, drop_count = monitor_source.drop_after_cutoff(outcome.value, drop_after)
-        dropped += drop_count
-        metas.extend(found)
-        latest = max((m['filing_date'] for m in found), default=None)
-        by_ticker[ticker] = {'rows': len(found), 'latest': latest}
-        if tally is not None:
-            tally.record(ticker, outcome, rows=len(found), latest=latest)
-    with core_tx._tx() as conn:
-        result = {**data_repo.store_news(conn, news_module.filing_news(metas), now=now),
-                  'acceptance_filled': data_repo.fill_filing_acceptance(conn, metas),
-                  'by_ticker': by_ticker, 'errors': errors}
-    if drop_after is not None:
-        result['after_cutoff_dropped'] = dropped
-    return result
-
-
-def fred_series(series_id: str, *, session: date, now: datetime, deps: Any,
-                api_key: str | None, tally: 'Tally | None' = None) -> dict | str:
-    """One FRED series: ``'not_configured'`` without a key (no request, no rows),
-    otherwise the stored observations. The request runs under the fetch-1 policy (``FetchError`` on failure;
-    the key never appears in its text); with ``tally`` the outcome is booked under the series id."""
-    if not api_key:
-        return 'not_configured'
-    outcome: Fetched | None = None
-    try:
-        outcome = _fetch(series_id, lambda: macro_module.fetch_series(
-            series_id, start=session - timedelta(days=macro_module.MACRO_LOOKBACK_DAYS), end=session,
-            api_key=api_key, fetcher=deps.macro_fetcher))
-        rows = outcome.value
-        with core_tx._tx() as conn:
-            counts = data_repo.store_macro(conn, series_id, rows, now=now)
-    except Exception as exc:
-        _fail(tally, series_id, exc, outcome)
-        raise
-    if tally is not None:
-        tally.record(series_id, outcome, rows=counts['inserted'],
-                     latest=_iso(max((row['obs_date'] for row in rows), default=None)))
-    return counts
 
 
 # ------------------------------------------------------------- fetch-run bookkeeping

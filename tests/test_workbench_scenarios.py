@@ -421,13 +421,22 @@ def test_agent_track_end_to_end(offline, scripted_model):
     def tool_reply(name, args, call_id):
         return AIMessage(content='', tool_calls=[{'name': name, 'args': args, 'id': call_id}])
 
-    def buy_json(ref):
+    def research_reply(tag):
+        """agent-4's researcher phase (spec 6.1): one tool call (its call:1), then a checked conclusion citing it."""
+        return [tool_reply('get_news', {'days': 30}, f'r{tag}'),
+                AIMessage(content=json.dumps({'facts': [{'text': '近期资讯已核对', 'kind': 'disclosure',
+                                                         'refs': ['call:1']}],
+                                              'risks': [], 'blocked': [], 'summary': '基本面已核验'},
+                                             ensure_ascii=False))]
+
+    def buy_json(ref, research_ref=None):
         return json.dumps({'action': 'buy', 'summary': '回踩修复放量',
                            'entry_type': 'zone_limit', 'max_hold_sessions': 10,
                            'levels': {k: {'value': v, 'refs': [ref]} for k, v in
                                       (('entry_low', 120.0), ('entry_high', 128.0), ('stop', 115.0),
                                        ('target1', 140.0))},
-                           'thesis': [{'text': '放量突破 20 日线', 'refs': [ref]}],
+                           'thesis': [{'text': '放量突破 20 日线',
+                                       'refs': [research_ref, ref] if research_ref else [ref]}],
                            'invalidation': [{'kind': 'close_below', 'params': {'price': 112},
                                              'text': '收盘跌破 112', 'refs': [ref]}]}, ensure_ascii=False)
 
@@ -441,17 +450,22 @@ def test_agent_track_end_to_end(offline, scripted_model):
         d.agent_settings = settings
         return d
 
+    # agent-4 first versions: the researcher phase comes first (its tool call is call:1, so the proposer's own
+    # tool call is call:2 and a first-version thesis cites the researcher, spec 6.1)
     batch = service.run_batch(now=evening(S1), deps=agent_deps([
         # SYNC（核心，字母序在前）：引用 call:99 → 整条作废
+        *research_reply('c'),
         tool_reply('get_indicators', {'ticker': 'SYNC'}, 't1'),
         AIMessage(content=buy_json('call:99')),
-        # SYNTH（核心）：工具 → 买入 JSON → 反方工具 → 风险
+        # SYNTH（核心）：研究员 → 工具 → 买入 JSON → 反方工具 → 风险
+        *research_reply('t'),
         tool_reply('get_indicators', {'ticker': 'SYNTH'}, 't2'),
-        AIMessage(content=buy_json('call:1')),
+        AIMessage(content=buy_json('call:2', 'call:1')),
         tool_reply('get_news', {'days': 7}, 't3'),
-        AIMessage(content=json.dumps({'counter': [{'thesis': 1, 'text': '财报临近', 'refs': ['call:1']}],
+        AIMessage(content=json.dumps({'counter': [{'thesis': 1, 'text': '财报临近', 'refs': ['call:2']}],
                                       'risks': []})),
-        # SYNE（扩展，最后跑）：pass
+        # SYNE（扩展，最后跑）：研究员 → pass（thesis 引用研究员的调用）
+        *research_reply('e'),
         tool_reply('get_indicators', {'ticker': 'SYNE'}, 't4'),
         AIMessage(content=json.dumps({'action': 'pass', 'summary': '趋势不明',
                                       'thesis': [{'text': '量能不足', 'refs': ['call:1']}]})),
@@ -504,6 +518,7 @@ def test_agent_track_end_to_end(offline, scripted_model):
 
     # 同日重跑：ok/pass 单元不再运行，agent 计划不新增（失败的 SYNC 按 §8.1 重试）
     again = service.run_batch(now=evening(S1), deps=agent_deps([
+        *research_reply('c2'),
         tool_reply('get_indicators', {'ticker': 'SYNC'}, 't5'),
         AIMessage(content=buy_json('call:99')),
     ]))
@@ -532,17 +547,22 @@ def test_signal_day_creates_agent2_version_zero(offline, scripted_model, monkeyp
     def tool_reply(name, args, call_id):
         return AIMessage(content='', tool_calls=[{'name': name, 'args': args, 'id': call_id}])
 
+    # agent-4 first version: the researcher's tool call is call:1, the proposer's own call:2, the counter's call:3
+    research_json = json.dumps({'facts': [{'text': '近期资讯已核对', 'kind': 'disclosure', 'refs': ['call:1']}],
+                                'risks': [], 'blocked': [], 'summary': '基本面已核验'}, ensure_ascii=False)
     plan_json = json.dumps({
         'action': 'buy', 'summary': '回踩修复放量', 'entry_type': 'zone_limit', 'max_hold_sessions': 10,
-        'levels': {k: {'value': v, 'refs': ['call:1']} for k, v in
+        'levels': {k: {'value': v, 'refs': ['call:2']} for k, v in
                    (('entry_low', 120.0), ('entry_high', 128.0), ('stop', 115.0), ('target1', 140.0))},
-        'thesis': [{'text': '放量突破 20 日线', 'refs': ['call:1']}, {'text': '回踩不破前低', 'refs': ['call:1']}],
-        'invalidation': [{'kind': 'close_below', 'params': {'price': 112}, 'refs': ['call:1']}]},
+        'thesis': [{'text': '放量突破 20 日线', 'refs': ['call:1', 'call:2']},
+                   {'text': '回踩不破前低', 'refs': ['call:2']}],
+        'invalidation': [{'kind': 'close_below', 'params': {'price': 112}, 'refs': ['call:2']}]},
         ensure_ascii=False)
-    counter_json = json.dumps({'counter': [{'thesis': 1, 'text': '突破量能不足', 'refs': ['call:2']}],
-                               'risks': [{'text': '财报临近', 'refs': ['call:1']}]}, ensure_ascii=False)
+    counter_json = json.dumps({'counter': [{'thesis': 1, 'text': '突破量能不足', 'refs': ['call:3']}],
+                               'risks': [{'text': '财报临近', 'refs': ['call:2']}]}, ensure_ascii=False)
     def unit_replies(ticker):
-        return [tool_reply('get_indicators', {'ticker': ticker}, 't1'), AIMessage(content=plan_json),
+        return [tool_reply('get_news', {'days': 30}, 'r1'), AIMessage(content=research_json),
+                tool_reply('get_indicators', {'ticker': ticker}, 't1'), AIMessage(content=plan_json),
                 tool_reply('get_news', {'days': 7}, 't2'), AIMessage(content=counter_json)]
 
     real_insert = execution_repo.insert_plan_version
@@ -566,9 +586,9 @@ def test_signal_day_creates_agent2_version_zero(offline, scripted_model, monkeyp
     assert plan['plan_version'] == 'agent-3'
     assert plan['inputs']['version_no'] == 0 and plan['inputs']['as_of_session'] == S1.isoformat()
     [run] = analysis_repo.agent_runs_for(offline, 'SYNTH', S1)
-    assert run['agent_version'] == 'agent-3' and run['mode'] == 'propose' and run['status'] == 'ok'
+    assert run['agent_version'] == 'agent-4' and run['mode'] == 'propose' and run['status'] == 'ok'   # D38: run version agent-4, plan schema agent-3
     assert str(run['plan_id']) == str(plan['id'])
-    assert [c['phase'] for c in analysis_repo.agent_tool_calls(offline, run['id'])] == ['propose', 'counter']
+    assert [c['phase'] for c in analysis_repo.agent_tool_calls(offline, run['id'])] == ['research', 'propose', 'counter']
     [version] = execution_repo.chain_versions(offline, 'SYNTH', S1)
     assert (version['version_no'], version['origin'], version['supersedes_plan_id'], version['diff']) == \
         (0, 'signal', None, None)
@@ -576,9 +596,9 @@ def test_signal_day_creates_agent2_version_zero(offline, scripted_model, monkeyp
     assert version['cutoff_at'] == run['cutoff_at'] == evening(S1)
     assert version['as_of_session'] == S1 and version['schema_version'] == 'agent-3'
     brief = analysis_repo.latest_brief(offline, 'SYNTH', S1)
-    assert brief['agent_run_id'] == run['id'] and brief['prompt_version'] == 'agent-3'
+    assert brief['agent_run_id'] == run['id'] and brief['prompt_version'] == 'agent-4'   # the brief carries the run version
     assert brief['output']['summary'] == '回踩修复放量'
-    assert brief['output']['contra'] == [{'thesis': 1, 'text': '突破量能不足', 'refs': ['call:2']}]
+    assert brief['output']['contra'] == [{'thesis': 1, 'text': '突破量能不足', 'refs': ['call:3']}]
     head = execution_repo.chain_head(offline, 'SYNTH', S1)
     assert str(head['plan']['id']) == str(plan['id'])
 
@@ -657,22 +677,27 @@ def test_review_expansion_end_to_end(offline, scripted_model):
     def tool_msg(name, args):
         return AIMessage(content='', tool_calls=[{'name': name, 'args': args, 'id': name + '-1'}])
 
+    # agent-4 first versions: the researcher's tool call is call:1 and the proposer's own tool call is call:2
+    research_json = _json.dumps({'facts': [{'text': '近期资讯已核对', 'kind': 'disclosure', 'refs': ['call:1']}],
+                                 'risks': [], 'blocked': [], 'summary': '基本面已核验'}, ensure_ascii=False)
     alpha_json = _json.dumps({'action': 'buy', 'summary': '回踩修复放量',
                               'entry_type': 'zone_limit', 'max_hold_sessions': 10,
-                              'levels': {'entry_low': {'value': 124, 'refs': ['call:1']},
-                                         'entry_high': {'value': 125.5, 'refs': ['call:1']},
-                                         'stop': {'value': 120, 'refs': ['call:1']},
-                                         'target1': {'value': 131, 'refs': ['call:1']}},
-                              'thesis': [{'text': '放量突破 20 日线', 'refs': ['call:1']}],
+                              'levels': {'entry_low': {'value': 124, 'refs': ['call:2']},
+                                         'entry_high': {'value': 125.5, 'refs': ['call:2']},
+                                         'stop': {'value': 120, 'refs': ['call:2']},
+                                         'target1': {'value': 131, 'refs': ['call:2']}},
+                              'thesis': [{'text': '放量突破 20 日线', 'refs': ['call:1', 'call:2']}],
                               'invalidation': [{'kind': 'close_below', 'params': {'price': 118},
-                                                'refs': ['call:1']}]}, ensure_ascii=False)
+                                                'refs': ['call:2']}]}, ensure_ascii=False)
     beta_json = _json.dumps({'action': 'pass', 'summary': '趋势不明',
                              'thesis': [{'text': '量能不足', 'refs': ['call:1']}]}, ensure_ascii=False)
     posn_json = _json.dumps({'summary': '持仓跌破均线，趋势走坏',
                              'support': [{'text': '收盘价跌破 MA50', 'refs': ['call:1']}],
                              'contra': [], 'conflicts': []}, ensure_ascii=False)
-    replies = [tool_msg('get_indicators', {'ticker': 'ALPHA'}), AIMessage(content=alpha_json),
+    replies = [tool_msg('get_news', {'days': 30}), AIMessage(content=research_json),
+               tool_msg('get_indicators', {'ticker': 'ALPHA'}), AIMessage(content=alpha_json),
                tool_msg('get_news', {'days': 7}), AIMessage(content=_json.dumps({'counter': [], 'risks': []})),
+               tool_msg('get_news', {'days': 30}), AIMessage(content=research_json),
                tool_msg('get_indicators', {'ticker': 'BETA'}), AIMessage(content=beta_json),
                AIMessage(content=_json.dumps({'counter': [], 'risks': []})),
                tool_msg('get_trigger', {}), AIMessage(content=posn_json)]
@@ -692,7 +717,7 @@ def test_review_expansion_end_to_end(offline, scripted_model):
     assert batch['agent']['runs'] == {'ALPHA': 'ok', 'BETA': 'pass'}
     assert analysis_repo.latest_brief(offline, 'POSN', S1)['prompt_version'] == 'agent-brief-1'   # 持仓解读由 Agent 产出
     prompt_versions = [r[0] for r in offline.execute('SELECT prompt_version FROM signal_briefs').fetchall()]
-    assert set(prompt_versions) <= {'agent-2', 'agent-3', 'agent-brief-1'}                               # 不再有 Codex
+    assert set(prompt_versions) <= {'agent-2', 'agent-3', 'agent-4', 'agent-brief-1'}                               # 不再有 Codex
 
     view = unit_cards(now=evening(S1))
     alpha_unit = next(u for u in view['units'] if u['ticker'] == 'ALPHA')

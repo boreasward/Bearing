@@ -27,7 +27,7 @@ from investment_assistant.core.constants import ACCOUNTS_AGENT_DEADLINE_S as ACC
 from investment_assistant.data.calendar import add_trading_days, is_trading_day, trading_days_between
 from investment_assistant.core import redact as families, tx as service, stages as stages_module
 from investment_assistant.core.tx import Unavailable
-from investment_assistant.workflow.state import _moment, _wall, _stage_finish
+from investment_assistant.workflow.state import _moment, _wall, _stage_finish, feature_enabled
 from typing import Any
 from investment_assistant.execution import simulation as plan_shadow
 from investment_assistant.execution import accounts
@@ -66,7 +66,7 @@ def recent_closed_facts(conn,account,*,session,now):
     return recent
 
 
-def run_stage(session,*,now,deps,run_id,acc,settings):
+def run_stage(session,*,now,deps,run_id,acc,settings,features=None):
     if not is_trading_day(session): return {'accounts':[],'skipped':'not_trading_day'}
     clock=deps.clock or clock_module.monotonic; started=clock()
     with core_tx._tx() as conn:
@@ -111,6 +111,11 @@ def run_stage(session,*,now,deps,run_id,acc,settings):
             host_cancellations[aid]=changed or []
             results[aid]['settled']['cancelled']+=len(changed or [])
     unavailable=None
+    # K2: the Agent-managed decision uses the stored portfolio check only when this run's frozen switch is on.
+    checking=feature_enabled({'features':features},'portfolio_manager') if any(a['strategy']=='agent_managed' for a in papers) else False
+    def decide_agent(conn,account,**kw):
+        state=execution_paper_accounts.portfolio_check_state(conn,account,session=session,enabled=checking)
+        return analysis_agent_runner.run_portfolio_decision(conn,account,portfolio_check=state,**kw)
     for strategy in ('follow_plans','agent_managed'):
         for account in papers:
             if account['strategy']!=strategy or str(account['id']) in failed: continue
@@ -120,7 +125,7 @@ def run_stage(session,*,now,deps,run_id,acc,settings):
             else:
                 if strategy=='agent_managed': kw.update(settings=settings,deps=deps,clock=clock,started=started,recent_closed=recent_closed_facts)
                 else: kw.update(recent_closed=recent_closed_facts)
-                row=phase(account,execution_paper_accounts.decide_follow_plans if strategy=='follow_plans' else analysis_agent_runner.run_portfolio_decision,**kw)
+                row=phase(account,execution_paper_accounts.decide_follow_plans if strategy=='follow_plans' else decide_agent,**kw)
             if strategy=='agent_managed' and row and row.get('status_reason') in ('quota_exhausted','not_connected','model_unavailable'):
                 unavailable=row['status_reason']
             if row: results[str(account['id'])]['decision']={'status':row['status'],'orders_placed':0,'orders_rejected':0,
@@ -163,7 +168,7 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
     summary = state['summary']
     try:
         summary['accounts'] = run_stage(session, now=now, deps=ctx.deps,
-            run_id=state.get('run_id'), acc=acc, settings=ctx.deps.agent_settings)
+            run_id=state.get('run_id'), acc=acc, settings=ctx.deps.agent_settings, features=state.get('features'))
     except Exception as exc:
         reason = families.sanitize_reason(exc)
         summary.setdefault('errors', []).append(f'accounts: {reason}')

@@ -1,4 +1,4 @@
-"""The ``daily`` LangGraph workflow (v2.11, ``daily-2``): eleven nodes in a line, checkpoints, node retry, resume.
+"""The ``daily`` LangGraph workflow (v2.14/v2.15, ``daily-3``): thirteen nodes in a line, checkpoints, node retry, resume.
 
 The stage functions live in ``workflow/nodes``; this module wraps each in a
 node that opens the stage's accumulator, runs the body, retries it once after ``NODE_RETRY_WAIT_S`` when it raises,
@@ -26,16 +26,18 @@ from investment_assistant.analysis import pool as pool_module
 from investment_assistant.core import tx as service
 from investment_assistant.workflow import state as state_helpers
 from investment_assistant.workflow.context import NodeContext
-from investment_assistant.workflow.nodes import accounts, agent, collect as collect_node, plan, push, regime, retro, review, screen, sec_monitor, signals
+from investment_assistant.workflow.nodes import (accounts, agent, collect as collect_node, plan, portfolio, propose, push,
+                                                 regime, retro, review, screen, sec_monitor, signals)
 from investment_assistant.data.adapters import bars
 from investment_assistant.core import stages as stages_module
 from investment_assistant.workflow import recorder as stage_recorder
 from investment_assistant.core.llm import model as agent_model
 from investment_assistant.core import tx as core_tx
+from investment_assistant.core import features as core_features
+from investment_assistant.core.versions import DAILY_GRAPH_VERSION as DAILY_GRAPH_VERSION
 
-DAILY_GRAPH_VERSION = 'daily-2'
 NODE_RETRY_WAIT_S = 60
-NODES: tuple[str, ...] = stages_module.STAGE_IDS            # the eleven ids of stages-5; the order is the edges
+NODES: tuple[str, ...] = stages_module.STAGE_IDS            # the thirteen ids of stages-6; the order is the edges
 NY = ZoneInfo('America/New_York')
 FAULT_ENV = 'INVESTMENT_ASSISTANT_FAULT_ONCE'                # Task 7 drill only: one injected failure of one node
 TRIGGERS = ('scheduled', 'manual_batch')
@@ -60,6 +62,8 @@ class DailyState(TypedDict, total=False):
     manual_pool: dict
     timeline_ready: bool | None
     growth_ready: bool | None
+    features: dict[str, bool]          # v2.12–v2.15 switches, frozen when the run starts (spec §9, D3)
+    force_propose: bool                # ``daily run --force-propose``: the propose node ignores the Saturday gate
     refs: dict[str, dict]
     agent_started_at: str | None
     summary: dict
@@ -101,7 +105,7 @@ def resume_deadline(session: date) -> datetime:
 
 def effective_rows(rows: list[dict]) -> dict[str, dict]:
     """Per stage the row of the highest ``attempt`` (a row without the field counts as attempt 1; among equals the
-    later one wins): the run's ten effective rows (spec D9)."""
+    later one wins): the run's thirteen effective rows (spec D9)."""
     chosen: dict[str, dict] = {}
     for row in rows:
         known = chosen.get(row['stage'])
@@ -129,9 +133,15 @@ def _pool_arg(explicit_pool: Any) -> dict:
     return state_helpers._pool_state(pool_module.Pool.all_core(list(explicit_pool)))
 
 
-def initial_state(*, run_id: str, trigger: str, now: datetime, explicit_pool: Any = None) -> DailyState:
+def initial_state(*, run_id: str, trigger: str, now: datetime, explicit_pool: Any = None,
+                  features: dict[str, bool] | None = None, force_propose: bool = False) -> DailyState:
     """The state a new run starts with. A manual run is always a trading day (it targets the latest settled session);
-    a scheduled one on a New York holiday starts with the v2.7 ``skipped`` summary, which the nodes honour."""
+    a scheduled one on a New York holiday starts with the v2.7 ``skipped`` summary, which the nodes honour.
+
+    ``features`` are the switch values the run is frozen on (spec §9: a flip during the run takes effect on the next
+    one; a resume reuses the checkpointed state). Without them every switch is on, the default of a flag without
+    history. ``force_propose`` (the command line's ``--force-propose``) is frozen too, so a resume keeps it; it
+    lifts only the propose node's day gate, never its switch."""
     if trigger not in TRIGGERS:
         raise ValueError(f'unknown trigger: {trigger!r}')
     ny_date = now.astimezone(NY).date()
@@ -141,7 +151,10 @@ def initial_state(*, run_id: str, trigger: str, now: datetime, explicit_pool: An
         'trigger': trigger, 'cutoff_at': now.isoformat(), 'session': bars.latest_closed_session(now).isoformat(),
         'ny_date': ny_date.isoformat(), 'trading_day': trading_day, 'explicit': explicit_pool is not None,
         'held': [], 'chain_tickers': [], 'collected': [], 'universe': None, 'manual_pool': {},
-        'timeline_ready': None, 'growth_ready': None, 'refs': {}, 'agent_started_at': None,
+        'timeline_ready': None, 'growth_ready': None,
+        'features': {flag: bool((features or {}).get(flag, True)) for flag in core_features.FLAGS},
+        'force_propose': bool(force_propose),
+        'refs': {}, 'agent_started_at': None,
         'summary': ({} if trading_day else {'status': 'skipped', 'reason': 'not a trading day in New York',
                                             'ny_date': ny_date.isoformat()}),
         'failed_node': None, 'failure': None}
@@ -240,14 +253,16 @@ BODIES: dict[str, Callable] = {
     'plan': _on_trading_day('plan', plan.run),
     'agent': _on_trading_day('agent', agent.run),
     'review': _on_trading_day('review', review.run),
+    'portfolio': _on_trading_day('portfolio', portfolio.run),
     'accounts': _on_trading_day('accounts', accounts.run),
     'push': push.run,
     'retro': retro.run,
+    'propose': propose.run,                 # judges its own day (Saturday in Beijing), like push and retro
 }
 
 
 def build_graph(*, checkpointer, ctx_factory: Callable[[], NodeContext]):
-    """START → the ten nodes in order → END, compiled with ``checkpointer`` (no conditional edges, spec §4.1)."""
+    """START → the thirteen nodes in order → END, compiled with ``checkpointer`` (no conditional edges, spec §4.1)."""
     from langgraph.graph import END, START, StateGraph
 
     graph = StateGraph(DailyState)
@@ -290,7 +305,7 @@ def _make_context(state: dict, deps: service.Deps, *, attempt: int, resumed: boo
 
 def _book_abort(ctx: NodeContext, resume_node: str | None, exc: BaseException) -> NodeFailed:
     """An exception outside any node (checkpoint write, state read, the graph itself): book what this execution
-    leaves undone so the run still has its ten effective rows — the first node without a row of this execution as
+    leaves undone so the run still has its thirteen effective rows — the first node without a row of this execution as
     ``failed / aborted``, the ones after it as ``skipped / upstream_failed`` (writes may themselves fail; the
     recorder swallows that)."""
     reason = f'aborted: {families.sanitize_reason(exc) or type(exc).__name__}'
@@ -357,6 +372,8 @@ def _execute(state: dict, graph_input: dict | None, *, deps: service.Deps, attem
                 'resumable': failure is not None}      # a stage's own ``failed`` row leaves no next node to resume
     summary.update(cutoff_at=state['cutoff_at'], session=state['session'], graph_version=DAILY_GRAPH_VERSION, run_status=status, failed_node=node, resumed=attempt - 1,
                    stage_status={'written': ctx.recorder.written, 'error': ctx.recorder.error})
+    if state.get('features') is not None:            # the frozen switches the run (and its resumes) used
+        summary['features'] = dict(state['features'])
     if resume_node is not None:
         summary['resume_node'] = resume_node
     if info is not None:
@@ -366,12 +383,24 @@ def _execute(state: dict, graph_input: dict | None, *, deps: service.Deps, attem
             'failed_node': node, 'failure': info}
 
 
+def _frozen_features() -> dict[str, bool] | None:
+    """The switches as the database holds them now (the run's frozen values, D3); ``None`` before migration 031 (a
+    flag without history is on) or when the database cannot be read — the first node then fails on its own."""
+    try:
+        with core_tx.read_only_tx() as conn:
+            return core_features.frozen(conn) if core_schema.five_layers_ready(conn) else None
+    except service.Unavailable:
+        return None
+
+
 def run(*, run_id: str, trigger: str, now: datetime, deps: service.Deps | None = None, explicit_pool=None,
-        checkpointer_factory=None, sleep=time.sleep, notify_cfg=None, config=None, send=None, sec_scan=None) -> dict:
-    """A new run: the ten nodes from the start. Returns ``{'run_id', 'status', 'summary', 'attempt', 'failed_node',
+        checkpointer_factory=None, sleep=time.sleep, notify_cfg=None, config=None, send=None, sec_scan=None,
+        force_propose: bool = False) -> dict:
+    """A new run: the thirteen nodes from the start. Returns ``{'run_id', 'status', 'summary', 'attempt', 'failed_node',
     'failure', ...}``; ``status`` is ``success`` / ``degraded`` / ``failed`` (D13). Raises ``CheckpointUnavailable``
     when the checkpoint tables are missing."""
-    state = initial_state(run_id=run_id, trigger=trigger, now=now, explicit_pool=explicit_pool)
+    state = initial_state(run_id=run_id, trigger=trigger, now=now, explicit_pool=explicit_pool,
+                          features=_frozen_features(), force_propose=force_propose)
     return _execute(state, dict(state), deps=deps or service.Deps(), attempt=1, resumed=False, sleep=sleep,
                     notify_cfg=notify_cfg, checkpointer_factory=checkpointer_factory, config=config,
                     send=send, sec_scan=sec_scan)

@@ -41,13 +41,14 @@ def holding(ticker='NVDA', **over):
 
 def build(units=(), holdings=(), summary=None, last_push_failed=False, extended_plans=0, market=None,
           agent_summary=None, screen=None, plan_updates=None, retro=None, fetch_status=None, holding_status=None,
-          merged=None, session_units=None):
+          merged=None, session_units=None, portfolio=None):
     return digest.build(session=SESSION, units=list(units), holdings=list(holdings),
                         summary=summary or {'errors': [], 'earnings': {}},
                         last_push_failed=last_push_failed, public_url=URL,
                         extended_plans=extended_plans, market=market, agent_summary=agent_summary,
                         screen=screen, plan_updates=plan_updates, retro=retro, fetch_status=fetch_status,
-                        holding_status=holding_status, merged=merged, session_units=session_units)
+                        holding_status=holding_status, merged=merged, session_units=session_units,
+                        portfolio=portfolio)
 
 
 def agent_ok(ticker='NVDA', summary='回踩修复放量', first_risk='财报临近'):
@@ -794,3 +795,61 @@ def test_rule_baseline_alone_is_three_lines():
     with_agent = plan_field(build(units=[unit(ticker='MU', plan=base, agent=agent3_ok())]), 'MU')
     assert with_agent.split('\n')[0].startswith('MU 10-14 第 2 版：区间限价 99–102') and \
         '；规则基线：区间 98.5–101.5 · 止损 94 · T1 112 · 166 股' in with_agent
+
+
+# ---------------------------------------------------------------- 🧩 组合检查 (v2.14 spec §7.4)
+
+def portfolio_check(status='ready', *, commentary=True, **over):
+    verdicts = [{'plan_id': 'p-nvda', 'ticker': 'NVDA', 'group': '半导体', 'verdict': 'ok', 'reasons': [], 'order': 1},
+                {'plan_id': 'p-amd', 'ticker': 'AMD', 'group': '半导体', 'verdict': 'blocked',
+                 'reasons': ['sector_cap'], 'order': None},
+                {'plan_id': 'p-mu', 'ticker': 'MU', 'group': '半导体', 'verdict': 'blocked',
+                 'reasons': ['max_per_sector', 'sector_unknown'], 'order': None},
+                {'plan_id': 'p-ko', 'ticker': 'KO', 'group': '消费', 'verdict': 'deferred',
+                 'reasons': ['deferred_by_cash'], 'order': 2},
+                {'plan_id': 'p-pg', 'ticker': 'PG', 'group': '消费', 'verdict': 'ok', 'reasons': [], 'order': 3}]
+    view = {'status': status, 'reason': None if status == 'ready' else 'Agent 不可用', 'session': SESSION,
+            'cutoff_at': None, 'result': {'verdicts': verdicts, 'order': ['p-nvda', 'p-ko', 'p-pg'], 'conflicts': [],
+                                          'exposure_by_sector': {}, 'params_used': {}, 'version': 'portfolio-check-1'},
+            'commentary': ({'summary': '先做 NVDA，行业集中度留意半导体',
+                            'ranking': [{'plan_id': 'p-nvda', 'rank': 1, 'reason': '半导体敞口还有空间'}],
+                            'tradeoffs': [], 'hold_actions': []} if commentary else None)}
+    view.update(over)
+    return view
+
+
+def test_digest_portfolio_field_counts_blocked_with_reasons_and_order():
+    field = build(portfolio=portfolio_check())['portfolio']
+    assert (field['status'], field['ok'], field['blocked'], field['deferred']) == ('ready', 2, 2, 1)
+    assert field['blocked_items'] == [{'ticker': 'AMD', 'reasons': ['sector_cap']},
+                                      {'ticker': 'MU', 'reasons': ['max_per_sector', 'sector_unknown']}]
+    assert field['order'] == ['NVDA', 'KO', 'PG']                      # the host's fill order, by ticker
+    assert field['summary'] == '先做 NVDA，行业集中度留意半导体' and field['first_reason'] == '半导体敞口还有空间'
+
+
+def test_workbench_digest_sends_the_portfolio_message_right_after_the_new_plans():
+    dg = build(units=[unit(plan=plan_row())], portfolio=portfolio_check())
+    messages = templates.workbench_digest(dg)
+    assert [m.title.split(' · ')[0] for m in messages][:3] == ['📊 工作台', '🆕 新计划', '🧩 组合检查']
+    fields = {f.name: f.value for f in messages[2].fields}
+    assert fields['结果'] == '可一起做 2 条 · 被拦 2 条 · 因现金暂缓 1 条'
+    assert fields['被拦 (2)'] == 'AMD：超过行业集中度上限\nMU：超过同行业标的数量上限、行业未归类'
+    assert fields['建议先后'] == 'NVDA → KO → PG'
+    assert fields['一句理由'] == '先做 NVDA，行业集中度留意半导体；半导体敞口还有空间'
+
+
+def test_portfolio_message_without_commentary_says_only_the_hard_result():
+    dg = build(portfolio=portfolio_check('degraded', commentary=False))
+    message = templates.workbench_digest(dg)[2]
+    assert message.title.startswith('🧩 组合检查')
+    assert {f.name: f.value for f in message.fields}['一句理由'] == 'Agent 不可用，只有硬结果'
+
+
+def test_no_hard_result_sends_no_portfolio_message():
+    """Switch off / node not run / migration missing: not an all-clear, so no message (K2)."""
+    for view in (None, portfolio_check('not_computed', result=None, commentary=None),
+                 portfolio_check('not_computed', reason='功能开关已关闭')):
+        dg = build(portfolio=view if view is None or view.get('result') is None else {**view, 'status': 'not_computed'})
+        assert dg['portfolio'] is None
+        assert not any(m.title.startswith('🧩') for m in templates.workbench_digest(dg))
+    assert len(templates.workbench_digest(build())) == 5               # the message set is unchanged without one

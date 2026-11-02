@@ -82,6 +82,15 @@ class Tally:
         self.outcomes[target] = reason
         self._records[target] = {'target': target, **item}
 
+    def record_for(self, target: str) -> dict[str, Any]:
+        """The ``detail.targets`` item booked for ``target`` (``{}`` when none)."""
+        return dict(self._records.get(target, {}))
+
+    @property
+    def call_failure(self) -> str | None:
+        """The sanitised reason of the whole-call (``'*'``) failure, if one was booked."""
+        return self._call_failure
+
     def ok(self, target: str) -> None:
         self.record(target, Fetched(None))
 

@@ -9,9 +9,10 @@ into ``close``'s report — bookkeeping must never fail the batch.
 
 ``stages-2`` (v2.5) has eight stages, ``review`` between ``agent`` and ``push``; ``stages-3`` (v2.7) has nine,
 ``retro`` between ``review`` and ``push``; ``stages-4`` (v2.8) has ten: ``sec_monitor`` in front and ``retro`` after
-``push``. ``stages-5`` inserts ``accounts`` between ``review`` and ``push`` (eleven stages). A run against a database without migration 026 is booked as ``stages-1`` (D22): the recorder then knows
+``push``. ``stages-5`` inserts ``accounts`` between ``review`` and ``push`` (eleven stages); ``stages-6`` adds ``portfolio``
+before ``accounts`` and ``propose`` last (thirteen). A run against a database without migration 026 is booked as ``stages-1`` (D22): the recorder then knows
 only the seven v2.4 stages and ignores ``review`` and ``retro``; without migration 027 as ``stages-2`` (v2.7 D29),
-which ignores ``retro``. ``stages-1`` .. ``stages-4`` remain registered for historical runs.
+which ignores ``retro``. ``stages-1`` .. ``stages-5`` remain registered for historical runs.
 """
 from __future__ import annotations
 import investment_assistant.workflow.repo as workflow_repo

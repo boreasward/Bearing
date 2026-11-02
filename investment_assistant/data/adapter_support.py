@@ -1,14 +1,17 @@
 """Lower-level target selection, freshness and outcome preservation."""
+import os
+import time
 from datetime import date, datetime, timedelta
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from investment_assistant.core.constants import BENCHMARK, SEC_EVIDENCE_DIR
 from investment_assistant.data import repo
-from investment_assistant.data.adapter_types import Adapter, DEFAULT_FALLBACK_KINDS, ToolSpec
-from investment_assistant.data.fetch_policy import FetchError, Fetched, FetchPolicy, classify_exception
-from investment_assistant.data.sources.edgar import EdgarSource
+from investment_assistant.data.adapter_types import DEFAULT_FALLBACK_KINDS, Adapter, AdapterDeps, ToolSpec
+from investment_assistant.data.fetch_policy import Fetched, FetchError, FetchPolicy, classify_exception
 from investment_assistant.data.market_constants import MACRO_SERIES
+from investment_assistant.data.sources.edgar import EdgarSource
 
 ONCE = FetchPolicy(backoff_s=())
 SCOPES = frozenset({'daily', 'manual', 'research', 'screen_new_members', 'data_request', 'sec_monitor'})
@@ -71,6 +74,23 @@ def sec_source(deps):
     if deps.filing_source is None:
         deps.filing_source = EdgarSource(SEC_EVIDENCE_DIR)
     return deps.filing_source
+
+
+def adapter_deps_from_service(deps, *, transaction, config=None, sleep=None) -> AdapterDeps:
+    """The one host→data projection of a ``core.tx.Deps``: fetchers, the config-derived
+    SEC text root and effective config keys (the manual fetch and the agent data-request
+    handler share it; the host keeps owning the transaction callable)."""
+    from investment_assistant.config import load_config
+
+    config = config if config is not None else load_config()
+    return AdapterDeps(transaction=transaction, bar_fetcher=deps.bar_fetcher,
+                       news_fetcher=deps.news_fetcher, earnings_fetcher=deps.earnings_fetcher,
+                       macro_fetcher=deps.macro_fetcher, filing_source=deps.filing_source,
+                       universe=deps.universe, universe_loader=deps.universe_loader,
+                       fred_api_key=os.environ.get('FRED_API_KEY'),
+                       sec_text_dir=config.filings.output_dir,
+                       sec_monitor_state_dir=Path(config.sec_monitor.state_dir) if config.sec_monitor.state_dir else None,
+                       sleep=sleep if sleep is not None else time.sleep)
 
 
 def sec_outcome(source, fn):

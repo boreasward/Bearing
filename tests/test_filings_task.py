@@ -65,7 +65,8 @@ def test_downloader_records_partial_by_ticker(monkeypatch):
     rows, status = _record(monkeypatch, {"downloaded_count": 0, "filings": [], "errors": {"MU": "timeout"}},
                            AssistantConfig(watchlist=["MU", "NVDA"]), run_id="daily-r9")
     assert len(rows) == 1
-    assert rows[0]["family"] == "sec_filings" and rows[0]["job"] == "daily"          # v2.8: the node's job
+    # D47 (v2.12): the monitor's row is the sec_text family's, scope sec_monitor
+    assert rows[0]["family"] == "sec_text" and rows[0]["job"] == "daily"          # v2.8: the node's job
     assert rows[0]["status"] == "partial"
     assert rows[0]["failures"] == [{"target": "MU", "reason": "timeout"}]
     assert rows[0]["trigger"] == "scheduled" and rows[0]["run_id"] == "daily-r9" and rows[0]["session"] is None
@@ -105,7 +106,9 @@ def test_monitor_failure_uses_real_watchlist_targets(monkeypatch, tmp_path):
     assert rows[0]["status"] == "failed"
     assert rows[0]["target_count"] == 1 and rows[0]["ok_count"] == 0   # 只有 AAPL；MU/NVDA 没被采集
     assert rows[0]["failures"] == [{"target": "*", "reason": "edgar down"}]
+    # D47: the row says which scope wrote it; the tally always carries its final-source totals (R7), here none
     assert rows[0]["detail"] == {"targets_source": "sec_monitor.watchlist_path", "mode": "monitor",
+                                 "scope": "sec_monitor", "source_counts": {}, "source_counts_complete": True,
                                  "failed_targets": ["AAPL"]}
     assert rows[0]["trigger"] == "scheduled" and rows[0]["run_id"] == "r1"
     assert status["written"] == 1
@@ -119,8 +122,10 @@ def test_monitor_success_uses_summary_tickers(monkeypatch, tmp_path):
     assert rows[0]["status"] == "success"
     assert rows[0]["target_count"] == 1 and rows[0]["ok_count"] == 1
     assert rows[0]["failures"] == []
+    # a scan-only booking (no adapter run) names no source: the totals say so (incomplete), never a made-up one
     assert {k: v for k, v in rows[0]["detail"].items() if k not in ("policy", "targets")} == {
-        "targets_source": "sec_monitor.watchlist_path", "mode": "monitor"}
+        "targets_source": "sec_monitor.watchlist_path", "mode": "monitor", "scope": "sec_monitor",
+        "source_counts": {}, "source_counts_complete": False}
     assert [t["target"] for t in rows[0]["detail"]["targets"]] == ["AAPL"]
 
 
@@ -179,7 +184,7 @@ def test_record_failure_prints_searchable_stderr_line(monkeypatch, capsys):
     sec_monitor._record_fetch_run({"summary": {"downloaded_count": 0, "filings": [], "errors": {}}},
                               config=AssistantConfig(watchlist=["NVDA"]), trigger_source="scheduled",
                               started_at=datetime(2026, 10, 22, tzinfo=UTC))
-    assert "family=sec_filings job=daily trigger=scheduled error=permission denied" in capsys.readouterr().err
+    assert "family=sec_text job=daily trigger=scheduled error=permission denied" in capsys.readouterr().err
 
 
 # ------------------------------------------------------------------------------------------------ the node body
@@ -218,6 +223,16 @@ def _node(monkeypatch, scan_result, mode, cfg, *, ctx=None, locks=None):
     acc = stages.StageAcc()
     ctx = ctx or _Ctx(config=cfg)
     ctx.sec_scan = scan
+    ctx.deps = object()
+    # The adapter run itself (sources, store, budgets) is covered against a real schema in test_sec_monitor; here the
+    # node's own wiring is under test, so the hook just books the targets the scan left standing.
+    def fake_collector(**kwargs):
+        def collect_text(tally, tickers):
+            seen["text"] = {"tickers": list(tickers), **kwargs}
+            for ticker in tickers:
+                tally.ok(ticker)
+        return collect_text
+    monkeypatch.setattr(sec_monitor, "text_collector", fake_collector)
     out = sec_monitor.run(dict(STATE), ctx, acc)
     return out, acc, seen, rows
 
@@ -235,7 +250,9 @@ def test_stage_sec_monitor_monitor_and_downloader(monkeypatch, tmp_path):
     assert acc.outputs["data_fetch_runs"] == [41]
     assert acc.detail["mode"] == "monitor" and acc.detail["notifications"] == {"delivery": "sent", "sent": 1}
     assert out["summary"]["sec_monitor"] == {"mode": "monitor", "filings": 1, "errors": {"MU": "sec timeout"}}
-    assert rows[0]["job"] == "daily" and rows[0]["run_id"] == STATE["run_id"] and rows[0]["session"] is None
+    assert rows[0]["job"] == "daily" and rows[0]["run_id"] == STATE["run_id"] and rows[0]["family"] == "sec_text"
+    assert rows[0]["session"] == date(2026, 10, 22)
+    assert seen["text"]["tickers"] == ["AAPL"] and seen["text"]["session"] == date(2026, 10, 22)   # MU's scan failed
     # the downloader branch: no delivery, the new downloads are the output
     downloaded = {"downloaded_count": 2, "errors": {}, "filings": [{"ticker": "MU", "form": "10-K", "filing_date": "2026-10-21",
                                                                   "path": "/x/MU.htm"}]}
@@ -259,7 +276,7 @@ def test_sec_monitor_holds_family_lock(monkeypatch, tmp_path):
     locks: list = []
     cfg = _monitor_cfg(tmp_path, [("AAPL", "是")])
     _node(monkeypatch, {"tickers": ["AAPL"], "errors": {}, "filings": []}, "monitor", cfg, locks=locks)
-    assert locks == [("open", ["sec_filings"]), ("closed", ["sec_filings"])]
+    assert locks == [("open", ["sec_filings", "sec_text"]), ("closed", ["sec_filings", "sec_text"])]
 
 
 def test_backfill_range_limit(monkeypatch):

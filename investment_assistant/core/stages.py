@@ -6,9 +6,10 @@ stays in ``workbench/stages.py`` until Task 1 moves it to ``workflow/recorder.py
 
 ``stages-2`` (v2.5) has eight stages, ``review`` between ``agent`` and ``push``; ``stages-3`` (v2.7) has nine,
 ``retro`` between ``review`` and ``push``; ``stages-4`` (v2.8) has ten: ``sec_monitor`` in front and ``retro`` after
-``push``. ``stages-5`` inserts ``accounts`` between ``review`` and ``push`` (eleven stages). A run against a database without migration 026 is booked as ``stages-1`` (D22): the recorder then knows
+``push``. ``stages-5`` inserts ``accounts`` between ``review`` and ``push`` (eleven stages); ``stages-6`` (v2.14/v2.15)
+adds ``portfolio`` between ``review`` and ``accounts`` and ``propose`` after ``retro`` (thirteen stages). A run against a database without migration 026 is booked as ``stages-1`` (D22): the recorder then knows
 only the seven v2.4 stages and ignores ``review`` and ``retro``; without migration 027 as ``stages-2`` (v2.7 D29),
-which ignores ``retro``. ``stages-1`` .. ``stages-4`` remain registered for historical runs.
+which ignores ``retro``. ``stages-1`` .. ``stages-5`` remain registered for historical runs.
 """
 from __future__ import annotations
 
@@ -22,9 +23,8 @@ from investment_assistant.core.redact import sanitize_reason
 from investment_assistant.core.versions import (STAGES_VERSION_V1, STAGES_VERSION_V2, STAGES_VERSION_V3,
                                                 STAGES_VERSION_V4, STAGES_VERSION_V5)
 
-# The registry's current version. The stages-6 upgrade (13 stages) happens in Task 4; until then
-# ``core.versions.STAGES_VERSION`` carries the future value only.
-STAGES_VERSION = 'stages-5'
+# The registry's current version (13 stages); ``core.versions.STAGES_VERSION`` carries the same value.
+STAGES_VERSION = 'stages-6'
 SAMPLES_MAX = 10                      # per skip-reason sample cap (spec §5.1)
 
 
@@ -77,6 +77,11 @@ STAGES: tuple[StageDef, ...] = (
         purpose='对每份有效 Agent 计划做一次复查：维持、修订或作废；系统信号与你的输入触发认真复查。',
     ),
     StageDef(
+        id='portfolio',
+        title='组合检查',
+        purpose='对真实账户和每个活跃模拟账户做组合硬检查（行业集中、单票与总敞口、现金先后），真实账户另由组合经理写取舍说明；开关关闭时整段跳过。',
+    ),
+    StageDef(
         id='accounts',
         title='账户',
         purpose='结算模拟账户昨天的挂单与退出，给每个账户记一行当日权益，再由照计划执行账户机械挂单、Agent 自管账户决定明天买卖什么。',
@@ -91,9 +96,16 @@ STAGES: tuple[StageDef, ...] = (
         title='复盘',
         purpose='交易日检测已结束的计划与平仓并起草复盘卡；周 / 月复盘到期时生成并推送。',
     ),
+    StageDef(
+        id='propose',
+        title='优化提案',
+        purpose='周六根据运行证据起草至多三条优化提案，写进 roadmap 等你决定；非周六或开关关闭时跳过。',
+    ),
 )
 
-# stages-1 .. stages-4 are history: their orders are literal tuples, never derived from STAGES (spec §4.4).
+# stages-1 .. stages-5 are history: their orders are literal tuples, never derived from STAGES (spec §4.4).
+STAGE_IDS_V5: tuple[str, ...] = ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review',
+                                 'accounts', 'push', 'retro')
 STAGE_IDS_V4: tuple[str, ...] = ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent',
                                  'review', 'push', 'retro')
 STAGE_IDS_V3: tuple[str, ...] = ('collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'retro', 'push')
@@ -102,7 +114,7 @@ STAGE_IDS_V1: tuple[str, ...] = ('collect', 'screen', 'regime', 'signals', 'plan
 STAGE_IDS: tuple[str, ...] = tuple(stage.id for stage in STAGES)
 STAGE_IDS_BY_VERSION: dict[str, tuple[str, ...]] = {STAGES_VERSION_V1: STAGE_IDS_V1, STAGES_VERSION_V2: STAGE_IDS_V2,
                                                     STAGES_VERSION_V3: STAGE_IDS_V3, STAGES_VERSION_V4: STAGE_IDS_V4,
-                                                    STAGES_VERSION: STAGE_IDS}
+                                                    STAGES_VERSION_V5: STAGE_IDS_V5, STAGES_VERSION: STAGE_IDS}
 
 # What a stage was called before ``stages-4`` (display of historic runs only): ``retro`` was the retro-card stage.
 LEGACY_STAGES: dict[str, StageDef] = {

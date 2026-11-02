@@ -1,8 +1,9 @@
 """The range collection and the screen stage of the daily workflow.
 
-v2.8 (D4) split the old screen stage in two: ``workflow_screen_collection.collect_range`` fetches the Nasdaq-100 range's bars and earnings
-dates inside the ``collect`` node, ``run_stage`` only reads what is stored, runs screen-1, persists and picks, and
-``workflow_screen_collection.backfill_new_members`` collects news and SEC listings for the members the collect node did not cover.
+v2.8 (D4) split the old screen stage in two: the ``collect`` node fetches the Nasdaq-100 range's bars and earnings
+dates (through ``registry.run_adapter``), ``run_stage`` only reads what is stored, runs screen-1, persists and picks, and
+``workflow_screen_collection.backfill_new_members`` collects news and SEC listings for the members the collect node did
+not cover (the same ``run_adapter`` call, scope ``screen_new_members``).
 
 Owns its transactions, like every other stage. On failure (unreadable universe, missing benchmark) the members stay
 with the locked and retention-window tickers, no new picks, and an error row lands in screen_runs.

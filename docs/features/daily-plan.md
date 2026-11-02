@@ -120,10 +120,12 @@
 
 ```bash
 .venv/bin/python -m investment_assistant.workflow check --since 2026-10-28 [--until 2026-10-31] [--kind rule|own|agent]
+.venv/bin/python -m investment_assistant.workflow check --session 2026-10-30
 .venv/bin/python -m investment_assistant.workflow stages --session 2026-10-28
 ```
 
 - `check`：逐份列出 `plan_id`、标的、信号日、种类、`status`、一致性结论（`consistent` / `mismatch` / `incomplete`）与差异明细，末行汇总；`--until` 按信号日截止（含当日），`--kind` 只看一种计划。任何 `status = ok` 的计划不是 `consistent` 时退出码 1（作废计划照常列出，不影响退出码）。
+- `check --session D`（v2.12，汇总核对）：对一个交易日逐项输出 `ok` / `mismatch` / `skipped`，任一项 `mismatch` 退出码 1。七项：① 推导（该日单元的 `ok` 计划都与重算一致）；② 持仓状态（批处理截止时间的持仓都有当日 `holding_status` 行）；③ 账户（账户节点实际运行过时，每个当时已存在的账户有权益行，模拟账户另有决策行）；④ `portfolio_checks`（组合检查节点实际运行过的日子，每个活跃账户一行；节点因冻结开关跳过、或当日没有运行，则 `skipped`）；⑤ `proposals_without_changes`（还是 `proposed` 的提案没有版本或实施简报）；⑥ `data_requests`（没有排队超过一天的补查）；⑦ 研究员（该日 `agent-4` 的提议 / 修订运行，`output.research.status` ∈ `ok / rejected / error / disabled / carried`）。迁移 029 / 030 / 031 未执行或当日没有批处理证据的项记 `skipped` 并写明原因，不算不通过。`check` 至少要给 `--since` 或 `--session` 之一，可同时给。
 - `stages`：按 `run_id` 分组列出该 session 的阶段行（阶段、状态、计数、推导计数、原因）。核对三件事：每个运行按自己的阶段版本行数齐全（`stages-1` 7 行、`stages-2` 8 行、`stages-3` 9 行，阶段集合也按版本核对）、每个运行都在 `job_reports` 里、时间窗（当日纽约 16:00 到下一交易日纽约 16:00 之间开始）内的 `workbench` 运行报告都有阶段行——没有的列为「缺证据」。任一项不满足，或 `stage_runs` 表还没建（迁移 025 未执行），退出码 1。
 - 两个子命令参数错误或数据库不可用时退出码 2。
 - 验证一次推导：手动运行批处理后，在「今日」任选一份计划点「展开推导」，顶部显示「推导与重算一致」，触发段每条条件标「成立」或「未冻结，无法复核」，底部运行证据的 `run_id` 与该次运行报告一致；CLI `check --since <当日>` 对同一计划的结论相同。
@@ -178,7 +180,7 @@ v2.9 起「今日」不再有单元卡区、决定表单和「进行中的 Agent
 - **排序**：入场期按池（核心 → 筛选 → 扩展）再按标的；已结束按结束日倒序。
 - **命令行**：`python -m investment_assistant.views.plan_table show [--session D]`（只读）打印三组各一行与读取失败；退出码 0，数据库不可用或 029 未执行为 2。
 - **持仓状态接口**：`GET /api/workbench/holding-status?session=` → `{session, rows}`（当天全部持仓状态行，缺行的现算并标 `stale`）。
-- **`GET /api/workbench/today`**：`units` 与 `extended_units` 退役为空列表并带 `retired: true`；`holdings`、`chains`（按 `timeline-2` 判定，含退出期）、`market`、`screen`、`timeline_ready` 照旧。单元卡数据只剩推送在用（`service.unit_cards`）。
+- **`GET /api/workbench/today`**：`units` 与 `extended_units` 退役为空列表并带 `retired: true`；`holdings`、`chains`（按 `timeline-2` 判定，含退出期）、`market`、`screen`、`timeline_ready` 照旧。单元卡数据只剩推送在用（`service.unit_cards`）。v2.14 起另有 `portfolio_check: {status, reason, session, cutoff_at, result, commentary}`（真实账户当日的组合检查，K2）：`ready` = 硬结果 + 组合经理评论；`degraded` = 有硬结果但没有成功的评论（`reason`「Agent 不可用」，页面写「只有硬结果」）；`not_computed` = 没有迁移 031、`portfolio_manager` 开关关着（整个节点被跳过，不拿同日旧运行留下的行顶替）或开关开着但节点还没产出行，`reason` 说明是哪种。
 
 下面各条描述的是行展开里的 Agent 计划卡（`AgentPlanCard`，去掉了决定表单）和计划页，设计见 [v2.5 §10](../specs/2026-10-28-v2.5-plan-timeline-design.md#10-今日与推送)；链、版本与复查的含义见 [Agent 轨道 · 计划时间线](agent-track.md#计划时间线)：
 

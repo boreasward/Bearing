@@ -126,6 +126,10 @@ RUN_REASON_TEXT: dict[str, str] = {
     'upstream_failed': '上游节点失败，未执行',
     'not_due': '今天没有到期的复盘',
     'daily_running': '另一次运行正在进行',
+    'feature_disabled': '功能开关已关闭',
+    'not_proposal_day': '今天不是提案日（北京时间周六）',
+    'no_evidence': '没有可用的证据',
+    'not_implemented': '本节点的提案功能尚未接入',
     # degradation kinds
     'fred_not_configured': 'FRED 未配置',
     'label_insufficient': '广度样本不足',
@@ -138,6 +142,8 @@ RUN_REASON_TEXT: dict[str, str] = {
     'revision_failed': '修订未通过校验',
     'agent_unavailable': 'Agent 不可用',
     'draft_rejected': '草稿未通过校验',
+    'pm_rejected': '组合评论未通过校验',
+    'pm_error': '组合评论出错',
     # rule skip reasons
     'missing_signal_bar': '缺信号日日线',
     'insufficient_history': '日线不足 200 根',

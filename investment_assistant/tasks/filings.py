@@ -13,7 +13,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from investment_assistant.config import AssistantConfig, load_config
-from investment_assistant.core import locks
+from investment_assistant.core import locks, tx as core_tx
+from investment_assistant.data.adapters import bars
 from investment_assistant.data.sec.storage import download_configured_filings
 from investment_assistant.data.sec import monitor
 from investment_assistant.data.sources.edgar import EdgarSource
@@ -176,11 +177,12 @@ def _scan(config: AssistantConfig, *, start_date: date | None, end_date: date | 
 
 
 def backfill(config: AssistantConfig, *, start_date: date, end_date: date | None = None,
-             trigger_source: str = "manual") -> dict[str, Any]:
+             trigger_source: str = "manual", deps: core_tx.Deps | None = None) -> dict[str, Any]:
     """The manual-only ``sec_backfill`` task: the same pass over a date range (at most 92 days), outside the graph.
 
     Holds the ``daily:run`` lock (``DailyBusy`` when a run is in progress), writes one ``data_fetch_runs`` row
-    (``job = 'sec_backfill'``, trigger ``manual_family``) and one ``job_reports`` row (``task = 'sec_backfill'``)."""
+    (family ``sec_text``, ``detail.scope = 'sec_monitor'``, ``job = 'sec_backfill'``, trigger ``manual_family``) and one
+    ``job_reports`` row (``task = 'sec_backfill'``). ``deps`` injects the sources (tests)."""
     from investment_assistant.tasks._harness import run_task
 
     end_date = end_date or start_date
@@ -196,12 +198,20 @@ def backfill(config: AssistantConfig, *, start_date: date, end_date: date | None
         started = datetime.now(UTC)
         result, mode = _scan(config, start_date=start_date, end_date=end_date, ny_date=ny_today, drop_after=None,
                              notify_cfg=effective_notify_config(config.notify))
+        now = datetime.now(UTC)
+        session = bars.latest_closed_session(now)
+        found: dict[str, Any] = {}
+        # D47: the pass's downloads and its research refresh are the sec_text adapter's work (scope sec_monitor)
+        collect_text = sec_monitor._remember(found, sec_monitor.text_collector(
+            deps=deps or core_tx.Deps(), config=config, trigger="manual_family", run_id=run_id, session=session, now=now,
+            features=None))
         data_status = sec_monitor._record_fetch_run({"run_id": run_id, "summary": result}, config=config,
                                         trigger_source=trigger_source, started_at=started, job="sec_backfill",
-                                        trigger="manual_family")
+                                        trigger="manual_family", session=session, collect_text=collect_text)
         out = {**result, "mode": mode, "data_status": data_status}
-        research = sec_monitor._local_research_after_success({"summary": result}, config).get("research")
-        if research is not None:
+        research = (sec_monitor.research_summary(found["tally"], found["handled"])
+                    if found.get("tally") is not None else None)
+        if research is not None and research["results"]:
             out["research"] = research
         return out
 

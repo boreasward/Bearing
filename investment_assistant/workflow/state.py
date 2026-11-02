@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Any, Callable
 
 from investment_assistant.analysis import pool as pool_module
+from investment_assistant.core import features as core_features, schema as core_schema, tx as core_tx
 from investment_assistant.data import collect
 
 def _pool_state(pool_: pool_module.Pool) -> dict[str, Any]:
@@ -45,3 +46,14 @@ def agent_window(state: dict[str, Any], ctx) -> tuple[float, Callable[[], float]
 
 def _wall(ctx) -> Callable[[], datetime]:
     return ctx.wall_now or collect.wall_clock
+
+
+def feature_enabled(state: dict[str, Any], flag: str) -> bool:
+    """One switch for this run (spec §9, D3): the value frozen in the state; a state without frozen flags (the v2.7
+    ``run_batch`` shell, a checkpoint from before ``daily-3``) reads the current ones. A flag without history, or a
+    database before migration 031, is on."""
+    frozen = state.get('features')
+    if frozen is not None:
+        return bool(frozen.get(flag, True))
+    with core_tx._tx() as conn:
+        return core_features.frozen(conn).get(flag, True) if core_schema.five_layers_ready(conn) else True

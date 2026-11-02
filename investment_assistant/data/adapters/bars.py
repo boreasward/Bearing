@@ -13,7 +13,7 @@ from investment_assistant.data import fetch_policy
 from investment_assistant.data.calendar import add_trading_days, is_trading_day
 from investment_assistant.core.constants import BACKUP_FILL_SESSIONS
 from investment_assistant.data import repo
-from investment_assistant.data.adapter_types import Source
+from investment_assistant.data.adapter_types import Rows, Source
 from investment_assistant.data.adapter_support import make_adapter, receipt
 from investment_assistant.data.sources import stooq
 
@@ -119,7 +119,7 @@ def _fetch(target, *, session, start, end, deps, now):
     rows, skipped = normalize_history(fetch_history(target, start, end, fetcher=deps.bar_fetcher))
     if not rows:
         raise fetch_policy.FetchError('no valid bars', kind='empty')
-    return rows
+    return Rows(rows, skipped=skipped)
 
 
 def fetch_backup(target, *, session, start, end, deps, now):

@@ -56,7 +56,7 @@ from investment_assistant.core import redact as families, texts as labels
 from investment_assistant.review.knowledge import my_knowledge
 from investment_assistant.core import tx as service
 from investment_assistant.core.tx import Unavailable
-from investment_assistant.core.constants import NY, BENCHMARK
+from investment_assistant.core.constants import AGENT_DEADLINE_S, NY, BENCHMARK
 from investment_assistant.views.derivation import _check_derivations
 from investment_assistant.workflow.state import _moment, agent_window, _stage_finish, _stage_skip
 from investment_assistant.workflow.nodes import accounts as paper_accounts
@@ -894,4 +894,26 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
     else:
         if skipped is not None:
             _stage_skip(ctx, 'review', skipped)
+        else:
+            _data_request_tail(state, ctx, acc, now=now, session=session, summary=summary, started=started,
+                               clock=clock)
     return {'summary': summary}
+
+
+def _data_request_tail(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, *, now, session: date,
+                       summary: dict[str, Any], started: float, clock: Callable[[], float]) -> None:
+    """v2.13 D40/D42: the review node's tail runs the same data-request handler as the agent node's, on what is
+    left of the shared ``AGENT_DEADLINE_S`` budget — requests a revision queued are settled the same day. A failure
+    of the tail is a ``summary['errors']`` line, never a failed review stage."""
+    try:
+        counts = analysis_agent_runner.process_data_requests(
+            session, run_id=state.get('run_id'), now=now, deps=ctx.deps, features=state.get('features'),
+            budget_left_s=AGENT_DEADLINE_S - (clock() - started))
+    except Unavailable:
+        raise
+    except Exception as exc:    # noqa: BLE001 - the reviews are written; the supplementary fetch is best effort
+        summary['errors'].append(f'review data_requests: {families.sanitize_reason(exc)}')
+        return
+    summary.setdefault('review', {})['data_requests'] = counts
+    if acc is not None:
+        acc.detail['data_requests'] = dict(counts)

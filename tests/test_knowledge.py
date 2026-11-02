@@ -371,7 +371,7 @@ def test_known_versions_cover_code_constants():
                accounts.ACCOUNT_VERSION, paper_fill.PAPER_FILL_VERSION, paper_strategies.FOLLOW_PLANS_VERSION,
                graph.PORTFOLIO_AGENT_VERSION}
     assert current <= knowledge.KNOWN_VERSIONS
-    assert {'stages-5', 'daily-2', 'retro-2', 'agent-retro-2', 'agent-discuss-1', 'my-knowledge-1',
+    assert {'stages-6', 'daily-3', 'retro-2', 'agent-retro-2', 'agent-discuss-1', 'my-knowledge-1',
             'knowledge-perf-1', 'review-8'} == {stages.STAGES_VERSION, workflow.DAILY_GRAPH_VERSION,
                                                  retro.RETRO_VERSION, review_agent_runs.RETRO_AGENT_VERSION,
                                                  review_agent_runs.DISCUSS_AGENT_VERSION, knowledge_items.MY_KNOWLEDGE_VERSION,
@@ -386,10 +386,21 @@ def test_known_versions_cover_code_constants():
             'monthly-4'} <= knowledge.KNOWN_VERSIONS
     # v2.11 keeps the historical versions above and registers each current account-related constant.
     assert {'account-1', 'paper-fill-1', 'follow-plans-1', 'agent-portfolio-1', 'stages-5', 'daily-2',
+            'monthly-5'} <= knowledge.KNOWN_VERSIONS                       # the v2.11 releases stay in old rows
+    assert {'account-1', 'paper-fill-1', 'follow-plans-1', 'agent-portfolio-2', 'stages-6', 'daily-3',
             'monthly-5'} == {accounts.ACCOUNT_VERSION, paper_fill.PAPER_FILL_VERSION,
                              paper_strategies.FOLLOW_PLANS_VERSION, graph.PORTFOLIO_AGENT_VERSION,
                              stages.STAGES_VERSION, workflow.DAILY_GRAPH_VERSION, monthly.MONTHLY_VERSION}
-    assert isinstance(knowledge.KNOWN_VERSIONS, frozenset) and len(knowledge.KNOWN_VERSIONS) == 58
+    # v2.12–v2.15 add nine literals, each with its constant in core.versions
+    from investment_assistant.core import versions as core_versions
+    assert {'agent-4', 'agent-portfolio-2', 'agent-pm-1', 'agent-optimize-1', 'agent-impl-brief-1', 'stages-6',
+            'daily-3', 'portfolio-check-1', 'indicator-1'} == {
+        core_versions.AGENT_RUN_VERSION, core_versions.PORTFOLIO_AGENT_VERSION, core_versions.PM_AGENT_VERSION,
+        core_versions.OPTIMIZE_AGENT_VERSION, core_versions.BRIEF_AGENT_VERSION, core_versions.STAGES_VERSION,
+        core_versions.DAILY_GRAPH_VERSION, core_versions.PORTFOLIO_CHECK_VERSION, core_versions.INDICATOR_VERSION}
+    assert {'agent-4', 'agent-portfolio-2', 'agent-pm-1', 'agent-optimize-1', 'agent-impl-brief-1', 'stages-6',
+            'daily-3', 'portfolio-check-1', 'indicator-1'} <= knowledge.KNOWN_VERSIONS
+    assert isinstance(knowledge.KNOWN_VERSIONS, frozenset) and len(knowledge.KNOWN_VERSIONS) == 67
 
 
 def test_knowledge_module_does_not_import_agent_or_service_at_top_level():

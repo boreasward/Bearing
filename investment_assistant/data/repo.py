@@ -24,8 +24,9 @@ def plan_knowledge_refs(conn, plan_ids) -> dict[str, list[dict]]:
                         'WHERE plan_id = ANY(%s) ORDER BY id', (ids,)).fetchall()
     if not rows:
         return {}
-    citations = [dict(zip(('plan_id', 'knowledge_id', 'version', 'field'), row)) for row in rows]
-    versions = [dict(zip(('knowledge_id', 'version', 'title'), row)) for row in conn.execute(
+    citations: list[dict[str, Any]] = [dict(zip(('plan_id', 'knowledge_id', 'version', 'field'), row))
+                                        for row in rows]
+    versions: list[dict[str, Any]] = [dict(zip(('knowledge_id', 'version', 'title'), row)) for row in conn.execute(
         'SELECT knowledge_id, version, title FROM knowledge_versions').fetchall()]
     return knowledge.refs_for_plans(citations, versions)
 
@@ -421,7 +422,7 @@ def insert_fetch_run(conn, row: dict[str, Any]) -> dict[str, Any]:
     """Append one fetch-run row; `failures`/`detail` arrive as Python objects, JSON-encoded here.
 
     `row` keys are the table columns except `id`/`created_at`, which the database sets."""
-    return _one(conn,
+    record = _one(conn,
                 'INSERT INTO data_fetch_runs (family, job, trigger, run_id, scope, ticker, session, status, '
                 'target_count, ok_count, failures, detail, started_at, finished_at) '
                 'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s) '
@@ -430,6 +431,8 @@ def insert_fetch_run(conn, row: dict[str, Any]) -> dict[str, Any]:
                  row.get('session'), row['status'], row['target_count'], row['ok_count'],
                  _plan_json(row.get('failures') or []), _plan_json(row.get('detail') or {}),
                  row['started_at'], row['finished_at']))
+    assert record is not None
+    return record
 
 
 def latest_fetch_runs(conn, *, scope: str | None = None) -> dict[str, dict[str, Any]]:
@@ -561,6 +564,15 @@ def bar_revision_counts(conn, ticker: str, *, since: date, cutoff_at: datetime) 
     return {row[0]: row[1] for row in rows}
 
 
+def bar_sources(conn, ticker: str, *, since: date, cutoff_at: datetime) -> dict[date, str | None]:
+    """Per price_date from ``since`` on, the source of the revision ``read_bars`` shows (the latest known by
+    ``cutoff_at``); None for a row written before the source column."""
+    rows = conn.execute('SELECT DISTINCT ON (price_date) price_date, source FROM price_bars '
+                        'WHERE ticker = %s AND price_date >= %s AND fetched_at <= %s '
+                        'ORDER BY price_date, revision DESC', (ticker.upper(), since, cutoff_at)).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
 def macro_revision_counts(conn, series_id: str, *, cutoff_at: datetime) -> dict[date, int]:
     """Per obs_date how many revisions of the series were known by ``cutoff_at``."""
     rows = conn.execute('SELECT obs_date, count(*) FROM macro_observations '
@@ -652,6 +664,26 @@ def queued_data_requests(conn, run_id) -> list[dict]:
                 'ORDER BY requested_at, id', (run_id,))
 
 
+def stale_queued_data_requests(conn, *, before) -> list[dict]:
+    """Requests still ``queued`` that were made before ``before`` (the workflow check's one-day rule)."""
+    return _all(conn, "SELECT id, run_id, agent_run_id, family, ticker, requested_at FROM data_requests "
+                "WHERE status = 'queued' AND requested_at < %s ORDER BY requested_at, id", (before,))
+
+
+def unit_data_request_rerun_today(conn, ticker: str, signal_date: date, *, ny_day: date) -> bool:
+    """D40: whether this unit already consumed its one data-request rerun on ``ny_day``.
+
+    The day is read from ``requested_at`` (the queueing run's cutoff — deterministic and
+    cutoff-bound), not ``updated_at`` (database clock); a request may hang on any of the
+    unit's runs (a revision queued it, an earlier propose settled it)."""
+    return conn.execute("SELECT EXISTS (SELECT 1 FROM data_requests dr "
+        'JOIN agent_runs ar ON ar.id = dr.agent_run_id '
+        'WHERE ar.ticker = %s AND ar.signal_date = %s '
+        'AND dr.rerun_run_id IS NOT NULL '
+        "AND (dr.requested_at AT TIME ZONE 'America/New_York')::date = %s)",
+        (ticker.upper(), signal_date, ny_day)).fetchone()[0]
+
+
 def insert_sector_classification(conn, row) -> int:
     """Append an answer; the adapter decides whether it differs from the prior answer."""
     saved = _one(conn, 'INSERT INTO sector_classifications '
@@ -730,6 +762,13 @@ def latest_observation_dates(conn, targets, *, dataset, cutoff_at):
     return {identities[r['security_id']]: r['latest'] for r in rows}
 
 
+def filing_text_at(conn, filing_id: int, *, ticker: str, cutoff_at: datetime) -> dict | None:
+    """An owned original only after both download and disclosure were known."""
+    return _one(conn, 'SELECT * FROM filings WHERE id = %s AND ticker = %s '
+        'AND downloaded_at <= %s AND (accepted_at IS NULL OR accepted_at <= %s)',
+        (filing_id, ticker.upper(), cutoff_at, cutoff_at))
+
+
 def indexed_filing_paths(conn, ticker) -> dict:
     return {r['accession_number']: r['file_path'] for r in _all(conn,
         'SELECT accession_number, file_path FROM filings WHERE ticker = %s ORDER BY id', (ticker.upper(),))}
@@ -778,3 +817,70 @@ def latest_text_filing_dates(conn, targets, *, cutoff_at):
         'AND first_seen_at <= %s AND disclosed_at <= %s GROUP BY security_id',
         (list(identities), cutoff_at, cutoff_at))
     return {identities[r['security_id']]: r['latest'] for r in rows}
+
+
+# ---------------------------------------------------------------- Data-menu raw browse of the v2.12 families (spec §5.6)
+
+def read_earnings_history(conn, ticker: str, *, cutoff_at: datetime, limit: int = 20) -> list[dict[str, Any]]:
+    """The earnings answers known by ``cutoff_at``, newest first (every answer is a row: unknown, none, known)."""
+    return _all(conn, f'SELECT {_EARNINGS_COLUMNS} FROM earnings_dates WHERE ticker = %s AND fetched_at <= %s '
+                      'ORDER BY fetched_at DESC, created_at DESC LIMIT %s', (ticker.upper(), cutoff_at, limit))
+
+
+def read_sector_history(conn, ticker: str, *, cutoff_at: datetime, limit: int = 20) -> list[dict[str, Any]]:
+    """The sector answers known by ``cutoff_at``, newest first; an answer is appended only when it changed."""
+    return _all(conn, 'SELECT ticker, sic, sic_description, "group", source, fetched_at FROM sector_classifications '
+                      'WHERE ticker = %s AND fetched_at <= %s ORDER BY fetched_at DESC, id DESC LIMIT %s',
+                (ticker.upper(), cutoff_at, limit))
+
+
+FINANCIAL_QUARTERS = 8
+_QUARTER_DAYS = (60, 120)       # the same duration band the filing analysis calls a quarter
+
+
+def financial_quarters(conn, ticker: str, *, cutoff_at: datetime,
+                       quarters: int = FINANCIAL_QUARTERS) -> list[dict[str, Any]]:
+    """The newest fiscal quarters of the SEC financial facts visible at ``cutoff_at``: one row per metric and
+    period, newest period first. A quarter is a duration fact of 60–120 days; an instant fact (balance sheet) is
+    shown when its date is one of those quarters' end dates. A fact whose sources disagree has no value and says so
+    (``conflict``)."""
+    rows = read_rows(conn, stock_id(ticker), 'financials', as_of=cutoff_at)
+    quarter_ends = sorted({r['end'] for r in rows if r.get('period_kind') == 'duration' and r.get('start')
+                           and _QUARTER_DAYS[0] <= (date.fromisoformat(r['end'])
+                                                    - date.fromisoformat(r['start'])).days <= _QUARTER_DAYS[1]},
+                          reverse=True)[:quarters]
+    wanted = set(quarter_ends)
+    out = []
+    for r in rows:
+        if r.get('end') not in wanted:
+            continue
+        if r.get('period_kind') == 'duration':
+            span = (date.fromisoformat(r['end']) - date.fromisoformat(r['start'])).days
+            if not _QUARTER_DAYS[0] <= span <= _QUARTER_DAYS[1]:
+                continue
+        out.append({'metric': r['metric'], 'value': r.get('value'), 'unit': r.get('unit'), 'period': r['end'],
+                    'start': r.get('start'), 'form': r.get('form'), 'filed': r.get('filed'),
+                    'conflict': bool(r.get('conflicts'))})
+    return sorted(out, key=lambda r: (-date.fromisoformat(r['period']).toordinal(), r['metric']))
+
+
+def read_filing_texts(conn, ticker: str, *, cutoff_at: datetime, limit: int = 20) -> list[dict[str, Any]]:
+    """The owned original documents known by ``cutoff_at`` (downloaded and, if the acceptance time is known,
+    accepted by then), newest first, each with the analysis summary the text facts were extracted into."""
+    filings = _all(conn, 'SELECT id, ticker, form, filing_date, accession_number, primary_document, file_path, '
+                         'downloaded_at, accepted_at, items FROM filings WHERE ticker = %s AND downloaded_at <= %s '
+                         'AND (accepted_at IS NULL OR accepted_at <= %s) '
+                         'ORDER BY filing_date DESC, id DESC LIMIT %s',
+                   (ticker.upper(), cutoff_at, cutoff_at, limit))
+    analysis = {r['natural_key']: (r.get('analysis') or {})
+                for r in read_rows(conn, stock_id(ticker), 'filings', as_of=cutoff_at)}
+    out = []
+    for filing in filings:
+        found = analysis.get(filing['accession_number'])
+        facts = {key: {'display': fact.get('display'), 'period': fact.get('period')}
+                 for key, fact in ((found or {}).get('facts') or {}).items()}
+        out.append({**filing, 'analyzed': found is not None, 'kind': (found or {}).get('kind'),
+                    'coverage': (found or {}).get('coverage'), 'facts': facts,
+                    'documents': len((found or {}).get('sources') or []),
+                    'warnings': list((found or {}).get('warnings') or [])})
+    return out

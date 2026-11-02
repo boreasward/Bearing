@@ -257,3 +257,43 @@ def test_generation_conflict_recorded_and_retried(db, monkeypatch):
     monkeypatch.setattr(review_weekly, 'generate_weekly', real_generate)
     second = tick(db, client=client)
     assert second['weekly']['action'] == 'generated' and second['weekly']['push']['sent'] is True
+
+
+# --- the proposals line (v2.15 spec §8.3 ④) ---
+
+def _proposal(db, created_at, title='p'):
+    db.execute("INSERT INTO roadmap_proposals (source, title, change, rationale, evidence_refs, created_at) "
+               "VALUES ('data', %s, 'c', 'r', ARRAY['fact:data_failures#1'], %s)", [title, created_at])
+
+
+def test_weekly_push_says_how_many_proposals_came_since_the_previous_weekly_push(db):
+    """The Saturday run pushes the review before ``propose`` runs, so a proposal reaches the NEXT weekly push; a
+    push counts what was written after the previous successful weekly push, and nothing before it."""
+    _proposal(db, SAT_MORNING - timedelta(days=30), 'old')               # before the first push: counted by it
+    first = FakeClient()
+    tick(db, client=first)
+    assert '本周提案 1 条，到 roadmap 页查看' in str(_messages(first, '周度复盘')[0][1])
+    db.execute('UPDATE review_pushes SET created_at = %s', [SAT_MORNING])    # the rows carry the real clock; pin them
+    _proposal(db, SAT_MORNING + timedelta(hours=1), 'a')                 # the propose node of the same Saturday run
+    _proposal(db, SAT_MORNING + timedelta(hours=1), 'b')
+    nxt = FakeClient()
+    out = retro_node.push_review('weekly', W, now=SAT_MORNING + timedelta(days=7), notify_cfg=cfg(), send=ports.send,
+                                 client=nxt)
+    assert out['sent'] is True
+    text = str(_messages(nxt, '周度复盘')[0][1])
+    assert '本周提案 2 条，到 roadmap 页查看' in text
+
+
+def test_weekly_push_without_new_proposals_says_zero_and_pre031_says_nothing(db, workbench_db_pre031, monkeypatch):
+    client = FakeClient()
+    tick(db, client=client)
+    assert '本周提案 0 条，到 roadmap 页查看' in str(_messages(client, '周度复盘')[0][1])
+
+    @contextmanager
+    def connection():
+        yield workbench_db_pre031
+    monkeypatch.setattr(core_tx, 'connection', connection)
+    before031 = FakeClient()
+    tick(workbench_db_pre031, client=before031)
+    sent = _messages(before031, '周度复盘')
+    assert sent and '本周提案' not in str(sent[0][1])

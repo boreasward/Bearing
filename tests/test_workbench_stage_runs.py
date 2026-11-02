@@ -31,21 +31,23 @@ def _stage(db, run_id: str, stage_id: str) -> dict:
 
 
 def test_collect_counts_match_fetch_runs(db):
-    """collect 的计数等于本次四族 data_fetch_runs 之和；失败与降级挨着采集记。"""
+    """collect 的计数等于本次前四族 data_fetch_runs 之和；失败与降级挨着采集记。v2.12：另有 earnings 日期行与
+    fundamentals / sec_text / sector 三个注册表族各一行，写进 outputs 但不进计数（同 universe）。"""
     summary = service.run_batch(tickers=['NVDA', 'MU'], now=NOW,
                                 deps=batch_deps(fail={'MU'}, fail_news=()),
                                 record_trigger='scheduled', run_id='run-collect',
                                 stages=_recorder('run-collect'))
     fam = dict(db.execute("SELECT family, id FROM data_fetch_runs "
                           "WHERE run_id = 'run-collect'").fetchall())
-    assert set(fam) == {'bars', 'news', 'sec_filings', 'fred'}
+    assert set(fam) == {'bars', 'news', 'sec_filings', 'fred', 'earnings', 'fundamentals', 'sec_text', 'sector'}
     totals = db.execute("SELECT sum(target_count), sum(ok_count) FROM data_fetch_runs "
-                        "WHERE run_id = 'run-collect'").fetchone()
+                        "WHERE run_id = 'run-collect' AND family IN ('bars', 'news', 'sec_filings', 'fred')").fetchone()
     row = _stage(db, 'run-collect', 'collect')
     assert row['run_id'] == 'run-collect' and row['session'] == SESSION
     assert row['input_count'] == totals[0] and row['output_count'] == totals[1]
     assert row['outputs']['data_fetch_runs'] == [fam[f] for f in
-                                                 ('bars', 'news', 'sec_filings', 'fred')]
+                                                 ('bars', 'news', 'sec_filings', 'fred', 'earnings', 'fundamentals',
+                                                  'sec_text', 'sector')]
     assert row['status'] == 'partial'
     assert {'target': 'bars:MU', 'reason': 'provider down'} in row['failures']
     assert {'target': 'sec_filings:MU', 'reason': 'edgar down'} in row['failures']      # v2.8 D21: one SEC request per ticker

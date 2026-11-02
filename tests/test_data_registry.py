@@ -271,3 +271,46 @@ def test_source_receives_immutable_run_cutoff():
         return []
     assert detail(run(adapter(fetch)))[0]['ok']
     assert seen == [NOW]
+
+
+def test_observe_sees_each_stored_target_before_it_is_booked():
+    seen = []
+    tally = registry.run_adapter(adapter(failure('network'), success), ['NVDA', 'AAPL'], scope='daily', trigger='scheduled',
+        run_id=None, session=DAY, now=NOW, deps=AdapterDeps(transaction=memory_tx, sleep=lambda _: None),
+        features={'backup_sources': True}, observe=lambda *args: seen.append(args))
+    assert [(t, source, rows, result['inserted']) for t, source, rows, result in seen] == [
+        ('NVDA', 'stooq', [{'price_date': DAY}], 1), ('AAPL', 'stooq', [{'price_date': DAY}], 1)]
+    assert sorted(tally.outcomes) == ['AAPL', 'NVDA'] and not any(tally.outcomes.values())
+
+
+def test_whole_call_target_books_one_sentinel_and_stops():
+    attempted = []
+
+    def directory_down(target, **kwargs):
+        attempted.append(target)
+        raise FetchError('dns down', kind='network', target='sec:company_tickers',     # an inner fetch already retried
+                         attempts=[{'n': 1, 'kind': 'network', 'status': None, 'elapsed_ms': 1}])
+
+    def per_target(adapter_, **kwargs):
+        return registry.run_adapter(adapter_, ['NVDA', 'AAPL', 'MU'], scope='daily', trigger='scheduled', run_id=None,
+            session=DAY, now=NOW, deps=AdapterDeps(transaction=memory_tx, sleep=lambda _: None),
+            features={'backup_sources': True}, **kwargs)
+
+    tally = per_target(adapter(directory_down), whole_call_target='sec:company_tickers')
+    row = tally.row(trigger='scheduled', run_id=None, session=DAY, started_at=NOW, finished_at=NOW)
+    assert attempted == ['NVDA']                                       # the first target only, then stop
+    assert [f['target'] for f in row['failures']] == ['*'] and row['status'] == 'failed'
+    assert (row['target_count'], row['ok_count']) == (3, 0) and row['detail']['failed_targets'] == ['AAPL', 'MU', 'NVDA']
+    attempted.clear()
+    every = per_target(adapter(directory_down))                        # without it every target records its own failure
+    assert sorted(every.outcomes) == ['AAPL', 'MU', 'NVDA'] and attempted == ['NVDA', 'AAPL', 'MU']
+
+
+def test_unavailable_storage_is_not_a_target_failure():
+    from investment_assistant.core.tx import Unavailable
+
+    def down(*args, **kwargs):
+        raise Unavailable('数据库不可达')
+
+    with pytest.raises(Unavailable):
+        run(adapter(success, store=down))

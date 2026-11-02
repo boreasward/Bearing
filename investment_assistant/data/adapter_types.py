@@ -12,6 +12,14 @@ from investment_assistant.data.market_constants import SECTOR_ETFS
 DEFAULT_FALLBACK_KINDS = frozenset({'timeout', 'network', 'http_5xx', 'http_429', 'empty'})
 
 
+class Rows(list):
+    """Fetched rows plus fetch-side facts a store cannot see (raw counts, skipped items); behaves as a plain list."""
+
+    def __init__(self, items=(), **facts: Any):
+        super().__init__(items)
+        self.facts = facts
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     family: str

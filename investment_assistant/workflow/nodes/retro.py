@@ -10,6 +10,7 @@ from investment_assistant.core.tx import Unavailable, _jsonable
 from investment_assistant.workflow.state import _moment, _stage_finish, _stage_skip
 from investment_assistant.data.adapters import bars
 from investment_assistant.execution import ledger, repo as execution_repo
+from investment_assistant.optimize import repo as optimize_repo
 from investment_assistant.review import monthly, repo as review_repo, weekly as review_weekly, period_digest as review_digest
 
 def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, *,
@@ -108,9 +109,13 @@ def push_review(kind: str, period: date, *, now: datetime, notify_cfg, send, tri
     with core_tx._tx() as conn:
         head = (review_repo.weekly_head(conn, period) if kind == 'weekly'
                 else review_repo.monthly_head(conn, period))
+        # v2.15 §8.3 ④: the proposals written since the previous weekly push (none before migration 031)
+        proposals = (optimize_repo.count_proposals(conn, since=review_repo.last_review_push_at(conn, 'weekly'),
+                                                   until=now)
+                     if kind == 'weekly' and core_schema.five_layers_ready(conn) else None)
     if head is None:
         raise ledger.NotFound(f'{period} 没有该周期的复盘快照')
-    payload = (review_digest.weekly(head, public_url=public_url) if kind == 'weekly'
+    payload = (review_digest.weekly(head, public_url=public_url, proposals=proposals) if kind == 'weekly'
                else review_digest.monthly(head, public_url=public_url))
     result = send(kind, payload, notify_cfg, client=client)
     return _record_push(kind, period, review_id=head['id'], trigger_source=trigger_source,

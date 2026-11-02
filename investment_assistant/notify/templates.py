@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from investment_assistant.core.texts import PORTFOLIO_REASON_TEXT
 from investment_assistant.notify.message import Notification, NotifyField
 from investment_assistant.analysis.regime import LABEL_TEXT
 
@@ -234,8 +235,36 @@ def workbench_digest(digest: dict) -> list[Notification]:
         if items:
             _clip_field(fields, SOURCE_NAMES.get(source, source), '\n'.join(str(i) for i in items))
     pending_msg = _fit_message(f"⏳ 待处理与异常 · {session}", fields, _footer())
-    return [overview_msg, plans_msg, *([updates_msg] if updates_msg else []), holdings_msg, pending_msg,
+    portfolio_msg = _portfolio_message(session, digest.get('portfolio'))
+    return [overview_msg, plans_msg, *([portfolio_msg] if portfolio_msg else []),
+            *([updates_msg] if updates_msg else []), holdings_msg, pending_msg,
             _screen_message(session, digest.get('screen'))]
+
+
+def _portfolio_message(session: str, portfolio: dict | None) -> Notification | None:
+    """「🧩 组合检查」 (v2.14 §7.4), right after the new plans: how many plans can be done together, how many the
+    check blocked and why, the order and one sentence of reason. None without a hard result — silence is not an
+    all-clear, the overview already says how many new plans there are."""
+    if not portfolio:
+        return None
+    reasons = PORTFOLIO_REASON_TEXT
+    head = f"可一起做 {portfolio.get('ok', 0)} 条 · 被拦 {portfolio.get('blocked', 0)} 条"
+    if portfolio.get('deferred'):
+        head += f" · 因现金暂缓 {portfolio['deferred']} 条"
+    fields = [NotifyField('结果', head)]
+    blocked = portfolio.get('blocked_items') or []
+    if blocked:
+        _clip_field(fields, f"被拦 ({len(blocked)})",
+                    '\n'.join(f"{b['ticker']}：" + ('、'.join(reasons.get(r, r) for r in b.get('reasons') or []) or '—')
+                              for b in blocked))
+    order = portfolio.get('order') or []
+    if order:
+        _clip_field(fields, '建议先后', ' → '.join(order))
+    if portfolio.get('summary'):
+        _clip_field(fields, '一句理由', '；'.join(filter(None, [portfolio['summary'], portfolio.get('first_reason')])))
+    elif portfolio.get('status') == 'degraded':
+        _clip_field(fields, '一句理由', 'Agent 不可用，只有硬结果')
+    return _fit_message(f"🧩 组合检查 · {session}", fields, _footer())
 
 
 def _plan_update_text(u: dict) -> str:
@@ -594,6 +623,8 @@ def workbench_weekly(payload):
     if payload.get("learning") is not None:       # review-6 及更早的快照没有这一段（v2.7 §10）
         _clip_field(fields, "你学到了什么", _learning_text(payload["learning"]))
     fields.append(_review_footer(payload))
+    if payload.get("proposals") is not None:            # v2.15 §8.3 ④: the last line of the weekly review
+        fields.append(NotifyField("提案", f"""本周提案 {payload["proposals"]} 条，到 roadmap 页查看"""))
     title = f"""📅 周度复盘 · {payload["start"]} – {payload["end"]}"""
     return [_fit_message(title, fields, _footer())]
 

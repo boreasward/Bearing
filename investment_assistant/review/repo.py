@@ -74,6 +74,12 @@ def review_push_sent(conn, kind: str, period: date) -> bool:
                         'AND sent = true)', (kind, period)).fetchone()[0]
 
 
+def last_review_push_at(conn, kind: str) -> datetime | None:
+    """When the newest fully successful push of ``kind`` was recorded (None: never pushed)."""
+    return conn.execute('SELECT max(created_at) FROM review_pushes WHERE kind = %s AND sent = true',
+                        (kind,)).fetchone()[0]
+
+
 def list_review_pushes(conn, limit: int) -> list[dict[str, Any]]:
     return _all(conn, 'SELECT id, kind, period, review_id, trigger_source, sent, messages, reason, created_at '
                       'FROM review_pushes ORDER BY created_at DESC, id DESC LIMIT %s', (limit,))

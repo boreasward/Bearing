@@ -54,7 +54,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 
 `collect` 节点结束时，每个已记录的数据族向 `data_fetch_runs` 各追加一行（`job = daily`，`trigger` 为 `scheduled` / `manual_batch`，记录带该次运行的 `run_id`；显式 `tickers`/`pool` 的调用只写 `bars`、`news`、`sec_filings`、`fred` 四行，没有 `universe` 行）；纳指 100 范围成分的日线与财报日也在这个节点采集，计在 `bars` 族里。`screen` 节点为当天新入池、`collect` 没覆盖的成员补采资讯与 SEC 列表，在本节点取 `news`、`sec_filings` 两把族锁并追加两行（`detail.scope = screen_new_members`）。每个目标的结果（尝试次数、错误类别、HTTP 状态、行数、最新时点、耗时）记在 `detail.targets`，见[外部请求策略](../features/data-menu.md)。写入在独立事务里，失败（包括迁移 024 未执行）只记在运行报告的 `summary.data_status`，不影响运行结果。表结构与状态口径见[数据基础设计](../specs/2026-10-26-v2.3-data-foundation-design.md)。
 
-`sec_monitor` 节点（下载器与监控两种模式）持 `sec_filings` 族锁，结束后追加一行 `sec_filings`（`job = daily`，`session = NULL`，`trigger` 按本次运行取 `scheduled` / `manual_batch`），记录带该次运行的 `run_id`；`sec_backfill` 写的行是 `job = sec_backfill`、`trigger = manual_family`。目标按模式取实际采集清单：监控模式是监控观察名单文件（`sec_monitor.watchlist_path` 中「采集=是」的成员；成功时即 `summary.tickers`），下载器模式是 `config.watchlist`，与批处理的「当前池 + 持仓」不同，`detail.targets_source` 如实注明。整次采集失败记一条 `{"target": "*"}` 哨兵（不进 `target_count`）；Discord 投递这类非标的错误记在 `detail.non_target_errors`，不伪造成采集目标。写入失败只记在任务返回值的 `data_status`，不影响任务结果与运行报告；同时向 stderr 打一行 `[data_fetch_runs] write failed family=sec_filings job=<job> trigger=<trigger> error=<脱敏原因>` 作为可检索落点。
+`sec_monitor` 节点（下载器与监控两种模式）持 `sec_filings` 与 `sec_text` 两把族锁；扫描之后，`sec_text` 适配器（`scope = 'sec_monitor'`，D47）只对**本次扫描发现了新申报且扫描没失败**的标的下载并建索引（R27；扫描成功但没有新申报的标的按扫描记成功，来源 `sec`，其余标的由 `collect` 节点的 `sec_text` 行覆盖，并跳过本次已处理的）。结束后追加一行 `sec_text`（`detail.scope = 'sec_monitor'`，`job = daily`，`session` 取本次运行的 session，`trigger` 按本次运行取 `scheduled` / `manual_batch`），记录带该次运行的 `run_id`；`sec_backfill` 写的行是 `job = sec_backfill`、`trigger = manual_family`（族同为 `sec_text`）。目标按模式取实际采集清单：监控模式是监控观察名单文件（`sec_monitor.watchlist_path` 中「采集=是」的成员；成功时即 `summary.tickers`），下载器模式是 `config.watchlist`，与批处理的「当前池 + 持仓」不同，`detail.targets_source` 如实注明。整次采集失败记一条 `{"target": "*"}` 哨兵（不进 `target_count`）；Discord 投递这类非标的错误记在 `detail.non_target_errors`，不伪造成采集目标。写入失败只记在任务返回值的 `data_status`，不影响任务结果与运行报告；同时向 stderr 打一行 `[data_fetch_runs] write failed family=sec_text job=<job> trigger=<trigger> error=<脱敏原因>` 作为可检索落点。
 
 ## 阶段证据（十一个节点与 `attempt`）
 
@@ -117,5 +117,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 | `email` | 发件人、收件人、SMTP 主机与端口；密码只取环境变量 `SMTP_PASSWORD` |
 
 派发顺序：总开关关 → 不发；该任务开关关 → `task_disabled`；没有频道 → `no_channel`；否则发送，失败返回 `send_failed: …`，不让任务失败。每日推送由 `push` 节点发、周 / 月复盘推送由 `retro` 节点发，结果写在运行报告的 `summary.push` 与 `retro` 行的 `detail` 里；`daily` 在运行失败时另发一条「每日工作流失败」（见上）。
+
+每日推送在「🆕 新计划」之后多一条「🧩 组合检查」（v2.14）：可一起做几条、被拦几条与原因、暂缓几条（现金不足）、宿主先后和组合经理的一句理由（Agent 不可用时写「只有硬结果」）。只有真实账户当日有硬结果才发；`portfolio_manager` 开关（取本次运行冻结的值）关着、节点没跑或没有迁移 031 时不发这一条，不用旧运行留下的同日检查顶替。周度复盘推送（`retro` 节点）末尾加一行「本周提案 N 条，到 roadmap 页查看」：N 是上一次成功的周度复盘推送之后 `propose` 节点写下的提案数（周六的复盘推送在 `propose` 之前，所以提案进下一次推送）；没有迁移 031 时不加这一行。
 
 验证：「设置 → 推送配置」点「验证」发测试消息（`POST /api/settings/notify/test`，body `{"channel": "signals"}`）。webhook 只返回「是否已配置」，不回显明文。

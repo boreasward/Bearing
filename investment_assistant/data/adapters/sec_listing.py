@@ -12,11 +12,12 @@ def _fetch(target, *, session, start, end, deps, now):
 
 
 def _store(conn, rows, *, target, source_id, now):
-    rows, _ = drop_after_cutoff(rows, now)
+    rows, dropped = drop_after_cutoff(rows, now)
     counts = repo.store_news(conn, filing_news(rows), now=now)
     filled = repo.fill_filing_acceptance(conn, rows)
     return {'inserted': counts['inserted'] + filled, 'existing': counts['existing'],
-            'latest': max((r['filing_date'] for r in rows), default=None)}
+            'latest': max((r['filing_date'] for r in rows), default=None),
+            'acceptance_filled': filled, 'after_cutoff_dropped': dropped, 'listed': len(rows)}
 
 
 ADAPTER = make_adapter('sec_filings', 'SEC 申报', 'SEC申报目录与接受时间', 'filings + news_items(sec_8k)',

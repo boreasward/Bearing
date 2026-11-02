@@ -365,3 +365,17 @@ def test_weekly_rule_line_without_mean_renders_dash():
     text = chr(10).join(f.value for f in templates.workbench_weekly(payload)[0].fields)
     assert '均值 —' in text
     assert 'None' not in text
+
+
+def test_weekly_proposals_line_is_the_last_field_and_absent_without_a_count():
+    """v2.15 spec §8.3 ④: 「本周提案 N 条，到 roadmap 页查看」 ends the weekly message; None (no migration 031) adds
+    nothing, 0 says so."""
+    plain = templates.workbench_weekly(review_digest.weekly(WEEKLY_REVIEW, public_url=URL))[0]
+    assert '本周提案' not in chr(10).join(f.value for f in plain.fields)
+    assert review_digest.weekly(WEEKLY_REVIEW, public_url=URL)['proposals'] is None
+
+    for count in (3, 0):
+        payload = review_digest.weekly(WEEKLY_REVIEW, public_url=URL, proposals=count)
+        assert payload['proposals'] == count
+        last = templates.workbench_weekly(payload)[0].fields[-1]
+        assert (last.name, last.value) == ('提案', f'本周提案 {count} 条，到 roadmap 页查看')

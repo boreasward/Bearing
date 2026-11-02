@@ -989,7 +989,7 @@ def test_fetch_run_round_trip(workbench_db):
 def test_fetch_runs_table_not_required_by_workbench(workbench_db):
     # Repository consumers use their owning layers below.
     assert 'data_fetch_runs' not in core_dbutil.WORKBENCH_TABLES
-    workbench_db.execute('DROP TABLE data_fetch_runs')
+    workbench_db.execute('DROP TABLE data_fetch_runs CASCADE')    # 031's data_requests references it
     assert core_dbutil.missing_tables(workbench_db) == []
     assert core_schema.fetch_runs_ready(workbench_db) is False
 

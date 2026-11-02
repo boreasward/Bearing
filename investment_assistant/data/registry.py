@@ -1,8 +1,14 @@
 """Ordered data-family registry and per-target primary/backup dispatch."""
+import argparse
+import json
+import sys
+from contextlib import nullcontext
 from datetime import timedelta
 from functools import partial
 
+from investment_assistant.core import schema as core_schema
 from investment_assistant.core.constants import HISTORY_DAYS
+from investment_assistant.core.tx import Unavailable
 from investment_assistant.data import fetch_policy
 from investment_assistant.data.adapter_types import Adapter, Source, DEFAULT_FALLBACK_KINDS
 from investment_assistant.data.adapters import bars, news, sec_listing, earnings, fred, universe, fundamentals, sec_text, sector
@@ -30,7 +36,15 @@ def tool_families() -> list[Adapter]:
     return [a for a in ADAPTERS if a.tool is not None]
 
 
-def run_adapter(adapter, targets, *, scope, trigger, run_id, session, now, deps, features, tally=None) -> Tally:
+def run_adapter(adapter, targets, *, scope, trigger, run_id, session, now, deps, features, tally=None,
+                observe=None, whole_call_target=None) -> Tally:
+    """Fetch and store ``targets`` through the adapter's sources, one target at a time.
+
+    ``observe(target, source_id, rows, result)`` (optional) sees each stored target before it is booked, so a host can
+    build its own summary from the fetched rows and the store receipt; it must not raise. A target's final failure
+    whose ``FetchError.target`` equals ``whole_call_target`` (the daily SEC listing passes the ticker directory's) means
+    nothing of the family can be resolved: it is booked once as the whole-call ``'*'`` and the rest is not attempted
+    (I04); without it every target records its own failure."""
     targets = list(dict.fromkeys(targets))
     tally = tally if tally is not None else Tally(adapter.id, 'daily', targets)
     tally.set_targets(targets)
@@ -79,15 +93,117 @@ def run_adapter(adapter, targets, *, scope, trigger, run_id, session, now, deps,
                     loaded = outcome.value[0]
                     tally.detail.update(name=loaded['name'], as_of=loaded['as_of'], tickers=len(loaded['tickers']),
                                         stale=adapter.lagging(loaded['as_of'], session))
+                if observe is not None:
+                    observe(target, source_used, outcome.value, result)
                 tally.record(target, Fetched(outcome.value, attempts, elapsed),
                              rows=result['inserted'], latest=result['latest'],
                              source_used=source_used, fallback=fallback)
                 break
             if result is None:
                 raise primary_error or FetchError('adapter has no sources', kind='other')
+        except Unavailable:
+            raise                       # database/schema not ready: the host's 503, never a per-target failure
         except Exception as exc:
             kind, status = fetch_policy.classify_exception(exc)
+            whole_call = whole_call_target is not None and getattr(exc, 'target', None) == whole_call_target
             error = FetchError(str(exc), kind=kind, status=status, attempts=attempts,
                                target=target, total_ms=elapsed)
+            if whole_call:
+                tally.record('*', error, rows=0)
+                break
             tally.record(target, error, rows=0, source_used=source_used, fallback=fallback)
     return tally
+
+
+# ---------------------------------------------------------------- command line (spec §12.3, R12a)
+
+def _list_rows() -> list[list[str]]:
+    return [[a.id, a.title, '逐只' if a.per_ticker else '整族', a.kind, '/'.join(s.id for s in a.sources)]
+            for a in ADAPTERS]
+
+
+def _fetch(family_id: str, ticker: str | None) -> int:
+    """One manual fetch through ``run_adapter`` (the Data menu's path, ``manual_family`` row). The data layer cannot
+    resolve a per-ticker family's whole target set (watchlist, positions, chains live in the workflow layer), so a
+    per-ticker family needs ``--ticker``; the menu or the daily batch fetches the whole family."""
+    from investment_assistant.config import load_config
+    from investment_assistant.core import features as core_features
+    from investment_assistant.core import tx as core_tx
+    from investment_assistant.data import collect, identity
+    from investment_assistant.data.adapter_support import adapter_deps_from_service
+    from investment_assistant.data.adapters.bars import latest_closed_session
+
+    adapter = get(family_id)
+    if ticker is None and adapter.per_ticker:
+        print(f'{family_id} 是逐只拉取的族：请加 --ticker（整族请用数据菜单或日批）', file=sys.stderr)
+        return 2
+    if ticker is not None:
+        if not adapter.per_ticker:
+            print('该族不支持单只拉取', file=sys.stderr)
+            return 2
+        ticker = ticker.strip().upper()
+        try:
+            identity.stock_id(ticker)
+        except ValueError:
+            print(f'非法 ticker：{ticker}', file=sys.stderr)
+            return 2
+    now = collect.wall_clock()
+    session = latest_closed_session(now)
+    deps = adapter_deps_from_service(core_tx.Deps(), transaction=core_tx._tx, config=load_config(),
+                                     sleep=collect.FETCH_SLEEP)
+    with core_tx._tx() as conn:
+        ready = core_schema.five_layers_ready(conn)
+        if not ready and family_id not in ('bars', 'sec_filings', 'news', 'fred', 'universe'):
+            raise Unavailable('需执行迁移 031')
+        flags = core_features.frozen(conn) if ready else {'backup_sources': False}
+        selected = adapter.targets(conn, 'manual', explicit=[ticker] if ticker is not None else None)
+    tally = Tally(family_id, 'workbench', selected)
+    tally.detail['feature_context'] = 'frozen' if ready else 'pre_031_primary_only'
+    with (collect.family_locks([family_id]) if adapter.lock else nullcontext()):
+        tally = run_adapter(adapter, selected, scope='manual', trigger='manual_family', run_id=None,
+                            session=session, now=now, deps=deps, features=flags, tally=tally)
+    row = tally.row(trigger='manual_family', run_id=None, session=session, started_at=now,
+                    finished_at=collect.wall_clock(), scope='ticker' if ticker is not None else 'family',
+                    ticker=ticker)
+    print(json.dumps({'status': row['status'], 'family': family_id, 'ticker': ticker,
+                      'targets': row['target_count'], 'ok': row['ok_count'], 'data_status': collect.write_runs([row])},
+                     ensure_ascii=False, default=str))
+    return 0 if row['status'] != 'failed' else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog='python -m investment_assistant.data.registry',
+                                     description='数据族注册表：列出适配器、手动拉取一个族。')
+    commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('list', help='列出全部数据族（id、标题、拉取方式、数据源）')
+    fetch = commands.add_parser('fetch', help='手动拉取一个族（写一行 manual_family 拉取记录）')
+    fetch.add_argument('family', help='族 id，见 list')
+    fetch.add_argument('--ticker', help='只拉这一只（逐只族必填）')
+    args = parser.parse_args(argv)
+    if args.command == 'list':
+        for line in _table(['id', '标题', '拉取', '类型', '数据源'], _list_rows()):
+            print(line)
+        return 0
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    try:
+        return _fetch(args.family, args.ticker)
+    except (LookupError, ValueError, Unavailable) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
+    import unicodedata
+
+    def width(text):
+        return sum(2 if unicodedata.east_asian_width(ch) in 'WF' else 1 for ch in text)
+
+    widths = [max(width(cell) for cell in column) for column in zip(headers, *rows)]
+    return [('  '.join(cell + ' ' * (w - width(cell)) for cell, w in zip(row, widths))).rstrip()
+            for row in [headers, *rows]]
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
