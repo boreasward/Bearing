@@ -4,7 +4,7 @@
 
 ## v2.15.0 — TBD
 
-**尚未发布、尚未完成使用验收。** v2.12–v2.15 一次发布为 v2.15.0，不打 v2.12.0–v2.14.0 空 tag。范围依据 [冻结 spec](docs/specs/2026-11-01-v2.12-v2.15-five-layers-and-agent-roles-design.md)；代码、概念卡与文档已合入主干，最终测试结果、差异与发布日期由收尾任务据实际结果填写。真实迁移 031 / roadmap 导入 / 重启 / tag / push 均待单独授权。
+**尚未发布、尚未完成使用验收。** v2.12–v2.15 一次发布为 v2.15.0，不打 v2.12.0–v2.14.0 空 tag。范围依据 [冻结 spec](docs/specs/2026-11-01-v2.12-v2.15-five-layers-and-agent-roles-design.md)；代码、概念卡与文档已合入主干，工程部分已完成：三套全量、全链路演练（审查修复前后各一次）和一轮最终整体审查的结果见「验证」，与 spec 的差异和限制见下。真实迁移 031 / roadmap 导入 / `web/dist` 重建 / 重启 / 使用验收 / tag / push 均未执行，需逐项单独授权（[验收记录 §6](docs/roadmap/v2.12-v2.15-acceptance.md)）；发布日期在这些步骤完成后才填写。
 
 ### 搬家
 
@@ -24,20 +24,120 @@
 ### v2.14：组合经理
 
 - 逐账户硬组合检查、真实账户 PM 意见、agent-portfolio-2 证据与拒单、行业参数、账户三类 markers。
-- K2：关闭 portfolio_manager 跳过整个节点、不执行硬检查、None 不作组合拦截、Today not_computed；开启且硬结果已存后 PM 失败才 degraded / 保硬结果。
+- 关闭 portfolio_manager 跳过整个节点、不执行硬检查、None 不作组合拦截、Today not_computed；开启且硬结果已存后 PM 失败才 degraded / 保硬结果。
 
 ### v2.15：系统内 roadmap 与优化提案
 
 - 人工种子、带 revision 的路线记录、北京周六（纽约周五收盘后）提案、冻结 evidence_pack、批准后 planned 版本与后台 brief、pending 读回和 Markdown 导出。
 - 四开关默认全开、下次 daily 冻结、续跑沿用与真实变更历史；十三节点 daily-3 / stages-6，概念卡 129 张、原理页 13 个阶段小节；新功能文档与未执行验收清单。
 
+### 版本
+
+运行版本升 `agent-4`，计划 schema 仍为 `agent-3`；新增或切换的口径为 `stages-6`、`daily-3`、`agent-portfolio-2`、`agent-pm-1`、`agent-optimize-1`、`agent-impl-brief-1`、`portfolio-check-1`、`indicator-1`。`stages-5`、`daily-2`、`agent-portfolio-1` 等旧口径保留给旧运行与旧快照，不改写。前端 `package.json` 与 `package-lock.json` 仅根包版本改为 `2.15.0`，不变更依赖。
+
+### 验证
+
+- **一次性库全链路演练**（2026-11-03，真实库、网络、模型、通知均未触碰），审查修复前后各做一次：
+  - 在 55433 一次性库新建独立库，`python -m investment_assistant.migrate` 从零执行 001–031 共 31 个迁移；`optimize.roadmap import --dir config/roadmap` 首次导入目标 1 / 版本 17 / 决策 124 / 证据 11 全部 inserted，立即重跑全部 skipped；`export` 得 114 248 字节，`test_roadmap_export` 的种子等价断言对它跑过，且与纯模板对种子的渲染逐行一致（5083 行，0 行不同）。
+  - **每日运行是合成替身，不是真实 `daily run --manual`**：真实 CLI 会触发生产行情、新闻、SEC、模型取数器，无法完全离线，所以改调同一入口 `tasks.daily.run(trigger_source='manual')`，传入与 `tests/test_daily_workflow.py` 相同的替身（合成行情 / 新闻 / 财报日 / 文件来源，Agent 设为 `provider=off`，假时钟、内存检查点，通知与 SEC 扫描换替身，HTTP 层一遇调用即报错）。数据库、迁移、`job_reports`、`stage_runs`、`data_fetch_runs`、`portfolio_checks`、`feature_flag_changes`、锁和 `workflow check` 走真实代码与真实（一次性）库；CLI 参数解析层未被演练覆盖，由真实使用验收（spec §16.2）补。
+  - 结果（修复前后相同）：`stage_runs` 13 行、13 个有效节点按 `stages-6` 顺序；`collect` 九族各一行（另有 `sec_monitor` 自己的一行 `sec_text`）；`portfolio_checks` 3 行对应 3 个账户；`workflow check --session` 7 项全部 ok、退出码 0。把 `portfolio_manager` 关掉重跑一次：`portfolio` 为 `skipped / feature_disabled`、无新增 `portfolio_checks`、`summary.features` 记 `false`，`workflow check` 仍通过。整体状态 `degraded` 来自合成替身没有基本面 / 行业取数能力、`sec_text` 一行失败、无 FRED 密钥，不是被测代码缺陷。
+  - 修复后重演另核对：两次运行的 `job_reports.summary.check` 都存在且 `ok` 为真（七项均 ok）；`data_requests` 无残留 `queued`。后者在演练里是空集合下通过（演练没有产生补查请求与研究员数据），不是有负载下的通过。
+- **最终整体审查**：范围 `7d9464d..c90a6cc`（625 个文件，配对改名后约 4.9 万行），按目录切成五区并行各一轮 opus 审查（数据与底座 / 分析与视图 / 执行·复盘·优化 / 编排与接口 / 前端与文档）。结果 Critical 0；原报 Important 21 条，另将 1 条 Minor（跨版本续跑）升级为 Important，共 22 条，去重后 16 项全部修复；Minor 52 条，需要说明的写进下面两节，其余不影响数据与口径。
+- **审查后的修复**（一轮，后端与前端 / 文档两个修复者并行，控制器看 diff 与相关测试确认）：
+  - 补查请求不再永久停在排队：手动运行与手动复查结束时本次未处理的请求结算为 `deferred / manual_run`，每日 `review` 收尾把更早的孤儿请求结算为 `deferred / orphaned`，`workflow check` 的补查项按运行日窗口核对，不再被前一天遗留的行拖成永久不通过。
+  - 研究队列不再冲破共享预算：每份研究的期限取 900 秒与剩余共享预算的较小者，剩余不足 120 秒不开始，采集每族开跑前检查；`waiting_data` 重跑计入次数、达上限以 `waiting_data_limit` 关闭；停在 `running` 超过两倍期限的请求回队并计次；每日队列里的研究采集沿用冻结开关。
+  - 组合检查口径：贪心造成的容量不足改判 `deferred`（原因码不变），`validate_orders` 只硬拦与顺序、挂单无关的原因；行业两道上限改为组内按顺序逐条。由此「挂单链换版」「当天止损退出后腾位」不再被冻结的检查结果错拦；模拟账户的组合检查显示「不调组合经理，只有硬结果」，不再写成「Agent 不可用」。
+  - 数据与工具：Nasdaq 备源答「未知」不再覆盖主源已知的财报日（原先会让 `earnings_in_validity` 作废失效）；研究员的 `get_sec_hits` 按来源过滤后再限条数，`get_filing_text` 跳过目录页、正文去标签。
+  - 编排与运行详情：每日运行把自动核对结果写进 `job_reports.summary.check`；升级前产生的 `daily-2` 失败运行不能被 `daily-3` 图续跑（`graph_version_changed`，409）；运行详情暴露 `research_auto_closed` 和 `review` 节点的补查计数。
+  - 前端与文档：研究页把关闭 / 错误原因码译成中文，`brief` 在 `pending` 时也能重新提交，组合检查块显示正确原因，运行详情显示「自动结束 N 份」；迁移 031 运维步骤补上 `--dir config/roadmap`、预期导入数 1 / 17 / 124 / 11 与重跑全 skipped、`web/dist` 重建，入口文档里的旧数字（节点数、概念卡数、迁移编号）按实际更新；功能文档同步上述口径。
+- **三套全量**（审查修复之后；离线与一次性库两套均经「只允许回环地址 + 指定库」的连接守卫）：
+  - 离线 pytest：3215 passed、1406 skipped、0 failed，190 秒，外部 socket 0 次。
+  - 一次性库 pytest：4620 passed、1 failed，43 分 23 秒。失败的是修复引入的研究员读原文回归（`get_filing_text` 把单一短 section 当成目录行），已修；修后 `test_agent_research_tools.py` 与 `test_agent_hosts.py` 共 16 passed，**未整套重跑**。
+  - 前端 vitest（`NODE_OPTIONS=--no-experimental-webstorage`，`--maxWorkers=4`）：1149 个用例，1148 passed、1 failed。失败的是 `Fundamentals.test.ts` 并行时 5 秒超时，单独跑 8/8 passed，计划前基线同样超时（见限制）。
+  - `svelte-check`：997 个文件，0 errors、0 warnings。
+  - 构建：输出到临时目录成功，`web/dist` 未改动。
+  - 对照：修复之前（`c90a6cc`）的一轮全量为离线 3210 passed / 1392 skipped、一次性库 4602 passed、vitest 1142 passed / 1 failed（同一个 `Fundamentals` 超时）、`svelte-check` 0 errors / 0 warnings；当时一次性库首轮的 1 个失败是测试桩缺 `breadth_tickers`、前端 3 处期望表过期（原因码键集、设置页签、图标表），均为补全等式期望，未放宽任何断言。
+- **Task 级审查**：Task 0–6 每个 Task 完成时各经一轮独立审查，修复由控制器看 diff 与相关测试确认；Task 5 / Task 6 完成时均无未决的 Critical / Important。概念卡检查 129 张通过，文档链接测试在全量内。
+- **尚未发生**：真实库迁移 031、`roadmap import`、`web/dist` 重建、服务重启、spec §16.2 使用验收，见「限制与待验收」。
+
 ### 与 spec 的差异
 
-<!-- 收尾任务按最终主树事实填写：差异、裁决依据、影响与对应证据。 -->
+**命令与接口**
+
+- **没有 `optimize.roadmap check`（D45）**：spec §12.3 与 §16.2-8 字面写 `optimize.roadmap import / export / check`；D45（§24）已定 `optimize check` 并入 `workflow check`，实际只有 `python -m investment_assistant.workflow check`。`--session D` 为汇总形态（推导、持仓状态、账户、`portfolio_checks`、提案无引用、`data_requests`、研究员状态各一项），`--since` 仍是旧的计划表核对。
+- **推导的数据库核对从 `derivation` 移到 `workflow`**：spec §12.3 写 `investment_assistant.derivation check / stages`；这两个命令实际要读执行、分析、编排的仓储，无法同时满足 D6 依赖方向，实际入口是 `python -m investment_assistant.workflow check / stages`，纯重算留在 `derivation`，跨层读取放 `views/derivation.py`。
+- **`data.registry fetch` 对逐标的族必须带 `--ticker`**：spec §12.3 写 `fetch <family> [--ticker]`；全族目标集由 `workflow.targets` 决定，`data` 层不得向上依赖，所以逐标的族只能指定单只拉取，整族拉取走每日 `collect`。
+- **通知发送改为由入口注入（D44）**：spec D44 指定发送在 `workflow/nodes/push.py` 等处调用，同时禁止 `workflow` 依赖 `notify / services / tasks`；实际由 `tasks` / API 入口把发送回调、SEC 投递端口和有效通知配置显式注入，节点只负责调用时机、幂等和记账，模板、返回值、去重与失败语义不变。
+- **接口为页面补了几个向后兼容的字段**：开关 `GET` 带 `history`；roadmap 版本与决策详情带 `version / history / brief / brief_status` 与 `decision / history`；提案行带取自生成时冻结证据包的 `evidence_rows`；推理视图的 `steps` 多一段 `research`。spec 只要求这些页面能力，没有冻结字段，没有新增端点，已冻结字段不变。
+- **适配器接口比 spec §5.1 草图多几个入参**：`Adapter.targets` 在 `(conn, scope)` 之外增加关键字入参 `facts / explicit / universe_loader`，由 `workflow` / `views` 宿主注入既有的池、持仓、链算法产出的冻结目标事实（原签名要求 `data` 层自己算依赖上层规则的目标，与 D6 冲突）；`Source.fetch` 的返回注解放宽为含 `Fetched[...]`，以如实保留 attempts。字段名、顺序、冻结性不变。
+
+**组合检查与拒单**
+
+- **拒绝码集合**：D31 写 `validate_orders` 新增 `sector_cap`、`mutually_exclusive`，与 §7.1 / §7.3 的 `reasons` 集合矛盾；按更明细且自洽的 §7.1 / §7.3，新增 `sector_cap`、`max_per_sector`，并把首因可能是 `single_cap`、`total_cap`、`held_ticker` 的情形也列入公开拒绝码（前后端同名中文，原样返回首因，不映射成别的原因）；共享的 `max_shares` 在风险容量不足一股时归 `single_cap`，文案写明「单笔风险或单票敞口」。
+- **贪心装不下判 `deferred`，只有顺序无关的原因才硬拦（D30④、§7.3）**：`max_positions`、`total_cap`、由前序候选累计预留造成的 `single_cap`、有在挂买单的标的，一律 `deferred`（原因码不改名）；`validate_orders` 只对 `sector_cap`、`max_per_sector`、对**已持仓**标的的 `held_ticker`、零预留下 sizing 已是 0 的 `single_cap`（含现金连一股都买不起）硬拦。spec 本就只把「装不下」定义为可下单的 `deferred`；此前实现把依赖挂单与贪心假设的结果也硬拦，会让换版的旧单被撤后新版本仍下不了单。
+- **行业两道上限按组内逐条判（D30③）**：「同组内超 `max_per_sector` 只数时标互斥组」有整组拦与组内至多 k 条两种读法；采用后者——按信号日、ticker 的贪心顺序累加，放得下给 `ok`，放不下给 `max_per_sector` / `sector_cap`，组仍列进 `conflicts`；0 股候选不计入组敞口与只数。`portfolio-check-1` 尚未发布，现在改的成本最低；若用户本意是整组拦，需回退这一条与对应两条测试期望。
+- **模拟账户的组合检查状态（D31、§7.4）**：§7.4 把「没有 commentary」一律显示为「Agent 不可用，只有硬结果」；模拟账户按 D31 本来就不调组合经理，所以有硬结果时 `status = ready`、`reason = paper_no_pm`、无 commentary，显示「模拟账户不调组合经理，只有硬结果」；真实账户无 commentary 仍为 `degraded / agent_unavailable`。
+- **`portfolio` 节点失败后不能从该节点续跑，也没有节点级重试（§15）**：§15 写「`portfolio` 失败 → 运行 `failed`，续跑从该节点」。实现里节点吞掉异常、链继续往下走（`accounts` 读到 `missing` 后不拦），所以检查点已越过 `portfolio`，该节点不可续跑，`node()` 包装器的 60 秒重试也不会触发；失败的组合检查只能整次重跑。这是 spec 自相矛盾处（`accounts` 已消费 `missing`，回头续跑 `portfolio` 没有意义），保留实现。
+
+**研究、补查与开关**
+
+- **运行之外的研究入口读当前开关，`daily` 内沿用冻结值（Q13）**：Q13 写开关下次 `daily` 生效、一次运行内沿用冻结值；研究补采在没有冻结状态时读运行时当前开关（缺行视为开），只有 API 后台等运行之外的入口如此，`daily` 内处理研究队列时传冻结的 `features`。
+- **手动运行登记的补查请求不同步补采（§5.5、§6.3）**：spec 写 `request_data` 在 `agent`、`review` 节点尾部或研究入口同步处理；手动 `run_agent` / `rerun_agent` / API 复查产生的请求没有 `agent` 节点尾部可处理，结束时直接结算为 `deferred / manual_run`（模型被告知「已登记」，实际只记 `deferred`，不补采）。每日 `review` 收尾另把早于本次 cutoff、`run_id` 不是本运行的排队行结算为 `deferred / orphaned`；带 `research:` 前缀、可能仍在后台研究的行只在早于 cutoff 一天以上才结算。
+- **`waiting_data` 重跑计入次数、停在 `running` 的请求回队（D28）**：D28 写三次失败 `closed / max_attempts`，没有覆盖这两种情形；`waiting_data` 的每次重跑计 1 次，达到 `MAX_ATTEMPTS` 以新增的 `waiting_data_limit` 关闭（否则每天有新版本的档案 30 天自动关闭永不触发）；`close_stale` 把 `updated_at` 早于两倍 `RESEARCH_DEADLINE_S` 的 `running` 请求回 `queued` 并计 1 次（后台线程随进程重启消失，错误版本兜不住）。每日队列给出的较小期限在模型阶段前耗尽时不计次数（预算截断不是失败）。
+- **`research_requests` 的 `request_id` 重放不比对内容（§6.3）**：spec 写重复 `request_id` 回放；实现回放时不比较 ticker、问题、期限，内容不同也直接返回已存的行，而开关、提案接口是「内容不同报 409」。前端每次提交生成新 UUID，单用户下实际风险低，未改。
+- **`collect` 节点状态不因新三族失败降级（D13）**：D13 要求降级可见；`fundamentals`、`sec_text`、`sector` 只供研究员 / Agent 读取，不是筛选与计划的必需输入，失败记在各自的 `data_fetch_runs` 行与数据菜单，和 `universe` 同规则，不把 `collect` 记为 `degraded`。
+- **`sec_monitor` 的正文调用只覆盖本次扫描出现新 filing 的标的（D47）**：D47 写下载改调 `sec_text` 适配器；范围保持原行为（只处理有新 filing 的标的），其余目标由 `collect` 的 `sec_text` 行覆盖并跳过已下载者，避免每次扫描给全部观察名单多一次 SEC 列表请求。
+- **SEC 每日额度按实际下载次数计，附件占额度（§15）**：每只每天至多 3 份按「原文 + 附件」的实际下载次数合计，先预约再下载；本地复用不占额度；预算存放在有效 `filings.output_dir` 下的 `.budgets` 文件，跨 scope 共享（清空目录会丢当日额度，运维文档已写）。
+
+**编排与可观察性**
+
+- **`daily show` 不打印开关当前值与最近翻动（§9）**：§9 写「开关当前值与最近翻动打印在 `daily show` 里」；实际冻结开关的核对位置是 `job_reports.summary.features`（`GET /api/jobs/reports`），设置页「功能开关」显示当前值与历史。另外 `daily show` 固定按 13 个节点列出，旧 `stages-5` 运行的 `portfolio` / `propose` 会显示「未开始」。
+- **跨版本续跑被拒（§10）**：spec 未涉及；升级当天，前一天失败的 `daily-2` 运行仍在续跑窗口内，用 13 节点图续跑会让 `stage_runs` 混入 `stages-5` 与 `stages-6` 的行。现在检查点 `graph_version` 不是 `daily-3` 时拒绝（`graph_version_changed`，HTTP 409），只能整次重跑。
+- **知识卡（§14）**：§14 的「提议者那张卡」对应现有的 `agent.action_levels`（现有 112 张里没有 `agent.proposer`）；升版或新增的 7 张是 `agent.action_levels`、`indicator.atr14`（注明原 ATR 族）、`system.stages`、`system.daily_workflow`、`account.agent_portfolio`、`indicator.moving_average`、`system.fetch_policy`；总数 129 张（§14 写 130 张，§24 已更正为 129）。
+- **`discuss@agent-discuss-1` 加了 `get_roadmap` 却没有升版（D20、D37）**：D20 要求白名单变了就升版，而 D37 与 plan 的接口字面锁定了 `discuss@agent-discuss-1`，两处互相矛盾，选定后者。工具集合变了但版本名不变；讨论工具由发起讨论的 API / 任务入口按运行绑定，`review` 层不反向依赖 `optimize`。
+- **反方采纳率是运行级代理指标（D35）**：D35 的「反方被采纳率」在当前图里没有同轮逐条采纳标记，按已有可观测数据统计「有反方意见且后续成功修订的运行比例」，证据块与说明都标明它不证明逐条采纳或因果关系。
 
 ### 限制与待验收
 
-<!-- 收尾任务填最终测试/审查、真实授权执行、使用验收、定时观察与未完成项；不得把 TBD 写成已发布。 -->
+**尚未执行（均需逐项单独授权，现为未执行状态）**
+
+- 真实库备份（`pg_dump`）、迁移 031、`roadmap import --dir config/roadmap`、`web/dist` 重建、服务重启、spec §16.2 九项使用验收、tag `v2.15.0`、推送——一项都没有做。执行顺序与核对点见 [验收记录 §6](docs/roadmap/v2.12-v2.15-acceptance.md)；缺 031 时 `daily` 拒跑、新接口 503 `migration_031_missing`、旧接口照常。**版本标题保持 TBD，发布日期与"已发布"措辞只能在这些步骤完成后填写。**
+- 连续 10 个交易日定时观察（spec §16.3）、四版各自的使用验收（§16.4：数据菜单能解释任一族来源与降级、指定股票得到可读档案、「今日」顶部一段就知道先做哪条、拿系统 brief 开了一版工并回填证据）均未开始；工程完成不代替使用验收，Gate HOLD 不变。模拟账户尚未积累足够前向证据，组合检查与 `agent-portfolio-2` 的对照结论不能据此下。
+- 备源：Stooq 日线端点 2026-11-01 探测为 HTTP 404（五只标的全部），正式 `bars.sources` 只注册 yfinance，补缺 / `adj_close` 比例 / 分界机制只有离线案例；NVDA 拆股调整因无数据无法验证。Nasdaq 财报日备源可用，但真实切换（主源失败 → 一次备源）要在真实环境里才能看到。
+
+**测试与演练的边界**
+
+- **一次性库全量在修复后没有整套通过一次**：修复后整套为 4620 passed、1 failed，失败的回归修好后只重跑了 `test_agent_research_tools.py` 与 `test_agent_hosts.py`（16 passed）。发布前若要整套证据，需再跑一次。
+- **`Fundamentals.test.ts` 并行时偶发 5 秒超时**：「displays the twelve latest actual quarters…」单独跑稳定通过（8/8，约 2–4.5 秒），宿主机负载高时并行会超过默认 5 秒；在计划之前的基线 `7d9464d` 上同样并行跑出现同样的超时（连同 `Instrument`），不是本计划引入，未改超时或断言。发布后本机满载时前端套件可能偶发红，需要时给该用例单独调超时。
+- **演练用合成替身**：见「验证」；真实 `daily run --manual` 与 CLI 参数层、真实行情 / SEC / 模型取数、通知投递都没有被工程自查覆盖；演练里补查请求与研究员数据为空集合，相应核对项只是「空集合下通过」。
+- 受保护启动器在一次性库套件末尾报 3 个被拒绝的连接（`test_run_detail.py` 里三个用例用空连接串建检查点连接，被守卫在连出前拦下，代码按「检查点不可用」处理，用例全部通过），是已有现象；一次性库里另有 18 个以前遗留的 `wb_test_*` 临时 schema，未清理。
+
+**升级与组合检查**
+
+- **升级当天的一次误导**：发布当天，前一天失败的 `daily-2` 运行详情页仍可能显示「续跑」按钮，点击得到 409（`graph_version_changed`，有中文文案），服务端已拒绝，不会污染数据；该运行只能整次重跑。
+- **组合检查的两处余项**：`portfolio` 节点排在 `accounts` 之前，模拟账户当天的结算（成交、过期、止损退出）和宿主撤旧单发生在 `accounts` 里，所以组合检查冻结的是结算前的账本。修复后因此造成的错拦只剩两处：**当天止损 / 退出的标的不能在同一交易日再买**（已持仓的 `held_ticker` 仍硬拦）；**权益分母比实际晚一天**（当日变动要到下一次结算才进入分母，真实账户同样，因为真实权益也在 `accounts` 里写入）。未移动节点，也没有在 `portfolio` 里提前结算。
+- 贪心装入顺序是信号日从早到晚，不是收益预测；SIC 两位是粗分类，未归类不阻断不代表风险为零；`sector_cap`、`max_per_sector` 的默认值（0.35 / 3）不从历史拟合。
+- 每个账户每个 session 只尝试一次组合经理（运行 id 按账户与 session 固定），临时失败当天不再重试，失败如实记录，硬结果仍在。
+- `PM_DEADLINE_S`（300 秒）与 `PROPOSE_DEADLINE_S`（600 秒）目前只是**启动闸门**：模型调用本身没有超时钩子，不受这两个时长约束；§10 预算总表里这两个数字并不限制模型调用的时长。
+
+**研究、补查与提案**
+
+- **首版因模型异常结束时，研究员段与工具调用不落库**（异常行只记原因，`agent-3` 时代就是这样），所以失败那次的 token 不计入当日上限，补查重跑也退回 `disabled`；不影响单元结论的正确性。
+- 提案日按运行 cutoff 的北京日期是周六判定（唯一口径 `optimize.evidence.is_proposal_day`，与 §8.3 字面一致）；纽约周五休市而北京周六时 `propose` 也照跑。
+- 同一个北京周六重复运行 `daily`（手动重跑、`propose` 中途失败后续跑、`--force-propose`），`propose` 会再起草一轮，最多再写 3 条，只按未决提案标题去重，超出 Q11「每次至多 3 条」的本意。
+- 研究请求每日额度（5 份）先计数后插入，没有加锁，并发的两个 `POST /api/research` 可能越过上限；直接调用 API 传小写标的会以小写入库（前端会转大写）。
+- 模型不可用的日子里 `close_stale` 不执行：它只在 `agent` 节点尾部、模型可用时才跑，所以 30 天无新版的档案要等模型恢复后才会自动关闭。
+- `sec_text` 主文在当日 3 份额度用尽时静默跳过、目标仍记 ok（8-K 在同样情况下则报失败），数据菜单看不出是被额度截停；`.budgets` 目录每只每个 session 留下两个小文件，没有清理。
+- 冻结开关的核对记录 `job_reports.summary.features` 随 `job_reports` 的 30 天清理一起消失，超过 30 天的运行无从核对开关。
+- Agent 子图的跳过行与修订行仍记 `agent-3`，只有首版记 `agent-4`（默认版本映射未改）；D38 要求的是运行版本升 `agent-4`、计划 schema 保持 `agent-3`，两者在首版上已经区分。
+- 研究列表后端固定取 50 条、没有分页；`brief` 状态靠手动「刷新」读回，不自动轮询。
+
+**页面与文档**
+
+- 前端错误提示表只收了 4 个新错误码，`version_id_exists`、`proposal_already_decided`、`brief_already_ok` 等会落到通用文案（`version_id_exists` 的提示会误导，应换版本号）；roadmap 决策页的版本筛选按字典序排序（`v2.10` 排在 `v2.2` 前）；`decisions.yaml` 有 85 条 `quote` 为空串，页面会渲染空引用块。
+- 概念卡 `agent.reject_reasons` 已列出 optimize 与 brief 的拒绝码，但 `applies_to` 元数据未补 `agent-4`、`agent-pm-1`、`agent-portfolio-2`、`agent-optimize-1`、`agent-impl-brief-1`，版本号未升。
+- 验收记录 §4 的清单缺 §16.2-9 里「Agent 未连接时 `propose` 为 `skipped`」这一条，已在 §6 的使用验收步骤里补上，§4 保持原样。
+- 活文档里个别历史段落还写着旧模块路径（`architecture.md` 的 `agent/conditions.py`、`derivation.py` 与「112 张」，`design-system.md` 的 `run_overview.py`，`features/legacy/README.md` 里 `refresh_local_filings` 的说法）；README 仍写「当前版本 v2.10.0」，属于发布后回填项。
 
 ## 未发布
 
