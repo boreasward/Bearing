@@ -25,7 +25,7 @@ daily 新运行在 initial_state 读取并冻结 `DailyState.features`；中途�
 
 - `GET /api/settings/features → {flags:[{flag,enabled,changed_at,reason,history_count}],history:[{id,flag,enabled_before,enabled_after,reason,request_id,created_at}]}`；history 含全部真实变更，按 id 升序。
 - `POST /api/settings/features/{flag}` body `{enabled,reason,request_id}` → `{flag,enabled,changed_at}`，request_id 保证回放；前端提交成功后读回。
-- `python -m investment_assistant.tasks.daily show --run-id <运行ID>` 是运行冻结状态的核对入口；不新增开关 CLI；未知开关名返回 404 `unknown_flag`，迁移 031 未执行返回 503 `migration_031_missing`。
+- 运行冻结的开关值存在该次运行的 `job_reports.summary.features`（`{flag: bool}`，`workflow/graph.py` 在收尾写入；续跑沿用同一份）。可读的入口是 `GET /api/jobs/reports?task=daily&limit=50`：在返回的 `reports[].summary.features` 里按 `run_id` 找到该次运行。`tasks.daily show` 只打印节点表，运行详情（`/api/runs/{run_id}/detail`）也不展示冻结值；不新增开关 CLI；未知开关名返回 404 `unknown_flag`，迁移 031 未执行返回 503 `migration_031_missing`。
 
 ## 怎么验证一次
 
