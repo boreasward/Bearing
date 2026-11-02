@@ -110,7 +110,7 @@
 
   type Row = Record<string, unknown>
   type Column = { key: string; label: string; format?: (value: unknown) => string; link?: string; concept?: string }
-  const text = (value: unknown): string => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value)
+  const text = (value: unknown): string => value == null ? '—' : Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value)
   const columns: Record<string, Column[]> = {
     bars: [
       { key: 'price_date', label: '日期' }, { key: 'open', label: '开' }, { key: 'high', label: '高' },

@@ -136,6 +136,19 @@ describe('DataBrowse 原始值', () => {
     expect(within(table).getByRole('cell', { name: '—' })).toBeTruthy()
   })
 
+  it('sec filings items TEXT[] cells join with commas, never as JSON', async () => {
+    vi.mocked(api.browseData).mockResolvedValue({
+      family: 'sec_filings', key: 'MU', has_data: true, rows: 1,
+      filings: [{ id: 2, ticker: 'MU', form: '8-K', filing_date: '2026-10-21', accession_number: '0001-26-000124',
+        primary_document: 'eight.htm', accepted_at: '2026-10-21T18:00:00+00:00', items: ['2.02', '9.01'] }],
+      sec_8k: [],
+    })
+    mount('sec_filings')
+    const filings = await screen.findByRole('table', { name: 'filings' })
+    expect(within(filings).getByRole('cell', { name: '2.02, 9.01' })).toBeTruthy()
+    expect(filings.textContent).not.toContain('["2.02"')
+  })
+
   it('sec shows both lists with count-shaped rows', async () => {
     vi.mocked(api.browseData).mockResolvedValue({
       family: 'sec_filings', key: 'MU', has_data: true, rows: 3,

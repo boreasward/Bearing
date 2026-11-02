@@ -204,11 +204,6 @@ export interface PortfolioCheckView {
   status: 'ready' | 'not_computed' | 'degraded'; reason: string | null; session: string | null; cutoff_at: string | null
   result: PortfolioResult | null; commentary: PortfolioCommentary | null
 }
-export const PORTFOLIO_REASON_TEXT: Record<string, string> = {
-  sector_cap: '超过行业集中度上限', max_per_sector: '超过同行业标的数量上限', single_cap: '超过单笔风险或单票敞口上限', total_cap: '超过组合总敞口上限',
-  insufficient_cash: '现金不足', held_ticker: '已持有、在挂或重复的标的', max_positions: '最多持仓数', sector_unknown: '行业未归类',
-  deferred_by_cash: '现金不足，暂缓执行',
-}
 export interface Decision {
   id: string; ticker: string; signal_date: string; proposed_action: Action; final_action: FinalAction
   decision: Choice; reason: string; decided_at: string; supersedes_id: string | null

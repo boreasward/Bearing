@@ -25,8 +25,7 @@ beforeEach(() => {
     if (path === '/api/roadmap/versions/v2.15') return Response.json(versionDetail)
     if (path === '/api/roadmap/versions/v2.16') return Response.json({ ...versionDetail, version: { ...versionDetail.version, version_id: 'v2.16' } })
     if (path === '/api/roadmap/decisions/113') return Response.json(decisionDetail)
-    if (path === '/api/roadmap/briefs/v2.15/retry') {
-      versionDetail = { ...versionDetail, brief: null, brief_status: 'pending' }
+    if (path === '/api/roadmap/briefs/v2.15/retry') {      // the real backend only queues a job; the old brief row stays
       return Response.json({ version_id: 'v2.15', brief_status: 'pending', run_id: 'impl-brief-1' })
     }
     throw new Error(`Unexpected request ${path} ${init?.method}`)
@@ -58,7 +57,7 @@ it('proposals tab decide opens ConfirmDialog requiring reason and version_id', a
   expect(body).toEqual({ decision: 'approved', version_id: 'v2.16', reason: '减少数据缺口', request_id: expect.any(String) })
   expect(await screen.findByText('brief 生成中')).toBeInTheDocument()
 })
-it('retry reads real detail back as pending, then refresh displays the completed brief', async () => {
+it('retry stays pending while only the old error row exists, then shows the new row', async () => {
   status = 'approved'
   versionDetail.brief_status = 'error'
   versionDetail.brief = { id: 1, version_id: 'v2.15', proposal_id: 9, agent_run_id: 'brief-old', body: null, status: 'error', reason: '模型预算不足', created_at: version.created_at }
@@ -68,11 +67,20 @@ it('retry reads real detail back as pending, then refresh displays the completed
   expect(screen.getByText('模型预算不足')).toBeInTheDocument()
   await fireEvent.click(screen.getByRole('button', { name: '重试 brief' }))
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/roadmap/briefs/v2.15/retry', expect.objectContaining({ method: 'POST' })))
+  // the immediate readback still returns the old error row (id 1): the UI keeps pending, never flips back to failure
   expect(await screen.findByText('brief 生成中')).toBeInTheDocument()
-  expect(screen.queryByText('brief 已生成')).toBeNull()
-  expect(screen.queryByText('模型预算不足')).toBeNull()
-  expect(fetcher.mock.calls.filter(([path]) => path === '/api/roadmap/versions/v2.15')).toHaveLength(2)
   await waitFor(() => expect(screen.getByRole('button', { name: '刷新 brief' })).toBeEnabled())
+  expect(fetcher.mock.calls.filter(([path]) => path === '/api/roadmap/versions/v2.15')).toHaveLength(2)
+  expect(screen.queryByText('brief 生成失败')).toBeNull()
+  expect(screen.queryByText('模型预算不足')).toBeNull()
+  expect(screen.queryByRole('button', { name: '重试 brief' })).toBeNull()
+  // a refresh while only the old row exists is still pending
+  await fireEvent.click(screen.getByRole('button', { name: '刷新 brief' }))
+  await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => path === '/api/roadmap/versions/v2.15')).toHaveLength(3))
+  await waitFor(() => expect(screen.getByRole('button', { name: '刷新 brief' })).toBeEnabled())
+  expect(screen.getByText('brief 生成中')).toBeInTheDocument()
+  expect(screen.queryByText('brief 生成失败')).toBeNull()
+  // the background job inserts a newer row: now it is shown
   versionDetail = { ...versionDetail, brief_status: 'ok', brief: { id: 2, version_id: 'v2.15', proposal_id: 9, agent_run_id: 'brief-new', body: '# 冻结证据驱动的实施步骤', status: 'ok', reason: null, created_at: version.created_at } }
   await fireEvent.click(screen.getByRole('button', { name: '刷新 brief' }))
   expect(await screen.findByText('# 冻结证据驱动的实施步骤')).toBeInTheDocument()
@@ -95,7 +103,7 @@ it('version link loads the latest definition, ordered revision history and not-r
   expect(screen.getByText('未请求 brief')).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: '重试 brief' })).toBeNull()
 })
-it('a pending retry acknowledgement is replaced by the actual error returned on readback', async () => {
+it('a newer error row after a retry replaces the pending acknowledgement and offers retry again', async () => {
   const failed = { id: 1, version_id: 'v2.15', proposal_id: 9, agent_run_id: 'brief-old', body: null, status: 'error' as const, reason: '旧失败', created_at: version.created_at }
   versionDetail = { ...versionDetail, brief_status: 'error', brief: failed }
   const respond = fetcher.getMockImplementation()!

@@ -15,10 +15,6 @@ STATUS_TS = ROOT / 'web/src/lib/ui/domain/status.ts'
 MIGRATION = ROOT / 'migrations/030_accounts.sql'
 
 
-# The front end's rejection words (and the portfolio reasons) gain the v2.14 sector / exposure codes with Task 5; Task 7
-# removes this marker (removal list: Task 4 report, Segment F).
-
-
 def _table(name: str) -> dict[str, str]:
     match = re.search(rf'export const {name}\b[^=]*=\s*\{{(.*?)\}} as const', ACCOUNTS_TS.read_text(), re.S)
     assert match, f'frontend {name} missing'
@@ -90,3 +86,9 @@ def test_new_status_domains_cover_account_and_paper_enums():
         match = re.search(rf'^\s*{domain}:\s*\{{([^\n]*)\}},?$', text, re.M)
         assert match, domain
         assert set(re.findall(r"(\w+):\s*'\w+'", match.group(1))) == keys, domain
+
+
+def test_portfolio_reason_display_map_matches_backend():
+    """The front end derives the portfolio reasons as REJECT_TEXT plus the informational extras, as core.texts does."""
+    assert re.search(r'export const PORTFOLIO_REASON_TEXT = \{\s*\.\.\.REJECT_TEXT,', ACCOUNTS_TS.read_text())
+    assert {**_table('REJECT_TEXT'), **_table('PORTFOLIO_REASON_TEXT')} == texts.PORTFOLIO_REASON_TEXT

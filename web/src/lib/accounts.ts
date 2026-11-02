@@ -20,6 +20,10 @@ export const REJECT_TEXT = {
   sector_cap: '超过行业集中度上限', max_per_sector: '超过同行业标的数量上限',
   single_cap: '超过单笔风险或单票敞口上限', total_cap: '超过组合总敞口上限', held_ticker: '已持有、在挂或重复的标的',
 } as const
+/** Portfolio-check reasons = the order rejection words plus two informational ones (core.texts.PORTFOLIO_REASON_TEXT). */
+export const PORTFOLIO_REASON_TEXT = {
+  ...REJECT_TEXT, sector_unknown: '行业未归类', deferred_by_cash: '现金不足，暂缓执行',
+} as const
 export const CANCEL_REASON_TEXT = {
   superseded_by_revision: '计划出了新版本，旧订单撤销', chain_ended: '计划链已结束，订单撤销', agent_cancel: 'Agent 主动撤单',
   validity_expired: '计划有效期已过', account_closed: '账户已关闭，订单撤销',

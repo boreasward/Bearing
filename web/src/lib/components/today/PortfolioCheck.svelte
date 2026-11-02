@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { PORTFOLIO_REASON_TEXT, type PortfolioCheckView, type PortfolioVerdict } from '$lib/workbench'
+  import { PORTFOLIO_REASON_TEXT as REASON_TEXT } from '$lib/accounts'
+  import type { PortfolioCheckView, PortfolioVerdict } from '$lib/workbench'
+  const PORTFOLIO_REASON_TEXT: Record<string, string> = REASON_TEXT
   import Section from '$lib/ui/domain/Section.svelte'
   import DataBlock from '$lib/ui/domain/DataBlock.svelte'
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
