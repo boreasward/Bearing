@@ -56,6 +56,15 @@ def _insert(conn, table, columns, row):
     return saved
 
 
+def record_key(table):
+    """The key column of one of the four record tables (a closed set, never a caller-supplied identifier)."""
+    return _record_schema(table)[0]
+
+
+def record_columns(table):
+    return _record_schema(table)[1]
+
+
 def insert_roadmap_record(conn, table, row):
     """Append one revision to one of four tables. UNIQUE collisions are never overwrites."""
     _, columns = _record_schema(table)
@@ -83,19 +92,36 @@ def insert_proposal(conn, row):
     return _insert(conn, 'roadmap_proposals', _PROPOSAL_COLUMNS, row)
 
 
-def decide_proposal(conn, id, *, decision, reason, decided_at) -> bool:
+def decide_proposal(conn, id, *, decision, reason, decided_at, request_id=None) -> bool:
+    """The one allowed status update (``proposed`` → decided). ``request_id`` (the caller's idempotency key,
+    UNIQUE) is stored with the decision so a replay can be recognised."""
     if decision not in {'approved', 'rejected', 'superseded'}:
         raise ValueError('proposal_decision')
     if not isinstance(reason, str) or not reason.strip() or decided_at is None:
         raise ValueError('proposal_decision_reason')
-    return conn.execute('UPDATE roadmap_proposals SET status = %s, decision_reason = %s, decided_at = %s '
-        "WHERE status = 'proposed' AND id = %s", (decision, reason.strip(), decided_at, id)).rowcount == 1
+    return conn.execute('UPDATE roadmap_proposals SET status = %s, decision_reason = %s, decided_at = %s, '
+        "request_id = COALESCE(%s, request_id) WHERE status = 'proposed' AND id = %s",
+        (decision, reason.strip(), decided_at, request_id, id)).rowcount == 1
+
+
+def proposal_by_id(conn, id):
+    return _one(conn, 'SELECT * FROM roadmap_proposals WHERE id = %s', (id,))
+
+
+def proposal_by_request(conn, request_id):
+    return _one(conn, 'SELECT * FROM roadmap_proposals WHERE request_id = %s', (request_id,))
 
 
 def list_proposals(conn, *, status=None):
     where = ' WHERE status = %s' if status is not None else ''
     return _all(conn, 'SELECT * FROM roadmap_proposals' + where + ' ORDER BY created_at DESC, id DESC',
                 (status,) if status is not None else ())
+
+
+def count_proposals(conn, *, since=None, until=None) -> int:
+    """Proposals written after ``since`` (exclusive; None: from the beginning) and up to ``until`` (inclusive)."""
+    return conn.execute('SELECT count(*) FROM roadmap_proposals WHERE (%s::timestamptz IS NULL OR created_at > %s) '
+                        'AND (%s::timestamptz IS NULL OR created_at <= %s)', (since, since, until, until)).fetchone()[0]
 
 
 def insert_brief(conn, row):

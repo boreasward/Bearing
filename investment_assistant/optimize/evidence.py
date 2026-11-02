@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import date
+from datetime import datetime
 from hashlib import sha256
+
+from investment_assistant.core.constants import SH
 
 
 EVIDENCE_KEYS = ('data_failures', 'agent_quality', 'retro_patterns', 'route', 'open_proposals')
@@ -115,10 +117,14 @@ def fact_blocks(pack) -> str:
                                                 'rows': pack.get(key, [])}) for key in EVIDENCE_KEYS)
 
 
-def is_proposal_day(session: date) -> bool:
-    """The caller supplies a New York exchange-session *date*, not Beijing now.
+PROPOSAL_WEEKDAY = 5          # Saturday, Beijing time
 
-    Friday's completed session is processed on Beijing Saturday, in both DST
-    regimes. Holiday/session validity belongs to the workflow's calendar gate.
-    """
-    return session.weekday() == 4
+
+def is_proposal_day(moment: datetime) -> bool:
+    """The one definition of the proposal day (spec §8.3 ①, D35): Saturday in Beijing at the run's cutoff.
+
+    Beijing Saturday morning is Friday evening in New York in both DST regimes (06:30 against the 18:30 close run in
+    summer, 07:30 in winter), so the run that follows Friday's close proposes. The rule looks at the moment, not at the
+    session date: a Friday holiday still has its Saturday-morning run, and the workflow's calendar gate — not this
+    rule — decides whether that day runs the chain at all. ``workflow.nodes.propose`` uses this very function."""
+    return moment.astimezone(SH).weekday() == PROPOSAL_WEEKDAY

@@ -1,6 +1,6 @@
 import copy
 import json
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -116,10 +116,20 @@ def test_route_preserves_host_computed_three_month_review_signal():
 
 
 def test_is_proposal_day():
-    assert is_proposal_day(date(2026, 11, 6)) is True
-    assert is_proposal_day(date(2026, 11, 5)) is False
-    assert is_proposal_day(date(2026, 11, 7)) is False
-    assert is_proposal_day(date(2026, 7, 10)) is True
+    """R25 (spec §8.3 ①): Saturday in Beijing at the run's cutoff — a moment, not a session date. The run after
+    Friday's New York close is that Saturday morning in both DST regimes; the Friday-session shortcut this test used to
+    pin is gone (it disagreed with the rule on a Friday holiday)."""
+    summer_close = datetime(2026, 7, 10, 22, 30, tzinfo=UTC)          # Fri 18:30 EDT = Sat 06:30 Beijing
+    winter_close = datetime(2026, 11, 6, 23, 30, tzinfo=UTC)          # Fri 18:30 EST = Sat 07:30 Beijing
+    assert is_proposal_day(summer_close) is True
+    assert is_proposal_day(winter_close) is True
+    assert is_proposal_day(summer_close - timedelta(days=1)) is False     # Thursday's run (Beijing Friday)
+    assert is_proposal_day(winter_close + timedelta(days=1)) is False     # Saturday's run (Beijing Sunday)
+    assert is_proposal_day(datetime(2026, 11, 6, 15, 59, tzinfo=UTC)) is False        # Beijing Friday 23:59
+    assert is_proposal_day(datetime(2026, 11, 6, 16, 0, tzinfo=UTC)) is True          # Beijing Saturday 00:00
+    assert is_proposal_day(datetime(2026, 11, 7, 15, 59, tzinfo=UTC)) is True         # Beijing Saturday 23:59
+    assert is_proposal_day(datetime(2026, 4, 3, 22, 30, tzinfo=UTC)) is True          # Good Friday: no session, still Saturday
+
 
 
 def test_route_database_id_cannot_override_stable_evidence_id():
