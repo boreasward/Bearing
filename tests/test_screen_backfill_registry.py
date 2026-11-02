@@ -103,3 +103,26 @@ def test_backfill_failures_are_problems_not_exceptions_and_unavailable_propagate
     monkeypatch.setattr(core_tx, '_tx', no_database)
     with pytest.raises(core_tx.Unavailable):
         screen_collection.backfill_new_members(['MU'], session=SESSION, now=NOW, deps=deps_for(), features={})
+
+
+def test_without_frozen_switches_the_backfill_reads_the_runtime_ones(db, monkeypatch):
+    """R20: a backfill with no frozen run state (``features=None``) reads the current switches — a flag with no
+    change row is on — instead of ``{}``, which the adapters read as ``backup_sources`` off."""
+    import uuid
+
+    from investment_assistant.core import features as core_features
+
+    seen = []
+    real = registry.run_adapter
+
+    def spy(adapter, targets, **kwargs):
+        seen.append(dict(kwargs['features']))
+        return real(adapter, targets, **kwargs)
+    monkeypatch.setattr(registry, 'run_adapter', spy)
+    screen_collection.backfill_new_members(['MU'], session=SESSION, now=NOW, deps=deps_for())
+    assert seen and all(flags == dict.fromkeys(core_features.FLAGS, True) for flags in seen)
+    core_features.record_change(db, flag='backup_sources', enabled=False, reason='停备源', request_id=uuid.uuid4())
+    db.commit()
+    seen.clear()
+    screen_collection.backfill_new_members(['MU'], session=SESSION, now=NOW, deps=deps_for())
+    assert seen and all(flags['backup_sources'] is False and flags['company_researcher'] is True for flags in seen)

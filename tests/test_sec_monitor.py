@@ -432,3 +432,34 @@ def test_uses_sec_text_adapter_with_scope(workbench_db, tmp_path, monkeypatch):
         == [("US:stock:NVDA", "filings", ACC)]
     assert acc.detail["research"]["results"][0]["ticker"] == "NVDA"
     assert acc.detail["research"]["results"][0]["status"] == "ready" and acc.detail["research"]["errors"] == []
+
+
+def test_text_collector_without_frozen_switches_reads_the_runtime_ones(workbench_db, monkeypatch):
+    """R20: the manual backfill (no frozen run state) passes the adapter the current switches, never ``{}``."""
+    import uuid
+    from contextlib import contextmanager
+
+    import investment_assistant.core.tx as core_tx
+    from investment_assistant.core import features as core_features
+    from investment_assistant.data import registry as data_registry
+    from investment_assistant.workflow.nodes import sec_monitor
+
+    @contextmanager
+    def connection():
+        yield workbench_db
+    monkeypatch.setattr(core_tx, "connection", connection)
+    seen = []
+    monkeypatch.setattr(data_registry, "run_adapter", lambda adapter, targets, **kwargs: seen.append(kwargs["features"]))
+    from datetime import UTC, date, datetime
+
+    collect_text = sec_monitor.text_collector(deps=core_tx.Deps(), config=AssistantConfig(), trigger="manual_family",
+                                              run_id=None, session=date(2026, 10, 22),
+                                              now=datetime(2026, 10, 22, 22, tzinfo=UTC), features=None)
+    collect_text(object(), ["NVDA"])
+    assert seen == [dict.fromkeys(core_features.FLAGS, True)]
+    core_features.record_change(workbench_db, flag="backup_sources", enabled=False, reason="停备源",
+                                request_id=uuid.uuid4())
+    workbench_db.commit()
+    seen.clear()
+    collect_text(object(), ["NVDA"])
+    assert seen[0]["backup_sources"] is False and seen[0]["company_researcher"] is True

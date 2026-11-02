@@ -11,6 +11,7 @@ from investment_assistant.data import collect, registry as data_registry
 from investment_assistant.data.adapter_support import adapter_deps_from_service
 from investment_assistant.data.fetch_policy import Fetched
 from investment_assistant.data.sources.edgar import read_watchlist
+from investment_assistant.workflow.state import runtime_flags
 
 FILINGS_LISTED_MAX = 50
 
@@ -163,7 +164,7 @@ def text_collector(*, deps, config: AssistantConfig, trigger: str, run_id: str |
         with core_tx._tx() as conn:
             targets = adapter.targets(conn, SCOPE, explicit=tickers)
         data_registry.run_adapter(adapter, targets, scope=SCOPE, trigger=trigger, run_id=run_id, session=session,
-                                  now=now, deps=projected, features=features or {}, tally=tally)
+                                  now=now, deps=projected, features=runtime_flags(features), tally=tally)
     return collect_text
 
 

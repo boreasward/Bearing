@@ -6,6 +6,7 @@ from typing import Any
 
 from investment_assistant.core import redact as families, tx as core_tx
 from investment_assistant.data import collect
+from investment_assistant.workflow.state import runtime_flags
 
 
 def backfill_new_members(tickers: list[str], *, session: date, now: datetime, deps: Any,
@@ -36,7 +37,7 @@ def backfill_new_members(tickers: list[str], *, session: date, now: datetime, de
                            'filings_error': None}
     members = list(dict.fromkeys(tickers))
     projected = adapter_deps_from_service(deps, transaction=core_tx._tx, config=config, sleep=collect.FETCH_SLEEP)
-    flags = features if features is not None else {}
+    flags = runtime_flags(features)       # R20: no frozen switches → the current ones, never an empty dict
 
     def run(adapter_id: str, targets: list[str], tally) -> _Family:
         family = _Family(adapter_id, 'daily')
