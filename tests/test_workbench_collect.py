@@ -115,9 +115,11 @@ def test_tally_record_targets_shape():
     assert row['detail']['policy'] == 'fetch-1'
     assert row['detail']['targets'] == [
         {'target': 'AAPL', 'ok': True, 'attempts': 1, 'error_kind': None, 'http_status': 200,
-         'reason': None, 'rows': 2, 'latest': '2026-10-29', 'elapsed_ms': 812},
+         'reason': None, 'rows': 2, 'latest': '2026-10-29', 'elapsed_ms': 812,
+         'source_used': None, 'fallback': {'tried': False, 'reason': None}},
         {'target': 'NVDA', 'ok': False, 'attempts': 3, 'error_kind': 'timeout', 'http_status': None,
-         'reason': 'timeout after 30s (3 attempts)', 'rows': None, 'latest': None, 'elapsed_ms': 100412}]
+         'reason': 'timeout after 30s (3 attempts)', 'rows': None, 'latest': None, 'elapsed_ms': 100412,
+         'source_used': None, 'fallback': {'tried': False, 'reason': None}}]
     assert row['status'] == 'partial' and row['target_count'] == 2 and row['ok_count'] == 1
     assert row['failures'] == [{'target': 'NVDA', 'reason': 'timeout after 30s (3 attempts)'}]
     assert 'targets_truncated' not in row['detail']
@@ -151,6 +153,52 @@ def test_tally_targets_truncated_at_600():
     assert row['target_count'] == 650 and row['ok_count'] == 650          # the status still counts every target
 
 
+def test_tally_source_counts_use_final_successes_before_target_clipping(monkeypatch):
+    monkeypatch.setenv('FRED_API_KEY', 'SECRET-KEY-VALUE')
+    tally = collect.Tally('bars', 'daily')
+    for i in range(collect.TARGETS_MAX):
+        tally.record(f'A{i:04d}', _ok(), source_used='yfinance')
+    tally.record('Z-backup', _ok(), source_used='stooq',
+                 fallback={'tried': True, 'reason': 'timeout SECRET-KEY-VALUE'})
+    tally.record('Z-retried', _ok(), source_used='stooq')
+    tally.record('Z-retried', _ok(), source_used='yfinance')
+    tally.record('Z-failed', _ok(), source_used='stooq')
+    tally.record('Z-failed', _bad(), source_used='stooq', fallback={'tried': True, 'reason': 'failed'})
+    row = _row(tally)
+    assert row['target_count'] == collect.TARGETS_MAX + 3
+    assert row['ok_count'] == collect.TARGETS_MAX + 2 and row['status'] == 'partial'
+    assert len(row['detail']['targets']) == collect.TARGETS_MAX
+    assert row['detail']['targets_truncated'] == 3
+    assert row['detail']['source_counts'] == {'yfinance': collect.TARGETS_MAX + 1, 'stooq': 1}
+    assert row['detail']['source_counts_complete'] is True
+    # Reading freezes fresh counts; replaying row() does not increment successful retries.
+    assert _row(tally)['detail']['source_counts'] == row['detail']['source_counts']
+    assert 'SECRET-KEY-VALUE' not in tally._records['Z-backup']['fallback']['reason']
+    assert tally._records['Z-backup']['fallback']['tried'] is True
+
+
+@pytest.mark.parametrize('source', [None, '', '   '])
+def test_tally_missing_success_source_makes_accounting_incomplete(source):
+    tally = collect.Tally('bars', 'daily')
+    tally.record('known', _ok(), source_used='stooq')
+    tally.record('unknown', _ok(), source_used=source)
+    assert _row(tally)['detail']['source_counts'] == {'stooq': 1}
+    assert _row(tally)['detail']['source_counts_complete'] is False
+    tally.record('unknown', _bad())
+    assert _row(tally)['detail']['source_counts_complete'] is True
+
+
+def test_tally_source_counts_empty_when_no_successful_targets():
+    tally = collect.Tally('bars', 'daily', ['A'])
+    assert _row(tally)['detail']['source_counts'] == {}
+    assert _row(tally)['detail']['source_counts_complete'] is True
+    tally.record('*', _bad(), source_used='stooq')
+    tally.record('A', _bad(), source_used='stooq', fallback={'tried': True, 'reason': 'failed'})
+    row = _row(tally)
+    assert row['status'] == 'failed' and row['ok_count'] == 0
+    assert row['detail']['source_counts'] == {} and row['detail']['source_counts_complete'] is True
+
+
 def test_tally_legacy_ok_fail_delegate_to_record():
     tally = collect.Tally('bars', 'workbench', ('A', 'B'))
     tally.ok('A')
@@ -158,9 +206,12 @@ def test_tally_legacy_ok_fail_delegate_to_record():
     row = _row(tally)
     assert row['detail']['targets'] == [
         {'target': 'A', 'ok': True, 'attempts': None, 'error_kind': None, 'http_status': None, 'reason': None,
-         'rows': None, 'latest': None, 'elapsed_ms': None},
+         'rows': None, 'latest': None, 'elapsed_ms': None,
+         'source_used': None, 'fallback': {'tried': False, 'reason': None}},
         {'target': 'B', 'ok': False, 'attempts': None, 'error_kind': 'other', 'http_status': None,
-         'reason': 'provider down', 'rows': None, 'latest': None, 'elapsed_ms': None}]
+         'reason': 'provider down', 'rows': None, 'latest': None, 'elapsed_ms': None,
+         'source_used': None, 'fallback': {'tried': False, 'reason': None}}]
+    assert row['detail']['source_counts'] == {} and row['detail']['source_counts_complete'] is False
     assert row['failures'] == [{'target': 'B', 'reason': 'provider down'}]
     # a FetchError handed to the old fail() keeps its category and attempts
     tally.fail('B', fp.FetchError('x', kind='http_5xx', status=503, attempts=_attempts(3, 4)))

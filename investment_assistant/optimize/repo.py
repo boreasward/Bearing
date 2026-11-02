@@ -120,6 +120,8 @@ def fetch_failures_since(conn, since):
     Missing/truncated target detail is accounted for as unknown, using the recorded
     target_count - ok_count. A multi-kind run contributes only once to partial/failed.
     Backup use means a successfully stored Stooq/Nasdaq target, not merely attempted fallback.
+    Full-run source counts take precedence over clipped targets. backup_incomplete_runs marks
+    runs whose successful-source coverage is unproven; backup_used is then only a known lower bound.
     """
     return _all(conn, '''WITH runs AS (
             SELECT * FROM data_fetch_runs WHERE finished_at >= %s
@@ -127,27 +129,57 @@ def fetch_failures_since(conn, since):
             SELECT r.id, r.family, t.value FROM runs r CROSS JOIN LATERAL jsonb_array_elements(
                 CASE WHEN jsonb_typeof(r.detail->'targets') = 'array' THEN r.detail->'targets'
                      ELSE '[]'::jsonb END) t
+        ), source_summary AS (
+            SELECT r.id,
+                sum(CASE WHEN s.key IN ('stooq', 'nasdaq') AND s.value ~ '^[0-9]+$'
+                    THEN s.value::bigint ELSE 0 END) AS backup_used,
+                sum(CASE WHEN btrim(s.key) <> '' AND s.value ~ '^[0-9]+$'
+                    THEN s.value::bigint ELSE 0 END) AS attributed,
+                bool_and(btrim(s.key) <> '' AND s.value ~ '^[0-9]+$') AS valid
+            FROM runs r CROSS JOIN LATERAL jsonb_each_text(
+                CASE WHEN jsonb_typeof(r.detail->'source_counts') = 'object'
+                    THEN r.detail->'source_counts' ELSE '{}'::jsonb END) s
+            GROUP BY r.id
+        ), source_coverage AS (
+            SELECT r.family,
+                CASE WHEN jsonb_typeof(r.detail->'source_counts') = 'object'
+                    THEN COALESCE(s.backup_used, 0) ELSE retained.backup_used END AS backup_used,
+                (CASE WHEN jsonb_typeof(r.detail->'source_counts') = 'object' THEN
+                    NOT (COALESCE(r.detail->'source_counts_complete' = 'true'::jsonb, false)
+                         AND COALESCE(s.attributed, 0) = r.ok_count AND COALESCE(s.valid, true))
+                ELSE retained.attributed <> r.ok_count
+                    OR COALESCE(r.detail->>'targets_truncated', '0') <> '0' END)::int AS backup_incomplete_runs
+            FROM runs r LEFT JOIN source_summary s ON s.id = r.id
+            CROSS JOIN LATERAL (
+                SELECT count(DISTINCT value->>'target') FILTER (
+                    WHERE value->>'source_used' IN ('stooq', 'nasdaq')) AS backup_used,
+                    count(DISTINCT value->>'target') FILTER (
+                        WHERE NULLIF(btrim(value->>'source_used'), '') IS NOT NULL) AS attributed
+                FROM targets t WHERE t.id = r.id AND value->>'ok' = 'true'
+                    AND NULLIF(value->>'target', '') IS NOT NULL AND value->>'target' <> '*'
+            ) retained
         ), counts AS (
             SELECT family, COALESCE(NULLIF(value->>'error_kind', ''), 'unknown') AS error_kind,
-                count(*) AS failed_targets, 0::bigint AS backup_used, 0::bigint AS partial, 0::bigint AS failed
+                count(*) AS failed_targets, 0::bigint AS backup_used, 0::bigint AS partial, 0::bigint AS failed,
+                0::bigint AS backup_incomplete_runs
             FROM targets WHERE value->>'ok' = 'false' AND value->>'target' IS DISTINCT FROM '*'
             GROUP BY family, COALESCE(NULLIF(value->>'error_kind', ''), 'unknown')
             UNION ALL
             SELECT r.family, 'unknown',
                 GREATEST(r.target_count - r.ok_count - (SELECT count(*) FROM targets t
                     WHERE t.id = r.id AND t.value->>'ok' = 'false'
-                    AND t.value->>'target' IS DISTINCT FROM '*'), 0), 0, 0, 0
+                    AND t.value->>'target' IS DISTINCT FROM '*'), 0), 0, 0, 0, 0
             FROM runs r WHERE r.status IN ('partial', 'failed')
             UNION ALL
-            SELECT family, NULL, 0, count(*) FILTER (WHERE value->>'ok' = 'true'
-                AND value->>'source_used' IN ('stooq', 'nasdaq')), 0, 0 FROM targets GROUP BY family
+            SELECT family, NULL, 0, backup_used, 0, 0, backup_incomplete_runs FROM source_coverage
             UNION ALL
             SELECT family, NULL, 0, 0, count(*) FILTER (WHERE status = 'partial'),
-                count(*) FILTER (WHERE status = 'failed') FROM runs GROUP BY family
+                count(*) FILTER (WHERE status = 'failed'), 0 FROM runs GROUP BY family
         ) SELECT family, error_kind, sum(failed_targets)::bigint AS failed_targets,
-            sum(backup_used)::bigint AS backup_used, sum(partial)::bigint AS partial, sum(failed)::bigint AS failed
+            sum(backup_used)::bigint AS backup_used, sum(partial)::bigint AS partial, sum(failed)::bigint AS failed,
+            sum(backup_incomplete_runs)::bigint AS backup_incomplete_runs
           FROM counts GROUP BY family, error_kind
-          HAVING sum(failed_targets + backup_used + partial + failed) > 0
+          HAVING sum(failed_targets + backup_used + partial + failed + backup_incomplete_runs) > 0
           ORDER BY family, error_kind NULLS FIRST''', (since,))
 
 
@@ -209,12 +241,21 @@ def lesson_repeats_since(conn, since):
 
 
 def stale_versions(conn, *, days=30):
-    """Latest route revision and elapsed days at transaction time; retain the >30 fractional boundary."""
+    """Latest route fields, aged from entry into the current consecutive pending revision period."""
     if type(days) is not int or days < 0:
         raise ValueError('stale_version_days')
-    return _all(conn, '''WITH latest AS (
+    return _all(conn, '''WITH periods AS (
+            SELECT *, count(*) FILTER (WHERE status <> 'user_acceptance_pending')
+                OVER (PARTITION BY version_id ORDER BY version, id) AS period
+            FROM roadmap_versions
+        ), pending AS (
+            SELECT id, first_value(created_at) OVER (
+                PARTITION BY version_id, period ORDER BY version, id) AS entered_at
+            FROM periods WHERE status = 'user_acceptance_pending'
+        ), latest AS (
             SELECT DISTINCT ON (version_id) * FROM roadmap_versions
             ORDER BY version_id, version DESC, id DESC
-        ) SELECT latest.*, (extract(epoch FROM (CURRENT_TIMESTAMP - created_at)) / 86400)::double precision AS days_pending
-        FROM latest WHERE status = 'user_acceptance_pending'
-        AND created_at < CURRENT_TIMESTAMP - (%s * INTERVAL '1 day') ORDER BY version_id''', (days,))
+        ) SELECT latest.*,
+            (extract(epoch FROM (CURRENT_TIMESTAMP - pending.entered_at)) / 86400)::double precision AS days_pending
+        FROM latest JOIN pending ON pending.id = latest.id
+        WHERE pending.entered_at < CURRENT_TIMESTAMP - (%s * INTERVAL '1 day') ORDER BY version_id''', (days,))

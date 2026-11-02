@@ -574,6 +574,7 @@ def test_evidence_sql_aggregates(db):
     )
     assert sum(r["failed_targets"] for r in inputs["fetch_failures"]) == 5
     assert sum(r["backup_used"] for r in inputs["fetch_failures"]) == 1
+    assert sum(r["backup_incomplete_runs"] for r in inputs["fetch_failures"]) == 0
     assert sum(r["partial"] for r in inputs["fetch_failures"]) == 1
     assert sum(r["failed"] for r in inputs["fetch_failures"]) == 1
     by_kind = {r["error_kind"]: r["failed_targets"] for r in inputs["fetch_failures"]}
@@ -590,13 +591,14 @@ def test_evidence_sql_aggregates(db):
     ]
     assert inputs["open_proposals"] == [pending]
     assert all(
-        set(row) == {"family", "error_kind", "failed_targets", "backup_used", "partial", "failed"}
+        set(row) == {"family", "error_kind", "failed_targets", "backup_used", "partial", "failed",
+                     "backup_incomplete_runs"}
         for row in inputs["fetch_failures"]
     )
     assert all(
         type(row[key]) is int
         for row in inputs["fetch_failures"]
-        for key in ("failed_targets", "backup_used", "partial", "failed")
+        for key in ("failed_targets", "backup_used", "partial", "failed", "backup_incomplete_runs")
     )
 
 
@@ -625,6 +627,99 @@ def test_stale_versions_preserves_fractional_days_over_threshold(db):
         )
     rows = optimize.stale_versions(db)
     assert [(r["version_id"], r["days_pending"]) for r in rows] == [("overdue", 30.5)]
+
+
+@pytest.mark.parametrize(
+    "revisions,expected_days",
+    [
+        ([("planned", 60), ("user_acceptance_pending", 35), ("user_acceptance_pending", 10)], 35),
+        ([("user_acceptance_pending", 60), ("in_progress", 40),
+          ("user_acceptance_pending", 35), ("user_acceptance_pending", 10)], 35),
+        ([("user_acceptance_pending", 60), ("done", 40),
+          ("user_acceptance_pending", 10), ("user_acceptance_pending", 1)], None),
+        ([("user_acceptance_pending", 60), ("done", 1)], None),
+    ],
+)
+def test_stale_versions_ages_current_consecutive_pending_period(db, revisions, expected_days):
+    now = db.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0]
+    # Revision order is authoritative even if older revisions are imported afterwards.
+    saved = {}
+    for version, (status, age) in reversed(list(enumerate(revisions, 1))):
+        saved[version] = optimize.insert_roadmap_record(
+            db, "roadmap_versions", {"version_id": "pending-history", "version": version,
+                "title": f"correction {version}", "status": status,
+                "created_at": now - timedelta(days=age)},
+        )
+    rows = optimize.stale_versions(db)
+    if expected_days is None:
+        assert rows == []
+    else:
+        assert rows == [{**saved[len(revisions)], "days_pending": expected_days}]
+
+
+@pytest.mark.parametrize("days", [-1, True, 30.5, "30", None])
+def test_stale_versions_rejects_invalid_days(db, days):
+    with pytest.raises(ValueError, match="stale_version_days"):
+        optimize.stale_versions(db, days=days)
+
+
+def test_fetch_failures_counts_all_final_tally_sources_before_clipping(db):
+    from investment_assistant.data import collect, fetch_policy
+
+    tally = collect.Tally("bars", "daily")
+    for i in range(collect.TARGETS_MAX):
+        tally.record(f"A{i:04d}", fetch_policy.Fetched(None), source_used="yfinance")
+    tally.record("Z-backup", fetch_policy.Fetched(None), source_used="stooq",
+                 fallback={"tried": True, "reason": "timeout"})
+    tally.record("Z-retried", fetch_policy.Fetched(None), source_used="stooq")
+    tally.record("Z-retried", fetch_policy.Fetched(None), source_used="yfinance")
+    tally.record("Z-overwritten", fetch_policy.Fetched(None), source_used="stooq")
+    tally.record("Z-overwritten", fetch_policy.FetchError("store failed", kind="other"), source_used="stooq")
+    tally.record("Z-failed", fetch_policy.FetchError("timeout", kind="timeout"), source_used="stooq",
+                 fallback={"tried": True, "reason": "both sources failed"})
+    row = tally.row(trigger="data_request", run_id="all-targets", session=DAY,
+                    started_at=NOW, finished_at=NOW)
+    assert row["detail"]["source_counts"] == {"yfinance": collect.TARGETS_MAX + 1, "stooq": 1}
+    assert row["detail"]["source_counts_complete"] is True
+    assert row["detail"]["targets_truncated"] == 4
+    assert len(row["detail"]["targets"]) == collect.TARGETS_MAX
+    assert all(t["source_used"] == "yfinance" for t in row["detail"]["targets"])
+    data.insert_fetch_run(db, row)
+    evidence = optimize.fetch_failures_since(db, NOW)
+    assert sum(r["backup_used"] for r in evidence) == 1
+    assert sum(r["backup_incomplete_runs"] for r in evidence) == 0
+    assert sum(r["failed_targets"] for r in evidence) == 2
+    assert sum(r["partial"] for r in evidence) == 1
+
+    # The same pre-summary historic payload only proves a lower bound, not exact zero.
+    legacy_detail = {k: v for k, v in row["detail"].items()
+                     if k not in {"source_counts", "source_counts_complete"}}
+    data.insert_fetch_run(db, {**row, "family": "earnings", "detail": legacy_detail})
+    historic = [r for r in optimize.fetch_failures_since(db, NOW) if r["family"] == "earnings"]
+    assert sum(r["backup_used"] for r in historic) == 0
+    assert sum(r["backup_incomplete_runs"] for r in historic) == 1
+    assert sum(r["partial"] for r in historic) == 1
+
+
+@pytest.mark.parametrize(
+    "detail,ok_count,known,incomplete",
+    [
+        ({"targets": [{"target": "A", "ok": True, "source_used": "nasdaq"}]}, 1, 1, 0),
+        ({"targets": [{"target": "A", "ok": True, "source_used": "stooq"},
+                      {"target": "B", "ok": True}]}, 2, 1, 1),
+        ({"targets": [{"target": "A", "ok": True, "source_used": "stooq"}],
+          "targets_truncated": 1}, 2, 1, 1),
+        ({}, 1, 0, 1),
+        ({"targets": [{"target": "A", "ok": True, "fallback": {"tried": True}}]}, 1, 0, 1),
+        ({"source_counts": {"stooq": 1}, "source_counts_complete": False}, 2, 1, 1),
+    ],
+)
+def test_fetch_failures_exposes_incomplete_backup_lower_bounds(db, detail, ok_count, known, incomplete):
+    fetch(db, target_count=ok_count, ok_count=ok_count, detail=detail)
+    assert optimize.fetch_failures_since(db, NOW) == [
+        {"family": "bars", "error_kind": None, "failed_targets": 0, "backup_used": known,
+         "backup_incomplete_runs": incomplete, "partial": 0, "failed": 0}
+    ]
 
 
 def test_probe_rejects_constraint_that_explicitly_disallows_portfolio(db):

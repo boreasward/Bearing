@@ -244,14 +244,15 @@ class Tally:
             self.targets.append(target)
 
     def record(self, target: str, outcome: Fetched | BaseException, *, rows: int | None = None,
-               latest: Any = None) -> None:
+               latest: Any = None, source_used: str | None = None, fallback: dict | None = None) -> None:
         """Book one target's outcome: a ``Fetched`` is a success, a ``FetchError`` (or any exception) a failure.
 
         Feeds ``outcomes`` (the family status, ``failures``) and ``detail.targets`` (spec §6.4):
         ``{target, ok, attempts, error_kind, http_status, reason, rows, latest, elapsed_ms}``. ``rows`` is what the
         fetch newly wrote (bars / news / observations) or found (SEC filings); ``latest`` the newest point in time
         it saw (date or datetime, stored as ISO text). The last record per target wins. ``'*'`` (the whole-call
-        failure) books the failure but is not a target."""
+        failure) books the failure but is not a target. Optional source_used is the final source id, not a
+        fallback attempt; fallback records {tried, reason} with the reason sanitised."""
         if isinstance(outcome, Fetched):
             known = bool(outcome.attempts)          # a legacy ok() carries no fetch data: attempts / elapsed null
             item = {'ok': True, 'attempts': len(outcome.attempts) or None, 'error_kind': None,
@@ -272,6 +273,10 @@ class Tally:
         if target == '*':
             self._call_failure = reason
             return
+        fallback = fallback if fallback is not None else {'tried': False, 'reason': None}
+        item.update(source_used=source_used, fallback={
+            'tried': bool(fallback['tried']),
+            'reason': families.sanitize_reason(fallback['reason']) if fallback.get('reason') else None})
         self.add_target(target)
         self.outcomes[target] = reason
         self._records[target] = {'target': target, **item}
@@ -295,6 +300,15 @@ class Tally:
                            for target, reason in self.outcomes.items() if reason is not None),
                           key=lambda failure: failure['target'])
         detail = dict(self.detail)
+        # Source totals must use final successful outcomes before the display detail is clipped.
+        source_counts: dict[str, int] = {}
+        for target in self.targets:
+            if target in self.outcomes and self.outcomes[target] is None:
+                source = self._records.get(target, {}).get('source_used')
+                if isinstance(source, str) and source.strip():
+                    source_counts[source] = source_counts.get(source, 0) + 1
+        detail['source_counts'] = source_counts
+        detail['source_counts_complete'] = sum(source_counts.values()) == ok_count
         if self._records:
             targets = [self._records[name] for name in sorted(self._records)]
             detail['policy'] = fetch_policy.FETCH_POLICY_VERSION

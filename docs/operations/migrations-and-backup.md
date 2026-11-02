@@ -276,4 +276,8 @@ Unix socket 路径太长时启动会失败，所以用 `-k ''` 关掉 socket、�
 
 031 未就绪时，run 返回 error；resume / 手动 ensure_ready 抛 `migration_031_missing`（HTTP 503），三者都尝试追加一条 error 报告。ensure_ready 只是预检，不发送失败通知；实际 run / resume 沿用失败通知路径。数据库不可写时只能记录日志，不保证报告入库。
 
+证据计账：`data_fetch_runs.detail.targets` 仍最多保留 600 个目标；`detail.source_counts` 在截断前按每个目标的**最终成功结果**统计来源（重试 / 覆盖只算最后一次，失败备源不计成功）。`source_counts_complete` 仅在全部成功目标都有非空来源时为 true；旧调用未提供来源时不猜成主源。备源 SQL 的 `backup_used` 只计 stooq / nasdaq 成功目标；新记录优先用全量来源汇总，旧记录只用仍保留的成功来源证据。`backup_incomplete_runs` 按族计来源证据不完整的运行数（每次运行最多一次）：旧截断记录或成功来源覆盖不足时，`backup_used` 只能解释为已知下界，不能把零称作「没有用过备源」。不回填历史证据，也不据此启用任何备源适配器。
+
+roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计算，同状态修正文案不会重置起点；离开 `user_acceptance_pending` 后再进入才重新起算。仍返回最新版本字段，严格超过 30 天才进入默认逾期证据（保留小数天）。
+
 回滚须另行授权：停服务、按本页恢复备份，再重启到兼容的旧代码；恢复会丢掉备份后的所有写入（包括开关、研究与 roadmap 记录）。
