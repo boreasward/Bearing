@@ -53,6 +53,7 @@ _STAGE_ORDER = {
                  'retro'),
     'stages-5': ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'accounts',
                  'push', 'retro'),
+    'stages-6': ('sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'portfolio', 'accounts', 'push', 'retro', 'propose'),
 }
 def stage_rows_for_run(conn, run_id: str) -> list[dict[str, Any]]:
     """One run's stage rows including `attempt`, ordered by the stage's position in its stages_version, then

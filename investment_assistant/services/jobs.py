@@ -95,11 +95,11 @@ def trigger_job(name: str, payload: dict[str, Any] | None = None) -> dict[str, A
             busy = False
         if busy:
             raise locks.DailyBusy()
-    if name == "daily":
-        daily.ensure_ready()        # 503 migration_028_missing instead of a 200 and a run that only records it
-        rid = daily.new_run_id()    # the date arguments do not apply: it always targets the latest settled session
-        run_id = runner.submit(name, lambda: REGISTRY[name](config, trigger_source="manual", run_id=rid))
-        return {"run_id": run_id, "status": "pending", "daily_run_id": rid}
+        if name == "daily":
+            daily.ensure_ready()    # 503 before submit; missing 031 also records the refused pre-check
+            rid = daily.new_run_id()    # date arguments do not apply: targets the latest settled session
+            run_id = runner.submit(name, lambda: REGISTRY[name](config, trigger_source="manual", run_id=rid))
+            return {"run_id": run_id, "status": "pending", "daily_run_id": rid}
     run_id = runner.submit(name, lambda: REGISTRY[name](config, trigger_source="manual", **kwargs))
     return {"run_id": run_id, "status": "pending"}
 
@@ -112,13 +112,14 @@ def patch_scheduled_job(name: str, *, enabled=None, time_local=None) -> dict[str
 
 
 def resume_daily(payload: dict[str, Any] | None) -> dict[str, Any]:
-    """Continue a failed ``daily`` run from its failed node (spec §5.4): every pre-check runs here, synchronously and
-    without writing a row; the continuation runs in the background. Returns the 202 body.
+    """Continue a failed ``daily`` run from its failed node (spec §5.4): every pre-check runs synchronously;
+    the continuation runs in the background. Returns the 202 body. Validation normally writes nothing, except
+    that a missing 031 readiness check records its refusal as an error report.
 
-    ``ValueError`` (body without ``run_id`` / ``node``, a malformed id, a node not of ``stages-4``), ``LookupError``
-    (no such run), ``workflow.ResumeRejected`` (``not_failed`` / ``node_mismatch`` / ``resume_window_closed``),
-    ``locks.DailyBusy`` (the lock is taken) and ``service.Unavailable`` (migration 028 / 029 missing, no database) are the
-    caller's to map."""
+    ``ValueError`` (missing / malformed body or unknown node), ``LookupError`` (no such run),
+    ``workflow.ResumeRejected`` (``not_failed`` / ``node_mismatch`` / ``resume_window_closed``),
+    ``locks.DailyBusy`` (the lock is taken) and ``service.Unavailable`` (migration 028–031 missing, no database)
+    are the caller's to map."""
     from investment_assistant.tasks import daily
     from investment_assistant.views.runs import detail as run_detail
     from investment_assistant.workflow import graph as workflow
@@ -130,7 +131,7 @@ def resume_daily(payload: dict[str, Any] | None) -> dict[str, Any]:
     if not run_detail.RUN_ID_RE.match(run_id):
         raise ValueError("run_id 格式不合法")
     info = workflow.resume_check(run_id, node, now=datetime.now(UTC))     # raises before anything is written
-    daily.ensure_ready()        # migration 029 too (the background resume checks it as well): 503, not a lost 202
+    daily.ensure_ready()        # migrations through 031: 503 before submit; missing 031 records an error
     if locks.is_running():
         raise locks.DailyBusy()
     runner_id = runner.submit("daily_resume", lambda: daily.resume(run_id, node))

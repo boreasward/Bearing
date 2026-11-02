@@ -67,10 +67,19 @@ def daily_ready(conn) -> bool:
     return bool(has_attempt and has_job)
 
 
+FIVE_LAYER_TABLES = ('feature_flag_changes', 'data_requests', 'sector_classifications', 'research_requests',
+                     'research_versions', 'portfolio_checks', 'roadmap_goals', 'roadmap_versions',
+                     'roadmap_decisions', 'roadmap_evidence', 'roadmap_proposals', 'roadmap_briefs')
+
+
 def five_layers_ready(conn) -> bool:
-    """True when migration 031 has run. TODO(Task 2): implement the real gate; the placeholder
-    passes so Task 0's sinks stay behaviour-neutral."""
-    return True
+    """031's twelve tables and the portfolio stage CHECK, on this connection's search_path."""
+    checks = ' AND '.join(f"to_regclass('{table}') IS NOT NULL" for table in FIVE_LAYER_TABLES)
+    return bool(conn.execute(f'SELECT {checks} AND EXISTS ('
+        'SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass(\'stage_runs\') '
+        "AND conname = 'stage_runs_stage_check' AND contype = 'c' AND convalidated "
+        'AND pg_get_constraintdef(oid) ~ %s)',
+        (r"^CHECK \(\(stage = ANY \(ARRAY\[.*'portfolio'::text.*\]\)\)\)$",)).fetchone()[0])
 
 
 def fetch_runs_ready(conn) -> bool:

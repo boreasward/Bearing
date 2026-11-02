@@ -1,5 +1,5 @@
 """The ``daily`` task shell (v2.8 §4.7, §5.9): the lock, the graph run, ``job_reports`` and the failure notice.
-v2.9 D36: a database without migration 029 is refused (``error / migration_029_missing``, one failure notice).
+Migrations 029–031 are required before execution; 031 refusals also leave an error report at manual pre-check.
 
 One *execution* — a first run or a resume — takes the ``daily:run`` session lock on a connection of its own, runs
 ``workflow.run`` / ``workflow.resume``, appends one ``job_reports`` row (``task = 'daily'``, the run's ``run_id``;
@@ -40,10 +40,11 @@ def new_run_id() -> str:
 
 
 def ensure_ready() -> None:
-    """The pre-check of the manual run entries: ``service.Unavailable('migration_028_missing')`` (HTTP 503; likewise
-    ``migration_029_missing``, v2.9) when the database answers and migration 028 has not run, so the caller is told instead of getting a 200 and a run that only
-    records ``migration_028_missing``. Without a database to ask (not configured, unreachable, tables missing) it
-    passes: the run itself reports what is wrong."""
+    """Manual-entry migration pre-checks raise Unavailable (HTTP 503) before scheduling work.
+
+    A missing 031 also attempts to append an error report, without sending an execution-failure notice.
+    If the initial database probes cannot answer, the run itself reports what is wrong.
+    """
     try:
         with core_tx.read_only_tx() as conn:
             ready = core_schema.daily_ready(conn)
@@ -60,6 +61,16 @@ def ensure_ready() -> None:
         raise service.Unavailable('migration_029_missing')       # v2.9 D36
     if not _accounts_ready():
         raise service.Unavailable('migration_030_missing')
+    if not _five_layers_ready():
+        # A refused manual pre-check has no graph execution, but must leave an auditable error.
+        moment = datetime.now(UTC)
+        try:
+            _harness._record(task='daily', run_id=new_run_id(), status='error', started_at=moment,
+                             finished_at=datetime.now(UTC), trigger_source='manual',
+                             summary={'error': 'migration_031_missing', 'run_status': 'failed'})
+        except Exception as exc:  # noqa: BLE001 - preserve the HTTP readiness error
+            logger.error('daily job report not written: %s', type(exc).__name__)
+        raise service.Unavailable('migration_031_missing')
 
 
 def _trigger(trigger_source: str) -> str:
@@ -231,6 +242,14 @@ def _accounts_ready() -> bool:
         return False
 
 
+def _five_layers_ready() -> bool:
+    try:
+        with core_tx.read_only_tx() as conn:
+            return core_schema.five_layers_ready(conn)
+    except Exception:  # noqa: BLE001 - an unreadable database cannot run the workflow either
+        return False
+
+
 def run(config: AssistantConfig | None = None, *, trigger_source: str = 'scheduled', now: datetime | None = None,
         deps: service.Deps | None = None, run_id: str | None = None, checkpointer_factory=None, sleep=time.sleep,
         notify_cfg: Any = None, explicit_pool=None) -> dict[str, Any]:
@@ -252,6 +271,9 @@ def run(config: AssistantConfig | None = None, *, trigger_source: str = 'schedul
                                 config=effective, notify_cfg=notify_cfg)
             if not _accounts_ready():
                 return _refused(rid, 'migration_030_missing', started_at=started_at, trigger_source=trigger_source,
+                                config=effective, notify_cfg=notify_cfg)
+            if not _five_layers_ready():
+                return _refused(rid, 'migration_031_missing', started_at=started_at, trigger_source=trigger_source,
                                 config=effective, notify_cfg=notify_cfg)
             try:
                 result = workflow.run(run_id=rid, trigger=_trigger(trigger_source), now=moment, deps=deps,
@@ -278,7 +300,8 @@ def resume(run_id: str, node: str, *, now: datetime | None = None, deps: service
            notify_cfg: Any = None) -> dict[str, Any]:
     """Continue a failed run from ``node`` (spec §5.4): lock → ``workflow.resume`` → a ``job_reports`` row with
     ``trigger_source = 'resume'``. ``DailyBusy``, ``workflow.ResumeRejected``, ``LookupError`` and
-    ``service.Unavailable`` propagate before anything is written."""
+    ``service.Unavailable`` propagate without starting the graph. A missing 031 additionally records an error
+    execution and sends the existing failure notice before raising; earlier migration refusals write nothing."""
     effective = config if config is not None else load_config()
     started_at = datetime.now(UTC)
     with locks.exclusive(), locks._active(run_id):
@@ -286,6 +309,10 @@ def resume(run_id: str, node: str, *, now: datetime | None = None, deps: service
             raise service.Unavailable('migration_029_missing')
         if not _accounts_ready():           # the current graph includes accounts even when entered through the CLI
             raise service.Unavailable('migration_030_missing')
+        if not _five_layers_ready():
+            _refused(run_id, 'migration_031_missing', started_at=started_at, trigger_source='resume',
+                     config=effective, notify_cfg=notify_cfg)
+            raise service.Unavailable('migration_031_missing')
         try:
             result = workflow.resume(run_id, node, now=now or datetime.now(UTC), deps=deps,
                                      checkpointer_factory=checkpointer_factory, sleep=sleep,

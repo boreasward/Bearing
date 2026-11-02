@@ -4,11 +4,102 @@ import json
 from datetime import date, datetime
 from typing import Any
 from psycopg.rows import dict_row
+from investment_assistant.core.idempotency import Conflict
 from investment_assistant.core.dbutil import _one, _all, _canonical, _plan_json
 
 from investment_assistant.core.versions import REGIME_VERSION
 from investment_assistant.data.repo import _REGIME_COLUMNS, _AGENT_RUN_COLUMNS
 from investment_assistant.execution import repo as execution_repo
+
+_RESEARCH_TRANSITIONS = {
+    'queued': frozenset({'running', 'closed'}),
+    'running': frozenset({'queued', 'waiting_data', 'concluded', 'closed'}),
+    'waiting_data': frozenset({'running', 'closed'}),
+    'concluded': frozenset({'closed'}),
+    'closed': frozenset(),
+}
+
+
+def insert_research_request(conn, row) -> dict[str, Any]:
+    """Create a queued dossier; identical idempotency keys replay even after status changes."""
+    if row.get('status', 'queued') != 'queued':
+        raise ValueError('research_initial_status')
+    values = (row['ticker'].upper(), row.get('question'), row.get('horizon_days'), row.get('source', 'manual'))
+    saved = _one(conn, 'INSERT INTO research_requests '
+        '(id, ticker, question, horizon_days, source, status, request_id, created_at) '
+        "VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s) ON CONFLICT (request_id) DO NOTHING RETURNING *",
+        (row['id'], *values, row['request_id'], row['created_at']))
+    if saved is not None:
+        return saved
+    saved = _one(conn, 'SELECT * FROM research_requests WHERE request_id = %s', (row['request_id'],))
+    assert saved is not None
+    if tuple(saved[k] for k in ('ticker', 'question', 'horizon_days', 'source')) != values:
+        raise Conflict('research_request_conflict')
+    return saved
+
+
+def update_research_status(conn, id, *, from_status, to_status, **fields) -> bool:
+    """D51: legal repeated transitions use compare-and-set, never an unguarded overwrite."""
+    if to_status not in _RESEARCH_TRANSITIONS.get(from_status, ()):
+        raise ValueError('research_status_transition')
+    if set(fields) - {'attempts', 'updated_at', 'closed_reason'}:
+        raise ValueError('research_status_fields')
+    if 'attempts' in fields and (type(fields['attempts']) is not int or fields['attempts'] < 0):
+        raise ValueError('research_attempts')
+    assignments = ['status = %s', 'updated_at = COALESCE(%s, clock_timestamp())']
+    params = [to_status, fields.get('updated_at')]
+    for name in ('attempts', 'closed_reason'):
+        if name in fields:
+            assignments.append(f'{name} = %s')
+            params.append(fields[name])
+    return conn.execute('UPDATE research_requests SET ' + ', '.join(assignments) +
+        ' WHERE status = %s AND id = %s', (*params, from_status, id)).rowcount == 1
+
+
+def research_request(conn, id) -> dict[str, Any] | None:
+    return _one(conn, 'SELECT * FROM research_requests WHERE id = %s', (id,))
+
+
+def list_research_requests(conn, *, status=None, limit=50):
+    where = ' WHERE status = %s' if status is not None else ''
+    return _all(conn, 'SELECT * FROM research_requests' + where + ' ORDER BY created_at DESC, id DESC LIMIT %s',
+                ([status] if status is not None else []) + [limit])
+
+
+def queued_research_requests(conn):
+    """Waiting-data dossiers are eligible for the next batch, FIFO with queued ones."""
+    return _all(conn, "SELECT * FROM research_requests WHERE status IN ('queued', 'waiting_data') "
+                'ORDER BY created_at, id', ())
+
+
+def insert_research_version(conn, row) -> dict[str, Any]:
+    """Append a conclusion/error version; retain SQL NULL rather than JSON null for absent outputs."""
+    saved = _one(conn, 'INSERT INTO research_versions '
+        '(request_id, version_no, agent_run_id, cutoff_at, status, action, plan_id, summary, output, '
+        'review_when, tokens, elapsed_ms, created_at) '
+        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, '
+        'COALESCE(%s, clock_timestamp())) RETURNING *',
+        (row['request_id'], row['version_no'], row.get('agent_run_id'), row['cutoff_at'], row['status'],
+         row.get('action'), row.get('plan_id'), row.get('summary'),
+         _plan_json(row['output']) if row.get('output') is not None else None,
+         _plan_json(row['review_when']) if row.get('review_when') is not None else None,
+         row.get('tokens'), row.get('elapsed_ms'), row.get('created_at')))
+    assert saved is not None
+    return saved
+
+
+def research_versions(conn, request_id):
+    return _all(conn, 'SELECT * FROM research_versions WHERE request_id = %s ORDER BY version_no, id', (request_id,))
+
+
+def latest_dossier_for(conn, ticker, *, cutoff_at) -> dict[str, Any] | None:
+    """Newest actual conclusion known by cutoff, not a backfilled/future version or error-only attempt."""
+    return _one(conn, 'SELECT v.*, r.ticker, r.question, r.horizon_days FROM research_versions v '
+        'JOIN research_requests r ON r.id = v.request_id '
+        "WHERE r.ticker = %s AND v.status IN ('concluded', 'waiting_data') "
+        'AND r.created_at <= %s AND v.created_at <= %s AND v.cutoff_at <= %s '
+        'ORDER BY v.cutoff_at DESC, v.created_at DESC, v.version_no DESC, v.id DESC LIMIT 1',
+        (ticker.upper(), cutoff_at, cutoff_at, cutoff_at))
 
 def store_candidate(conn, ticker: str, signal_date: date, candidate, *, run_id: str | None) -> dict[str, Any]:
     """Insert once per (ticker, date, rule, version). A re-run with other inputs is a conflict, never an overwrite."""

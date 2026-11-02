@@ -164,7 +164,8 @@ def _same_bar(stored: dict[str, Any], fetched: dict[str, Any]) -> bool:
     return abs(new - old) <= abs(old) * ADJ_CLOSE_TOLERANCE
 
 
-def store_bars(conn, ticker: str, rows: list[dict[str, Any]], *, now: datetime) -> dict[str, int]:
+def store_bars(conn, ticker: str, rows: list[dict[str, Any]], *, now: datetime,
+               source: str = 'yfinance') -> dict[str, int]:
     """Append a revision only when values differ from the latest one.
 
     Dividends rewrite historical adj_close, so a re-fetch after one appends new
@@ -183,10 +184,10 @@ def store_bars(conn, ticker: str, rows: list[dict[str, Any]], *, now: datetime) 
                 counts['unchanged'] += 1
                 continue
             cur.execute(
-                f"INSERT INTO price_bars (ticker, price_date, {', '.join(BAR_VALUES)}, revision, fetched_at) "
-                f"VALUES (%s, %s, {', '.join(['%s'] * len(BAR_VALUES))}, %s, %s)",
+                f"INSERT INTO price_bars (ticker, price_date, {', '.join(BAR_VALUES)}, revision, fetched_at, source) "
+                f"VALUES (%s, %s, {', '.join(['%s'] * len(BAR_VALUES))}, %s, %s, %s)",
                 (ticker, row['price_date'], *(row[k] for k in BAR_VALUES),
-                 (latest['revision'] + 1) if latest else 1, now))
+                 (latest['revision'] + 1) if latest else 1, now, source))
             counts['inserted'] += 1
     return counts
 
@@ -291,15 +292,16 @@ def split_events(conn, ticker: str, *, cutoff_at: datetime | None = None) -> lis
 _EARNINGS_COLUMNS = 'id, ticker, earnings_date, status, source, fetched_at, created_at'
 
 
-def store_earnings(conn, ticker: str, row: dict[str, Any], *, now: datetime) -> dict[str, Any]:
+def store_earnings(conn, ticker: str, row: dict[str, Any], *, now: datetime,
+                   source: str = 'yfinance') -> dict[str, Any]:
     """Append only when the answer changed; a same-day re-fetch writes nothing."""
     latest = latest_earnings(conn, ticker, cutoff_at=now)
     if latest and latest['status'] == row['status'] and latest['earnings_date'] == row.get('earnings_date'):
         return {'status': 'unchanged', 'id': latest['id']}
     with conn.cursor() as cur:
-        cur.execute('INSERT INTO earnings_dates (ticker, earnings_date, status, fetched_at) '
-                    'VALUES (%s, %s, %s, %s) RETURNING id',
-                    (ticker.upper(), row.get('earnings_date'), row['status'], now))
+        cur.execute('INSERT INTO earnings_dates (ticker, earnings_date, status, fetched_at, source) '
+                    'VALUES (%s, %s, %s, %s, %s) RETURNING id',
+                    (ticker.upper(), row.get('earnings_date'), row['status'], now, source))
         return {'status': 'inserted', 'id': cur.fetchone()[0]}
 
 
@@ -603,3 +605,71 @@ def knowledge_rows(conn, *, cutoff: datetime | None, ticker: str | None = None, 
                           'AND (%s::timestamptz IS NULL OR created_at <= %s) ORDER BY created_at, id',
                     (sorted({v['knowledge_id'] for v in versions}), cutoff, cutoff))
     return versions, statuses
+
+
+def insert_data_requests(conn, rows) -> list[int]:
+    """Persist buffered tool requests after their agent run, in the caller's transaction."""
+    ids = []
+    for row in rows:
+        if row.get('status', 'queued') != 'queued':
+            raise ValueError('data_request_initial_status')
+        saved = _one(conn, 'INSERT INTO data_requests '
+            '(run_id, agent_run_id, family, ticker, requested_at) VALUES (%s, %s, %s, %s, %s) RETURNING id',
+            (row.get('run_id'), row.get('agent_run_id'), row['family'], row['ticker'].upper(),
+             row['requested_at']))
+        assert saved is not None
+        ids.append(saved['id'])
+    return ids
+
+
+def settle_data_request(conn, id, *, status, fetch_run_id, rows, reason, rerun_run_id) -> bool:
+    """Only queued→terminal once. Use attach_data_request_rerun after a later rerun."""
+    if status not in {'fetched', 'failed', 'deferred'}:
+        raise ValueError('data_request_terminal_status')
+    if rows is not None and (type(rows) is not int or rows < 0):
+        raise ValueError('data_request_rows')
+    if rerun_run_id is not None and (status != 'fetched' or not rows):
+        raise ValueError('data_request_rerun_without_rows')
+    return conn.execute('UPDATE data_requests SET status = %s, fetch_run_id = %s, rows = %s, '
+        'reason = %s, rerun_run_id = %s, updated_at = clock_timestamp() '
+        "WHERE status = 'queued' AND id = %s",
+        (status, fetch_run_id, rows, reason, rerun_run_id, id)).rowcount == 1
+
+
+def attach_data_request_rerun(conn, id, rerun_run_id) -> bool:
+    """Fill only the rerun pointer; settlement status/count/reason/time stay frozen (D40)."""
+    if rerun_run_id is None:
+        raise ValueError('data_request_rerun_required')
+    return conn.execute('UPDATE data_requests SET rerun_run_id = %s '
+        "WHERE status = 'fetched' AND id = %s AND rows > 0 AND rerun_run_id IS NULL",
+        (rerun_run_id, id)).rowcount == 1
+
+
+def queued_data_requests(conn, run_id) -> list[dict]:
+    return _all(conn, "SELECT * FROM data_requests WHERE status = 'queued' AND run_id IS NOT DISTINCT FROM %s "
+                'ORDER BY requested_at, id', (run_id,))
+
+
+def insert_sector_classification(conn, row) -> int:
+    """Append an answer; the adapter decides whether it differs from the prior answer."""
+    saved = _one(conn, 'INSERT INTO sector_classifications '
+        '(ticker, sic, sic_description, "group", source, fetched_at) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id',
+        (row['ticker'].upper(), row.get('sic'), row.get('sic_description'), row.get('group'),
+         row['source'], row['fetched_at']))
+    assert saved is not None
+    return saved['id']
+
+
+def latest_sectors(conn, tickers, *, cutoff_at) -> dict[str, dict]:
+    return {row['ticker']: row for row in _all(conn,
+        'SELECT DISTINCT ON (ticker) * FROM sector_classifications '
+        'WHERE ticker = ANY(%s) AND fetched_at <= %s ORDER BY ticker, fetched_at DESC, id DESC',
+        ([ticker.upper() for ticker in tickers], cutoff_at))}
+
+
+def missing_bar_sessions(conn, ticker, sessions: list[date]) -> list[date]:
+    """D46: any existing revision blocks backup filling; preserve requested session order."""
+    found = {row['price_date'] for row in _all(conn,
+        'SELECT DISTINCT price_date FROM price_bars WHERE ticker = %s AND price_date = ANY(%s)',
+        (ticker.upper(), sessions))}
+    return [day for day in sessions if day not in found]

@@ -40,14 +40,15 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 
 箭头表示依赖：每层只能依赖自身或左边的层，`workflow` 与 `views` 位于业务层之上，API、服务、任务、通知位于最外层。`db.py`、`config.py`、`runtime_paths.py`、`migrate.py` 是底层设施。守护测试检查全部 import（含函数内）与顶层模块环。SQL 按层归属，事务由调用方管理，公共事务入口唯一定义在 `core/tx.py`。
 
-本次只调整代码布局，现行 `stages-5`、`daily-2`、`agent-portfolio-1` 保持。工作台规则、计划、影子引擎、纪律、月度收益、三方对比、账户账本和订单校验仍是纯函数。下列路径相对于 `investment_assistant/`；各包 `__init__.py` 仅作包标识，Agent 包另保留公共版本与原因文案。
+五层代码布局与迁移 031 的仓储已准备，现行 `stages-5`、`daily-2`、`agent-portfolio-1` 保持；研究、组合经理、提案节点与新接口尚未接入。工作台规则、计划、影子引擎、纪律、月度收益、三方对比、账户账本和订单校验仍是纯函数。下列路径相对于 `investment_assistant/`；各包 `__init__.py` 仅作包标识，Agent 包另保留公共版本与原因文案。
 
 ### core：共享底座
 
 | 模块 | 做什么 |
 | --- | --- |
 | `core/tx.py` | `Unavailable`、`Gone`、`Deps`、连接与读写 / 只读事务、JSON 转换的唯一定义点 |
-| `core/schema.py` | 缺表检查与各迁移就绪探测 |
+| `core/schema.py` | 缺表检查与各迁移就绪探测；031 检查十二张表与允许 portfolio 的阶段 CHECK |
+| `core/features.py` | 四个功能开关的只追加历史、请求幂等与当前 / 冻结快照；无变更行默认开启 |
 | `core/dbutil.py` | SQL 行读取、JSON 编码、锁与账户作用域公共函数 |
 | `core/constants.py` | 预算、时区、基准、回溯窗口与固定账户 ID |
 | `core/versions.py` | 全部计算口径版本的唯一定义点 |
@@ -75,7 +76,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `data/collect.py` | 逐族拉取、Tally、fetch-run 写入与族锁 |
 | `data/fundamentals.py` | SEC 财务身份、规范化与保留申报版本 |
 | `data/acquisition.py` | 原始字节归档、财季 / 行情旧记录归一化、本地 SEC 研究刷新 |
-| `data/repo.py` | 日线、新闻、申报、财报日、宏观、采集记录与只读事实 SQL |
+| `data/repo.py` | 日线、新闻、申报、财报日、宏观、采集记录与只读事实 SQL；补查队列一次结算 / 补重跑指针、行业截止读取、缺失交易日查询 |
 | `data/adapters/bars.py` | yfinance 日线采集与存储形状 |
 | `data/adapters/news.py` | 新闻标题与 SEC 8-K 列表 |
 | `data/adapters/earnings.py` | 下次财报日 |
@@ -124,7 +125,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `execution/paper/accounts.py` | 开账、参数、结算、权益、订单与机械决策；recent_closed 由上层必需注入 |
 | `execution/paper/fill.py` | paper-fill-1 逐交易日模拟成交与退出 |
 | `execution/paper/strategies.py` | follow-plans-1 机械挂换撤单、仓位约束与订单逐条校验 |
-| `execution/repo.py` | 计划、成交、链、账户、订单、权益与决策 SQL |
+| `execution/repo.py` | 计划、成交、链、账户、订单、权益与决策 SQL；每账户 / 交易日首份组合检查固定、评论只补一次 |
 | `execution/repo_legacy.py` | 旧 signal_decisions 只读查询；私有旧夹具写入由 tests 静态守护 |
 
 ### analysis：规则与模型用例
@@ -146,7 +147,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `analysis/agent/evidence.py` | 复查提示证据与上一条链证据块 |
 | `analysis/agent/runner.py` | 单元、解读、复查、组合模型调用及原子记账；recent_closed 显式注入 |
 | `analysis/agent/__main__.py` | Agent setup / run CLI |
-| `analysis/repo.py` | 候选、简报、池、筛选、区制、Agent 运行、工具调用与引用写入 SQL |
+| `analysis/repo.py` | 候选、简报、池、筛选、区制、Agent 运行、工具调用与引用写入 SQL；研究请求前态守护、FIFO 重试队列与只追加档案版本 / 截止读取 |
 
 ### review：复盘与知识
 
@@ -170,12 +171,12 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `review/period_digest.py` | 周 / 月通知与快照提醒载荷纯组装 |
 | `review/repo.py` | 复盘、知识、引用读取、讨论与复盘推送记录 SQL |
 
-### optimize：上线前检查
+### optimize：上线前检查与路线记录
 
 | 模块 | 做什么 |
 | --- | --- |
 | `optimize/backcheck.py` | backcheck-2 历史规则检查、用例与 CLI |
-| `optimize/repo.py` | 上线前检查记录 SQL |
+| `optimize/repo.py` | 上线前检查、四类 roadmap 版本记录、提案一次决定、brief 历史与证据聚合 SQL；提案生成与审批入口尚未接入 |
 
 ### workflow：编排与记账
 
@@ -186,7 +187,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `workflow/state.py` | 跨节点状态、时间、池与记账辅助 |
 | `workflow/batch.py` | 原 run_batch 薄壳 |
 | `workflow/recorder.py` | StageRecorder 与 stage_runs 写入，每阶段独立事务 |
-| `workflow/repo.py` | 阶段、运行、恢复、推送窗口与证据行 SQL |
+| `workflow/repo.py` | 阶段、运行、恢复、推送窗口与证据行 SQL；可按 stages-6 历史顺序读取，但当前图不升版 |
 | `workflow/targets.py` | 跨层组装数据族目标清单 |
 | `workflow/screen_collection.py` | 范围日线与筛选新成员补采 |
 | `workflow/check.py` | 原推导 check / 阶段 stages 数据库只读 CLI 实现 |

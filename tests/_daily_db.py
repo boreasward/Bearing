@@ -1,6 +1,6 @@
 """Shared fixtures and fakes for the v2.8 daily-workflow tests (and Task 4's run-detail / API tests).
 
-``daily_db`` is the ``workbench_db`` schema (``tests/conftest.WORKBENCH_MIGRATIONS`` ends with 029 since v2.9) with
+``daily_db`` is the ``workbench_db`` schema plus migration 031 with
 ``service.connection`` pointing at it. Everything else — fetchers, the scripted model, the checkpointer, ``sleep``,
 the clocks, the notifier and ``job_reports`` — is a fake: nothing touches the network or a real database.
 """
@@ -10,6 +10,7 @@ import investment_assistant.analysis.agent.runner as analysis_agent_runner
 import os
 from contextlib import nullcontext
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -153,8 +154,10 @@ def _wire(workbench_db, monkeypatch, job_reports):
 
 @pytest.fixture
 def daily_db(workbench_db, monkeypatch, job_reports):
-    """The workbench schema (``conftest.WORKBENCH_MIGRATIONS`` ends with 029), ``service.connection`` on it and the run
+    """The daily-ready schema (through 031), ``service.connection`` on it and the run
     locks on connections of their own."""
+    workbench_db.execute(Path('migrations/031_five_layers.sql').read_text(encoding='utf-8'))
+    workbench_db.commit()
     return _wire(workbench_db, monkeypatch, job_reports)
 
 

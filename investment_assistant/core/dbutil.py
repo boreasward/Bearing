@@ -6,6 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from psycopg.rows import dict_row
+from psycopg.sql import Composable
 from investment_assistant.core import schema as core_schema
 from investment_assistant.core.schema import WORKBENCH_TABLES, GROWTH_TABLES
 from investment_assistant.core.constants import REAL_ACCOUNT_ID
@@ -39,13 +40,13 @@ def _account_scope(conn, account_id=REAL_ACCOUNT_ID, *, alias: str = '', allow_a
     return True, f' AND {prefix}account_id = %s', [account_id]
 
 
-def _one(conn, sql: str, params) -> dict[str, Any] | None:
+def _one(conn, sql: str | Composable, params) -> dict[str, Any] | None:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
         return cur.fetchone()
 
 
-def _all(conn, sql: str, params) -> list[dict[str, Any]]:
+def _all(conn, sql: str | Composable, params) -> list[dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
         return cur.fetchall()

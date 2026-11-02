@@ -7,7 +7,7 @@ import pytest
 
 from _daily_db import (NotifyCfg, clock, daily_config, daily_db, job_reports, notices, shared_saver)   # noqa: F401
 from test_daily_workflow import RUN_ID, effective, fake_sec, flaky, no_fetch_backoff, rows, world   # noqa: F401
-from test_workbench_service import NOW, SESSION, _agent_settings, seed_watchlist
+from test_workbench_service import NOW, SESSION, _agent_settings, _ok_responses, seed_watchlist
 
 from investment_assistant.tasks import daily, filings
 from investment_assistant.core import locks
@@ -96,9 +96,11 @@ def test_cli_show_has_no_raw_summary(daily_db, clock, notices, job_reports, caps
     assert daily.main(['show', '--run-id', 'daily-20260101000000-00000000']) == 2
 
 
-def test_cli_resume_reports_rejections(daily_db, clock, notices, capsys):
-    assert daily.main(['resume', '--run-id', 'daily-20260101000000-00000000', '--node', 'collect']) == 2
-    assert capsys.readouterr().err
+def test_cli_resume_reports_rejections(daily_db, clock, notices, capsys, monkeypatch):  # noqa: F811 - shared fixtures
+    monkeypatch.setattr(workflow, '_default_checkpointer', shared_saver()[1])
+    run_id = 'daily-20260101000000-00000000'
+    assert daily.main(['resume', '--run-id', run_id, '--node', 'collect']) == 2
+    assert capsys.readouterr().err.strip() == f'没有这次运行：{run_id}'
 
 
 def test_sec_backfill_job_report_task(daily_db, clock, notices, job_reports, fake_sec):
@@ -227,8 +229,8 @@ def episode(monkeypatch):
     return fake
 
 
-def run_with_connection(clock, number, connection, *, now=NOW, trigger_source='manual'):
-    d = world(clk=clock, agent=True)
+def run_with_connection(clock, number, connection, *, now=NOW, trigger_source='manual', scripted=None):  # noqa: F811
+    d = world(clk=clock, agent=True, scripted=scripted)
     d.agent_settings = _agent_settings(connection=connection)
     return daily.run(daily_config(), now=now, deps=d, run_id=f'daily-2026102300000{number}-aaaaaaa{number}',
                      checkpointer_factory=shared_saver()[1], sleep=clock.sleep, notify_cfg=NotifyCfg(),
@@ -271,11 +273,12 @@ def test_not_connected_notifies_once_per_episode(daily_db, clock, notices, job_r
 
 
 def test_an_execution_that_does_not_hit_in_between_does_not_hide_the_failure(daily_db, clock, notices, job_reports,
-                                                                           episode, monkeypatch):
+                                                                           episode, monkeypatch, scripted_model):
     """Lost -> an execution that never reaches the Agent (connection fine as far as it can tell, or stopped before
     ``agent``) -> the execution that hits: exactly one notice, the in-between ones never moved the base."""
     seed_watchlist(daily_db, [('NVDA', ['core'])])
-    ok = run_with_connection(clock, 1, 'connected')                       # the failure is not known to this execution
+    ok = run_with_connection(clock, 1, 'connected', scripted=scripted_model(_ok_responses()))
+    assert ok['summary']['agent']['runs'] == {'NVDA': 'ok'}
     assert 'connection_notice' not in ok['summary']
     flaky('collect', monkeypatch, fail_times=2)                           # a run that stops before ``agent``
     stopped = run_with_connection(clock, 2, 'needs_login')
@@ -315,9 +318,11 @@ def test_connection_notice_is_retried_until_it_was_sent(daily_db, clock, notices
     assert episode.calls[-1] == checked(second) and third['summary']['connection_notice']['reason'] == 'already_reported'
 
 
-def test_no_connection_notice_without_not_connected(daily_db, clock, notices, job_reports, episode):
+def test_no_connection_notice_without_not_connected(daily_db, clock, notices, job_reports, episode,  # noqa: F811
+                                                    scripted_model):
     seed_watchlist(daily_db, [('NVDA', ['core'])])
-    ok = run_with_connection(clock, 1, 'connected')
+    ok = run_with_connection(clock, 1, 'connected', scripted=scripted_model(_ok_responses()))
+    assert ok['summary']['agent']['runs'] == {'NVDA': 'ok'}
     assert 'connection_notice' not in ok['summary'] and episode.calls == [] and lost_titles(notices) == []
     off = run_daily(clock)                                                # provider off: disabled, not a lost connection
     assert 'connection_notice' not in off['summary'] and episode.calls == []
@@ -415,3 +420,49 @@ def test_daily_resume_refuses_without_029(daily_db, clock, notices, job_reports,
     with pytest.raises(service.Unavailable, match='migration_029_missing'):
         daily.resume(RUN_ID, 'collect', now=NOW, config=daily_config(), notify_cfg=NotifyCfg())
     assert job_reports.rows() == [] and daily_db.execute('SELECT count(*) FROM stage_runs').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('entry', ['run', 'resume', 'ensure_ready'])
+def test_refuses_without_migration_031(daily_db, clock, notices, job_reports, entry):
+    """A real missing table must stop every entry before stage/checkpoint reads and leave an error report."""
+    from investment_assistant.core.tx import Unavailable
+
+    # Remove a real required table rather than mocking the readiness result.
+    daily_db.execute('DROP TABLE feature_flag_changes')
+    daily_db.commit()
+    if entry == 'run':
+        out = run_daily(clock)
+        assert (out['status'], out['summary']['error']) == ('error', 'migration_031_missing')
+    else:
+        with pytest.raises(Unavailable, match='migration_031_missing'):
+            if entry == 'resume':
+                daily.resume(RUN_ID, 'collect', now=NOW, config=daily_config(), notify_cfg=NotifyCfg())
+            else:
+                daily.ensure_ready()
+    [report] = job_reports.rows()
+    assert (report['status'], report['summary']['error']) == ('error', 'migration_031_missing')
+    assert report['trigger_source'] == ('resume' if entry == 'resume' else 'manual')
+    if entry == 'ensure_ready':
+        assert report['run_id'].startswith('daily-')
+        assert notices.calls == []
+    else:
+        assert report['run_id'] == RUN_ID
+        assert len([t for t in notices.titles('workbench') if '每日工作流失败' in t]) == 1
+    assert daily_db.execute('SELECT count(*) FROM stage_runs').fetchone()[0] == 0
+
+
+def test_migration_031_ready_allows_precheck_run_and_resume(daily_db, clock, notices, job_reports, monkeypatch):
+    """A fully migrated schema reaches the real graph and can continue a stopped run."""
+    assert core_schema.five_layers_ready(daily_db)
+    daily.ensure_ready()
+    assert job_reports.rows() == []
+    seed_watchlist(daily_db, [('NVDA', ['core'])])
+    flaky('regime', monkeypatch, fail_times=2)
+    saver, factory = shared_saver()
+    first = run_daily(clock, factory)
+    assert first['summary']['failed_node'] == 'regime'
+    resumed = daily.resume(RUN_ID, 'regime', now=NOW, deps=world(clk=clock), config=daily_config(),
+                           checkpointer_factory=factory, sleep=clock.sleep, notify_cfg=NotifyCfg())
+    assert resumed['run_status'] != 'failed'
+    assert [r['trigger_source'] for r in job_reports.rows()] == ['manual', 'resume']
+    assert set(effective(daily_db)) == set(workflow.NODES)

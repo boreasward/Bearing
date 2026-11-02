@@ -16,6 +16,31 @@ _TRADE_COLUMNS = ('id, request_id, request_hash, ticker, side, quantity, price, 
                   'plan_id, note, recorded_at, voided_at, void_reason, account_id, recorded_by, detail')
 
 
+def insert_portfolio_check(conn, row) -> int:
+    """The first frozen hard result wins per account/session, including concurrent reruns."""
+    saved = _one(conn, 'INSERT INTO portfolio_checks '
+        '(account_id, session, run_id, cutoff_at, version, result) VALUES (%s, %s, %s, %s, %s, %s::jsonb) '
+        'ON CONFLICT (account_id, session) DO NOTHING RETURNING id',
+        (row['account_id'], row['session'], row['run_id'], row['cutoff_at'], row['version'],
+         _plan_json(row['result'])))
+    if saved is None:
+        saved = portfolio_check_for(conn, row['account_id'], row['session'])
+    assert saved is not None
+    return saved['id']
+
+
+def set_portfolio_commentary(conn, id, commentary, pm_run_id) -> bool:
+    if commentary is None:
+        raise ValueError('portfolio_commentary_required')
+    return conn.execute('UPDATE portfolio_checks SET commentary = %s::jsonb, pm_run_id = %s '
+        'WHERE commentary IS NULL AND id = %s', (_plan_json(commentary), pm_run_id, id)).rowcount == 1
+
+
+def portfolio_check_for(conn, account_id, session) -> dict[str, Any] | None:
+    return _one(conn, 'SELECT * FROM portfolio_checks WHERE account_id = %s AND session = %s',
+                (account_id, session))
+
+
 def _trade_columns(accounts_enabled: bool) -> str:
     return _TRADE_COLUMNS if accounts_enabled else _TRADE_COLUMNS.removesuffix(', account_id, recorded_by, detail')
 
