@@ -32,6 +32,12 @@ def _cap_reason(sizing: dict, *, equity) -> str:
             'cash': 'insufficient_cash', 'max_positions': 'max_positions'}[sizing['applied_cap']]
 
 
+# What a zero-reservation sizing of 0 means for good: the plan itself cannot be bought, whatever the order or the
+# pending orders. ``max_positions`` and ``total_cap`` stay out of it: they read positions that today's settlement
+# (a stop-out, a fill) can still change.
+_HARD_SIZING = frozenset({'single_cap', 'insufficient_cash'})
+
+
 def check(*, session, plans, positions, pending, cash, equity, params, sectors) -> PortfolioResult:
     """Check entry heads, then greedily reserve their full account-sized quantities.
 
@@ -40,6 +46,16 @@ def check(*, session, plans, positions, pending, cash, equity, params, sectors) 
     Positions carry quantity and market_value (or close); pending buys carry frozen
     entry_high or reserved_cash, including fees, just like validate_orders.
     The caller has already selected effective heads and facts for ``session``.
+
+    Verdicts (B6/B8). ``blocked`` is only for what no order of buying and no cancellation can change: ``sector_cap`` /
+    ``max_per_sector`` (judged candidate by candidate in the greedy order -- signal date, ticker -- so a group that
+    still has room keeps ``ok`` for the first ones and blocks only those that no longer fit), ``held_ticker`` for a
+    ticker already held (or planned twice), and a ``single_cap`` / ``insufficient_cash`` that leaves the plan at 0
+    shares even with nothing reserved. Whatever else keeps a plan from being bought -- the cash or the position /
+    total / single caps used up by the candidates before it or by pending orders (a ticker with a pending buy too),
+    ``max_positions`` -- is ``deferred`` under its own reason code: the host settles and cancels first, and
+    ``validate_orders`` judges those gates again after the cancellations. A candidate of 0 shares counts for neither
+    the group's exposure nor its ticker count.
     """
     params = {**default_params(WorkbenchConfig()), **params}
     cash, equity = _dec(cash), _dec(equity)
@@ -47,12 +63,13 @@ def check(*, session, plans, positions, pending, cash, equity, params, sectors) 
     sectors = {ticker.strip().upper(): group for ticker, group in sectors.items()}
     exposure, members = {}, defaultdict(set)
 
-    def bucket(ticker):
+    def bucket(ticker, *, member=True):
         group = sectors.get(ticker)
         if group not in exposure:
             exposure[group] = {'held_value': ZERO, 'pending_value': ZERO, 'candidate_value': ZERO,
                                'share_of_equity': None}
-        members[group].add(ticker)
+        if member:
+            members[group].add(ticker)
         return exposure[group]
 
     held_values = defaultdict(lambda: ZERO)
@@ -97,7 +114,8 @@ def check(*, session, plans, positions, pending, cash, equity, params, sectors) 
         value = _dec(sizing['shares']) * _dec(item['entry_high'])
         # An already occupied ticker is not an additional candidate exposure.
         candidates[pid] = ZERO if ticker in held_values or ticker in reserved or counts[ticker] > 1 else value
-        bucket(ticker)['candidate_value'] += candidates[pid]
+        # A candidate of 0 shares neither adds to the group's exposure nor counts as one more ticker in it.
+        bucket(ticker, member=candidates[pid] > 0)['candidate_value'] += candidates[pid]
 
     for values in exposure.values():
         total = values['held_value'] + values['pending_value'] + values['candidate_value']
@@ -107,23 +125,43 @@ def check(*, session, plans, positions, pending, cash, equity, params, sectors) 
     conflicts = [{'group': group, 'plan_ids': [item['plan_id'] for item in items if sectors.get(item['ticker']) == group],
                   'rule': 'max_per_sector'} for group in sorted(over_count)]
     conflicts = [conflict for conflict in conflicts if conflict['plan_ids']]
+    # Per group, what the greedy order has placed so far: the exposure and the tickers already there.
+    placed_value = {group: values['held_value'] + values['pending_value'] for group, values in exposure.items()}
+    placed_tickers = {group: {t for t in tickers if t in held_values or t in reserved}
+                      for group, tickers in members.items()}
     verdicts, order = [], []
     running_reserved = dict(reserved)
     pending_count = len(active)
     for item in items:
         ticker, pid = item['ticker'], str(item['plan_id'])
-        group, reasons = sectors.get(ticker), []
-        share = exposure[group]['share_of_equity']
-        if group is not None and share is not None and share > _dec(params['sector_cap']):
-            reasons.append('sector_cap')
-        if group in over_count:
-            reasons.append('max_per_sector')
-        if ticker in held_values or ticker in reserved or counts[ticker] > 1:
-            reasons.append('held_ticker')
+        group, hard, soft = sectors.get(ticker), [], []
+        if ticker in held_values or counts[ticker] > 1:
+            hard.append('held_ticker')
+        elif ticker in reserved:
+            soft.append('held_ticker')                # a pending buy: the host or the Agent may cancel it first
         elif sizings[pid]['shares'] <= 0:
-            reasons.append(_cap_reason(sizings[pid], equity=equity))
-        verdict, rank = 'blocked' if reasons else 'ok', None
-        if not reasons:
+            reason = _cap_reason(sizings[pid], equity=equity)
+            bare = strategies.max_shares(item, equity=equity, params=params, cash=cash,
+                                         positions_value_by_ticker=held_values, total_positions_value=held_total,
+                                         pending_reserved={}, positions_count=0, pending_count=0)
+            bare_reason = _cap_reason(bare, equity=equity)
+            if bare['shares'] <= 0 and bare_reason in _HARD_SIZING:
+                hard.append(bare_reason)
+            else:
+                soft.append(reason)
+        elif group is not None and exposure[group]['share_of_equity'] is not None:
+            total = placed_value[group] + candidates[pid]
+            if total / equity > _dec(params['sector_cap']):
+                hard.append('sector_cap')
+            if len(placed_tickers[group] | {ticker}) > params['max_per_sector']:
+                hard.append('max_per_sector')
+            if not hard:
+                placed_value[group] = total
+                placed_tickers[group].add(ticker)
+        verdict, rank, reasons = 'blocked' if hard else 'ok', None, hard
+        if not hard and soft:
+            verdict, reasons = 'deferred', soft
+        if verdict == 'ok':
             cost = candidates[pid] + fee
             if cost > cash - sum(running_reserved.values(), ZERO):
                 verdict, reasons = 'deferred', ['deferred_by_cash']
@@ -133,12 +171,13 @@ def check(*, session, plans, positions, pending, cash, equity, params, sectors) 
                                                   total_positions_value=held_total, pending_reserved=running_reserved,
                                                   positions_count=len(held_values), pending_count=pending_count)
                 if available['shares'] < sizings[pid]['shares']:
-                    verdict, reasons = 'blocked', [_cap_reason(available, equity=equity)]
+                    verdict, reasons = 'deferred', [_cap_reason(available, equity=equity)]
                 else:
                     order.append(item['plan_id'])
                     rank = len(order)
                     running_reserved[ticker] = running_reserved.get(ticker, ZERO) + cost
                     pending_count += 1
+        reasons = list(reasons)
         if group is None:
             reasons.append('sector_unknown')
         verdicts.append({'plan_id': item['plan_id'], 'ticker': ticker, 'group': group,

@@ -164,7 +164,7 @@ def portfolio_check(account_id,*,now,session=None):
     session=min(session or bars.latest_closed_session(now),bars.latest_closed_session(now))
     with core_tx.read_only_tx() as conn:
         account=execution_paper_accounts.require_account(conn,account_id)
-        view=today_views.portfolio_check_view(conn,session,account_id=account['id'])
+        view=today_views.portfolio_check_view(conn,session,account_id=account['id'],kind=account['kind'])
         return service._jsonable({**view,'account':{'id':account['id'],'name':account['name'],'kind':account['kind']}})
 
 

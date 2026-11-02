@@ -31,6 +31,7 @@ export const RESUME_ERROR_TEXT: Record<string, string> = {
   not_failed: '这次运行没有失败的节点',
   node_mismatch: '只能从失败的节点 <next> 继续',
   resume_window_closed: '已过 <下一交易日> 纽约 17:00，只能整次重新运行',
+  graph_version_changed: '这次运行由旧版流程图产生，不能续跑，只能整次重新运行',
   daily_running: '每日工作流正在运行',
   // GET /api/runs/{id}/detail 的 resume.reason 另有三个（不是 409 码）
   interrupted: '这次运行中途中断，只能整次重新运行',
@@ -82,6 +83,8 @@ export interface RunNodeDid {
   // Optional only for older stages; UI1 fixes the shapes when present.
   data_requests?: DataRequestCounts
   research_requests?: number
+  /** agent node only: research requests closed automatically (30 days without a new version) in this run */
+  research_auto_closed?: number
 }
 export interface PortfolioNodeItem { account_id: string; name: string; ok: number; blocked: number; deferred: number; commentary_status: string | null }
 export interface ProposalNodeItem { id: number; title: string; source: 'data' | 'agent_quality' | 'route'; status: 'proposed' | 'approved' | 'rejected' | 'superseded' }

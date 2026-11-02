@@ -45,12 +45,25 @@ def test_sector_cap_blocks_candidate_over_cap():
 
 
 def test_max_per_sector_conflict_group():
+    """B8: holding 2 with 2 coming and a limit of 3 -- the group is a conflict, but the first candidate in the greedy
+    order (signal date, ticker) still fits and only the second is blocked."""
     result = check(plans=[plan('b', 'BBB'), plan('a')], positions=[position('H1', '1000'), position('H2', '1000')],
                    cash=D('98000'), sectors=dict.fromkeys(['AAA', 'BBB', 'H1', 'H2'], '科技'))
     assert result.conflicts == [{'group': '科技', 'plan_ids': ['a', 'b'], 'rule': 'max_per_sector'}]
-    assert [v['reasons'] for v in result.verdicts] == [['max_per_sector'], ['max_per_sector']]
-    assert all(v['verdict'] == 'blocked' for v in result.verdicts)
-    assert result.order == []
+    assert [(v['plan_id'], v['verdict'], v['reasons']) for v in result.verdicts] == [
+        ('a', 'ok', []), ('b', 'blocked', ['max_per_sector'])]
+    assert result.order == ['a']
+
+
+def test_zero_share_candidates_count_for_neither_group_exposure_nor_ticker_count():
+    """B8: a candidate sized to 0 shares (here by the position cap) must not push a group over its limits."""
+    zero_risk = plan('zero', 'ZZZ', ref_price=D('90'), stop=D('95'))                  # ref <= stop: no room at all
+    result = check(plans=[zero_risk, plan('a')], positions=[position('H1', '1000'), position('H2', '1000')],
+                   cash=D('98000'), sectors=dict.fromkeys(['AAA', 'ZZZ', 'H1', 'H2'], '科技'))
+    assert result.conflicts == []                                       # 2 held + 1 buyable = 3 = the limit
+    assert [(v['plan_id'], v['verdict']) for v in result.verdicts] == [('a', 'ok'), ('zero', 'blocked')]
+    assert result.verdicts[1]['reasons'] == ['single_cap']
+    assert result.exposure_by_sector['科技']['candidate_value'] == D('8000')
 
 
 def test_cash_greedy_order_by_signal_date():
@@ -73,6 +86,7 @@ def test_holding_chains_only_in_exposure(holding):
                    sectors={'AAA': '科技', 'HELD': '科技'})
     assert [v['plan_id'] for v in result.verdicts] == ['new']
     assert result.verdicts[0]['reasons'] == ['max_positions']
+    assert result.verdicts[0]['verdict'] == 'deferred'          # B6: today's settlement may still free the slot
     assert result.exposure_by_sector['科技']['held_value'] == D('30000')
     assert result.exposure_by_sector['科技']['candidate_value'] == 0
     assert result.conflicts == [] and result.order == []
@@ -107,10 +121,13 @@ def test_to_fact_shape():
     assert result.verdicts[0]['reasons'] == ['sector_unknown']
 
 
-def test_sector_caps_use_all_candidates_and_accept_exact_boundary():
+def test_sector_cap_is_judged_candidate_by_candidate_and_accepts_exact_boundary():
+    """B8: the first candidate (.28) fits under .35, the second would reach .36 and is the only one blocked; the
+    group exposure shown still adds every candidate."""
     result = check(plans=[plan('a'), plan('b', 'BBB')], positions=[position(value='20000')],
                    cash=D('80000'), sectors=dict.fromkeys(['AAA', 'BBB', 'HELD'], '科技'))
-    assert [v['reasons'] for v in result.verdicts] == [['sector_cap'], ['sector_cap']]
+    assert [(v['verdict'], v['reasons']) for v in result.verdicts] == [('ok', []), ('blocked', ['sector_cap'])]
+    assert result.order == ['a'] and result.exposure_by_sector['科技']['share_of_equity'] == D('.36')
     boundary = check(positions=[position(value='27000')], cash=D('73000'),
                      sectors={'AAA': '科技', 'HELD': '科技'})
     assert boundary.verdicts[0]['verdict'] == 'ok'
@@ -163,7 +180,7 @@ def test_running_shared_caps_reserve_accepted_candidates(updates, reason):
     result = check(plans=[plan('a'), plan('b', 'BBB')], sectors={'AAA': '科技', 'BBB': '金融'},
                    params={**PARAMS, **updates})
     assert result.order == ['a'] and result.verdicts[-1]['reasons'] == [reason]
-    assert result.verdicts[-1]['verdict'] == 'blocked'
+    assert result.verdicts[-1]['verdict'] == 'deferred'          # B6: the greedy order's capacity is not a hard block
 
 
 def test_held_and_duplicate_tickers_cannot_enter_again():
@@ -179,7 +196,9 @@ def test_no_room_reasons_precede_unknown_sector_hint():
     assert result.verdicts[0]['verdict'] == 'blocked'
     assert result.verdicts[0]['reasons'] == ['insufficient_cash', 'sector_unknown']
     result = check(positions=[position(value='100000')], params={**PARAMS, 'total_cap': 1})
-    assert result.verdicts[0]['reasons'] == ['total_cap']
+    assert result.verdicts[0]['reasons'] == ['total_cap'] and result.verdicts[0]['verdict'] == 'deferred'
+    result = check(plans=[plan(stop=D('100'))])                              # nothing to risk: the plan itself is dead
+    assert result.verdicts[0]['verdict'] == 'blocked' and result.verdicts[0]['reasons'] == ['single_cap']
 
 
 def test_check_does_not_mutate_inputs():

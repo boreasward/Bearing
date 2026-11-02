@@ -34,6 +34,7 @@ describe('runs helpers', () => {
       not_failed: '这次运行没有失败的节点',
       node_mismatch: '只能从失败的节点 <next> 继续',
       resume_window_closed: '已过 <下一交易日> 纽约 17:00，只能整次重新运行',
+      graph_version_changed: '这次运行由旧版流程图产生，不能续跑，只能整次重新运行',
       daily_running: '每日工作流正在运行',
       interrupted: '这次运行中途中断，只能整次重新运行',
       stage_failed: '这一步记了失败但链已跑完，不能续跑；需要时整次重新运行',

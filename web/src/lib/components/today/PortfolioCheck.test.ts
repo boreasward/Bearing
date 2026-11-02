@@ -32,3 +32,14 @@ it('degraded shows hard results only', () => {
   expect(screen.getByRole('table', { name: '组合计划判定' })).toBeInTheDocument()
   expect(screen.queryByText('优先处理较早的信号')).toBeNull()
 })
+it('degraded translates the agent_unavailable code and keeps the hard result', () => {
+  render(PortfolioCheck, { check: { ...check, status: 'degraded', reason: 'agent_unavailable', commentary: null } })
+  expect(screen.getByText('Agent 不可用；只有硬结果')).toBeInTheDocument()
+  expect(screen.getByRole('table', { name: '组合计划判定' })).toBeInTheDocument()
+})
+it('a paper account is ready with the paper_no_pm reason and never claims the Agent is unavailable', () => {
+  render(PortfolioCheck, { check: { ...check, status: 'ready', reason: 'paper_no_pm', commentary: null } })
+  expect(screen.getByText('模拟账户不调组合经理，只有硬结果')).toBeInTheDocument()
+  expect(screen.queryByText(/Agent 不可用/)).toBeNull()
+  expect(screen.getByRole('table', { name: '组合计划判定' })).toBeInTheDocument()
+})

@@ -239,6 +239,24 @@ def test_every_execution_summary_carries_cutoff_and_session(daily_db, clock, not
     assert result['summary']['session'] == result['session'] == '2026-10-23'      # the Friday before the Saturday
 
 
+def test_the_run_ends_with_a_workflow_check_in_its_summary(daily_db, clock, notices, monkeypatch):
+    """B11 (D45): after ``propose`` and before the report is written, one read-only ``workflow check`` of the run's
+    session lands in ``summary['check']``; a failing check is only an ``errors`` line and never moves the status."""
+    import investment_assistant.workflow.check as workflow_check
+
+    result = go(daily_db, clock, trigger='scheduled')
+    check = result['summary']['check']
+    assert check['ok'] is True and list(check['items']) == list(workflow_check.CHECK_ITEMS)
+    assert set(check['items'].values()) <= {'ok', 'skipped'}
+    assert not any(str(line).startswith('check:') for line in result['summary'].get('errors', []))
+    status = result['status']
+
+    monkeypatch.setattr(workflow_check, 'run_checks', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('check boom')))
+    again = go(daily_db, clock, trigger='scheduled', run_id='daily-20261022223001-0a1b2c3d', no_seed=True)
+    assert 'check' not in again['summary'] and again['status'] == status
+    assert any(str(line).startswith('check: ') for line in again['summary']['errors'])
+
+
 def test_retro_not_due_on_non_trading_day(daily_db, clock, notices):
     due_week = date(2026, 10, 19)                                   # the week due on HOLIDAY
     review_repo.insert_review_push(daily_db, {'kind': 'weekly', 'period': due_week, 'review_id': None,

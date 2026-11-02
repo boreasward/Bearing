@@ -97,18 +97,23 @@ def _unit_cards(conn, session: date, *, now: datetime, ready: bool) -> tuple[lis
 
 PORTFOLIO_FLAG = 'portfolio_manager'
 _PORTFOLIO_REASONS = {'migration_031_missing': '需执行迁移 031', 'feature_disabled': RUN_REASON_TEXT['feature_disabled'],
-                      'not_run': '组合检查节点尚未运行', 'agent_unavailable': RUN_REASON_TEXT['agent_unavailable']}
+                      'not_run': '组合检查节点尚未运行', 'agent_unavailable': RUN_REASON_TEXT['agent_unavailable'],
+                      'paper_no_pm': 'paper_no_pm'}      # a code: the page words it (「模拟账户不调组合经理，只有硬结果」)
 
 
-def portfolio_check_view(conn, session: date, *, account_id=REAL_ACCOUNT_ID, enabled: bool | None = None) -> dict[str, Any]:
+def portfolio_check_view(conn, session: date, *, account_id=REAL_ACCOUNT_ID, enabled: bool | None = None,
+                         kind: str | None = None) -> dict[str, Any]:
     """The account's portfolio check of ``session`` as 「今日」 shows it (spec §7.4, K2):
     ``{status, reason, session, cutoff_at, result, commentary}``.
 
     ``not_computed``: migration 031 has not run; the ``portfolio_manager`` switch is off (the whole node was skipped, so
     a stored row of the same session from an earlier run is deliberately NOT shown as this version's check); or the
     switch is on but the node left no row (it has not run yet, or failed). ``degraded``: the hard result exists but has
-    no successful PM commentary (model unavailable, rejected or failed). ``ready``: hard result and commentary.
-    ``enabled`` is the switch the caller reads (the current one by default; the push passes the run's frozen one)."""
+    no successful PM commentary of a real account (model unavailable, rejected or failed). ``ready``: hard result and
+    commentary -- or, for a paper account (``kind='paper'``; by default every account but the real one), the hard result
+    alone with ``reason='paper_no_pm'``: the portfolio manager only comments on the real account (D31), so there is no
+    commentary to wait for. ``enabled`` is the switch the caller reads (the current one by default; the push passes
+    the run's frozen one)."""
     view: dict[str, Any] = {'status': 'not_computed', 'reason': None, 'session': session, 'cutoff_at': None,
                             'result': None, 'commentary': None}
     if not core_schema.five_layers_ready(conn):
@@ -122,6 +127,9 @@ def portfolio_check_view(conn, session: date, *, account_id=REAL_ACCOUNT_ID, ena
         return {**view, 'reason': _PORTFOLIO_REASONS['not_run']}
     view.update(cutoff_at=row['cutoff_at'], result=row['result'], commentary=row['commentary'])
     if row['commentary'] is None:
+        paper = (kind == 'paper') if kind is not None else (account_id != REAL_ACCOUNT_ID)
+        if paper:
+            return {**view, 'status': 'ready', 'reason': _PORTFOLIO_REASONS['paper_no_pm']}
         return {**view, 'status': 'degraded', 'reason': _PORTFOLIO_REASONS['agent_unavailable']}
     return {**view, 'status': 'ready'}
 

@@ -190,7 +190,7 @@ describe('Settings · 状态与页签', () => {
     const tabs = within(screen.getByRole('navigation', { name: '设置' }))
     expect(tabs.getAllByRole('link').map(a => [a.textContent!.trim(), a.getAttribute('href')])).toEqual([
       ['系统', '#settings/system'], ['关注列表', '#settings/watchlist'], ['推送配置', '#settings/discord'],
-      ['定时任务', '#settings/jobs'], ['环境变量', '#settings/env']])
+      ['定时任务', '#settings/jobs'], ['环境变量', '#settings/env'], ['功能开关', '#settings/features']])
     expect(tabs.getByRole('link', { name: '环境变量' })).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByRole('tablist')).toBeNull()
     // set / unset are words, not ✅ / — marks

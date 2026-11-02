@@ -60,7 +60,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `core/stages.py` | 阶段注册表、历史版本、分类与纯 `StageAcc` |
 | `core/locks.py` | daily 会话锁、运行中探测与活动 run_id |
 | `core/runner.py` | API 提交任务的进程内后台执行与状态 |
-| `core/knowledge.py` | 112 张概念卡、原理页、引用解析与可见性；纯文件校验 / 渲染；CLI check / show |
+| `core/knowledge.py` | 129 张概念卡、原理页、引用解析与可见性；纯文件校验 / 渲染；CLI check / show |
 | `core/llm/chatgpt.py` | siwc-1 OAuth、回环回调、PKCE、Responses 改写与安全错误码 |
 | `core/llm/connection.py` | 唯一读写 Agent 连接与连接事件的模块；登录、刷新、状态与失效通知依据 |
 | `core/llm/model.py` | 模型设置、客户端、错误分类、检查点与运行记录公共结构 |

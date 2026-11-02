@@ -69,7 +69,7 @@ def _queue_research(db, monkeypatch, order):
     made = research_requests.create(ticker='AMD', question='为何增长？', horizon_days=None,
                                     request_id=str(uuid.uuid4()), now=evening(S1))
 
-    def fake_run(request_id, *, now, deps):
+    def fake_run(request_id, *, now, deps, **kwargs):
         order.append('research')
         for before, after in (('queued', 'running'), ('running', 'concluded')):     # the real state machine
             analysis_repo.update_research_status(db, request_id, from_status=before, to_status=after)

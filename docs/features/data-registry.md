@@ -23,6 +23,7 @@
 - 目标明细为原字段加 `source_used`（来源 id）、`fallback: {tried, reason}`；双源失败保留主源原因。每族每 scope 一行 `data_fetch_runs`；`sec_monitor` 正文记 `family=sec_text, detail.scope=sec_monitor`，collect 跳过已下载文件。历史缺来源的行不补造。
 - SEC 正文每 ticker/session 最多发起 3 份下载；有效 `filings.output_dir` 及 `.budgets` 是全部入口共享的正文根与日预算事实，见 [运维](../operations/scheduling-and-notifications.md#sec-正文目录与日预算v212a2)。SIC 无匹配为未归类，不猜行业、不阻断。
 - `request_data(family,ticker)` 只缓存请求，运行结束与 `agent_runs` 同事务写队列；返回「本轮不可见」。事务结束后，agent 与 review 尾部共用 handler 补采；剩余不足 120 秒为 `deferred`，只有 `fetched` 且新行数大于 0 才以新 cutoff 重跑，每单元每天至多一次。已开链走 recheck（`plan_reviews.detail.via=data_request`）；未开链再 propose，受原尝试上限约束。研究员段按 D42 carried，不再调用。
+- 补查行的终态：`queued` 只在产生它的 daily 运行里由 agent / review 尾部结算。手动「重新运行 Agent」、`rerun_agent` 与手动复查 `recheck` 不在手动路径里同步补采，结束时把本次产生且仍 `queued` 的行结算为 `deferred`，原因 `manual_run`；daily 的 review 收尾再把「`run_id` 不是本运行、且 `requested_at` 早于本运行 cutoff」的遗留 `queued` 行结算为 `deferred`，原因 `orphaned`。所以任何一行最终都有终态，`workflow check` 的 `data_requests` 项按交易日窗口过滤 `requested_at`，不会被前几天的孤儿行永久拖成 mismatch。
 
 标准指标是 `indicator-1` 注册项，按已知截止日现算、不落历史表；包装原函数，不统一口径、不改冻结数值：
 
@@ -74,4 +75,4 @@ python -m investment_assistant.derivation.indicators compute <id> <ticker>
 
 ## 已知限制
 
-Stooq 解析与补缺机制已有独立实现，但 Task0 实测不可用、未正式注册，当前 bars 没有备源。若将来启用，`adj_close=close×主源最近比例` 只是近似，无主源取 1，仅补最近 10 个交易日的缺口；拆股口径仍待真实源验证。Nasdaq ETF 可返回 `data=null`，盘前 / 盘后 time 不可靠。指标窗口不足如实为空；注册与算术一致不证明策略有效，仍为 Gate HOLD。
+Stooq 解析与补缺机制已有独立实现，但 Task0 实测不可用、未正式注册，当前 bars 没有备源。若将来启用，`adj_close=close×主源最近比例` 只是近似，无主源取 1，仅补最近 10 个交易日的缺口；拆股口径仍待真实源验证。Nasdaq ETF 可返回 `data=null`，盘前 / 盘后 time 不可靠；Nasdaq 返回日期 `unknown`（未公布）按空结果失败处理（`FetchError(kind='empty')`），目标按备源也失败记账并保留主源的失败原因，不把「未公布」当作成功日期。指标窗口不足如实为空；注册与算术一致不证明策略有效，仍为 Gate HOLD。

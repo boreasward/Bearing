@@ -142,7 +142,7 @@
             {/if}
           {/if}
           {#if step.output}<ResearchFacts output={step.output} onRef={step.status === 'carried' ? undefined : jump} />
-          {:else}<DataBlock state="not_computed" message={step.reason_text ?? step.reason ?? '本版未保存公司研究内容'} />{/if}
+          {:else}<DataBlock state="not_computed" message={step.reason_text ?? (step.reason ? AGENT_REASON_TEXT[step.reason] ?? step.reason : '本版未保存公司研究内容')} />{/if}
         {:else if step.kind === 'previous_chain'}
           <pre class="text-xs whitespace-pre-wrap rounded-sm border border-border p-2" data-previous-chain>{step.text}</pre>
         {:else if step.kind === 'read'}

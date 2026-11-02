@@ -171,14 +171,19 @@ def test_proposals_with_changes_before_approval(conn):
 # ---------------------------------------------------------------- data_requests
 
 def test_data_request_queued_for_more_than_a_day(conn):
-    old, fresh = (data_repo.insert_data_requests(conn, [{'family': 'bars', 'ticker': 'NVDA', 'requested_at': at}])[0]
-                  for at in (NOW - timedelta(days=1, minutes=1), NOW - timedelta(hours=23)))
-    item = checks(conn)['items']['data_requests']
+    """Only the session's own window counts (B1): the row made in it and older than a day is a mismatch, a fresh one
+    and another session's leftover are not."""
+    later = NOW + timedelta(days=1)
+    old, fresh, elsewhere = (data_repo.insert_data_requests(conn, [{'family': 'bars', 'ticker': 'NVDA',
+                                                                    'requested_at': at}])[0]
+                             for at in (NOW - timedelta(hours=2), NOW + timedelta(hours=2),
+                                        NOW - timedelta(days=5)))
+    item = checks(conn, now=later)['items']['data_requests']
     assert item['status'] == 'mismatch' and len(item['problems']) == 1 and f'补查请求 {old} bars NVDA' in item['problems'][0]
-    assert fresh is not None
+    assert fresh is not None and elsewhere is not None
     data_repo.settle_data_request(conn, old, status='failed', fetch_run_id=None, rows=None, reason='x',
                                   rerun_run_id=None)
-    assert checks(conn)['items']['data_requests']['status'] == 'ok'          # only ``queued`` counts
+    assert checks(conn, now=later)['items']['data_requests']['status'] == 'ok'          # only ``queued`` counts
 
 
 # ---------------------------------------------------------------- research

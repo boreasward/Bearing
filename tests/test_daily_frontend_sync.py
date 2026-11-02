@@ -60,11 +60,11 @@ def test_agent_reason_text_matches():
 
 def test_resume_error_codes_match():
     """`RESUME_ERROR_TEXT` has a text for every code the resume refusal can carry: the codes of
-    `workflow.ResumeRejected` (not_failed, node_mismatch, resume_window_closed), `daily_running` (the lock is held)
+    `workflow.ResumeRejected` (not_failed, node_mismatch, resume_window_closed, graph_version_changed), `daily_running` (the lock is held)
     and the extra `resume.reason` values the detail page can show (`interrupted`, `stage_failed`, `checkpoint_unavailable`)."""
     frontend = _ts_table(RUNS_TS.read_text(encoding='utf-8'), 'RESUME_ERROR_TEXT')
     rejected = set(re.findall(r"ResumeRejected\(\s*'(\w+)'", WORKFLOW_PY.read_text(encoding='utf-8')))
-    assert rejected == {'not_failed', 'node_mismatch', 'resume_window_closed'}
+    assert rejected == {'not_failed', 'node_mismatch', 'resume_window_closed', 'graph_version_changed'}
     reasons = set(re.findall(r"block\['reason'\] = '(\w+)'", RUN_DETAIL_PY.read_text(encoding='utf-8')))
     reasons |= {'interrupted'}              # assigned through `nothing_to_resume`
     assert reasons == {'daily_running', 'not_failed', 'checkpoint_unavailable', 'resume_window_closed', 'interrupted',

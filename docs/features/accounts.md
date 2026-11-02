@@ -10,7 +10,7 @@
 - 参数新增 sector_cap（默认 0.35，0.05–1.0）、max_per_sector（默认 3，整数 1–10）；沿用理由 / request_id、下一交易日起生效。`POST /api/accounts/{id}/params` 接受这两个键。
 - 硬拒绝新增 sector_cap「超过行业集中度上限」、max_per_sector「超过同行业标的数量上限」、single_cap「超过单笔风险或单票敞口上限」、total_cap「超过组合总敞口上限」、held_ticker「已持有、在挂或重复的标的」。未归类 sector_unknown 只提示、deferred_by_cash 只暂缓，不列硬拒绝；原现金 / 股数检查照常。
 - K2：portfolio_manager 关闭时整个 portfolio skipped/feature_disabled，不执行硬检查；fact 为「本版未检查」，validate_orders(None) 不作组合拦截，Today not_computed。开启、硬结果已产出而 PM 失败才是保留硬结果的 degraded，不能混淆。
-- `GET /api/accounts/{id}/portfolio-check?session=` 返回 `{status,reason,session,cutoff_at,result,commentary}`，与 Today 共用；缺行不是空组合成功。决策列表增加真实 agent_version；对比 / equity 增加 `markers:[{session,kind,label}]`，feature 虚线、version 实线、params 点线，图下列出分界。
+- `GET /api/accounts/{id}/portfolio-check?session=` 返回 `{status,reason,session,cutoff_at,result,commentary}`，与 Today 共用；缺行不是空组合成功。状态口径：真实账户有成功意见为 `ready`，缺意见为 `degraded` / `reason='agent_unavailable'`；模拟账户有硬结果即 `ready` / `reason='paper_no_pm'`、`commentary=null`（模拟账户不调组合经理，不算降级）。决策列表增加真实 agent_version；对比 / equity 增加 `markers:[{session,kind,label}]`，feature 虚线、version 实线、params 点线，图下列出分界。
 
 待执行核对：各账户硬结果隔离与重算、修改参数后的证据与首 reason、未归类提示、关闭 / 模型失败差别、对照账户不变、三类分界。综合核对走 `python -m investment_assistant.workflow check`，账户只读 CLI 仍为下文的 `investment_assistant.views.account show`；这些核对步骤尚未执行。
 

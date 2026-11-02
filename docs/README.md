@@ -16,7 +16,7 @@
 
 | 文档 | 功能 |
 | --- | --- |
-| [daily-plan.md](features/daily-plan.md) | 每日工作流（`daily-2` / `stages-5` 的十一个节点、检查点与续跑、运行详情页）、规则 v1、交易计划（`plan-2` 的执行字段）、「今日」计划表与成交关联计划（v2.9）、持仓止损、每日推送 |
+| [daily-plan.md](features/daily-plan.md) | 每日工作流（`daily-3` / `stages-6` 的十三个节点、检查点与续跑、运行详情页）、规则 v1、交易计划（`plan-2` 的执行字段）、「今日」计划表与成交关联计划（v2.9）、持仓止损、每日推送 |
 | [agent-track.md](features/agent-track.md) | Agent 轨道：ChatGPT 订阅模型层与连接、工具层、提议与反方、引用校验、预算、解读；一只股票一条活跃链、再次触发、退出期与持仓状态（v2.9） |
 | [accounts.md](features/accounts.md) | 真实账本与券商对账、开账与参数、Agent 自管与照计划执行模拟账户、日线成交、订单和决策证据、权益曲线与账户对比（v2.11，本地实现与发布准备） |
 | [review.md](features/review.md) | 影子跟踪、可切换账户的纪律与三方对比、真实账户周/月复盘（`review-8` / `monthly-5`；缺账本端点回退快照）、复盘推送 |
@@ -38,7 +38,7 @@
 | --- | --- |
 | [local-service.md](operations/local-service.md) | LaunchAgent、启动链路、重启、日志与路径、认证 |
 | [scheduling-and-notifications.md](operations/scheduling-and-notifications.md) | 调度线程、任务注册表、运行报告、通知配置 |
-| [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–030、真实库备份与执行、一次性测试库 |
+| [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–031、真实库备份与执行、一次性测试库 |
 | [../scripts/README.md](../scripts/README.md) | 一次性核查脚本：`scripts/siwc_precheck.py`（v2.8 开工前 ChatGPT 核查，由你在运行服务的这台 Mac 上执行，结果追加到 v2.8 spec §17） |
 
 ## 方向与历史

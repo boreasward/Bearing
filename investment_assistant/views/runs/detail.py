@@ -41,6 +41,10 @@ FRESH_RUN = (timedelta(hours=6), timedelta(minutes=5))      # how old / how far 
 RERUN_END = ('error',)                              # a unit can be re-run when its latest run ended like this ...
 RERUN_SKIP = 'max_attempts'                         # ... or was skipped for this reason (analysis_agent_runner.rerun_agent's rule)
 PENDING_NOTE = '这一节点还没有执行'
+DID_DETAIL_KEYS = {      # node detail keys passed through into ``did`` (C2): the agent node's tails, the review's data requests
+    'agent': ('data_requests', 'research_requests', 'research_auto_closed'),
+    'review': ('data_requests',),
+}
 PORTFOLIO_ITEM_KEYS = ('account_id', 'name', 'ok', 'blocked', 'deferred', 'commentary_status')   # per account (UI1)
 PROPOSAL_ITEM_KEYS = ('id', 'title', 'source', 'status')
 # The daily graph each stages version was booked by (spec §24 版本推断); the stages version decides, a report's own
@@ -349,8 +353,7 @@ def _node(conn, stage_id: str, version: str, view: dict, members: list[dict], ef
         'did': {'sentence': view['sentence'], 'input_count': view['input_count'], 'output_count': view['output_count'],
                 'skips': view['skips'], 'failures': view['failures'], 'degradations': view['degradations'],
                 'retry': detail.get('retry'), 'timings': detail.get('timings') or {},
-                **({key: detail[key] for key in ('data_requests', 'research_requests') if key in detail}
-                   if stage_id == 'agent' else {})},
+                **({key: detail[key] for key in DID_DETAIL_KEYS.get(stage_id, ()) if key in detail})},
         'fetch': fetch, 'results': results,
         'actions': {'resume': bool(resume['allowed'] and resume['node'] == stage_id), 'rerun_agent': again},
     }

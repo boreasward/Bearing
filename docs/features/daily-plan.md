@@ -28,7 +28,9 @@ initial_state 冻结四项 features，续跑沿用，summary.features 留证；�
 
 「今日」运行一览之后增加 [组合检查](portfolio-manager.md)。K2：关闭 portfolio_manager 不做硬检查，fact 写「本版未检查」，None 不拦组合订单，accounts 照常、Today not_computed；开启且硬结果已存后 PM 失败才 degraded / 保硬结果。portfolio 节点失败下游账户仍运行，实际续跑入口以检查点 / resume.allowed 为准，不能只凭 failed 标签承诺续跑。
 
-运行详情新增 portfolio.results（按账户 ok/blocked/deferred/commentary_status，展开取实际硬结果）、propose.results（提案链接）、agent.did：research_requests 为处理数，research_auto_closed 为本次因 30 个自然日无新版自动结束的研究请求数（先于队列处理结算），data_requests 为 `{queued,fetched,failed,deferred,reruns}`。补查先结束事务再采集，新数据本轮不可见，有新行才新 cutoff 重跑；[研究](research.md)只出档案，daily 忙时 200 queued。
+运行详情新增 portfolio.results（按账户 ok/blocked/deferred/commentary_status，展开取实际硬结果）、propose.results（提案链接）。节点 `did` 的补充字段：agent 节点有 `research_requests`（本次处理的研究请求数）、`research_auto_closed`（整数，可缺省：本次因 30 个自然日无新版自动结束的研究请求数，先于队列处理结算；页面「研究请求」小节显示「本次处理 N 份 · 自动结束 M 份」）和 `data_requests`；review 节点同样有 `data_requests`（与 agent 节点同形，页面「补查请求」小节在这两个节点都显示），内容为 `{queued,fetched,failed,deferred,reruns}`。补查先结束事务再采集，新数据本轮不可见，有新行才新 cutoff 重跑；补查行的终态与孤儿结算见[数据注册表](data-registry.md)；[研究](research.md)只出档案，daily 忙时 200 queued，研究队列受 agent+review 共用预算约束。
+
+**每日自动核对**：daily 在 `propose` 之后、写 `job_reports` 之前，用只读事务对本交易日调一次 `workflow check --session` 的同一组核对（`run_checks`），把 `{ok, items:{核对项: 状态}}` 写进 `job_reports.summary.check`（`ok` 为全部核对项没有 mismatch）。核对本身出错只记入 `summary.errors`，不改变运行状态，也不发通知；第 6 项 `data_requests` 按本交易日窗口过滤（见下），所以前一天遗留的补查行不会让当天的核对失败。
 
 验证步骤见 [四版清单](../roadmap/v2.12-v2.15-acceptance.md)：新运行核对 13 条有效行、开关冻结 / 续跑、各账户硬结果、运行详情三个分支、未连接时非模型部分继续；均尚未执行。综合检查用 `python -m investment_assistant.workflow check --session D`，不另设 optimize check（D45）；下面的已迁移 CLI 路径保留。
 
@@ -61,7 +63,7 @@ initial_state 冻结四项 features，续跑沿用，summary.features 留证；�
 
 **两层自动重试**：每个外部请求按目标重试 2 次（退避 2 秒、8 秒，4xx 不重试，见[外部请求策略](data-menu.md)），单个目标失败不拖住节点；节点抛出没人接住的异常时，等 60 秒自动重试一次，第一次的错误记进该行 `detail.retry`；再失败就停在该节点，它后面的节点各记一行 `skipped / upstream_failed`，运行状态为失败，并发一条失败通知。数据库连不上不重试。区制计算出错也会停链（信号依赖当天区制）。
 
-**续跑**：失败的运行可以从失败的节点继续（运行详情页的「从此节点继续」，`POST /api/jobs/daily/resume`，命令行 `python -m investment_assistant.tasks.daily resume --run-id … --node …`）：已完成的节点不重跑，截止时间和交易日沿用原运行，只给重新执行的节点追加 `attempt` 更大的行；下一个交易日纽约 17:00 之后只能整次重新运行。只有「停链」的失败才能续跑：节点重试后仍失败而停在检查点上。节点自己记了 `failed` 行、链却照常跑完的失败（Discord 推送没发出去、整段 `review` / `accounts` 失败、复盘卡或筛选整段失败）检查点没有下一个节点，运行状态是失败，但详情页写「这一步记了失败但链已跑完，不能续跑；需要时整次重新运行」，失败通知里也没有「续跑」一行。
+**续跑**：失败的运行可以从失败的节点继续（运行详情页的「从此节点继续」，`POST /api/jobs/daily/resume`，命令行 `python -m investment_assistant.tasks.daily resume --run-id … --node …`）：已完成的节点不重跑，截止时间和交易日沿用原运行，只给重新执行的节点追加 `attempt` 更大的行；下一个交易日纽约 17:00 之后只能整次重新运行；检查点记录的图版本与当前 `DAILY_GRAPH_VERSION` 不同（例如升级代码后续跑升级前失败的运行）时拒绝续跑，API 返回 409 `graph_version_changed`，只能整次重新运行。只有「停链」的失败才能续跑：节点重试后仍失败而停在检查点上。节点自己记了 `failed` 行、链却照常跑完的失败（Discord 推送没发出去、整段 `review` / `accounts` 失败、复盘卡或筛选整段失败）检查点没有下一个节点，运行状态是失败，但详情页写「这一步记了失败但链已跑完，不能续跑；需要时整次重新运行」，失败通知里也没有「续跑」一行。
 
 **运行状态**：由十一个节点的有效行推出：有失败 → 失败；有 `partial` / `degraded` → 降级；否则成功。降级是常态（例如 FRED 没配置），不发通知；失败发通知。
 
@@ -153,7 +155,7 @@ initial_state 冻结四项 features，续跑沿用，summary.features 留证；�
 ```
 
 - `check`：逐份列出 `plan_id`、标的、信号日、种类、`status`、一致性结论（`consistent` / `mismatch` / `incomplete`）与差异明细，末行汇总；`--until` 按信号日截止（含当日），`--kind` 只看一种计划。任何 `status = ok` 的计划不是 `consistent` 时退出码 1（作废计划照常列出，不影响退出码）。
-- `check --session D`（v2.12，汇总核对）：对一个交易日逐项输出 `ok` / `mismatch` / `skipped`，任一项 `mismatch` 退出码 1。七项：① 推导（该日单元的 `ok` 计划都与重算一致）；② 持仓状态（批处理截止时间的持仓都有当日 `holding_status` 行）；③ 账户（账户节点实际运行过时，每个当时已存在的账户有权益行，模拟账户另有决策行）；④ `portfolio_checks`（组合检查节点实际运行过的日子，每个活跃账户一行；节点因冻结开关跳过、或当日没有运行，则 `skipped`）；⑤ `proposals_without_changes`（还是 `proposed` 的提案没有版本或实施简报）；⑥ `data_requests`（没有排队超过一天的补查）；⑦ 研究员（该日 `agent-4` 的提议 / 修订运行，`output.research.status` ∈ `ok / rejected / error / disabled / carried`）。迁移 029 / 030 / 031 未执行或当日没有批处理证据的项记 `skipped` 并写明原因，不算不通过。`check` 至少要给 `--since` 或 `--session` 之一，可同时给。
+- `check --session D`（v2.12，汇总核对）：对一个交易日逐项输出 `ok` / `mismatch` / `skipped`，任一项 `mismatch` 退出码 1。七项：① 推导（该日单元的 `ok` 计划都与重算一致）；② 持仓状态（批处理截止时间的持仓都有当日 `holding_status` 行）；③ 账户（账户节点实际运行过时，每个当时已存在的账户有权益行，模拟账户另有决策行）；④ `portfolio_checks`（组合检查节点实际运行过的日子，每个活跃账户一行；节点因冻结开关跳过、或当日没有运行，则 `skipped`）；⑤ `proposals_without_changes`（还是 `proposed` 的提案没有版本或实施简报）；⑥ `data_requests`（本交易日窗口内 `requested_at` 的补查行没有仍停在 `queued` 的；窗口外的遗留行由下一次 daily 收尾结算为 `orphaned`，不计入）；⑦ 研究员（该日 `agent-4` 的提议 / 修订运行，`output.research.status` ∈ `ok / rejected / error / disabled / carried`）。迁移 029 / 030 / 031 未执行或当日没有批处理证据的项记 `skipped` 并写明原因，不算不通过。`check` 至少要给 `--since` 或 `--session` 之一，可同时给。
 - `stages`：按 `run_id` 分组列出该 session 的阶段行（阶段、状态、计数、推导计数、原因）。核对三件事：每个运行按自己的阶段版本行数齐全（`stages-1` 7 行、`stages-2` 8 行、`stages-3` 9 行，阶段集合也按版本核对）、每个运行都在 `job_reports` 里、时间窗（当日纽约 16:00 到下一交易日纽约 16:00 之间开始）内的 `workbench` 运行报告都有阶段行——没有的列为「缺证据」。任一项不满足，或 `stage_runs` 表还没建（迁移 025 未执行），退出码 1。
 - 两个子命令参数错误或数据库不可用时退出码 2。
 - 验证一次推导：手动运行批处理后，在「今日」任选一份计划点「展开推导」，顶部显示「推导与重算一致」，触发段每条条件标「成立」或「未冻结，无法复核」，底部运行证据的 `run_id` 与该次运行报告一致；CLI `check --since <当日>` 对同一计划的结论相同。

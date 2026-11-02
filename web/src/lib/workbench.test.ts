@@ -107,7 +107,13 @@ describe('agent track', () => {
       // v2.8 §8.8
       'not_connected', 'model_unavailable',
       // v2.9 §5.5 + R3
-      'invalid_entry_type', 'invalid_max_hold', 'stop_lowered', 'stop_above_close', 'active_chain'].sort())
+      'invalid_entry_type', 'invalid_max_hold', 'stop_lowered', 'stop_above_close', 'active_chain',
+      // v2.13–v2.15: researcher, portfolio manager, proposals and briefs
+      'research_malformed', 'research_facts_count', 'research_kind', 'research_inference_unsupported',
+      'research_refs_invalid', 'research_summary_length', 'research_blocked_shape',
+      'pm_malformed', 'pm_summary_length', 'pm_levels_forbidden', 'pm_ranking_invalid', 'pm_refs_invalid',
+      'proposal_malformed', 'proposal_source', 'proposal_title', 'proposal_length', 'proposal_refs_invalid',
+      'proposal_duplicate_title', 'proposal_limit', 'brief_empty', 'brief_length', 'brief_acceptance_missing'].sort())
   })
 
   it('AGENT_REASON_TEXT has not_connected and model_unavailable (v2.8 §8.8, verbatim)', async () => {

@@ -126,6 +126,21 @@ def test_resume_node_mismatch(daily_db, clock, notices, monkeypatch):
         workflow.resume_check(RUN_ID, 'nonsense', now=LATER, checkpointer_factory=factory)
 
 
+def test_resume_refuses_a_checkpoint_of_another_graph_version(daily_db, clock, notices, monkeypatch):
+    """B12: the day the graph is upgraded, a failed run of the old graph (its checkpoint says ``daily-2``) is still inside
+    its resume window -- continuing it on the new nodes would mix stage versions, so it is refused (409 at the API)."""
+    factory = failed_run(daily_db, clock, monkeypatch, node='regime')
+    assert workflow.resume_check(RUN_ID, 'regime', now=LATER, checkpointer_factory=factory)['node'] == 'regime'
+    monkeypatch.setattr(workflow, 'DAILY_GRAPH_VERSION', 'daily-4')       # the checkpoint was written by daily-3
+    count = len(rows(daily_db))
+    with pytest.raises(workflow.ResumeRejected) as caught:
+        workflow.resume_check(RUN_ID, 'regime', now=LATER, checkpointer_factory=factory)
+    assert caught.value.code == 'graph_version_changed' and 'daily-3' in caught.value.message
+    with pytest.raises(workflow.ResumeRejected) as again:
+        resume(clock, factory, 'regime', now=LATER)
+    assert again.value.code == 'graph_version_changed' and len(rows(daily_db)) == count      # nothing was written
+
+
 def test_resume_not_failed(daily_db, clock, notices):
     saver, factory = shared_saver()
     go(daily_db, clock, factory=factory)

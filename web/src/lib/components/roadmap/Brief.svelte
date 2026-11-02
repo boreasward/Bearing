@@ -44,6 +44,7 @@
   {#if error}<DataBlock state="error" message={error} />{/if}
   <div class="flex gap-2">
     <Button variant="outline" {busy} onclick={() => readback()}>刷新 brief</Button>
-    {#if status === 'error'}<Button {busy} onclick={() => readback(true)}>重试 brief</Button>{/if}
+    {#if status === 'error' || status === 'pending'}<Button {busy} onclick={() => readback(true)}>重试 brief</Button>{/if}
   </div>
+  {#if status === 'pending'}<p class="text-xs text-muted-foreground">若长时间无结果可重新提交</p>{/if}
 </Section>

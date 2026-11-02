@@ -250,7 +250,7 @@ def test_agent_node_drains_queue_within_budget(wired_db, monkeypatch, scripted_m
     _fake_collect(monkeypatch, rows=1)
     ran = []
 
-    def fake_run(request_id, *, now, deps):
+    def fake_run(request_id, *, now, deps, **kwargs):
         row = analysis_repo.research_request(wired_db, request_id)
         assert row is not None
         ran.append(row['ticker'])
@@ -338,7 +338,7 @@ def test_agent_node_closes_stale_before_draining_and_counts_it(wired_db, monkeyp
     fresh = _aged(wired_db, created_days=1)
     ran = []
 
-    def fake_run(request_id, *, now, deps):
+    def fake_run(request_id, *, now, deps, **kwargs):
         ran.append(request_id)
         return {'id': request_id, 'status': 'concluded', 'version': {'status': 'concluded'}}
 
@@ -506,7 +506,7 @@ def test_research_run_obeys_its_900_second_deadline(wired_db, monkeypatch, scrip
     context_monkey(wired_db, monkeypatch)
     made = make(str(uuid.uuid4()))
     _fake_collect(monkeypatch)
-    ticks = iter([0.0] + [901.0] * 50)
+    ticks = iter([0.0] * 8 + [901.0] * 50)          # the start and the seven collection checks, then the model gate
     model = scripted_model([])                       # a model call would raise: the gate must stop first
     out = research_requests.run(made['id'], now=NOW, deps=_deps(model, clock=lambda: next(ticks)))
     assert out['version']['status'] == 'error' and 'stage_budget' in out['version']['summary']
@@ -583,3 +583,142 @@ def test_requests_of_a_rejected_attempt_do_not_stay_queued(wired_db, monkeypatch
     assert out['version']['status'] == 'error'
     row = wired_db.execute('SELECT run_id, status, reason FROM data_requests').fetchone()
     assert row == (f"research:{made['id']}", 'deferred', 'research_not_followed')
+
+
+# ---------------------------------------------------------------- final fix wave: B2 / B3 / B4 / B5
+
+def _running(db, request_id, *, updated_at=None):
+    assert analysis_repo.update_research_status(db, request_id, from_status='queued', to_status='running',
+                                                updated_at=updated_at)
+    db.commit()
+
+
+def test_drain_hands_each_dossier_the_smaller_of_900_and_what_is_left(wired_db, monkeypatch):
+    """B2: the shared budget bounds every dossier; with less than DATA_REQUEST_MIN_S left none starts."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    seen = []
+
+    def fake_run(request_id, *, now, deps, deadline_s=None, features=None):
+        seen.append((deadline_s, features))
+        return {'id': request_id, 'status': 'concluded', 'version': {'status': 'concluded'}}
+
+    monkeypatch.setattr(research_requests, 'run', fake_run)
+    summary = {'agent': {'runs': {}}, 'briefs': {}, 'errors': [], 'sources': {}, 'timings': {}}
+    assert _agent_node(30, summary)['summary']['agent']['research_requests'] == 0 and seen == []     # 30 s: not started
+    assert _agent_node(119, summary)['summary']['agent']['research_requests'] == 0 and seen == []
+    assert _agent_node(300, summary)['summary']['agent']['research_requests'] == 1
+    assert seen == [(300.0, {})]
+    assert analysis_repo.research_request(wired_db, made['id']) is not None
+
+
+def test_collection_that_runs_out_of_the_deadline_stops_before_the_model(wired_db, monkeypatch, scripted_model):
+    """B2: enough left to start, but the (stubbed) clock runs out during collection -- an error version
+    ``stage_budget``, no model call, the request back to ``queued`` and no attempt spent."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    collected = _fake_collect(monkeypatch)
+    ticks = iter([0.0, 0.0, 0.0, 0.0] + [131.0] * 50)       # the start, then four families fit in 130 s
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(scripted_model([]), clock=lambda: next(ticks)),
+                                deadline_s=130)
+    assert out['version']['status'] == 'error' and 'stage_budget' in out['version']['summary']
+    assert out['error'] == 'stage_budget' and out['agent_run_id'] is None
+    assert [family for family, *_ in collected] == ['bars', 'news', 'sec_filings']        # the rest never started
+    request = analysis_repo.research_request(wired_db, made['id'])
+    assert request is not None and request['status'] == 'queued' and request['attempts'] == 0
+    assert wired_db.execute("SELECT count(*) FROM agent_runs WHERE mode = 'research'").fetchone()[0] == 0
+
+
+def test_a_shared_budget_stop_before_the_model_spends_no_attempt(wired_db, monkeypatch, scripted_model):
+    """B2: collection fits the drain's smaller budget but the model gate does not -- the refusal is the budget's, not
+    the dossier's, so no attempt is spent (the own 900-second refusal still is, see above)."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    _fake_collect(monkeypatch)
+    ticks = iter([0.0] * 8 + [200.0] * 50)
+    out = research_requests.run(made['id'], now=NOW, deps=_deps(scripted_model([]), clock=lambda: next(ticks)),
+                                deadline_s=150)
+    assert out['version']['status'] == 'error' and 'stage_budget' in out['version']['summary']
+    request = analysis_repo.research_request(wired_db, made['id'])
+    assert request is not None and request['status'] == 'queued' and request['attempts'] == 0
+
+
+def test_waiting_data_reruns_count_and_the_third_closes(wired_db, monkeypatch, scripted_model):
+    """B3: the first wait is not a rerun; each rerun that waits again spends an attempt and the third closes the
+    file ``waiting_data_limit`` (``MAX_ATTEMPTS``)."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    _fake_collect(monkeypatch, rows=0)
+    blocked = json.dumps({'facts': [{'text': '已披露增长', 'kind': 'disclosure', 'refs': ['call:1']}],
+                          'risks': [], 'blocked': [{'what': '最新指引', 'why': '工具返回 not_found'}],
+                          'summary': '指引缺失'}, ensure_ascii=False)
+    wait = json.dumps({'action': 'wait', 'summary': '等下季指引', 'catalysts': [],
+                       'price_scenarios': [], 'next_steps': []}, ensure_ascii=False)
+
+    def attempt(minutes):
+        model = scripted_model([tool('get_news', {'days': 30}), AIMessage(content=blocked),
+                                AIMessage(content=wait), AIMessage(content='{"counter": []}')])
+        return research_requests.run(made['id'], now=NOW + timedelta(minutes=minutes), deps=_deps(model))
+
+    observed = []
+    for minutes in range(4):
+        assert attempt(minutes)['version']['status'] == 'waiting_data'
+        request = analysis_repo.research_request(wired_db, made['id'])
+        assert request is not None
+        observed.append((request['status'], request['attempts'], request['closed_reason']))
+    assert observed == [('waiting_data', 0, None), ('waiting_data', 1, None), ('waiting_data', 2, None),
+                        ('closed', 3, 'waiting_data_limit')]
+    assert [row['id'] for row in analysis_repo.queued_research_requests(wired_db)] == []      # nothing left to drain
+
+
+def test_close_stale_returns_a_dead_running_request_to_the_queue(wired_db, monkeypatch):
+    """B4: ``running`` older than 2 x RESEARCH_DEADLINE_S is a dossier whose process died -- queued again with one more
+    attempt, ``closed / max_attempts`` when that was the last; a live one (younger) is left alone."""
+    context_monkey(wired_db, monkeypatch)
+    dead_at = NOW - timedelta(seconds=2 * 900 + 1)
+    dead = _aged(wired_db, created_days=1)
+    last = _aged(wired_db, created_days=1)
+    alive = _aged(wired_db, created_days=1)
+    wired_db.execute('UPDATE research_requests SET attempts = 2 WHERE id = %s', (last,))
+    _running(wired_db, dead, updated_at=dead_at)
+    _running(wired_db, last, updated_at=dead_at)
+    _running(wired_db, alive, updated_at=NOW - timedelta(seconds=2 * 900 - 1))
+    assert research_requests.close_stale(now=NOW) == 0                       # none is a 30-day close
+    request = analysis_repo.research_request(wired_db, dead)
+    assert request is not None and (request['status'], request['attempts']) == ('queued', 1)
+    request = analysis_repo.research_request(wired_db, last)
+    assert request is not None and (request['status'], request['attempts'], request['closed_reason']) == (
+        'closed', 3, 'max_attempts')
+    assert _status(wired_db, alive)[0] == 'running'
+
+
+def test_drain_researches_with_the_runs_frozen_switches(wired_db, monkeypatch, scripted_model):
+    """B5: a switch flipped during the run changes nothing for the daily drain's collection -- it uses the frozen
+    values; outside the daily run (``features=None``) the current ones still apply."""
+    from investment_assistant.core import features as core_features
+
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    made = make(str(uuid.uuid4()))
+    _fake_collect(monkeypatch, rows=0)
+    _fake_collect.features.clear()
+    frozen = {'backup_sources': True, 'company_researcher': True, 'portfolio_manager': True,
+              'optimize_proposals': True}
+    core_features.record_change(wired_db, flag='backup_sources', enabled=False, reason='运行中翻动',
+                                request_id=uuid.uuid4())
+    wired_db.commit()
+    summary = {'agent': {'runs': {}}, 'briefs': {}, 'errors': [], 'sources': {}, 'timings': {}}
+    model = scripted_model([tool('get_news', {'days': 30}), AIMessage(content=RESEARCH_OK),
+                            AIMessage(content=CONCLUSION_BUY), AIMessage(content=COUNTER_OK)])
+    counts = runner.drain_research_requests(SESSION, now=NOW, deps=_deps(model), summary=summary,
+                                            budget_left_s=900, features=frozen)
+    assert counts == {'requests': 1} and summary.get('errors', []) == []
+    assert len(_fake_collect.features) == 7 and all(f['backup_sources'] is True for f in _fake_collect.features)
+    assert analysis_repo.research_request(wired_db, made['id'])['status'] == 'concluded'
+    _fake_collect.features.clear()
+    research_requests._collect('AMD', now=NOW, deps=core_tx.Deps())              # a non-daily entrance
+    assert all(f['backup_sources'] is False for f in _fake_collect.features)

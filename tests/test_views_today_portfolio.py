@@ -95,3 +95,24 @@ def test_today_payload_carries_the_block(db, monkeypatch):
     payload = today_view.today(now=NOW)
     assert payload['portfolio_check']['status'] == 'ready'
     assert payload['portfolio_check']['result'] == RESULT
+
+
+def test_a_paper_account_without_commentary_is_ready_with_its_hard_result(db):
+    """C1: the portfolio manager only comments on the real account (D31), so a paper account's hard result is the whole
+    check -- ``ready`` with ``paper_no_pm``, not a degraded 「Agent 不可用」; the real account's gap stays degraded."""
+    from uuid import uuid4
+
+    paper_id = uuid4()
+    db.execute("INSERT INTO accounts (id, kind, strategy, name, opening_cash, opened_on) "
+               "VALUES (%s, 'paper', 'follow_plans', '模拟', 100000, %s)", (paper_id, SESSION))
+    execution_repo.insert_portfolio_check(db, {'account_id': paper_id, 'session': SESSION, 'run_id': 'r1',
+                                               'cutoff_at': NOW, 'version': PORTFOLIO_CHECK_VERSION, 'result': RESULT})
+    _check(db)
+    paper = today_view.portfolio_check_view(db, SESSION, account_id=paper_id)
+    assert (paper['status'], paper['reason'], paper['commentary']) == ('ready', 'paper_no_pm', None)
+    assert paper['result'] == RESULT and paper['cutoff_at'] == NOW
+    assert today_view.portfolio_check_view(db, SESSION, account_id=paper_id, kind='paper')['reason'] == 'paper_no_pm'
+    real = today_view.portfolio_check_view(db, SESSION)
+    assert (real['status'], real['reason']) == ('degraded', 'Agent 不可用')
+    assert today_view.portfolio_check_view(db, SESSION, kind='real')['status'] == 'degraded'
+    assert today_view.portfolio_check_view(db, SESSION, account_id=uuid4())['reason'] == '组合检查节点尚未运行'   # no row

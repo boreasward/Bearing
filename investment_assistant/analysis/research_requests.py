@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from investment_assistant.analysis import repo as analysis_repo
@@ -19,7 +19,7 @@ from investment_assistant.core import features as core_features
 from investment_assistant.core import runner as core_runner
 from investment_assistant.core import schema as core_schema
 from investment_assistant.core import tx as core_tx
-from investment_assistant.core.constants import NY, RESEARCH_AUTO_CLOSE_DAYS, RESEARCH_DAILY_MAX
+from investment_assistant.core.constants import NY, RESEARCH_AUTO_CLOSE_DAYS, RESEARCH_DAILY_MAX, RESEARCH_DEADLINE_S
 from investment_assistant.core.llm import model as agent_model
 from investment_assistant.data.adapters import bars as bars_module
 from investment_assistant.data.identity import stock_id
@@ -29,6 +29,11 @@ HORIZON_RANGE = (1, 365)
 COLLECT_FAMILIES = ('bars', 'news', 'sec_filings', 'earnings', 'fundamentals', 'sec_text', 'sector')
 MAX_ATTEMPTS = 3
 AUTO_CLOSE_REASON = 'no_new_version_30d'      # closed_reason of D28's automatic close (manual: free text; cap: max_attempts)
+
+
+class StageBudget(RuntimeError):
+    """The attempt's own deadline ran out before collection finished (B2): the request returns to ``queued`` without
+    spending an attempt."""
 
 
 class FeatureDisabled(RuntimeError):
@@ -130,7 +135,11 @@ def close_stale(*, now: datetime) -> int:
     version for more than ``RESEARCH_AUTO_CLOSE_DAYS`` natural days (New York dates, counted from the newest
     version, or from creation when it has none) becomes ``closed / no_new_version_30d``. Independent of the
     ``company_researcher`` flag (closing a file is not a dossier run); a no-op before 031. Each close is the guarded
-    one-shot ``update_research_status``, so a request someone just moved is skipped. Returns how many closed."""
+    one-shot ``update_research_status``, so a request someone just moved is skipped. Returns how many closed.
+
+    B4: a ``running`` request whose last move is older than ``2 x RESEARCH_DEADLINE_S`` is a dossier whose process
+    died (the background run is a daemon thread): it goes back to ``queued`` with one more attempt, or ``closed /
+    max_attempts`` when that was the last. Those are not counted in the return value (they are not 30-day closes)."""
     closed = 0
     with core_tx._tx() as conn:
         if not _ready(conn):
@@ -140,6 +149,15 @@ def close_stale(*, now: datetime) -> int:
             if analysis_repo.update_research_status(conn, row['id'], from_status=row['status'], to_status='closed',
                                                     closed_reason=AUTO_CLOSE_REASON):
                 closed += 1
+        for row in analysis_repo.stuck_running_research_requests(conn, before=now - timedelta(
+                seconds=2 * RESEARCH_DEADLINE_S)):
+            attempts = (row['attempts'] or 0) + 1
+            if attempts >= MAX_ATTEMPTS:
+                analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='closed',
+                                                     attempts=attempts, closed_reason='max_attempts')
+            else:
+                analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='queued',
+                                                     attempts=attempts)
     return closed
 
 
@@ -185,8 +203,15 @@ def latest_dossier(conn, ticker: str, *, cutoff_at: datetime) -> dict[str, Any] 
     return analysis_repo.latest_dossier_for(conn, ticker, cutoff_at=cutoff_at)
 
 
-def run(request_id: str, *, now: datetime, deps) -> dict[str, Any]:
+def run(request_id: str, *, now: datetime, deps, deadline_s: float | None = None,
+        features: dict | None = None) -> dict[str, Any]:
     """One dossier attempt (§6.3 run). Raises LookupError for an unknown or non-eligible request.
+
+    ``deadline_s`` (B2) bounds the whole attempt -- collection, the model phases and the follow-up fetches -- and
+    defaults to ``RESEARCH_DEADLINE_S`` (the API's background run); the daily drain passes
+    ``min(RESEARCH_DEADLINE_S, what is left of the shared budget)``. Collection that runs out of it records a
+    ``stage_budget`` error version and returns the request to ``queued`` without spending an attempt. ``features``
+    (B5) are the daily run's frozen switches; ``None`` (every other entrance) reads the current ones.
 
     Once the request is ``running`` nothing may leave it there: a failure anywhere after the switch (collection,
     configuration, the final write) is written as an ``error`` version with the reason and the same attempts /
@@ -195,6 +220,7 @@ def run(request_id: str, *, now: datetime, deps) -> dict[str, Any]:
     exception propagates."""
     clock = deps.clock or time.monotonic
     started = clock()
+    budget_s = RESEARCH_DEADLINE_S if deadline_s is None else min(deadline_s, RESEARCH_DEADLINE_S)
     with core_tx._tx() as conn:
         row = analysis_repo.research_request(conn, request_id)
         if row is None or row['status'] not in ('queued', 'waiting_data'):
@@ -203,15 +229,21 @@ def run(request_id: str, *, now: datetime, deps) -> dict[str, Any]:
                                                     to_status='running'):
             raise LookupError(f'研究请求状态已变化：{request_id}')
     try:
-        collection = _collect(row['ticker'], now=now, deps=deps)
-        out = agent_runner.run_research(row, now=now, deps=deps, collection=collection, started=started)
+        collection = _collect(row['ticker'], now=now, deps=deps, features=features, started=started, clock=clock,
+                              deadline_s=budget_s)
+        out = agent_runner.run_research(row, now=now, deps=deps, collection=collection, started=started,
+                                        deadline_s=budget_s, features=features)
     except Exception as exc:    # noqa: BLE001 — every failure class becomes an error version, never a stuck request
         settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
         reason, _ = agent_model.classify_error(exc, settings.api_key)
         if isinstance(exc, core_tx.Unavailable):
             reason = 'unavailable'
+        spent = isinstance(exc, StageBudget)
+        if spent:
+            reason = 'stage_budget'
         try:
-            version = agent_runner.fail_research(row, now=now, reason=reason, started=started, clock=clock)
+            version = agent_runner.fail_research(row, now=now, reason=reason, started=started, clock=clock,
+                                                 count_attempt=not spent)
             with core_tx._tx() as conn:
                 current = analysis_repo.research_request(conn, row['id'])
         except Exception:   # noqa: BLE001 — the record itself failed: the caller sees the original problem
@@ -224,20 +256,26 @@ def run(request_id: str, *, now: datetime, deps) -> dict[str, Any]:
     return out
 
 
-def _collect(ticker: str, *, now: datetime, deps) -> dict[str, int]:
+def _collect(ticker: str, *, now: datetime, deps, features: dict | None = None, started: float | None = None,
+             clock=None, deadline_s: float | None = None) -> dict[str, int]:
     """§6.3 ②: the seven per-ticker families through the registry, scope 'research'; a family
     failure is recorded (its data_fetch_runs row says so) and never aborts the dossier — the
-    researcher writes the gap into ``blocked``."""
+    researcher writes the gap into ``blocked``. Before each family the attempt's deadline is checked (B2): once
+    ``deadline_s`` has passed since ``started`` the rest is not fetched and ``StageBudget`` is raised. ``features``
+    are the daily run's frozen switches (B5); ``None`` reads the current ones."""
     from investment_assistant.data import collect as data_collect
     from investment_assistant.data import registry as data_registry
     from investment_assistant.data.adapter_support import adapter_deps_from_service
 
     session = bars_module.latest_closed_session(now)
     projected = adapter_deps_from_service(deps, transaction=core_tx._tx, sleep=data_collect.FETCH_SLEEP)
-    with core_tx._tx() as conn:           # R20: the current runtime switches (no row = on), like process_data_requests
-        features = core_features.frozen(conn)
+    if features is None:                  # R20: outside the daily run, the current switches (no row = on)
+        with core_tx._tx() as conn:
+            features = core_features.frozen(conn)
     counts = {}
     for family in COLLECT_FAMILIES:
+        if deadline_s is not None and clock is not None and started is not None and clock() - started >= deadline_s:
+            raise StageBudget(family)
         adapter = data_registry.get(family)
         lock = (data_collect.family_locks([family]) if adapter.lock else _null_lock())
         with lock:

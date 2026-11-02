@@ -798,7 +798,7 @@ def test_accounts_node_captures_later_cutoff_once_and_excludes_truly_future_plan
     conn.commit()
     reads=[]
     def wall(): reads.append(at); return at
-    ctx=SimpleNamespace(deps=service.Deps(clock=lambda:0),wall_now=wall,recorder=None)
+    ctx=SimpleNamespace(deps=service.Deps(clock=lambda:0),wall_now=wall,recorder=None,breadth_tickers=None)
     acc=SimpleNamespace(detail={},input=lambda n:None,output=lambda n:None,fail=lambda *a:pytest.fail(str(a)))
     state={'cutoff_at':NOW.isoformat(),'session':END.isoformat(),'run_id':'daily-current','summary':{}}
     paper_orchestration.run(state,ctx,acc)

@@ -601,7 +601,10 @@ def run_agent(ticker: str, signal_date: date, *, now: datetime, deps: Deps | Non
         return _skip(agent_unit, unavailable, now=now, settings=settings, attempt=len(prior) + 1)
     if not ready:
         return _skip(agent_unit, 'migration_026_missing', now=now, settings=settings, attempt=len(prior) + 1)
-    return run_agent_unit(agent_unit, now=now, deps=deps, settings=settings, attempt=len(prior) + 1)
+    try:
+        return run_agent_unit(agent_unit, now=now, deps=deps, settings=settings, attempt=len(prior) + 1)
+    finally:      # B1(a): no handler pass follows a manual run -- whatever it queued is settled ``manual_run``
+        defer_manual_data_requests(None, requested_at=now)
 
 
 RERUN_MODES = ('propose', 'interpret')
@@ -1375,6 +1378,35 @@ def defer_leftover_data_requests(run_id: str | None, *, reason: str = 'run_ended
         return len(rows)
 
 
+def defer_manual_data_requests(run_id: str | None, *, requested_at: datetime, reason: str = 'manual_run') -> int:
+    """B1(a): a manual flow (``run_agent`` / ``rerun_agent`` / the API recheck) has no handler pass behind it, so the
+    requests it queued -- ``run_id`` (NULL for ``run_agent``) at its own cutoff ``requested_at`` -- settle ``deferred``
+    (reason ``manual_run``) as soon as the call ends; nothing is fetched synchronously. Returns how many rows settled;
+    before migration 031 there is no queue (0)."""
+    with core_tx._tx() as conn:
+        if not core_schema.five_layers_ready(conn):
+            return 0
+        rows = data_repo.queued_data_requests_at(conn, run_id, requested_at)
+        for row in rows:
+            data_repo.settle_data_request(conn, row['id'], status='deferred', fetch_run_id=None, rows=None,
+                                          reason=reason, rerun_run_id=None)
+        return len(rows)
+
+
+def defer_orphaned_data_requests(run_id: str | None, *, before: datetime, reason: str = 'orphaned') -> int:
+    """B1(b): the daily review's last act also settles ``deferred`` (reason ``orphaned``) the ``queued`` rows no later pass
+    will ever read -- another run's (or a manual flow's) rows made before this run's cutoff ``before``. A dossier's own
+    rows (``research:`` run ids) are only taken once a day old. Returns how many rows settled."""
+    with core_tx._tx() as conn:
+        if not core_schema.five_layers_ready(conn):
+            return 0
+        rows = data_repo.orphaned_data_requests(conn, run_id=run_id, before=before, research_prefix=RESEARCH_RUN_PREFIX)
+        for row in rows:
+            data_repo.settle_data_request(conn, row['id'], status='deferred', fetch_run_id=None, rows=None,
+                                          reason=reason, rerun_run_id=None)
+        return len(rows)
+
+
 def process_data_requests(session: date, *, run_id: str | None, now: datetime, deps: Deps,
                           features: dict | None, budget_left_s: float,
                           breadth_tickers: tuple[str, ...] | list[str] | None = None) -> dict[str, int]:
@@ -1485,11 +1517,13 @@ def _unit_for_request_rerun(conn, ticker: str, signal_date: date, *, prior: list
 RESEARCH_RUN_PREFIX = 'research:'      # the ``run_id`` a dossier's own ``data_requests`` carry (§6.3 ⑦, never NULL)
 
 
-def _research_gate(settings, *, started: float, clock: Callable[[], float], now: datetime) -> tuple[str, str] | None:
-    """§6.3 预算 / R36: no model phase starts after ``RESEARCH_DEADLINE_S`` since the attempt started, nor once the
-    day's tokens are spent (a dossier's tokens count into the same total). ``(reason, detail)`` or None."""
-    if clock() - started >= RESEARCH_DEADLINE_S:
-        return 'stage_budget', f'研究预算 {RESEARCH_DEADLINE_S} 秒已用完'
+def _research_gate(settings, *, started: float, clock: Callable[[], float], now: datetime,
+                   deadline_s: float = RESEARCH_DEADLINE_S) -> tuple[str, str] | None:
+    """§6.3 预算 / R36: no model phase starts after ``deadline_s`` since the attempt started -- ``RESEARCH_DEADLINE_S``,
+    or less when the daily drain hands the dossier only what is left of the shared budget (B2) -- nor once the day's
+    tokens are spent (a dossier's tokens count into the same total). ``(reason, detail)`` or None."""
+    if clock() - started >= deadline_s:
+        return 'stage_budget', f'研究预算 {deadline_s:g} 秒已用完'
     if settings.daily_tokens is not None:
         with core_tx._tx() as conn:
             used = analysis_repo.agent_tokens_on(conn, now.astimezone(NY).date())
@@ -1498,15 +1532,34 @@ def _research_gate(settings, *, started: float, clock: Callable[[], float], now:
     return None
 
 
-def _advance_request(conn, row: dict, version_status: str) -> None:
-    """The request's state-machine step after a version (D51, §6.3 失败): concluded / waiting_data move on; an error
-    returns it to ``queued`` and the third attempt closes it ``max_attempts``. Guarded by ``WHERE status = running``."""
+def _advance_request(conn, row: dict, version_status: str, *, count_attempt: bool = True) -> None:
+    """The request's state-machine step after a version (D51, §6.3 失败): concluded moves on; an error returns it to
+    ``queued`` and the third attempt closes it ``max_attempts``; a ``waiting_data`` that came from a rerun (the request
+    was already ``waiting_data`` when this attempt began) counts as an attempt too and the third such rerun closes it
+    ``waiting_data_limit`` (B3). ``count_attempt=False`` (the shared budget ran out, B2) returns an error to ``queued``
+    without spending one. Guarded by ``WHERE status = running``."""
     from investment_assistant.analysis import research_requests
 
-    if version_status in ('concluded', 'waiting_data'):
-        analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status=version_status)
+    attempts = row.get('attempts') or 0
+    if version_status == 'concluded':
+        analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='concluded')
         return
-    attempts = (row.get('attempts') or 0) + 1
+    if version_status == 'waiting_data':
+        if row.get('status') != 'waiting_data':       # the first wait: not yet a rerun
+            analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='waiting_data')
+            return
+        attempts += 1
+        if attempts >= research_requests.MAX_ATTEMPTS:
+            analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='closed',
+                                                 attempts=attempts, closed_reason='waiting_data_limit')
+        else:
+            analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='waiting_data',
+                                                 attempts=attempts)
+        return
+    if not count_attempt:
+        analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='queued')
+        return
+    attempts += 1
     if attempts >= research_requests.MAX_ATTEMPTS:
         analysis_repo.update_research_status(conn, row['id'], from_status='running', to_status='closed',
                                              attempts=attempts, closed_reason='max_attempts')
@@ -1516,11 +1569,12 @@ def _advance_request(conn, row: dict, version_status: str) -> None:
 
 
 def fail_research(row: dict, *, now: datetime, reason: str, started: float | None = None,
-                  clock: Callable[[], float] = time.monotonic) -> dict | None:
+                  clock: Callable[[], float] = time.monotonic, count_attempt: bool = True) -> dict | None:
     """A failure outside the model half (collection, configuration, the final write): the request is ``running`` and
     must not stay so. Writes an ``error`` version carrying the reason and does the same attempts / ``closed /
     max_attempts`` bookkeeping as ``run_research`` (§6.3 失败). Returns the version, or None when the request is no
-    longer ``running`` (someone already moved it: closed by hand, or the model half finished)."""
+    longer ``running`` (someone already moved it: closed by hand, or the model half finished). ``count_attempt=False``
+    (the budget ran out, not the dossier) returns the request to ``queued`` without spending an attempt."""
     with core_tx._tx() as conn:
         current = analysis_repo.research_request(conn, row['id'])
         if current is None or current['status'] != 'running':
@@ -1530,20 +1584,22 @@ def fail_research(row: dict, *, now: datetime, reason: str, started: float | Non
             'agent_run_id': None, 'cutoff_at': now, 'status': 'error', 'action': None,
             'summary': f'运行失败：{reason}', 'output': None, 'review_when': None, 'tokens': 0,
             'elapsed_ms': int((clock() - started) * 1000) if started is not None else None, 'created_at': now})
-        _advance_request(conn, current, 'error')
+        _advance_request(conn, current, 'error', count_attempt=count_attempt)
     return version
 
 
 def run_research(row: dict, *, now: datetime, deps: Deps, collection: dict | None = None,
-                 started: float | None = None) -> dict:
+                 started: float | None = None, deadline_s: float | None = None, features: dict | None = None) -> dict:
     """One dossier attempt's model half (§6.3 ④–⑦): the agent-4 dossier chain (researcher + proposer + counter +
     check), its ``agent_runs`` row, one ``research_versions`` row and the request's state-machine outcome.
     ``waiting_data`` only when the researcher found blocked data AND the conclusion says ``wait``; every failure
     class becomes an error version, the request returns to ``queued`` until the third attempt closes it (D51).
     Dossiers never open chains or write plans (D39 B).
 
-    Budget (§6.3): no model phase starts after ``RESEARCH_DEADLINE_S`` since ``started`` or once the day's tokens are
-    spent (``_research_gate``). §6.3 ⑦: the ``request_data`` calls of the first version are stamped
+    Budget (§6.3): no model phase starts after ``deadline_s`` (default ``RESEARCH_DEADLINE_S``; the daily drain passes
+    ``min(RESEARCH_DEADLINE_S, what is left of the shared budget)``, B2 -- a refusal by that smaller budget does not
+    spend an attempt) since ``started`` or once the day's tokens are spent (``_research_gate``). ``features`` are the
+    run's frozen switches (B5) for the follow-up fetches; ``None`` reads the current ones. §6.3 ⑦: the ``request_data`` calls of the first version are stamped
     ``research:<request id>`` (never a NULL run), settled synchronously in the remaining budget through the same
     handler as the batch tail, and when they gained rows the chain runs once more (a second version, pointers on the
     requests); whatever the last version queued settles ``deferred``. The model half never reruns the researcher's
@@ -1552,6 +1608,8 @@ def run_research(row: dict, *, now: datetime, deps: Deps, collection: dict | Non
 
     clock = deps.clock or time.monotonic
     started = started if started is not None else clock()
+    budget_s = RESEARCH_DEADLINE_S if deadline_s is None else min(deadline_s, RESEARCH_DEADLINE_S)
+    shared_limit = budget_s < RESEARCH_DEADLINE_S      # the drain's smaller budget ran out, not the dossier's own
     session = bars.latest_closed_session(now)
     settings = deps.agent_settings if deps.agent_settings is not None else agent_model.settings_from_env()
     unit = {'ticker': row['ticker'], 'signal_date': session, 'pool_tier': None}
@@ -1565,7 +1623,7 @@ def run_research(row: dict, *, now: datetime, deps: Deps, collection: dict | Non
         agent_run_id = str(uuid.uuid4())
         result: dict = {'status': 'error', 'reason': None, 'output': None, 'research': None,
                         'calls': [], 'data_requests': [], 'input_tokens': 0, 'output_tokens': 0}
-        failure = _research_gate(settings, started=started, clock=clock, now=now)
+        failure = _research_gate(settings, started=started, clock=clock, now=now, deadline_s=budget_s)
         if failure is None:
             try:
                 with ExitStack() as stack:
@@ -1583,7 +1641,7 @@ def run_research(row: dict, *, now: datetime, deps: Deps, collection: dict | Non
                             result = research_phase.run_chain(
                                 unit=unit, ctx=ctx, model=model_obj, checkpointer=checkpointer, run_id=agent_run_id,
                                 question=row.get('question') or '', now=lambda: now,
-                                expired=lambda: clock() - started >= RESEARCH_DEADLINE_S)
+                                expired=lambda: clock() - started >= budget_s)
                         except core_tx.Unavailable:
                             raise
                         except Exception as exc:   # noqa: BLE001 — classify_error names the reason
@@ -1606,7 +1664,8 @@ def run_research(row: dict, *, now: datetime, deps: Deps, collection: dict | Non
             version_status = 'waiting_data' if (blocked and action == 'wait') else 'concluded'
             run_status, reason, detail = result['status'], result.get('reason'), None
         return {'agent_run_id': agent_run_id, 'result': result, 'version_status': version_status,
-                'action': action, 'summary': summary, 'run_status': run_status, 'reason': reason, 'detail': detail}
+                'action': action, 'summary': summary, 'run_status': run_status, 'reason': reason, 'detail': detail,
+                'count_attempt': not (shared_limit and failure is not None and failure[0] == 'stage_budget')}
 
     def write(attempt: dict, *, final: str | None) -> dict:
         """The attempt's run, calls, queued requests and version row in one transaction; ``final`` also moves the
@@ -1630,7 +1689,7 @@ def run_research(row: dict, *, now: datetime, deps: Deps, collection: dict | Non
                 'review_when': None, 'tokens': tokens['input_tokens'] + tokens['output_tokens'],
                 'elapsed_ms': int((clock() - started) * 1000), 'created_at': now})
             if final is not None:
-                _advance_request(conn, row, final)
+                _advance_request(conn, row, final, count_attempt=attempt['count_attempt'])
         return version
 
     first = compute()
@@ -1642,9 +1701,10 @@ def run_research(row: dict, *, now: datetime, deps: Deps, collection: dict | Non
         defer_leftover_data_requests(request_run, reason='research_not_followed')
     if follow_up:
         try:
-            _, settled = _settle_requests(session, run_id=request_run, now=now, deps=deps, features=None,
-                                          budget_left_s=RESEARCH_DEADLINE_S - (clock() - started))
-            if settled and _research_gate(settings, started=started, clock=clock, now=now) is None:
+            _, settled = _settle_requests(session, run_id=request_run, now=now, deps=deps, features=features,
+                                          budget_left_s=budget_s - (clock() - started))
+            if settled and _research_gate(settings, started=started, clock=clock, now=now,
+                                          deadline_s=budget_s) is None:
                 second = compute()
                 version = write(second, final=None)
                 agent_run_id = second['agent_run_id']
@@ -1671,7 +1731,10 @@ def drain_research_requests(session: date, *, now: datetime, deps: Deps, summary
                             budget_left_s: float, features: dict | None = None) -> dict[str, int]:
     """§10/D26: the agent node's dossier tail — queued and waiting-data requests FIFO, inside the
     run's remaining shared budget (capped at RESEARCH_DEADLINE_S); the review tail reuses this
-    handler. Degrades to a no-op before 031, with the flag off or without budget left."""
+    handler. Each dossier gets ``min(RESEARCH_DEADLINE_S, what is left)`` as its own deadline (collection, model
+    phases and the follow-up fetches all stop at it, B2) and none starts with less than ``DATA_REQUEST_MIN_S`` left;
+    the dossiers fetch with the run's frozen ``features`` (B5). Degrades to a no-op before 031, with the flag off or
+    without budget left."""
     from investment_assistant.analysis import research_requests
 
     counts = {'requests': 0}
@@ -1685,10 +1748,11 @@ def drain_research_requests(session: date, *, now: datetime, deps: Deps, summary
     clock = deps.clock or time.monotonic
     deadline = clock() + min(budget_left_s, RESEARCH_DEADLINE_S)
     for row in queue:
-        if clock() >= deadline:
+        left = deadline - clock()
+        if left < DATA_REQUEST_MIN_S:
             break
         try:
-            research_requests.run(row['id'], now=now, deps=deps)
+            research_requests.run(row['id'], now=now, deps=deps, deadline_s=left, features=flags)
         except core_tx.Unavailable:
             raise
         except Exception as exc:   # noqa: BLE001 — one dossier never drags the node

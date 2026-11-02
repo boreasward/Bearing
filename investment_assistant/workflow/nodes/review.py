@@ -329,9 +329,12 @@ def recheck(ticker: str, signal_date: date, *, now: datetime, deps=None, run_id:
             raise RecheckConflict('review_in_progress')
         _precheck(ticker, signal_date, session=session, now=now, settings=settings, run_lock=False)
         clock = deps.clock or time.monotonic
-        out = analysis_agent_runner._review_chain({'ticker': ticker, 'signal_date': signal_date}, session=session, now=now,
-                            trigger='recheck', run_id=run_id, deps=deps, settings=settings, started=clock(),
-                            clock=clock, quota={'exhausted': False})
+        try:
+            out = analysis_agent_runner._review_chain({'ticker': ticker, 'signal_date': signal_date}, session=session,
+                                now=now, trigger='recheck', run_id=run_id, deps=deps, settings=settings,
+                                started=clock(), clock=clock, quota={'exhausted': False})
+        finally:      # B1(a): no handler pass follows a manual recheck -- its queued requests settle ``manual_run``
+            analysis_agent_runner.defer_manual_data_requests(run_id, requested_at=now)
     if 'skipped_without_row' in out:
         raise RecheckConflict(out['skipped_without_row'])
     return out
@@ -907,10 +910,13 @@ def run(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None) -> dict[
 def _defer_leftover_requests(state: dict[str, Any], summary: dict[str, Any], acc: stages_module.StageAcc | None) -> None:
     """§5.5: the review node is the run's last handler pass. Whatever the run still has ``queued`` after it — the requests
     the tail's own reruns queued, or everything when the review stage was skipped or failed — settles ``deferred``,
-    so ``workflow check``'s one-day rule never names the system's own normal operation. Best effort; counted into the
+    so ``workflow check``'s one-day rule never names the system's own normal operation. Rows of other runs (and of
+    manual flows) made before this run's cutoff, which no pass will read, settle ``deferred`` / ``orphaned`` too. Best effort; counted into the
     review's ``data_requests`` (queued and deferred) when that detail exists."""
     try:
         left = analysis_agent_runner.defer_leftover_data_requests(state.get('run_id'))
+        if state.get('run_id') is not None and state.get('cutoff_at'):
+            analysis_agent_runner.defer_orphaned_data_requests(state['run_id'], before=_moment(state)[0])
     except Unavailable:
         raise
     except Exception as exc:    # noqa: BLE001 - housekeeping never fails the stage

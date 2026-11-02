@@ -95,6 +95,27 @@ it('dossier sections read the saved conclusion lists, counter status and keep mi
   expect(screen.getByText('本版没有反证条目')).toBeInTheDocument()
   expect(screen.getAllByText('本版未记录')).toHaveLength(2)   // missing catalysts + review_when
   await view.rerender({ sub: 'r1/3' })
-  expect(await screen.findByText('校验未过：research_refs_invalid')).toBeInTheDocument()
+  expect(await screen.findByText('校验未过：研究引用无效')).toBeInTheDocument()
   expect(screen.getByText('本版未记录研究事实')).toBeInTheDocument()
+})
+it('translates automatic close reasons and error-version summaries; manual reasons stay as written', async () => {
+  const detail = (closed_reason: string, summary: string) => Response.json({
+    request: { ...item, status: 'closed', closed_reason, source: 'manual', horizon_days: 20 },
+    versions: [{ ...version, status: 'error', action: null, summary, output: null }], chain: null,
+  })
+  fetcher.mockImplementation(async () => detail('no_new_version_30d', '运行失败：stage_budget'))
+  const view = render(Research, { sub: 'r1' })
+  expect(await screen.findByText('超过 30 个自然日没有新版本，已自动结束')).toBeInTheDocument()
+  expect(screen.getByText('运行失败：超出时限')).toBeInTheDocument()
+  expect(screen.queryByText('no_new_version_30d')).toBeNull()
+  cleanup(); view.unmount()
+  fetcher.mockImplementation(async () => detail('waiting_data_limit', '校验未过：invalid_citation'))
+  render(Research, { sub: 'r1' })
+  expect(await screen.findByText('等待补数据已重试 3 次，已结束')).toBeInTheDocument()
+  expect(screen.getByText('校验未过：引用无效已作废')).toBeInTheDocument()
+  cleanup()
+  fetcher.mockImplementation(async () => detail('手动结束', '运行失败：some_unknown_code'))
+  render(Research, { sub: 'r1' })
+  expect(await screen.findByText('手动结束')).toBeInTheDocument()
+  expect(screen.getByText('运行失败：some_unknown_code')).toBeInTheDocument()
 })

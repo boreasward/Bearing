@@ -84,7 +84,7 @@ class NodeFailed(RuntimeError):
 
 class ResumeRejected(RuntimeError):
     """A resume the pre-checks refuse (HTTP 409 in the API): ``code`` is ``not_failed`` / ``node_mismatch`` /
-    ``resume_window_closed``; ``message`` the Chinese text."""
+    ``resume_window_closed`` / ``graph_version_changed``; ``message`` the Chinese text."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -378,9 +378,24 @@ def _execute(state: dict, graph_input: dict | None, *, deps: service.Deps, attem
         summary['resume_node'] = resume_node
     if info is not None:
         summary['error'] = f"{info['node']}: {info['reason']}"
+    _attach_check(summary, state['session'])
     return {'run_id': run_id, 'status': status, 'summary': summary, 'attempt': attempt,
             'trigger': state['trigger'], 'session': state['session'], 'started_at': started_at,
             'failed_node': node, 'failure': info}
+
+
+def _attach_check(summary: dict, session: str) -> None:
+    """B11 (spec §8.4, D45): the run's last act, after ``propose`` and before the report is written, is one read-only
+    ``workflow check`` of its session; ``{ok, items: {name: status}}`` goes to ``summary['check']``. A failure of the
+    check is a line in ``summary['errors']`` -- it never changes the run's status."""
+    from investment_assistant.workflow import check as workflow_check
+
+    try:
+        with core_tx.read_only_tx() as conn:
+            found = workflow_check.run_checks(conn, session=date.fromisoformat(session), now=_wall())
+        summary['check'] = {'ok': found['ok'], 'items': {name: item['status'] for name, item in found['items'].items()}}
+    except Exception as exc:  # noqa: BLE001 - housekeeping never fails the run
+        summary.setdefault('errors', []).append(f'check: {families.sanitize_reason(exc) or type(exc).__name__}')
 
 
 def _frozen_features() -> dict[str, bool] | None:
@@ -425,6 +440,11 @@ def _checked(run_id: str, node_id: str, *, now: datetime, checkpointer_factory) 
     values = dict(snapshot.values or {})
     if not rows or not values:
         raise LookupError(f'没有这次运行：{run_id}')
+    if values.get('graph_version') != DAILY_GRAPH_VERSION:
+        # B12: a checkpoint written by another graph (the day the graph is upgraded, a run of ``daily-2`` still inside
+        # its resume window) must not continue on this graph's nodes: its rows would mix stage versions.
+        raise ResumeRejected('graph_version_changed',
+                             f"这次运行用的是 {values.get('graph_version') or '旧版'} 图，现行为 {DAILY_GRAPH_VERSION}，只能整次重新运行")
     pending = tuple(snapshot.next)
     if not pending:
         raise ResumeRejected('not_failed', '这次运行没有失败的节点')
@@ -448,7 +468,7 @@ def _checked(run_id: str, node_id: str, *, now: datetime, checkpointer_factory) 
 
 def resume_check(run_id: str, node: str, *, now: datetime, checkpointer_factory=None) -> dict:
     """The resume pre-checks, writing nothing (spec §5.4): ``LookupError`` (no such run), ``ResumeRejected(code,
-    message)`` (``not_failed`` / ``node_mismatch`` / ``resume_window_closed``), ``service.Unavailable`` (migration 028
+    message)`` (``not_failed`` / ``node_mismatch`` / ``resume_window_closed`` / ``graph_version_changed``), ``service.Unavailable`` (migration 028
     missing / checkpoint tables missing / database unreachable), ``ValueError`` (node not of ``stages-4``). Returns ``{'run_id', 'node', 'attempt',
     'session', 'cutoff_at', 'trigger', 'deadline_at'}``."""
     return _checked(run_id, node, now=now, checkpointer_factory=checkpointer_factory)[0]

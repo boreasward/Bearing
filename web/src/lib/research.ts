@@ -1,4 +1,4 @@
-import { request } from './workbench'
+import { AGENT_REASON_TEXT, request } from './workbench'
 
 export type ResearchStatus = 'queued' | 'running' | 'waiting_data' | 'concluded' | 'closed'
 export type FactKind = 'disclosure' | 'guidance' | 'price_fact' | 'user' | 'inference'
@@ -23,6 +23,18 @@ export type CounterStatus = 'ok' | 'malformed' | 'skipped' | 'tool_rounds_exceed
 export const COUNTER_STATUS_TEXT: Record<CounterStatus, string> = {
   ok: '反方阶段完成', malformed: '反方输出格式无效，本版没有反证', skipped: '反方阶段因时限未运行，本版没有反证',
   tool_rounds_exceeded: '反方工具调用超限，本版没有反证',
+}
+/** `research_requests.closed_reason` machine codes the backend writes (auto close after 30 days, attempt cap, B3's waiting-data
+ * cap); a manual close stores free text, which is shown as written. */
+export const CLOSED_REASON_TEXT: Record<string, string> = {
+  no_new_version_30d: '超过 30 个自然日没有新版本，已自动结束', max_attempts: '连续 3 次失败，已停止重试',
+  waiting_data_limit: '等待补数据已重试 3 次，已结束',
+}
+export const closedReasonText = (reason: string) => CLOSED_REASON_TEXT[reason] ?? reason
+/** An error version's summary is `运行失败：<code>` / `校验未过：<code>`; the code is translated, anything else is shown as stored. */
+export function versionSummaryText(summary: string): string {
+  const match = /^(运行失败|校验未过)：([A-Za-z][A-Za-z0-9_]*)(.*)$/s.exec(summary)
+  return match ? `${match[1]}：${AGENT_REASON_TEXT[match[2]] ?? match[2]}${match[3]}` : summary
 }
 export const DOSSIER_ACTION_TEXT: Record<string, string> = { buy: '倾向买入', pass: '不建议买入', wait: '等待数据' }
 /** `research_versions.output` of a concluded dossier: the conclusion's lists plus the researcher's checked segment.

@@ -6,7 +6,7 @@
 
 `review → portfolio → accounts`。开关开启、交易日时，对真实账户和每个活跃模拟账户各算一份 `portfolio-check-1` 硬结果；`execution.portfolio.check(*,session,plans,positions,pending,cash,equity,params,sectors)` 是纯函数，不调模型、不读库。
 
-- verdict / order / 互斥只给**入场期链头版本**；持仓链只计敞口与只数。宿主按 `chain_signal_date` 升序、再 ticker 贪心装入；这是硬约束顺序，不是投资优劣排名。现金不够为 `deferred_by_cash`，order 为 null。
+- verdict / order / 互斥只给**入场期链头版本**；持仓链只计敞口与只数。宿主按 `chain_signal_date` 升序、再 ticker 贪心装入；这是硬约束顺序，不是投资优劣排名。现金不够为 `deferred_by_cash`，order 为 null。贪心造成的容量不足同样判 `deferred`、原因码保留原名：`max_positions`、`total_cap`，以及由前序候选累计预留造成的 `single_cap`；它们只说明「这一单今天排不上」，不是硬拒绝。
 - 行业敞口含持仓、在挂与候选，除以本账户权益。`sector_cap` 默认 0.35、范围 0.05–1.0；`max_per_sector` 默认 3、整数 1–10，都是账户参数，不从历史拟合。未知 SIC 单列「未归类」，不计入任何行业组上限，`sector_unknown` 只提示。
 - 结果含 `exposure_by_sector/verdicts/conflicts/order/params_used/version`。真实账户另可调用一次 `agent-pm-1`，独立 300 秒，commentary 为 summary/ranking/tradeoffs/hold_actions；ranking 只能包含硬判定 ok 的计划，模型不得改价位或股数。模拟账户不另跑 PM，Agent 自管用 `agent-portfolio-2` 的第八段 `[fact:portfolio_check]`。
 - 买单被硬判 blocked 时取首个 reason 拒绝；`deferred` 本身不是硬拒绝，原现金等订单校验照常。照计划执行对照账户不读取组合检查，仍为 `follow-plans-1`。检查不改写或作废单条计划，真实账户不自动成交。
@@ -21,10 +21,15 @@
 
 `sector_unknown=行业未归类`、`deferred_by_cash=现金不足，暂缓执行` 是提示 / 暂缓，不能放进硬拒绝枚举。
 
+**两道行业上限按组内逐条判**：同一行业组内按同一贪心顺序（信号日、ticker）累加持仓、在挂与候选；放得下的给 `ok`，放不下的给 `max_per_sector` / `sector_cap`，而不是整组一起拦。例如持 2 只、来 2 条候选、上限 3：第一条 `ok`，第二条 `max_per_sector`。该组仍列进 `conflicts`，供经理取舍；0 股（买不了）的候选不计入组敞口与只数。
+
+**订单校验只硬拦与顺序、挂单无关的原因**：`sector_cap`、`max_per_sector`、对**已持仓**标的的 `held_ticker`、零预留下 sizing 已为 0 的 `single_cap`。由挂单预留得出的原因（`max_positions`、`total_cap`、累计预留的 `single_cap`）不在这里硬拦，交给 `validate_orders` 自己在撤单释放预留之后的闸门判断——所以挂单链换版时，宿主撤掉旧单之后新版本仍能下单，当天止损退出后 `max_positions` 也不会拦新单。
+
 | 条件 | 节点、订单与页面 |
 | --- | --- |
 | 冻结 `portfolio_manager=false` | 整节点 `skipped/feature_disabled`，**不执行硬检查**；fact 写「本版未检查」，`validate_orders(None)` 不作组合拦截，原现金 / 股数校验及 accounts 照常；Today `not_computed` |
-| 开启且硬结果已产出，随后 PM 模型失败 / 不可用 | 硬结果保留、无成功 commentary，Today `degraded` /「只有硬结果」，已有本账户硬结果仍约束订单 |
+| 开启且硬结果已产出，随后真实账户的 PM 模型失败 / 不可用 | 硬结果保留、无成功 commentary，`degraded`、`reason='agent_unavailable'`，页面「Agent 不可用；只有硬结果」，已有本账户硬结果仍约束订单 |
+| 开启且模拟账户有硬结果 | 模拟账户本来就不调组合经理：`status='ready'`、`reason='paper_no_pm'`、`commentary=null`，页面写「模拟账户不调组合经理，只有硬结果」，不再冒充「Agent 不可用」 |
 | 开启但缺硬结果 | `not_computed`，不是空组合成功，也不是已有硬结果的 degraded；节点失败下游 accounts 照常，缺行不作组合拦截 |
 | 硬结果与成功意见完整 | `ready` |
 
@@ -51,4 +56,4 @@
 
 ## 已知限制
 
-SIC 两位是粗分类，未归类不阻断不代表风险为零。贪心装入顺序不是收益预测，经理建议仍须人工判断。组合检查 / 页面通过不能替代前向账户证据；Gate HOLD 不变，验收见 [清单 §3](../roadmap/v2.12-v2.15-acceptance.md)。
+SIC 两位是粗分类，未归类不阻断不代表风险为零。当天止损 / 退出的标的不能在同一交易日再买；权益分母比实际晚一天（当日变动要到下一次结算才进入分母）。贪心装入顺序不是收益预测，经理建议仍须人工判断。组合检查 / 页面通过不能替代前向账户证据；Gate HOLD 不变，验收见 [清单 §3](../roadmap/v2.12-v2.15-acceptance.md)。

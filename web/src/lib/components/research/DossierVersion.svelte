@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { DossierEntry, ResearchVersion } from '$lib/research'
-  import { COUNTER_STATUS_TEXT, DOSSIER_ACTION_TEXT, RESEARCH_PHASE_TEXT } from '$lib/research'
+  import { COUNTER_STATUS_TEXT, DOSSIER_ACTION_TEXT, RESEARCH_PHASE_TEXT, versionSummaryText } from '$lib/research'
   import { AGENT_REASON_TEXT } from '$lib/workbench'
   import AgentReasoning from '$lib/components/AgentReasoning.svelte'
   import Facts from './Facts.svelte'
@@ -28,7 +28,7 @@
 <div class="grid gap-4">
   <div class="flex flex-wrap gap-3 text-xs"><StatusPill domain="research_request" value={version.status} /><CutoffTime at={version.cutoff_at} /><span>token {version.tokens ?? '未记录'} · {version.elapsed_ms == null ? '耗时未记录' : `${version.elapsed_ms / 1000} 秒`}</span></div>
   <Section title="论点" level={3}>
-    <p>{version.summary ?? '尚无结论'}</p>
+    <p>{version.summary == null ? '尚无结论' : versionSummaryText(version.summary)}</p>
     {#if version.action}<p class="text-xs text-muted-foreground">档案结论：{DOSSIER_ACTION_TEXT[version.action] ?? version.action}</p>{/if}
   </Section>
   <Section title="事实与来源" level={3}>

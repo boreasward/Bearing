@@ -253,12 +253,14 @@ def _proposals_item(conn) -> dict[str, Any]:
                      for proposal_id in optimize_proposals.violations(conn)])
 
 
-def _data_requests_item(conn, now: datetime) -> dict[str, Any]:
-    """No request has stayed ``queued`` for more than a day."""
+def _data_requests_item(conn, session: date, now: datetime) -> dict[str, Any]:
+    """No request made in the session's window has stayed ``queued`` for more than a day."""
     if not core_schema.five_layers_ready(conn):
         return _skipped('migration_031_missing')
+    start, end = session_window(session)
     return _verdict([f"补查请求 {row['id']} {row['family']} {row['ticker']} 自 {_beijing(row['requested_at'])} 起仍在排队"
-                     for row in data_repo.stale_queued_data_requests(conn, before=now - timedelta(days=1))])
+                     for row in data_repo.stale_queued_data_requests(conn, before=now - timedelta(days=1),
+                                                                     since=start, until=end)])
 
 
 def _research_item(conn, session: date) -> dict[str, Any]:
@@ -284,7 +286,7 @@ def run_checks(conn, *, session: date, now: datetime) -> dict[str, Any]:
         'accounts': _accounts_item(conn, session, now),
         'portfolio_checks': _portfolio_item(conn, session),
         'proposals_without_changes': _proposals_item(conn),
-        'data_requests': _data_requests_item(conn, now),
+        'data_requests': _data_requests_item(conn, session, now),
         'research': _research_item(conn, session),
     }
     return {'session': session, 'ok': all(item['status'] != 'mismatch' for item in items.values()), 'items': items}

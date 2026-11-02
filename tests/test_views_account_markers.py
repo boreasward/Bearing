@@ -107,7 +107,7 @@ def test_compare_and_equity_carry_markers_and_decisions_the_agent_version(conn, 
 
 def test_portfolio_check_of_one_account_and_session(conn):
     """`GET /api/accounts/{id}/portfolio-check?session=`: 「今日」's shape for any account; a missing row is
-    not_computed, a hard result alone is degraded."""
+    not_computed, a paper account's hard result alone is ready (no portfolio manager, C1)."""
     account = paper(conn, '自管', 'agent_managed')
     conn.commit()
     now, session = wall(), date(2026, 10, 22)
@@ -121,5 +121,5 @@ def test_portfolio_check_of_one_account_and_session(conn):
         'cutoff_at': datetime(2026, 10, 22, 22, 30, tzinfo=UTC), 'version': 'portfolio-check-1', 'result': result})
     conn.commit()
     out = account_views.portfolio_check(str(account['id']), now=now, session=session)
-    assert (out['status'], out['result'], out['commentary']) == ('degraded', result, None)
+    assert (out['status'], out['reason'], out['result'], out['commentary']) == ('ready', 'paper_no_pm', result, None)   # C1: a paper account has no PM
     assert account_views.portfolio_check(str(account['id']), now=now, session=date(2026, 10, 21))['status'] == 'not_computed'

@@ -328,3 +328,107 @@ def test_review_node_defers_what_its_tail_leaves_queued(wired_db, monkeypatch):
     assert wired_db.execute("SELECT count(*) FROM data_requests WHERE status = 'queued'").fetchone()[0] == 0
     review_node._defer_leftover_requests({'run_id': None}, summary, None)          # a shell without a run id: nothing
     assert summary['errors'] == []
+
+
+# ---------------------------------------------------------------- B1: nobody's requests settle
+
+def _states(conn):
+    return conn.execute('SELECT family, status, reason FROM data_requests ORDER BY id').fetchall()
+
+
+def test_manual_run_agent_settles_its_requests_manual_run(wired_db, monkeypatch):
+    """B1(a): a manual ``run_agent`` has no handler pass behind it -- the requests it queued end ``deferred`` /
+    ``manual_run`` when it returns (an earlier manual row at another cutoff and a daily row are not its to close)."""
+    from investment_assistant.core import schema as core_schema
+    from investment_assistant.core.llm import model as agent_model
+    from investment_assistant.execution import plan_context
+
+    analysis_repo.insert_agent_run(wired_db, _run_row(), [], data_requests=[
+        {'family': 'news', 'ticker': 'AMD', 'requested_at': NOW - timedelta(days=2)},
+        {'family': 'sector', 'ticker': 'AMD', 'run_id': 'daily-r1'}])
+    wired_db.commit()
+
+    monkeypatch.setattr(data_repo, 'unit_candidates', lambda conn, ticker, day: [{'rule': 'x'}])
+    monkeypatch.setattr(plan_context, '_book', lambda conn, ticker: {'position': None})
+    monkeypatch.setattr(runner.synthesis, 'synthesize',
+                        lambda *a, **k: {'ticker': 'AMD', 'proposed_action': 'buy', 'labels': []})
+    monkeypatch.setattr(runner, '_assert_unit_may_open', lambda *a, **k: None)
+    monkeypatch.setattr(runner.units, '_unit_is_extended', lambda *a, **k: False)
+    monkeypatch.setattr(data_repo, 'pool_entry_at', lambda *a, **k: None)
+    monkeypatch.setattr(core_schema, 'timeline_ready', lambda conn: True)
+    monkeypatch.setattr(agent_model, 'unavailable_reason', lambda settings: None)
+
+    def fake_unit(unit, **kwargs):
+        record = analysis_repo.insert_agent_run(wired_db, _run_row(), [], data_requests=[
+            {'family': 'fundamentals', 'ticker': 'AMD', 'requested_at': NOW}])
+        wired_db.commit()
+        return record
+
+    monkeypatch.setattr(runner, 'run_agent_unit', fake_unit)
+    runner.run_agent('AMD', SESSION, now=NOW, deps=core_tx.Deps(agent_settings=object()))
+    assert _states(wired_db) == [('news', 'queued', None), ('sector', 'queued', None),
+                                 ('fundamentals', 'deferred', 'manual_run')]
+
+
+def test_defer_manual_requests_matches_run_id_and_cutoff(wired_db):
+    """The API recheck carries its runner id: only that id's rows made at that cutoff settle."""
+    analysis_repo.insert_agent_run(wired_db, _run_row(), [], data_requests=[
+        {'family': 'fundamentals', 'ticker': 'AMD', 'run_id': 'plan_recheck-1', 'requested_at': NOW},
+        {'family': 'news', 'ticker': 'AMD', 'run_id': 'plan_recheck-2', 'requested_at': NOW},
+        {'family': 'sector', 'ticker': 'AMD', 'run_id': 'plan_recheck-1', 'requested_at': NOW - timedelta(hours=1)}])
+    wired_db.commit()
+    assert runner.defer_manual_data_requests('plan_recheck-1', requested_at=NOW) == 1
+    assert _states(wired_db) == [('fundamentals', 'deferred', 'manual_run'), ('news', 'queued', None),
+                                 ('sector', 'queued', None)]
+
+
+def test_orphaned_requests_settle_at_the_daily_review_and_check_is_ok(wired_db):
+    """B1(b): after a manual run a day earlier, the next daily review settles its rows ``orphaned`` (another run's
+    rows, a manual flow's NULL rows, an old dossier's rows), keeps this run's own for the leftover pass, a fresh
+    dossier's rows and anything made after the cutoff; ``workflow check`` is then ok."""
+    from investment_assistant.workflow import check as workflow_check
+    from investment_assistant.workflow.nodes import review as review_node
+
+    cutoff = NOW + timedelta(days=1)
+    analysis_repo.insert_agent_run(wired_db, _run_row(), [], data_requests=[
+        {'family': 'fundamentals', 'ticker': 'AMD', 'requested_at': NOW},                              # manual
+        {'family': 'news', 'ticker': 'AMD', 'run_id': 'plan_recheck-1', 'requested_at': NOW},          # api recheck
+        {'family': 'sector', 'ticker': 'AMD', 'run_id': 'daily-now', 'requested_at': cutoff},          # this run's own
+        {'family': 'earnings', 'ticker': 'AMD', 'run_id': 'research:5', 'requested_at': cutoff - timedelta(hours=1)},
+        {'family': 'sec_text', 'ticker': 'AMD', 'run_id': 'research:6', 'requested_at': NOW - timedelta(days=2)},
+        {'family': 'bars', 'ticker': 'AMD', 'run_id': 'daily-next', 'requested_at': cutoff + timedelta(minutes=5)}])
+    wired_db.commit()
+    summary = {'errors': []}
+    review_node._defer_leftover_requests({'run_id': 'daily-now', 'cutoff_at': cutoff.isoformat(),
+                                          'session': '2026-10-31'}, summary, None)
+    assert summary['errors'] == []
+    assert _states(wired_db) == [('fundamentals', 'deferred', 'orphaned'), ('news', 'deferred', 'orphaned'),
+                                 ('sector', 'deferred', 'run_ended'), ('earnings', 'queued', None),
+                                 ('sec_text', 'deferred', 'orphaned'), ('bars', 'queued', None)]
+    found = workflow_check.run_checks(wired_db, session=SESSION, now=cutoff + timedelta(hours=1))
+    assert found['items']['data_requests']['status'] == 'ok'
+
+
+def test_api_recheck_settles_what_it_queued(wired_db, monkeypatch):
+    """B1(a), the recheck half: the review runs under a runner id; what it queued ends ``manual_run`` with the call."""
+    from contextlib import contextmanager
+
+    from investment_assistant.workflow.nodes import review as review_node
+
+    @contextmanager
+    def free_lock(ticker, signal_date):
+        yield True
+
+    def fake_review(obj, **kwargs):
+        analysis_repo.insert_agent_run(wired_db, _run_row(mode='review'), [], data_requests=[
+            {'family': 'news', 'ticker': 'AMD', 'run_id': kwargs['run_id'], 'requested_at': kwargs['now']}])
+        wired_db.commit()
+        return {'id': 1}
+
+    monkeypatch.setattr(review_node.analysis_agent_runner, '_run_lock', free_lock)
+    monkeypatch.setattr(review_node, '_precheck', lambda *a, **k: None)
+    monkeypatch.setattr(review_node.analysis_agent_runner, '_review_chain', fake_review)
+    out = review_node.recheck('AMD', SESSION, now=NOW, deps=core_tx.Deps(agent_settings=object()),
+                              run_id='plan_recheck-9')
+    assert out == {'id': 1}
+    assert _states(wired_db) == [('news', 'deferred', 'manual_run')]

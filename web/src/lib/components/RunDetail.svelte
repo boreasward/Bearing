@@ -410,10 +410,13 @@
               {/if}
             </Section>
           {/if}
-          {#if node.id === 'agent'}
-            {#if node.did?.research_requests != null}<Section title="研究请求" level={3}><p>{node.did.research_requests}</p><a class="text-primary underline" href="#research">查看研究档案</a></Section>{/if}
-            {#if node.did?.data_requests != null}<Section title="补查请求" level={3}><p>{requestCounts(node.did.data_requests)}</p></Section>{/if}
+          {#if node.id === 'agent' && node.did?.research_requests != null}
+            <Section title="研究请求" level={3}>
+              <p>本次处理 {node.did.research_requests} 份{#if node.did.research_auto_closed != null}{' · '}自动结束 {node.did.research_auto_closed} 份{/if}</p>
+              <a class="text-primary underline" href="#research">查看研究档案</a>
+            </Section>
           {/if}
+          {#if (node.id === 'agent' || node.id === 'review') && node.did?.data_requests != null}<Section title="补查请求" level={3}><p>{requestCounts(node.did.data_requests)}</p></Section>{/if}
           </Card.Content>
         </Card.Root>
       {:else}

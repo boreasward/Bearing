@@ -738,7 +738,8 @@ def test_stages_6_portfolio_proposals_and_agent_request_counts(daily_db):
     book(daily_db, RUN_ID, version='stages-6', rows_by_stage={
         'portfolio': {'detail': {'accounts': accounts}, 'input_count': 2, 'output_count': 2},
         'propose': {'detail': {'proposals': proposals}, 'output_count': 1},
-        'agent': {'detail': {'data_requests': requests, 'research_requests': 2}}})
+        'agent': {'detail': {'data_requests': requests, 'research_requests': 2, 'research_auto_closed': 1}},
+        'review': {'detail': {'data_requests': {**requests, 'queued': 1, 'reruns': 0}, 'outcomes': {}}}})
     report(daily_db, RUN_ID, summary={'cutoff_at': NOW.isoformat()})
     detail = view()
     assert len(detail['nodes']) == 13
@@ -750,8 +751,11 @@ def test_stages_6_portfolio_proposals_and_agent_request_counts(daily_db):
         'kind': 'proposals', 'total': 1, 'truncated': False,
         'items': [{'id': 7, 'title': '补采财报', 'source': 'data_failures', 'status': 'proposed'}]}
     did = node(detail, 'agent')['did']
-    assert did['data_requests'] == requests and did['research_requests'] == 2
-    assert 'data_requests' not in node(detail, 'review')['did']          # the counts belong to the agent node
+    assert did['data_requests'] == requests and did['research_requests'] == 2 and did['research_auto_closed'] == 1
+    review = node(detail, 'review')['did']                               # C2: the review's own tail, same shape
+    assert review['data_requests'] == {**requests, 'queued': 1, 'reruns': 0}
+    assert 'research_requests' not in review and 'research_auto_closed' not in review
+    assert 'research_auto_closed' not in node(detail, 'portfolio')['did']
     assert 'portfolio' in node(detail, 'portfolio')['did']['sentence'] or '账户' in node(detail, 'portfolio')['did']['sentence']
 
 

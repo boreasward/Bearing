@@ -82,7 +82,13 @@ def _fetch(target, *, session, start, end, deps, now):
 
 
 def _nasdaq(target, *, session, start, end, deps, now):
-    return [nasdaq.fetch_earnings_date(target, today=session)]
+    """The backup only counts when it knows a date: an ``unknown`` answer says nothing about the primary's failure and
+    must not overwrite a known date already stored (B10), so the target counts as failed on both sources and keeps the
+    primary's reason."""
+    row = nasdaq.fetch_earnings_date(target, today=session)
+    if row['status'] != 'known':
+        raise fetch_policy.FetchError('Nasdaq 没有可解析的财报日', kind='empty', target=f'earnings:{target.upper()}')
+    return [row]
 
 
 def _store(conn, rows, *, target, source_id, now):

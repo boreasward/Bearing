@@ -201,6 +201,36 @@ def test_real_earnings_policy_and_nasdaq_single_attempt(monkeypatch):
     assert (item['rows'], item['attempts'], item['source_used']) == (1, 4, 'nasdaq')
 
 
+def test_nasdaq_unknown_answer_is_a_failed_backup_and_keeps_the_known_date(monkeypatch):
+    """B10: the primary fails (network), Nasdaq has no parsable date -- that is not an answer. Nothing is stored, the
+    target fails with the primary's reason and the earlier known date stays the latest answer."""
+    from investment_assistant.data.adapters import earnings
+    from investment_assistant.data.sources import nasdaq
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def get(self, *args, **kwargs):
+            return SimpleNamespace(status_code=200, headers={}, json=lambda: {'data': None})
+    def calendar(ticker):
+        raise ConnectionError('down')
+    monkeypatch.setattr(earnings, 'FETCH_SLEEP', lambda _: None)
+    monkeypatch.setattr(nasdaq.fetch_policy, 'policy_session', lambda *args: Session())
+    known = {'status': 'known', 'earnings_date': date(2026, 11, 17)}
+    store = {'rows': [known]}
+    def save(conn, ticker, row, *, now, source):
+        store['rows'].append(row)
+        return {'status': 'inserted', 'id': len(store['rows'])}
+    monkeypatch.setattr(repo, 'store_earnings', save)
+    monkeypatch.setattr(repo, 'latest_earnings', lambda conn, ticker, cutoff_at: store['rows'][-1])
+    tally = run(registry.get('earnings'), deps=AdapterDeps(transaction=memory_tx, earnings_fetcher=calendar,
+                                                          sleep=lambda _: None))
+    item = detail(tally)[0]
+    assert store['rows'] == [known] and repo.latest_earnings(None, 'NVDA', None) == known       # nothing was written
+    assert item['ok'] is False and item['rows'] == 0
+    assert item['fallback']['tried'] is True and item['fallback']['reason']
+    assert item['reason'] and 'Nasdaq' not in item['reason']                                       # the primary's reason
+
+
 def test_sector_only_changes_append_and_missing_classification_is_none(monkeypatch):
     from investment_assistant.data.adapters import sector
     saved = {}

@@ -288,12 +288,9 @@ def test_host_rejected_order_does_not_consume_version_but_others_do():
     ({'max_per_sector': 1}, 'HELD', '1000', '99000', True, 166, ['max_per_sector']),
     ({'single_cap': .0005}, None, '0', '100000', False, 0, ['single_cap']),
     ({'risk_pct': .000001}, None, '0', '100000', False, 0, ['single_cap']),
-    ({'total_cap': .2}, 'HELD', '20000', '80000', False, 0, ['total_cap']),
     ({}, 'NVDA', '1000', '99000', True, 166, ['held_ticker']),
-    ({'max_positions': 1}, 'HELD', '1000', '99000', False, 0, ['max_positions']),
     ({'fee_per_trade': 5}, 'HELD', '99895', '105', False, 0, ['insufficient_cash']),
-], ids=['sector_cap', 'max_per_sector', 'single_cap', 'risk_under_one_share',
-        'total_cap', 'held_ticker', 'max_positions', 'insufficient_cash'])
+], ids=['sector_cap', 'max_per_sector', 'single_cap', 'risk_under_one_share', 'held_ticker', 'insufficient_cash'])
 def test_blocked_plan_rejected_with_first_reason(params_update, held_ticker, held_value, cash,
                                                 same_sector, shares, reasons):
     from investment_assistant.execution.portfolio import check, verdict_for
@@ -319,6 +316,69 @@ def test_blocked_plan_rejected_with_first_reason(params_update, held_ticker, hel
     assert got == {'accepted': [], 'rejected': [{'order': buy(shares=1), 'code': reasons[0]}], 'schema_error': None}
     assert got['rejected'][0]['code'] in strategies().REJECT_CODES
     assert strategies().validate_orders(data, **args, portfolio_check=None) == strategies().validate_orders(data, **args)
+
+
+@pytest.mark.parametrize('params_update,held_value,cash,reason', [
+    ({'total_cap': .2}, '20000', '80000', 'total_cap'), ({'max_positions': 1}, '1000', '99000', 'max_positions')],
+    ids=['total_cap', 'max_positions'])
+def test_capacity_shortfalls_are_deferred_not_blocked(params_update, held_value, cash, reason):
+    """B6: what depends on the positions or reservations of the moment is ``deferred``; the order gates judge it."""
+    from investment_assistant.execution.portfolio import check, verdict_for
+
+    params = {**PARAMS, **params_update}
+    positions = [{'ticker': 'HELD', 'quantity': 10, 'market_value': D(held_value)}]
+    candidate = item(max_shares=0)
+    hard = check(session=S, plans=[candidate], positions=positions, pending=[], cash=D(cash),
+                 equity=D(cash) + D(held_value), params=params, sectors={'NVDA': '科技', 'HELD': '金融'})
+    verdict = verdict_for(hard, 'p')
+    assert verdict is not None and verdict['verdict'] == 'deferred' and verdict['reasons'] == [reason]
+    got = strategies().validate_orders(output([buy(shares=1)], holds=[{'ticker': 'HELD', 'reason': '持有'}]),
+                                       items=[candidate], positions=positions, pending_orders=[], cash=D(cash),
+                                       params=params, portfolio_check=hard)
+    assert got['rejected'][0]['code'] == 'exceeds_max_shares'              # the order's own gate, not the portfolio's
+
+
+def test_a_pending_chain_revision_can_be_bought_after_the_host_cancels_the_old_order():
+    """B6 regression: the check sees the old version's pending buy (a ticker with a pending buy is ``deferred``, not
+    ``blocked``), so once that order is cancelled -- by the Agent in the same output, or already by the host -- the new
+    version places."""
+    from investment_assistant.execution.portfolio import check, verdict_for
+
+    old = order('o1', plan_id='p1', shares=2)
+    new = item('p2', max_shares=10, version_no=1)
+    hard = check(session=S, plans=[new], positions=[], pending=[old], cash=D('10000'), equity=D('10000'),
+                 params=PARAMS, sectors={'NVDA': '科技'})
+    verdict = verdict_for(hard, 'p2')
+    assert verdict is not None and verdict['verdict'] == 'deferred' and verdict['reasons'] == ['held_ticker']
+    cancel = {'action': 'cancel', 'order_id': 'o1', 'reason': '换版'}
+    got = strategies().validate_orders(output([cancel, buy('p2', 2)]), items=[new], positions=[],
+                                       pending_orders=[old], cash=D('10000'), params=PARAMS, portfolio_check=hard)
+    assert got['rejected'] == [] and got['accepted'] == [cancel, buy('p2', 2)]
+    after_host_cancel = strategies().validate_orders(output([buy('p2', 2)]), items=[new], positions=[],
+                                                     pending_orders=[], cash=D('10000'), params=PARAMS,
+                                                     portfolio_check=hard)
+    assert after_host_cancel['rejected'] == [] and after_host_cancel['accepted'] == [buy('p2', 2)]
+    # without the cancellation the order gates still refuse the duplicate chain
+    kept = strategies().validate_orders(output([buy('p2', 2)]), items=[new], positions=[], pending_orders=[old],
+                                        cash=D('10000'), params=PARAMS, portfolio_check=hard)
+    assert kept['rejected'][0]['code'] == 'duplicate_order'
+
+
+def test_a_same_day_stop_out_frees_the_position_slot_the_check_counted():
+    """B6 regression: the check ran before the accounts node settled today's exit and still counts the position --
+    ``max_positions`` is only ``deferred`` there, so the buy places once the exit has settled."""
+    from investment_assistant.execution.portfolio import check, verdict_for
+
+    params = {**PARAMS, 'max_positions': 1}
+    stopped = [{'ticker': 'HELD', 'quantity': 10, 'market_value': D('1000')}]
+    candidate = item(max_shares=10)
+    hard = check(session=S, plans=[candidate], positions=stopped, pending=[], cash=D('9000'), equity=D('10000'),
+                 params=params, sectors={'NVDA': '科技', 'HELD': '金融'})
+    verdict = verdict_for(hard, 'p')
+    assert verdict is not None and verdict['verdict'] == 'deferred' and verdict['reasons'] == ['max_positions']
+    got = strategies().validate_orders(output([buy(shares=2)]), items=[candidate], positions=[], pending_orders=[],
+                                       cash=D('10000'), params=params, portfolio_check=hard)
+    assert got['rejected'] == [] and got['accepted'] == [buy(shares=2)]
 
 
 def test_none_check_does_not_block():

@@ -48,7 +48,7 @@
         {#snippet actions()}<a class="text-primary underline" href="#research">全部档案</a>{#if request.status !== 'closed'}<Button onclick={() => { closeError = ''; closing = true }}>结束研究</Button>{/if}{/snippet}
       </PageHeader>
       <p>{detail.request.question ?? '未指定问题'}</p>
-      {#if detail.request.closed_reason}<p>{detail.request.closed_reason}</p>{/if}
+      {#if detail.request.closed_reason}<p>{api.closedReasonText(detail.request.closed_reason)}</p>{/if}
       {#if detail.chain?.head_plan_id}<a class="text-primary underline" href={`#plan/${detail.chain.head_plan_id}`}>关联计划链</a>{/if}
       <TabNav label="结论版本" items={versions.map(v => ({ href: `#research/${id}/${v.version_no}`, label: `第 ${v.version_no} 版`, current: v === selected }))} />
       {#if selected}{#key selected.version_no}<DossierVersion version={selected} />{/key}{:else}<DataBlock state="not_computed" message="请求尚未产出结论版本" />{/if}

@@ -12,7 +12,10 @@
   let { check }: { check?: PortfolioCheckView | null } = $props()
   const result = $derived(check?.result)
   const state = $derived(!check || check.status === 'not_computed' || !result ? 'not_computed' : check.status)
-  const message = $derived(state === 'degraded' ? `${check?.reason || 'Agent 不可用'}；只有硬结果` : check?.reason || '组合检查节点尚未运行')
+  // The backend sends either a code (C1: paper_no_pm, agent_unavailable) or an already translated text; both read as text.
+  const REASON_CODE_TEXT: Record<string, string> = { paper_no_pm: '模拟账户不调组合经理，只有硬结果', agent_unavailable: 'Agent 不可用' }
+  const reasonText = $derived(check?.reason ? REASON_CODE_TEXT[check.reason] ?? check.reason : null)
+  const message = $derived(state === 'degraded' ? `${reasonText || 'Agent 不可用'}；只有硬结果` : reasonText || '组合检查节点尚未运行')
   const rows = $derived(result ? [...result.verdicts].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity)) : [])
   const groupName = (group: string | null) => !group || group === 'None' || group === 'null' ? '未归类' : group
   const columns: Column<PortfolioVerdict>[] = [
@@ -35,7 +38,7 @@
           <ul>{#each check.commentary.tradeoffs as tradeoff}<li>{tradeoff.text} <span class="text-xs text-muted-foreground">{tradeoff.refs.join('、')}</span></li>{/each}</ul>
           <ul>{#each check.commentary.hold_actions as action}<li>{action.ticker} · {HOLD_TEXT[action.suggestion]}：{action.reason}</li>{/each}</ul>
         </details>
-      {:else if state === 'ready'}<p>Agent 不可用，只有硬结果</p>{/if}
+      {:else if state === 'ready' && reasonText}<p>{reasonText}</p>{/if}
       <DataBlock state={rows.length ? 'ready' : 'empty'} message="本次没有需要检查的计划"><DataTable {columns} {rows} rowKey={r => r.plan_id} ariaLabel="组合计划判定" /></DataBlock>
       <Section title="行业敞口" level={3}>
         {#each Object.entries(result.exposure_by_sector) as [group, exposure]}

@@ -85,6 +85,13 @@ def stale_research_requests(conn, *, today: date, days: int):
                 (today, days))
 
 
+def stuck_running_research_requests(conn, *, before):
+    """B4: ``running`` requests whose last move (the switch to ``running``) is older than ``before`` -- a dossier whose
+    process died; a live attempt never outlasts its deadline."""
+    return _all(conn, "SELECT * FROM research_requests WHERE status = 'running' AND updated_at < %s "
+                'ORDER BY created_at, id', (before,))
+
+
 def insert_research_version(conn, row) -> dict[str, Any]:
     """Append a conclusion/error version; retain SQL NULL rather than JSON null for absent outputs."""
     saved = _one(conn, 'INSERT INTO research_versions '

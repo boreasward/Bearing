@@ -664,10 +664,30 @@ def queued_data_requests(conn, run_id) -> list[dict]:
                 'ORDER BY requested_at, id', (run_id,))
 
 
-def stale_queued_data_requests(conn, *, before) -> list[dict]:
-    """Requests still ``queued`` that were made before ``before`` (the workflow check's one-day rule)."""
+def queued_data_requests_at(conn, run_id, requested_at) -> list[dict]:
+    """Queued rows of ``run_id`` (NULL pairs with NULL) that were made at exactly ``requested_at`` -- what one manual
+    call (one cutoff) queued."""
+    return _all(conn, "SELECT * FROM data_requests WHERE status = 'queued' AND run_id IS NOT DISTINCT FROM %s "
+                'AND requested_at = %s ORDER BY requested_at, id', (run_id, requested_at))
+
+
+def orphaned_data_requests(conn, *, run_id, before, research_prefix: str) -> list[dict]:
+    """Queued rows no handler is left to settle: made before ``before`` by another run (or a manual flow, ``run_id`` NULL).
+    A dossier's own rows (``research_prefix``) belong to a possibly still running research, so only the ones a day older
+    than ``before`` count."""
+    return _all(conn, "SELECT * FROM data_requests WHERE status = 'queued' AND requested_at < %s "
+                'AND run_id IS DISTINCT FROM %s '
+                "AND (run_id IS NULL OR run_id NOT LIKE %s OR requested_at < %s - interval '1 day') "
+                'ORDER BY requested_at, id', (before, run_id, research_prefix + '%', before))
+
+
+def stale_queued_data_requests(conn, *, before, since=None, until=None) -> list[dict]:
+    """Requests still ``queued`` that were made before ``before`` (the workflow check's one-day rule); ``since`` /
+    ``until`` bound ``requested_at`` to one session's window when given."""
     return _all(conn, "SELECT id, run_id, agent_run_id, family, ticker, requested_at FROM data_requests "
-                "WHERE status = 'queued' AND requested_at < %s ORDER BY requested_at, id", (before,))
+                "WHERE status = 'queued' AND requested_at < %s "
+                'AND (%s::timestamptz IS NULL OR requested_at >= %s) AND (%s::timestamptz IS NULL OR requested_at < %s) '
+                'ORDER BY requested_at, id', (before, since, since, until, until))
 
 
 def unit_data_request_rerun_today(conn, ticker: str, signal_date: date, *, ny_day: date) -> bool:

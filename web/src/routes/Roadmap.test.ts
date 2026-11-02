@@ -73,7 +73,7 @@ it('retry stays pending while only the old error row exists, then shows the new 
   expect(fetcher.mock.calls.filter(([path]) => path === '/api/roadmap/versions/v2.15')).toHaveLength(2)
   expect(screen.queryByText('brief 生成失败')).toBeNull()
   expect(screen.queryByText('模型预算不足')).toBeNull()
-  expect(screen.queryByRole('button', { name: '重试 brief' })).toBeNull()
+  expect(screen.getByRole('button', { name: '重试 brief' })).toBeInTheDocument()      // a pending brief can always be resubmitted
   // a refresh while only the old row exists is still pending
   await fireEvent.click(screen.getByRole('button', { name: '刷新 brief' }))
   await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => path === '/api/roadmap/versions/v2.15')).toHaveLength(3))
@@ -86,6 +86,14 @@ it('retry stays pending while only the old error row exists, then shows the new 
   expect(await screen.findByText('# 冻结证据驱动的实施步骤')).toBeInTheDocument()
   expect(screen.getByText('brief 已生成')).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: '重试 brief' })).toBeNull()
+})
+it('a brief stuck at pending (no row at all) still offers a retry that resubmits it', async () => {
+  render(Roadmap, { sub: 'versions/v2.15' })
+  expect(await screen.findByText('brief 生成中')).toBeInTheDocument()
+  expect(screen.getByText('若长时间无结果可重新提交')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: '重试 brief' }))
+  await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/roadmap/briefs/v2.15/retry', expect.objectContaining({ method: 'POST' })))
+  expect(await screen.findByText('brief 生成中')).toBeInTheDocument()
 })
 it('version link loads the latest definition, ordered revision history and not-requested brief', async () => {
   versionDetail = { ...versionDetail, version: { ...versionDetail.version, proposal_id: null }, brief_status: 'not_requested' }

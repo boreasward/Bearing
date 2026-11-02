@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -67,6 +68,33 @@ def get_filing_facts(ctx: ToolContext, filing_id: int) -> dict:
 
 _SECTIONS = {'item_1a': '1a', 'item_7': '7', 'item_2_02': '2.02'}
 _ITEM = re.compile(r'(?im)(?:^|(?<=>))\s*item\s+(\d+(?:\.\d+)?[a-z]?)\s*[.：:\-–]?\s*')
+_TAG = re.compile(r'<[^>]*>')
+TEXT_MAX = 6000
+TOC_BODY_MIN = 200         # a heading followed by less plain text than this before the next Item heading is a contents row
+
+
+def _plain_len(raw: str) -> int:
+    return len(html.unescape(_TAG.sub('', raw)).strip())
+
+
+def _cut(raw: str, limit: int) -> tuple[str, str]:
+    """``(plain text, raw prefix)``: the tags stripped and entities decoded from the front of ``raw`` until ``limit``
+    characters of text; the raw prefix is exactly the original characters it was read from (the ``byte_range`` basis)."""
+    plain, used, position = [], 0, 0
+    for token in re.split(r'(<[^>]*>)', raw):
+        if used >= limit:
+            break
+        if token.startswith('<') and token.endswith('>') and _TAG.fullmatch(token):
+            position += len(token)
+            continue
+        text = html.unescape(token)
+        if used + len(text) > limit:
+            token = token[:limit - used]
+            text = html.unescape(token)
+        plain.append(text)
+        used += len(text)
+        position += len(token)
+    return ''.join(plain), raw[:position]
 
 
 def get_filing_text(ctx: ToolContext, filing_id: int, section: str) -> dict:
@@ -102,15 +130,23 @@ def get_filing_text(ctx: ToolContext, filing_id: int, section: str) -> dict:
     start, end = 0, len(text)
     if section in _SECTIONS:
         headings = list(_ITEM.finditer(text))
+
+        def body_end(i):
+            return headings[i + 1].start() if i + 1 < len(headings) else len(text)
+
+        # One heading is the section, however short (R65). Several are ambiguous: a contents-page row (the heading
+        # followed by almost no text before the next Item heading) is dropped, and exactly one must remain --
+        # otherwise do not guess.
         matching = [i for i, heading in enumerate(headings) if heading.group(1).lower() == _SECTIONS[section]]
-        # A contents-page match plus the real heading is ambiguous: do not guess.
+        if len(matching) > 1:
+            matching = [i for i in matching if _plain_len(text[headings[i].end():body_end(i)]) >= TOC_BODY_MIN]
         if len(matching) != 1:
             raise ToolError('section_unavailable')
         index = matching[0]
-        start = headings[index].start()
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
-    end = min(end, start + 6000)
-    return {'filing_id': filing_id, 'section': section, 'text': text[start:end], 'sha256': digest,
+        start, end = headings[index].start(), body_end(index)
+    shown, taken = _cut(text[start:end], TEXT_MAX)
+    end = start + len(taken)
+    return {'filing_id': filing_id, 'section': section, 'text': shown, 'sha256': digest,
             'byte_range': [len(text[:start].encode('utf-8')), len(text[:end].encode('utf-8'))],
             'downloaded_at': row['downloaded_at'].isoformat()}
 
@@ -120,9 +156,10 @@ def get_sec_hits(ctx: ToolContext, days: int = 30) -> dict:
 
     days = _int_in(days, 'days', 1, 90, 30)
     since = ctx.cutoff_at - timedelta(days=days)
-    news = ctx.read(lambda conn: repo.read_news(conn, ctx.ticker, cutoff_at=ctx.cutoff_at, since=since))
+    news = ctx.read(lambda conn: repo.read_news(conn, ctx.ticker, cutoff_at=ctx.cutoff_at, since=since,
+                                                source='sec_8k', limit=None))      # B13: filtered in SQL, never cut by volume
     rows = _rows(ctx, ctx.ticker, 'filings')
-    return _plain({'hits': [row for row in news if row.get('source') == 'sec_8k'], 'filings': [
+    return _plain({'hits': news, 'filings': [
         row for row in rows if row.get('form') == '8-K' and row['first_seen_at'] >= since]})
 
 

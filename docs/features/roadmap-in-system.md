@@ -28,7 +28,7 @@ O2 的 `measurement=counter_followed_by_successful_revision` 指「运行级后�
 
 `#roadmap` 有路线 / 提案 / 决策 / 证据四页签。路线看目标、主指标、版本定义与退出条件；提案展开冻结证据行，批准 / 驳回先确认和填理由，批准默认建议下一个未用 v2.x；决策显示编号、日期、问题、决定与原话；证据按版本分组。右上导出 Markdown。
 
-版本 / 决策详情展示真实全部 revision（按 version/id 升序，含当前行），不拿当前行充历史；404 显示错误。brief 共用 not_requested / pending / ok / error：批准或 retry 返回 pending 只说明任务提交，继续读回详情，pending 可「刷新 brief」，error 可重试；只有读回 ok 才展示成功正文。历史证据包缺记录时显示「历史证据包缺少该引用的记录」，不补造证据。
+版本 / 决策详情展示真实全部 revision（按 version/id 升序，含当前行），不拿当前行充历史；404 显示错误。brief 共用 not_requested / pending / ok / error：批准或 retry 返回 pending 只说明任务提交，继续读回详情，pending 可「刷新 brief」，pending 与 error 都有「重试 brief」（pending 旁注「若长时间无结果可重新提交」：服务重启或后台任务中途失败会让 brief 永远停在 pending，重复提交只多一条只追加的 brief 行，读回取最新行）；只有读回 ok 才展示成功正文。历史证据包缺记录时显示「历史证据包缺少该引用的记录」，不补造证据。
 
 ## 接口与命令行
 

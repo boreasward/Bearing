@@ -264,13 +264,13 @@ Unix socket 路径太长时启动会失败，所以用 `-k ''` 关掉 socket、�
 
 ### 031 的真实库执行（仅准备，逐步单独授权）
 
-本节不代表已经执行迁移、导入或重启。当前只准备数据库与仓储，仍运行 `stages-5` / `daily-2` / `agent-portfolio-1`；十三阶段图与新入口在后续任务接入。必须等整版就绪，再按 **备份 → 031 → roadmap import → 重启** 执行：
+本节不代表已经执行迁移、导入或重启。整版代码已就绪（`stages-6` / `daily-3`、十三个节点、`agent-portfolio-2`、研究 / 路线 / 功能开关三页和 `/api/research`、`/api/roadmap`、`/api/settings/features` 等入口都在），但真实库还没有执行 031 和导入。按 **备份 → 031 → roadmap import → 重建 `web/dist` → 重启** 执行：
 
 1. **只读预检**：确认 030 就绪、没有运行中的 daily；记录旧表行数，核对历史 `price_bars.source` / `earnings_dates.source` 满足上表枚举。031 增加这两条 CHECK，不自动修正历史来源。
 2. **全库备份**：`pg_dump -Fc "$INVESTMENT_ASSISTANT_DATABASE_URL" -f .local/us-workbench/backups/investment_assistant-before-031-<时间戳>.dump`；保存 SHA-256，`pg_restore --list` 确认可读。备份含明文 Agent 令牌，留在 `.local/`，不上传、不共享。
 3. **单事务执行**：`psql "$INVESTMENT_ASSISTANT_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/031_five_layers.sql`。旧 CHECK 按定义删除后以具名约束重建；首次执行的 `DROP CONSTRAINT IF EXISTS` 缺失 NOTICE 属预期。
-4. **核对并导入**：`core.schema.five_layers_ready` 为真；十二张新表在导入前各 0 行、旧表行数不变，行业索引在位。B 方案保留 `agent_runs_mode_plan_check`、`agent_plan_versions.origin`、`agent_attempt_resets.mode`，研究不创建交易链。再运行 `python -m investment_assistant.optimize.roadmap import`（**后续任务提供，须等整版就绪；本任务不执行**），核对导入记录与原文。
-5. **重启与验证**：单独授权后重启到整版代码，确认 daily 的 031 门通过，再按发布验收步骤操作；这里不提前触发任务或通知。
+4. **核对并导入**：`core.schema.five_layers_ready` 为真；十二张新表在导入前各 0 行、旧表行数不变，行业索引在位。B 方案保留 `agent_runs_mode_plan_check`、`agent_plan_versions.origin`、`agent_attempt_resets.mode`，研究不创建交易链。再运行 `python -m investment_assistant.optimize.roadmap import --dir config/roadmap`（`--dir` 必填；输出每个文件的 `{inserted, skipped}`），预期首次导入 `goals` 1、`versions` 17、`decisions` 124、`evidence` 11 全部为 inserted；立刻再跑一次，四项应全部为 skipped、0 条 inserted（同键同内容跳过，不同内容报冲突且整次不写入）。再核对导入记录与原文，页面条数与 `export` 导出一致。
+5. **重建前端并重启**：本版新增研究、路线、功能开关三页，必须先 `cd web && npm run build` 重建 `web/dist`，并核对构建时间晚于发布提交（漏了这一步会重启到旧前端，三页都没有）；再单独授权重启到整版代码（[本机服务](local-service.md)），确认 daily 的 031 门通过，再按发布验收步骤操作；这里不提前触发任务或通知。
 
 八张只追加表不得 UPDATE / DELETE。`data_requests` 只能从 queued 结算一次；后续只可为 fetched 且 rows>0 的行补空的 `rerun_run_id`。`roadmap_proposals` 仅从 proposed 决定一次；`portfolio_checks` 仅当 commentary 为 NULL 时补一次评论与 pm_run_id，不改硬结果。按 D51，`research_requests` 可多次合法转移，但每次必须匹配期望前态；`research_versions` 仍只追加。
 

@@ -84,6 +84,17 @@ describe('AgentReasoning', () => {
     await fireEvent.click(within(region).getAllByRole('button', { name: 'call:7' })[0])
     expect(document.querySelector('[data-call="run-1-7"]')).toHaveAttribute('data-highlighted', 'true')
   })
+  it('a research step without output falls back to the translated reason, not the raw code', async () => {
+    vi.mocked(api.getReasoning).mockRestore()
+    const mine = reasoning({ run: run({ agent_version: 'agent-4' }), steps: [
+      { kind: 'research', title: '公司研究', concept: 'agent.company_researcher', status: 'error', reason: 'stage_budget', output: null },
+    ] })
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(mine)))
+    render(AgentReasoning, { runId: 'run-1' })
+    const region = await screen.findByRole('region', { name: '公司研究' })
+    expect(within(region).getAllByText(/超出时限/)).toHaveLength(2)
+    expect(region).not.toHaveTextContent('stage_budget')
+  })
   it('a carried research segment shows its provenance and never jumps into this run\'s calls', async () => {
     vi.mocked(api.getReasoning).mockRestore()
     const output = { summary: '沿用的研究', facts: [{ text: '原运行读到的事实', kind: 'disclosure' as const, refs: ['call:1'] }], risks: [], blocked: [] }

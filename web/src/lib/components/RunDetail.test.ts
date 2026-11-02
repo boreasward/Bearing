@@ -137,8 +137,21 @@ describe('RunDetail · page', () => {
   it('agent branch shows research and data request counts even without unit results', async () => {
     vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ nodes: [node('agent', { did: { ...node('agent').did!, research_requests: 2, data_requests: { queued: 3, fetched: 4, failed: 1, deferred: 0, reruns: 2 } } })] }))
     render(RunDetail, { runId: RID }); await click('Agent：成功')
-    expect(screen.getByRole('region', { name: '研究请求' })).toHaveTextContent('2')
+    expect(screen.getByRole('region', { name: '研究请求' })).toHaveTextContent('本次处理 2 份')
+    expect(screen.getByRole('region', { name: '研究请求' })).not.toHaveTextContent('自动结束')
     expect(screen.getByRole('region', { name: '补查请求' })).toHaveTextContent('排队中 3 · 已补采 4 · 失败 1 · 暂缓 0 · 重跑 2')
+  })
+  it('agent branch shows how many research requests were auto-closed; review shows its own supplementary request counts', async () => {
+    const counts = { queued: 0, fetched: 2, failed: 0, deferred: 1, reruns: 0 }
+    vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ nodes: [
+      node('agent', { did: { ...node('agent').did!, research_requests: 1, research_auto_closed: 3 } }),
+      node('review', { did: { ...node('review').did!, data_requests: counts } }),
+    ] }))
+    render(RunDetail, { runId: RID }); await click('Agent：成功')
+    expect(screen.getByRole('region', { name: '研究请求' })).toHaveTextContent('本次处理 1 份 · 自动结束 3 份')
+    await click('每日复查：成功')
+    expect(screen.getByRole('region', { name: '补查请求' })).toHaveTextContent('排队中 0 · 已补采 2 · 失败 0 · 暂缓 1 · 重跑 0')
+    expect(screen.queryByRole('region', { name: '研究请求' })).toBeNull()
   })
   it('keeps historical stages-4 at ten nodes with no account stage', async () => {
     vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ graph_version: 'daily-1', stages_version: 'stages-4', nodes: HISTORICAL_IDS_V4.map(id => node(id)) }))
