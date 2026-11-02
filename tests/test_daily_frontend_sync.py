@@ -5,7 +5,6 @@ and the run-id pattern (`web/src/lib/runs.ts`). Offline: reads source files, no 
 import re
 from pathlib import Path
 
-import pytest
 
 from investment_assistant.analysis import agent
 
@@ -24,10 +23,6 @@ MIGRATION_031 = ROOT / 'migrations' / '031_five_layers.sql'
 RUN_DETAIL_TEST_TS = ROOT / 'web' / 'src' / 'lib' / 'components' / 'RunDetail.test.ts'
 WORKFLOW_PY = ROOT / 'investment_assistant' / 'workflow' / 'graph.py'
 RUN_DETAIL_PY = ROOT / 'investment_assistant' / 'views' / 'runs' / 'detail.py'
-
-# Cross-end assertions that read the Task 5 front end (v2.12-v2.15 vocabulary). They are expected to fail until Task 5
-# is merged; Task 7 removes this marker (the removal list is in the Task 4 report, Segment F).
-TASK5 = pytest.mark.xfail(strict=False, reason='Task 5 front end (v2.12-v2.15 vocabulary) not merged yet; Task 7 removes')
 
 # The two reasons v2.8 adds (spec §8.8, verbatim).
 NEW_REASONS = {'not_connected': 'ChatGPT 未连接', 'model_unavailable': '所选模型不可用'}
@@ -54,7 +49,6 @@ def test_agent_reason_text_backend_vocabulary():
     assert {'feature_disabled', 'not_proposal_day', 'no_evidence'} <= set(texts.RUN_REASON_TEXT)
 
 
-@TASK5
 def test_agent_reason_text_matches():
     frontend = _ts_table(WORKBENCH_TS.read_text(encoding='utf-8'), 'AGENT_REASON_TEXT')
     # The front end may know more reasons than the back end, never fewer, and shared keys read the same.
@@ -100,7 +94,6 @@ def test_node_ids_match_backend_versions():
     assert derivation.RUN_STAGE_COUNT['stages-4'] == 10
 
 
-@TASK5
 def test_node_ids_match():
     """The detail page takes its nodes (id, title, order) from the API; the front end has no node list of its own
     in `runs.ts`. Its fixture (RunDetail.test.ts) follows the current stages version."""
@@ -153,14 +146,12 @@ def test_status_words_cover_the_migration_domains():
     assert features.FLAGS == ('backup_sources', 'company_researcher', 'portfolio_manager', 'optimize_proposals')
 
 
-@TASK5
 def test_status_words_match_frontend():
     text = STATUS_TS.read_text(encoding='utf-8')
     for name in STATUS_TABLES:
         assert _ts_table(text, name) == getattr(texts, name), name
 
 
-@TASK5
 def test_feature_flags_routes_and_research_words_are_named_in_the_frontend():
     """Switch names, the new route prefixes and the researcher's status words appear verbatim in the web sources."""
     sources = '\n'.join(path.read_text(encoding='utf-8') for path in (ROOT / 'web' / 'src').rglob('*')

@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { EChartsOption } from 'echarts'
   import type { Account, AccountDetail, EquityHistory, EquityRow } from '$lib/accounts'
-  import { assessEquityHistory, mergeSpyHistory, normalizedEquity, valuationWarning } from '$lib/accounts'
+  import { accountMarkLine, assessEquityHistory, mergeSpyHistory, normalizedEquity, valuationWarning } from '$lib/accounts'
+  import Markers from './Markers.svelte'
   import { pct } from '$lib/workbench'
   import EChart from '$lib/charts/EChart.svelte'
   import { Button } from '$lib/ui/button/index'
@@ -73,7 +74,7 @@
     tooltip: { trigger: 'axis' }, legend: { type: 'scroll' }, grid: { left: 50, right: 20, top: 50, bottom: 35 },
     xAxis: { type: 'time' }, yAxis: { type: 'value', scale: true, name: '首个交易日 = 100' },
     series: [
-      { name: detail.account.name, type: 'line', showSymbol: false, connectNulls: false, data: ownCurve.data },
+      { name: detail.account.name, type: 'line', showSymbol: false, connectNulls: false, data: ownCurve.data, markLine: accountMarkLine(history?.markers) },
       ...(showSPY && spy.length ? [{ name: 'SPY', type: 'line' as const, showSymbol: false, data: normalizedEquity(spy.map(row => ({ session: row.session, equity: row.close }))) }] : []),
       ...(showOthers ? otherCurves.map(({ account, curve }) => ({ name: account.name, type: 'line' as const, showSymbol: false, connectNulls: false, data: curve.data })) : []),
     ],
@@ -115,3 +116,4 @@
     {#key `${showSPY}-${showOthers}`}<div class="min-w-0" role="img" aria-label="归一化账户权益曲线"><EChart {option} /></div>{/key}
   </DataBlock>
 </Section>
+<Markers markers={history?.markers} />

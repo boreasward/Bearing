@@ -7,6 +7,15 @@ beforeEach(() => { try { localStorage.removeItem(KEY) } catch { /* */ } })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 describe('SideNav', () => {
+  it('links research, roadmap children and feature settings', async () => {
+    render(SideNav, { current: 'roadmap', sub: 'proposals/12' })
+    expect(screen.getByRole('link', { name: '研究' })).toHaveAttribute('href', '#research')
+    expect(await screen.findByRole('link', { name: '提案' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: '决策' })).toHaveAttribute('href', '#roadmap/decisions')
+    cleanup()
+    render(SideNav, { current: 'settings', sub: 'features' })
+    expect(await screen.findByRole('link', { name: '功能开关' })).toHaveAttribute('aria-current', 'page')
+  })
   it('highlights 运行记录 for the list and for a run detail (#tools/runs/<id>)', async () => {
     render(SideNav, { current: 'tools', sub: 'runs/daily-20261030033000-1a2b3c4d' })
     const runs = await screen.findByRole('link', { name: '运行记录' })

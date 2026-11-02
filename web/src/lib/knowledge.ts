@@ -62,9 +62,7 @@ export interface ReasoningCall {
 }
 export interface ReasoningCondition { kind: string; params?: Record<string, unknown>; text?: string; refs?: string[] }
 /** One reading step; `kind` picks which of the optional fields the page shows (spec §8.2, backend reasoning.py). */
-export interface ReasoningStep {
-  kind: 'evidence' | 'read' | 'proposal' | 'check' | 'counter' | 'response' | 'outcome' | 'verdict'
-    | 'interpretation' | string
+interface ReasoningStepFields {
   title: string; concept: string | null; note?: string | null
   /** false on a proposal / counter / verdict / interpretation step the rejected run never stored; `text` says why. */
   available?: boolean; text?: string | null
@@ -103,6 +101,18 @@ export interface ReasoningStep {
   attachment?: string | null; context?: string | null
   knowledge_draft?: { title: string; body: string; scope: string; counter_examples: string; refs?: string[] } | null
 }
+export interface ResearchReasoningStep extends ReasoningStepFields {
+  kind: 'research'; title: '公司研究'; concept: 'agent.company_researcher'
+  status: import('./research').ResearchPhase['status']
+  reason: string | null; output: import('./research').ResearchOutput | null
+  /** status 'carried' only (R16): the original run owns this segment's call:N refs; `original_status` is its status there */
+  carried_from?: string | null; original_status?: import('./research').ResearchPhase['status'] | null
+}
+export interface OtherReasoningStep extends ReasoningStepFields {
+  kind: 'evidence' | 'read' | 'proposal' | 'check' | 'counter' | 'response' | 'outcome' | 'verdict'
+    | 'interpretation' | 'previous_chain' | 'draft' | 'question' | 'answer'
+}
+export type ReasoningStep = ResearchReasoningStep | OtherReasoningStep
 export interface ReasoningView {
   run: ReasoningRun; legacy: boolean
   version: { plan_id: string; version_no: number; origin: string } | null
@@ -172,7 +182,8 @@ export function resetConceptIndex(): void { indexPromise = null }
 
 // ---- which concept each field points at (spec §6.2) ----
 
-export const familyConcept = (familyId: string) => `family.${familyId}`
+/** ATR is a derived indicator with its own concept card; every other family has a family card. */
+export const familyConcept = (familyId: string) => familyId === 'atr' ? 'indicator.atr14' : `family.${familyId}`
 export const ruleConcept = (ruleId: string) => `rule.${ruleId}`
 
 export const ATTACH = {

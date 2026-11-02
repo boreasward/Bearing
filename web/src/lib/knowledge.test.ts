@@ -100,6 +100,7 @@ describe('ATTACH', () => {
 
   it('builds the dynamic family and rule ids', () => {
     expect(familyConcept('sec_filings')).toBe('family.sec_filings')
+    expect(familyConcept('atr')).toBe('indicator.atr14')      // no family.atr card: ATR is an indicator
     expect(ruleConcept('trend_reclaim')).toBe('rule.trend_reclaim')
   })
 

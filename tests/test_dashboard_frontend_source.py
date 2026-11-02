@@ -62,9 +62,9 @@ def test_api_client_exports_core_functions():
 def test_app_hash_router_covers_all_zones():
     # v2.11 adds #account/<id>/<tab>; the earlier zones and legacy fallbacks remain covered.
     router = Path("web/src/lib/router.ts").read_text(encoding="utf-8")
-    assert "export type Zone = 'today' | 'instrument' | 'account' | 'review' | 'data' | 'knowledge' | 'tools' | 'settings' | 'plan' | 'discuss'" in router
+    assert "export type Zone = 'today' | 'instrument' | 'account' | 'review' | 'data' | 'knowledge' | 'tools' | 'settings' | 'plan' | 'discuss' | 'research' | 'roadmap'" in router
     assert "export const workbenchZones: Zone[] = ['today', 'instrument', 'account', 'review']" in router
-    assert "export const zones: Zone[] = [...workbenchZones, 'data', 'knowledge', 'tools', 'settings', 'plan', 'discuss']" in router
+    assert "export const zones: Zone[] = [...workbenchZones, 'data', 'knowledge', 'tools', 'settings', 'plan', 'discuss', 'research', 'roadmap']" in router
     for zone in ["technicals", "strategy", "trade"]:
         assert f"'{zone}'" not in router, f"legacy zone still routed: {zone}"
     app = Path("web/src/app.svelte").read_text(encoding="utf-8")
@@ -128,5 +128,4 @@ def test_sse_store_has_reconnect_logic():
 def test_old_vanilla_ts_directories_are_deleted():
     for path in ["web/src/app", "web/src/features", "web/src/shared", "web/src/i18n", "web/src/styles.css"]:
         assert not Path(path).exists(), f"should be deleted: {path}"
-
 

@@ -12,6 +12,21 @@ afterEach(() => vi.unstubAllEnvs())
 const domains = Object.keys(TONES) as StatusDomain[]
 
 describe('status vocabulary', () => {
+  it('knows new request, proposal, verdict and flag states with legal tones', () => {
+    const expected = {
+      research_request: ['queued', 'running', 'waiting_data', 'concluded', 'closed', 'error'],
+      proposal: ['proposed', 'approved', 'rejected', 'superseded'],
+      portfolio_verdict: ['ok', 'blocked', 'deferred'], data_request: ['queued', 'fetched', 'failed', 'deferred'],
+      feature_flag: ['enabled', 'disabled'],
+      roadmap_version: ['planned', 'in_progress', 'engineering_done', 'user_acceptance_pending', 'done', 'dropped'],
+    }
+    for (const [domain, keys] of Object.entries(expected)) for (const key of keys) {
+      const info = statusOf(domain as StatusDomain, key)
+      expect(info.known).toBe(true)
+      expect(info.label).not.toBe(key)
+      expect(['success', 'warn', 'danger', 'info', 'running', 'neutral']).toContain(info.tone)
+    }
+  })
   it('every TONES key has a label', () => {
     for (const domain of domains) {
       for (const key of Object.keys(TONES[domain])) {
@@ -22,8 +37,8 @@ describe('status vocabulary', () => {
 
   it('every domain of the type is in TONES and LABELS', () => {
     expect(domains.sort()).toEqual([
-      'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'execution', 'fetch', 'instruction',
-      'knowledge', 'node', 'paper_decision', 'paper_order', 'push', 'reconcile', 'retro', 'run', 'system',
+      'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'data_request', 'execution', 'feature_flag', 'fetch', 'instruction',
+      'knowledge', 'node', 'paper_decision', 'paper_order', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research_request', 'retro', 'roadmap_version', 'run', 'system',
     ])
     expect(Object.keys(LABELS).sort()).toEqual(domains)
   })

@@ -7,7 +7,6 @@ from investment_assistant.execution import trades as execution_trades
 import inspect
 import re
 
-import pytest
 from pathlib import Path
 
 from investment_assistant.api.routes import workbench as workbench_routes
@@ -53,7 +52,6 @@ def _ts_string(text: str, name: str) -> str:
     return match.group(1)
 
 
-@pytest.mark.xfail(strict=False, reason='Task 5 front end (v2.12-v2.15 vocabulary) not merged yet; Task 7 removes')
 def test_new_void_reasons_match():
     frontend = _ts_table(_ts(), 'AGENT_REASON_TEXT')
     for reason in NEW_REASONS:

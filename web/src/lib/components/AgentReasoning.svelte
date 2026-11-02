@@ -5,8 +5,11 @@
   import AgentReasoning from './AgentReasoning.svelte'
   import ConceptTerm from './ConceptTerm.svelte'
   import KnowledgeRefs from './KnowledgeRefs.svelte'
+  import ResearchFacts from './research/Facts.svelte'
+  import { RESEARCH_PHASE_TEXT } from '$lib/research'
   import * as api from '../api'
   import { CONSISTENCY_TEXT } from '../derivation'
+  import { AGENT_REASON_TEXT } from '../workbench'
   import { fmtBeijing } from '../format'
   import { isKnowRef, knowHref } from '../growth'
   import { TOOL_TEXT, type ReasoningCall, type ReasoningStep, type ReasoningView } from '../knowledge'
@@ -32,6 +35,7 @@
 
   const MODE_TEXT: Record<string, string> = {
     propose: '提议', revise: '修订', review: '复查', interpret: '解读', retro: '复盘起草', discuss: '讨论',
+    research: '指定标的研究', pm: '组合经理', optimize: '优化提案', brief: '实施 brief',
   }
   const KNOWLEDGE_CALL_NOTE = '我的知识按截止时间读取：只含截止时间之前写入的版本'
   const RUN_STATUS_TEXT: Record<string, string> = {
@@ -126,7 +130,20 @@
         </h4>
         {#if step.note && step.kind !== 'check'}<p class="text-xs text-muted-foreground">{step.note}</p>{/if}
 
-        {#if step.kind === 'previous_chain'}
+        {#if step.kind === 'research'}
+          <p class="text-xs text-muted-foreground">{RESEARCH_PHASE_TEXT[step.status]}{step.status === 'carried' && step.original_status ? `（原状态：${RESEARCH_PHASE_TEXT[step.original_status]}）` : ''}{step.reason ? `：${AGENT_REASON_TEXT[step.reason] ?? step.reason}` : ''}</p>
+          {#if step.status === 'carried'}
+            <!-- R16: a carried segment keeps the ORIGINAL run's call numbers; they are never resolved against this run's calls -->
+            <p class="text-xs text-muted-foreground">{step.carried_from ? '引用编号属于原运行，不在本次运行的调用记录里' : '未记录原运行，引用编号无法对照'}</p>
+            {#if step.carried_from}
+              <Button variant="link" size="sm" class="text-[length:inherit] font-normal" aria-expanded={!!nested[step.carried_from]}
+                      onclick={() => nested[step.carried_from!] = !nested[step.carried_from!]}>看原运行的推理</Button>
+              {#if nested[step.carried_from]}<AgentReasoning runId={step.carried_from} />{/if}
+            {/if}
+          {/if}
+          {#if step.output}<ResearchFacts output={step.output} onRef={step.status === 'carried' ? undefined : jump} />
+          {:else}<DataBlock state="not_computed" message={step.reason_text ?? step.reason ?? '本版未保存公司研究内容'} />{/if}
+        {:else if step.kind === 'previous_chain'}
           <pre class="text-xs whitespace-pre-wrap rounded-sm border border-border p-2" data-previous-chain>{step.text}</pre>
         {:else if step.kind === 'read'}
           <ul class="space-y-1">

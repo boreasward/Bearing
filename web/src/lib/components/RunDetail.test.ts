@@ -2,14 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import RunDetail from './RunDetail.svelte'
 import * as api from '../api'
+import * as ac from '../accounts'
 import { resetConceptIndex } from '../knowledge'
 import { fmtBeijing } from '../format'
 import type { FetchFamily, RunDetail as RunDetailView, RunNode } from '../runs'
+import type { PortfolioCheckView } from '../workbench'
 
 const RID = 'daily-20261030033000-1a2b3c4d'
 const TITLES: Record<string, string> = {
   sec_monitor: 'SEC 监控', collect: '数据采集', screen: '筛选', regime: '市场环境', signals: '信号', plan: '规则计划',
-  agent: 'Agent', review: '每日复查', accounts: '账户', push: '推送', retro: '复盘',
+  agent: 'Agent', review: '每日复查', portfolio: '组合检查', accounts: '账户', push: '推送', retro: '复盘', propose: '优化提案',
 }
 const IDS = Object.keys(TITLES)
 const HISTORICAL_IDS_V4 = ['sec_monitor', 'collect', 'screen', 'regime', 'signals', 'plan', 'agent', 'review', 'push', 'retro']
@@ -31,7 +33,7 @@ const family = (over: Partial<FetchFamily> = {}): FetchFamily => ({
   failures: [{ target: 'NVDA', reason: 'timeout after 30s (NVDA)' }], legacy: false, ...over,
 })
 
-/** A stages-5 daily run that failed in collect: sec_monitor ok, collect failed, nine skipped upstream_failed. */
+/** A stages-6 daily run that failed in collect: sec_monitor ok, collect failed, eleven skipped upstream_failed. */
 function failedRun(over: Partial<RunDetailView> = {}): RunDetailView {
   const nodes = IDS.map(id => {
     if (id === 'sec_monitor') return node(id)
@@ -52,9 +54,9 @@ function failedRun(over: Partial<RunDetailView> = {}): RunDetailView {
     return node(id, { status: 'skipped', reason: 'upstream_failed', reason_text: '上游节点失败，未执行', duration_ms: null, attempts: [] })
   })
   return {
-    run_id: RID, task: 'daily', kind: 'daily', graph_version: 'daily-1', stages_version: 'stages-5', session: '2026-10-29',
+    run_id: RID, task: 'daily', kind: 'daily', graph_version: 'daily-3', stages_version: 'stages-6', session: '2026-10-29',
     cutoff_at: '2026-10-30T03:30:00Z', trigger: 'scheduled', status: 'failed',
-    headline: '10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：aborted；其后 9 个节点未执行',
+    headline: '10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：aborted；其后 11 个节点未执行',
     executions: [{ report_id: 812, trigger_source: 'scheduled', status: 'error', started_at: '2026-10-30T03:30:00Z',
       finished_at: '2026-10-30T03:36:00Z', resume_node: null, attempt: 1 }],
     resume: { allowed: true, node: 'collect', deadline_at: '2026-10-30T21:00:00Z', reason: null },
@@ -78,11 +80,68 @@ beforeEach(() => {
   vi.spyOn(api, 'getConcepts').mockRejectedValue(new Error('offline'))
   vi.spyOn(api, 'getRunDetail').mockResolvedValue(failedRun())
 })
-afterEach(() => { vi.useRealTimers(); cleanup(); vi.restoreAllMocks() })
+afterEach(() => { vi.useRealTimers(); cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('RunDetail · page', () => {
+  it('portfolio branch reads the UI1 HTTP envelope and translates all five hard rejection reasons', async () => {
+    vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ nodes: [node('portfolio', { results: { kind: 'portfolio', items: [{ account_id: 'a1', name: '真实账户', ok: 2, blocked: 1, deferred: 0, commentary_status: 'error' }], total: 1, truncated: false } })] }))
+    const reasons = [
+      ['sector_cap', '超过行业集中度上限'], ['max_per_sector', '超过同行业标的数量上限'],
+      ['single_cap', '超过单笔风险或单票敞口上限'], ['total_cap', '超过组合总敞口上限'], ['held_ticker', '已持有、在挂或重复的标的'],
+    ]
+    const payload: PortfolioCheckView = { status: 'degraded', reason: '模型不可用', session: '2026-10-29', cutoff_at: '2026-10-30T03:30:00Z', result: { version: 'portfolio-check-1', exposure_by_sector: {}, verdicts: [{ plan_id: 'p1', ticker: 'NVDA', group: null, verdict: 'blocked', reasons: reasons.map(([code]) => code), order: null }], conflicts: [{ group: 'technology', plan_ids: ['p1'], rule: 'max_per_sector' }], order: [], params_used: {} }, commentary: null }
+    const fetcher = vi.fn(async (path: string) => {
+      if (path === '/api/accounts/a1/portfolio-check?session=2026-10-29') return Response.json(payload)
+      throw new Error(`Unexpected request ${path}`)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    render(RunDetail, { runId: RID })
+    await click('组合检查：成功')
+    const region = screen.getByRole('region', { name: '结果详情' })
+    expect(region).toHaveTextContent('真实账户')
+    expect(region).toHaveTextContent('可执行 2')
+    expect(region).toHaveTextContent('被拦截 1')
+    expect(region).toHaveTextContent('组合经理出错')
+    await click('查看真实账户组合结果')
+    const table = await screen.findByRole('table', { name: '组合计划判定' })
+    for (const [code, text] of reasons) {
+      expect(table).toHaveTextContent(text)
+      expect(ac.orderReasonText('rejected', code)).toBe(text)
+      expect(ac.decisionReasonText(code)).toBe(text)
+    }
+    expect(screen.getByText('模型不可用；只有硬结果')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '互斥组' })).toHaveTextContent('超过同行业标的数量上限')
+    expect(fetcher).toHaveBeenCalledWith('/api/accounts/a1/portfolio-check?session=2026-10-29', expect.objectContaining({ cache: 'no-store' }))
+    expect(ac.orderReasonText('rejected', null)).toBe('')
+    expect(ac.decisionReasonText(null)).toBe('未提供原因')
+  })
+  it('missing account portfolio rows stay not_computed instead of an empty successful check', async () => {
+    vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ nodes: [node('portfolio', { results: { kind: 'portfolio', items: [{ account_id: 'a1', name: '真实账户', ok: 0, blocked: 0, deferred: 0, commentary_status: 'missing' }], total: 1, truncated: false } })] }))
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+      if (path === '/api/accounts/a1/portfolio-check?session=2026-10-29') return Response.json({ status: 'not_computed', reason: '该账户当日没有检查记录', session: '2026-10-29', cutoff_at: null, result: null, commentary: null } satisfies PortfolioCheckView)
+      throw new Error(`Unexpected request ${path}`)
+    }))
+    render(RunDetail, { runId: RID })
+    await click('组合检查：成功')
+    await click('查看真实账户组合结果')
+    expect(await screen.findByText('该账户当日没有检查记录')).toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: '组合计划判定' })).toBeNull()
+    expect(screen.queryByText('本次没有需要检查的计划')).toBeNull()
+  })
+  it('propose branch links proposal titles to roadmap', async () => {
+    vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ nodes: [node('propose', { results: { kind: 'proposals', items: [{ id: 9, title: '修复数据缺口', source: 'data', status: 'proposed' }], total: 1, truncated: false } })] }))
+    render(RunDetail, { runId: RID }); await click('优化提案：成功')
+    expect(screen.getByRole('link', { name: '修复数据缺口' })).toHaveAttribute('href', '#roadmap/proposals/9')
+    expect(screen.getByText('待决定')).toBeInTheDocument()
+  })
+  it('agent branch shows research and data request counts even without unit results', async () => {
+    vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ nodes: [node('agent', { did: { ...node('agent').did!, research_requests: 2, data_requests: { queued: 3, fetched: 4, failed: 1, deferred: 0, reruns: 2 } } })] }))
+    render(RunDetail, { runId: RID }); await click('Agent：成功')
+    expect(screen.getByRole('region', { name: '研究请求' })).toHaveTextContent('2')
+    expect(screen.getByRole('region', { name: '补查请求' })).toHaveTextContent('排队中 3 · 已补采 4 · 失败 1 · 暂缓 0 · 重跑 2')
+  })
   it('keeps historical stages-4 at ten nodes with no account stage', async () => {
-    vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ stages_version: 'stages-4', nodes: HISTORICAL_IDS_V4.map(id => node(id)) }))
+    vi.mocked(api.getRunDetail).mockResolvedValue(successRun({ graph_version: 'daily-1', stages_version: 'stages-4', nodes: HISTORICAL_IDS_V4.map(id => node(id)) }))
     render(RunDetail, { runId: RID })
     expect(await screen.findByTestId('meta')).toHaveTextContent('daily-1 / stages-4')
     expect(within(screen.getByRole('list', { name: '节点状态图' })).getAllByRole('listitem')).toHaveLength(10)
@@ -91,13 +150,13 @@ describe('RunDetail · page', () => {
   it('headline and meta line', async () => {
     render(RunDetail, { runId: RID })
     expect(await screen.findByTestId('headline')).toHaveTextContent(
-      '10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：aborted；其后 9 个节点未执行')
+      '10 月 29 日的运行在「数据采集」失败（已自动重试 1 次）：aborted；其后 11 个节点未执行')
     const meta = screen.getByTestId('meta')
     expect(meta).toHaveTextContent('任务 daily')
     expect(meta).toHaveTextContent('触发 定时')
     expect(meta).toHaveTextContent('session 2026-10-29')
     expect(meta).toHaveTextContent(`截止 ${fmtBeijing('2026-10-30T03:30:00Z')}`)
-    expect(meta).toHaveTextContent('daily-1 / stages-5')
+    expect(meta).toHaveTextContent('daily-3 / stages-6')
     expect(screen.getByRole('link', { name: '返回运行记录' })).toHaveAttribute('href', '#tools/runs')
     expect(api.getRunDetail).toHaveBeenCalledWith(RID)
     // 一次执行时不列执行记录

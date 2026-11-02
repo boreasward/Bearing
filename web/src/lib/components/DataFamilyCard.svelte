@@ -2,6 +2,7 @@
   import { Button } from '$lib/ui/button/index'
   import * as Card from '$lib/ui/card/index'
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
+  import SourceBadge from '$lib/ui/domain/SourceBadge.svelte'
   import * as api from '../api'
   import CodeText from './CodeText.svelte'
   import ConceptTerm from './ConceptTerm.svelte'
@@ -85,6 +86,13 @@
       <span class="rounded-sm bg-muted px-1.5 py-0.5 text-xs text-foreground">{kindLabel(card.kind)}</span>
     </div>
     <p class="text-xs text-muted-foreground"><CodeText text={card.purpose} /></p>
+    {#if card.sources?.length}<div class="flex flex-wrap gap-2 text-xs">{#each card.sources as source}<span><SourceBadge source={source.id} /> {source.note}</span>{/each}</div>{/if}
+    {#if card.today_sources}
+      {@const sources = card.today_sources}
+      {@const targets = sources.primary + sources.backup + sources.failed}
+      <p class="text-xs">今日来源：主源 {sources.primary} · 备源 {sources.backup} · 失败 {sources.failed}</p>
+      <p class="text-xs text-muted-foreground">{targets ? `备源占目标 ${(sources.backup / targets * 100).toFixed(1)}%` : '今日尚无采集目标'}</p>
+    {/if}
     <p>覆盖
       <span class="tabular-nums {card.coverage.lagging.length ? 'text-warn font-medium' : ''}">
         {card.coverage.covered} / {card.coverage.targets}</span>

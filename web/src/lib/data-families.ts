@@ -1,7 +1,7 @@
 // Types and display rules for the Data menu (design 2026-10-26 §4/§8/§9).
 // The backend's data_view owns the payload; these mirror its shapes verbatim.
 
-export const KNOWN_FAMILIES = ['bars', 'sec_filings', 'news', 'atr', 'fred', 'universe'] as const
+export const KNOWN_FAMILIES = ['bars', 'news', 'sec_filings', 'earnings', 'fred', 'universe', 'fundamentals', 'sec_text', 'sector', 'atr'] as const
 export type FamilyId = (typeof KNOWN_FAMILIES)[number]
 
 export interface FamilyJob {
@@ -53,13 +53,20 @@ export interface FamilyCard {
   notes: string[]
   current_error: string | null   // e.g. the universe file's current load error
   fetch_runs_ready: boolean
+  sources?: { id: string; note: string }[]
+  today_sources?: { primary: number; backup: number; failed: number } | null   // null on the derived ATR card
 }
+
+export interface IndicatorItem { id: string; title: string; basis: string; window: number | null; used_by: string[]; concept: string }
+export interface IndicatorCard { id: 'indicators'; kind: 'derived'; items: IndicatorItem[]; title?: string; version?: string }
+/** `GET /api/data/indicators`: the indicator registry's list. */
+export interface IndicatorList { version: string; items: IndicatorItem[] }
 
 export interface DataOverview {
   session: string
   evidence: string
   fetch_runs_ready: boolean
-  families: FamilyCard[]
+  families: (FamilyCard | IndicatorCard)[]
 }
 
 export interface FetchRun {
@@ -86,6 +93,8 @@ export interface DetailRow {
   latest_at: string | null
   lagging: boolean
   last_failure: string | null
+  source_used?: string | null // source id; absent on legacy detail rows
+  fallback?: { tried: boolean; reason: string | null } | null
 }
 
 export interface FamilyDetail {
@@ -116,6 +125,7 @@ export function kindLabel(kind: string): string {
 export function triggerLabel(trigger: string): string {
   const labels: Record<string, string> = {
     scheduled: '定时', manual_batch: '手动批处理', manual_family: '手动拉取',
+    manual_research: '手动研究', data_request: '补查请求',
   }
   return labels[trigger] ?? trigger
 }

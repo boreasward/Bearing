@@ -1,5 +1,6 @@
 /** Account ledger and host-managed paper trading. Monetary values remain API Decimal strings. */
 import { request, describeError, WorkbenchError, AGENT_REASON_TEXT } from './workbench'
+import type { PortfolioCheckView } from './workbench'
 
 export const REAL_ACCOUNT_ID = '00000000-0000-0000-0000-000000000001'
 export type DecimalValue = string | number
@@ -16,6 +17,8 @@ export const REJECT_TEXT = {
   schema_invalid: '订单格式无效', plan_not_buyable: '计划不可买入', chain_consumed: '计划链已使用',
   duplicate_order: '重复订单', exceeds_max_shares: '超过计划股数上限', max_positions: '达到持仓数量上限',
   insufficient_cash: '现金不足', no_position: '无可卖持仓', cannot_halve: '持仓不足以卖出一半', order_not_pending: '订单已不在待成交状态',
+  sector_cap: '超过行业集中度上限', max_per_sector: '超过同行业标的数量上限',
+  single_cap: '超过单笔风险或单票敞口上限', total_cap: '超过组合总敞口上限', held_ticker: '已持有、在挂或重复的标的',
 } as const
 export const CANCEL_REASON_TEXT = {
   superseded_by_revision: '计划出了新版本，旧订单撤销', chain_ended: '计划链已结束，订单撤销', agent_cancel: 'Agent 主动撤单',
@@ -41,6 +44,7 @@ export const RECONCILE_TEXT = {
 export interface AccountParams {
   risk_pct?: DecimalValue; single_cap?: DecimalValue; total_cap?: DecimalValue; fee_per_trade?: DecimalValue
   max_positions?: number; reconcile_tolerance_pct?: DecimalValue; reconcile_tolerance_abs?: DecimalValue
+  sector_cap?: DecimalValue; max_per_sector?: number
 }
 export interface EquityRow {
   id?: string | number; account_id?: string; session: string; cash: DecimalValue; positions_value: DecimalValue; equity: DecimalValue
@@ -80,6 +84,7 @@ export interface PaperDecision {
   id: string | number; session: string; status: DecisionStatus; status_reason: string | null; summary: string | Record<string, unknown> | null
   orders_placed?: number; orders_rejected?: number; evidence?: Record<string, unknown> | null
   output?: Record<string, unknown> | null; holds?: unknown[] | null; orders?: PaperOrder[]
+  agent_version?: string | null
 }
 export interface Reconciliation {
   status: keyof typeof RECONCILE_TEXT; session?: string; as_of?: string; ledger_equity?: DecimalValue | null
@@ -95,12 +100,14 @@ export interface AccountDetail {
   decision: PaperDecision | null; reconciliation: Reconciliation[] | null; forms: { can_record_trades: boolean }
   closed_positions?: ClosedPosition[]; cutoff_at?: string | null; calc_versions?: string[] | Record<string, string>
 }
-export interface EquityHistory { rows: EquityRow[]; spy: { session: string; close: DecimalValue }[] }
+export interface AccountMarker { session: string; kind: 'feature' | 'version' | 'params'; label: string }
+export interface EquityHistory { rows: EquityRow[]; spy: { session: string; close: DecimalValue }[]; markers?: AccountMarker[] }
 export interface CompareValue { text: string | null; value: unknown; note?: string | null }
 export interface CompareView {
   columns: { account_id: string; name: string; strategy: AccountStrategy }[]
   rows: { key: string; label: string; values: CompareValue[]; spy: string | null }[]
   cutoff_at: string | null; calc_versions: string[] | Record<string, string>
+  markers?: AccountMarker[]
 }
 export interface CreateAccountBody {
   request_id: string; name: string; strategy: Exclude<AccountStrategy, 'manual'>; opening_cash: string
@@ -130,6 +137,14 @@ export const getOrders = (id: string, status?: OrderStatus) => request<{ orders:
 export const getDecisions = (id: string) => request<{ decisions: PaperDecision[] }>(`${path(id)}/decisions`)
 export const getDecision = (id: string, session: string) => request<{ decision: PaperDecision | null }>(`${path(id)}/decisions${query({ session })}`)
 export const getCompare = (from?: string) => request<CompareView>(`/api/accounts/compare${query({ from })}`)
+// UI1 uses the same required envelope as Today, including explicit not_computed/null results.
+export const getPortfolioCheck = (id: string, session: string) => request<PortfolioCheckView>(`${path(id)}/portfolio-check${query({ session })}`)
+
+export const MARKER_KIND_TEXT = { feature: '功能开关', version: '版本', params: '参数' } as const
+export function accountMarkLine(markers: AccountMarker[] = []) {
+  const styles = { feature: 'dashed', version: 'solid', params: 'dotted' } as const
+  return { silent: true, symbol: 'none' as const, label: { formatter: '{b}' }, data: markers.map(m => ({ name: m.label, xAxis: m.session, lineStyle: { type: styles[m.kind] } })) }
+}
 
 const ERRORS: Record<string, string> = {
   migration_030_missing: '迁移 030 未执行，账户账本暂不可用', already_opened: '该账户已开账，期初值不能修改',

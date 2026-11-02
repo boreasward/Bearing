@@ -75,6 +75,7 @@ export interface AgentOutput {
   thesis: AgentItem[]
   // agent-2 (v2.5 §4.1)
   invalidation?: Condition[]; review_when?: Condition[]; changes?: Change[]
+  research?: import('./research').ResearchPhase
 }
 export interface AgentCounter {
   status: string; risks: AgentItem[]; dropped: number
@@ -185,6 +186,28 @@ export interface TodayView {
   session: string; units?: Unit[]; extended_units?: ExtendedUnit[]; holdings?: Holding[]
   market: MarketContext | null; screen: ScreenReport | null
   chains?: ChainRow[]; timeline_ready?: boolean     // v2.5 §10.2; false = migration 026 missing
+  portfolio_check?: PortfolioCheckView | null
+}
+export interface PortfolioVerdict {
+  plan_id: string; ticker: string; group: string | null; verdict: 'ok' | 'blocked' | 'deferred'; reasons: string[]; order: number | null
+}
+export interface PortfolioResult {
+  exposure_by_sector: Record<string, { held_value: string | number; pending_value: string | number; candidate_value: string | number; share_of_equity: string | number | null }>
+  verdicts: PortfolioVerdict[]; conflicts: { group: string | null; plan_ids: string[]; rule: 'max_per_sector' }[]
+  order: string[]; params_used: Record<string, string | number>; version: string
+}
+export interface PortfolioCommentary {
+  summary: string; ranking: { plan_id: string; rank: number; reason: string }[]
+  tradeoffs: { text: string; refs: string[] }[]; hold_actions: { ticker: string; suggestion: 'keep' | 'trim' | 'exit'; reason: string }[]
+}
+export interface PortfolioCheckView {
+  status: 'ready' | 'not_computed' | 'degraded'; reason: string | null; session: string | null; cutoff_at: string | null
+  result: PortfolioResult | null; commentary: PortfolioCommentary | null
+}
+export const PORTFOLIO_REASON_TEXT: Record<string, string> = {
+  sector_cap: '超过行业集中度上限', max_per_sector: '超过同行业标的数量上限', single_cap: '超过单笔风险或单票敞口上限', total_cap: '超过组合总敞口上限',
+  insufficient_cash: '现金不足', held_ticker: '已持有、在挂或重复的标的', max_positions: '最多持仓数', sector_unknown: '行业未归类',
+  deferred_by_cash: '现金不足，暂缓执行',
 }
 export interface Decision {
   id: string; ticker: string; signal_date: string; proposed_action: Action; final_action: FinalAction
@@ -275,6 +298,12 @@ function sentenceAfter(message: string, code: string): string | null {
 
 export function describeError(error: unknown): string {
   if (error instanceof WorkbenchError) {
+    const messages: Record<string, string> = {
+      invalid_ticker: '标的格式不正确', feature_disabled: '该功能已关闭，请到功能开关开启',
+      research_quota: '今日手动研究额度已用完（每天最多 5 次）', migration_031_missing: '数据库尚未执行迁移 031',
+    }
+    const code = error.message.split(/[:：]/)[0]
+    if (messages[code]) return sentenceAfter(error.message, code) ?? messages[code]
     // v2.9 (§6.4, §13, §21.4): retired decisions, trade links, migration 029
     if (error.status === 410 && error.message.startsWith('decisions_retired'))
       return sentenceAfter(error.message, 'decisions_retired') ?? DECISIONS_RETIRED_SENTENCE
@@ -345,6 +374,16 @@ export const AGENT_REASON_TEXT: Record<string, string> = {
   invalid_entry_type: '入场类型不在允许的三种之内', invalid_max_hold: '最长持有须为 5–20 个交易日',
   stop_lowered: '持仓期不能下移止损', stop_above_close: '持仓期止损不能高于最新收盘',
   active_chain: '已有进行中的计划链，这次触发已并入',
+  // v2.12-v2.15 researcher / portfolio manager / optimizer / brief writer (same as backend agent.REASON_TEXT)
+  research_malformed: '研究输出格式无效', research_facts_count: '研究事实数量不符', research_kind: '研究事实种类无效',
+  research_inference_unsupported: '研究推断缺少事实支持', research_refs_invalid: '研究引用无效',
+  research_summary_length: '研究摘要长度不符', research_blocked_shape: '研究缺失数据说明无效',
+  pm_malformed: '组合评论格式无效', pm_summary_length: '组合摘要长度不符', pm_levels_forbidden: '组合评论不得修改价位或股数',
+  pm_ranking_invalid: '组合排序无效', pm_refs_invalid: '组合评论引用无效',
+  proposal_malformed: '提案格式无效', proposal_source: '提案来源无效', proposal_title: '提案标题为空',
+  proposal_length: '提案字段长度不符', proposal_refs_invalid: '提案证据引用无效', proposal_duplicate_title: '提案标题重复',
+  proposal_limit: '超出每次三条提案上限',
+  brief_empty: '实施说明为空', brief_length: '实施说明过长', brief_acceptance_missing: '实施说明缺少验收小节',
 }
 
 export const ruleLabel = (id: string) => RULE_LABELS[id] ?? id

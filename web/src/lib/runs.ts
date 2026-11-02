@@ -73,12 +73,18 @@ export interface FetchFamily {
   failures: FailureItem[]; legacy: boolean
 }
 export interface NodeResults { kind: string; items: any[]; total: number; truncated: boolean }
+export interface DataRequestCounts { queued: number; fetched: number; failed: number; deferred: number; reruns: number }
 export interface RunNodeDid {
   sentence: string | null; input_count: number | null; output_count: number | null
   skips: SkipItem[]; failures: FailureItem[]; degradations: DegradationItem[]
   retry: { first_error: string; waited_s: number } | null
   timings?: Record<string, unknown>
+  // Optional only for older stages; UI1 fixes the shapes when present.
+  data_requests?: DataRequestCounts
+  research_requests?: number
 }
+export interface PortfolioNodeItem { account_id: string; name: string; ok: number; blocked: number; deferred: number; commentary_status: string | null }
+export interface ProposalNodeItem { id: number; title: string; source: 'data' | 'agent_quality' | 'route'; status: 'proposed' | 'approved' | 'rejected' | 'superseded' }
 export interface RunNode {
   id: string; title: string; purpose?: string; concept?: string | null
   status: string; reason: string | null; reason_text: string | null

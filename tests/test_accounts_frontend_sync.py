@@ -2,7 +2,6 @@
 import re
 from pathlib import Path
 
-import pytest
 
 from investment_assistant.core import texts
 from investment_assistant.execution import accounts
@@ -18,7 +17,6 @@ MIGRATION = ROOT / 'migrations/030_accounts.sql'
 
 # The front end's rejection words (and the portfolio reasons) gain the v2.14 sector / exposure codes with Task 5; Task 7
 # removes this marker (removal list: Task 4 report, Segment F).
-TASK5 = pytest.mark.xfail(strict=False, reason='Task 5 front end (v2.14 rejection words) not merged yet; Task 7 removes')
 
 
 def _table(name: str) -> dict[str, str]:
@@ -53,7 +51,6 @@ def test_rejection_codes_backend_vocabulary():
     assert set(texts.PORTFOLIO_REASON_TEXT) >= set(texts.REJECT_TEXT) | {'sector_unknown', 'deferred_by_cash'}
 
 
-@TASK5
 def test_rejection_enum_set_matches_frontend():
     assert set(_table('REJECT_TEXT')) == set(paper_strategies.REJECT_CODES)
 
@@ -67,7 +64,6 @@ def test_shared_chinese_display_maps_match_backend():
     assert hasattr(paper_strategies, 'REJECT_TEXT')
 
 
-@TASK5
 def test_rejection_display_map_matches_frontend():
     assert _table('REJECT_TEXT') == paper_strategies.REJECT_TEXT
 

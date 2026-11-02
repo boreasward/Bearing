@@ -15,7 +15,7 @@ import { fmtBeijing } from '../lib/format'
 import type { DataOverview, FamilyCard, FamilyDetail, FamilyId, FamilyJob, FetchRun } from '../lib/data-families'
 
 const EVIDENCE = '这里只展示采集事实。所有规则都未经验证（Phase 0 Gate HOLD）：数据完整不代表信号有效。'
-const TITLES: Record<FamilyId, string> = {
+const TITLES: Partial<Record<FamilyId, string>> = {
   bars: '日线', sec_filings: 'SEC 申报', news: '资讯', atr: 'ATR', fred: 'FRED 利差', universe: '纳指 100 范围',
 }
 
@@ -24,7 +24,7 @@ const job = (overrides: Partial<FamilyJob> = {}): FamilyJob => ({
 })
 
 const card = (id: FamilyId, overrides: Partial<FamilyCard> = {}): FamilyCard => ({
-  id, title: TITLES[id], purpose: `用途-${id}`,
+  id, title: TITLES[id] ?? id, purpose: `用途-${id}`,
   kind: id === 'atr' ? 'derived' : id === 'universe' ? 'manual' : 'fetched',
   fetch_via: id === 'atr' ? 'bars' : null,
   per_ticker: ['bars', 'sec_filings', 'news'].includes(id),
@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.restoreAllMocks()
   resetConceptIndex()
   vi.spyOn(api, 'getConcepts').mockResolvedValue(conceptIndexOf(
-    ['family.bars', 'family.sec_filings', 'family.news', 'family.atr', 'family.fred', 'family.universe', 'system.gate_hold']))
+    ['family.bars', 'family.sec_filings', 'family.news', 'indicator.atr14', 'family.fred', 'family.universe', 'system.gate_hold']))
   vi.spyOn(api, 'getDataFamilies').mockResolvedValue(overview(six()))
   vi.spyOn(api, 'getDataFamily').mockResolvedValue(detail())
   vi.spyOn(api, 'browseData').mockResolvedValue({ family: 'bars', key: 'MU', has_data: false, rows: [] })
@@ -56,6 +56,25 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('Data 总览', () => {
+  it('indicator card lists items with basis and never offers a fetch action', async () => {
+    vi.mocked(api.getDataFamilies).mockResolvedValue({ ...overview([]), families: [{ id: 'indicators', kind: 'derived', items: [{ id: 'atr14', title: 'ATR14', basis: 'high_low', window: 14, used_by: ['plan-2', 'agent-tools'], concept: 'indicator.atr14' }] }] })
+    render(Data)
+    const article = await screen.findByRole('article', { name: '指标' })
+    expect(article).toHaveTextContent('ATR14')
+    expect(article).toHaveTextContent('high_low')
+    expect(article).toHaveTextContent('14')
+    expect(article).toHaveTextContent('plan-2、agent-tools')
+    expect(within(article).queryByRole('button', { name: /拉取/ })).toBeNull()
+  })
+  it('family card shows today sources and fallback share', async () => {
+    vi.mocked(api.getDataFamilies).mockResolvedValue(overview([card('bars', { sources: [{ id: 'yfinance', note: '主源' }, { id: 'stooq', note: '备源，按最近比例调整' }], today_sources: { primary: 7, backup: 2, failed: 1 } })]))
+    render(Data)
+    const article = await screen.findByRole('article', { name: '日线' })
+    expect(article).toHaveTextContent('今日来源：主源 7 · 备源 2 · 失败 1')
+    expect(article).toHaveTextContent('备源占目标 20.0%')
+    expect(article).toHaveTextContent('stooq')
+    expect(article).toHaveTextContent('备源，按最近比例调整')
+  })
   it('renders six cards with evidence banner', async () => {
     render(Data)
     expect(await screen.findByLabelText('证据说明')).toHaveTextContent(EVIDENCE)
@@ -535,7 +554,7 @@ describe('Data 详情', () => {
     render(Data)
     await screen.findAllByRole('article')
     // six family names plus the page evidence banner
-    expect(await termIds()).toEqual(new Set(['family.bars', 'family.sec_filings', 'family.news', 'family.atr',
+    expect(await termIds()).toEqual(new Set(['family.bars', 'family.sec_filings', 'family.news', 'indicator.atr14',
                                               'family.fred', 'family.universe', 'system.gate_hold']))
     expect(screen.getByRole('link', { name: '日线' })).toHaveAttribute('href', '#data/bars')
     expect(screen.getByRole('heading', { name: '日线' })).toBeTruthy()      // the card heading keeps its name

@@ -12,6 +12,7 @@
   import OrdersTable from '$lib/components/account/OrdersTable.svelte'
   import DecisionDay from '$lib/components/account/DecisionDay.svelte'
   import CompareTable from '$lib/components/account/CompareTable.svelte'
+  import Markers from '$lib/components/account/Markers.svelte'
   import NewAccountDialog from '$lib/components/account/NewAccountDialog.svelte'
   import OpeningDialog from '$lib/components/account/OpeningDialog.svelte'
   import { Alert, AlertDescription } from '$lib/ui/alert/index'
@@ -28,6 +29,7 @@
   import PageHeader from '$lib/ui/domain/PageHeader.svelte'
   import Section from '$lib/ui/domain/Section.svelte'
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
+  import VersionChip from '$lib/ui/domain/VersionChip.svelte'
   import Field from '$lib/ui/field/Field.svelte'
   import { Input } from '$lib/ui/input/index'
   import TabNav from '$lib/ui/tab-nav/TabNav.svelte'
@@ -191,6 +193,7 @@
     tooltip: { trigger: 'axis' }, legend: { type: 'scroll' }, grid: { left: 50, right: 20, top: 50, bottom: 35 },
     xAxis: { type: 'time' }, yAxis: { type: 'value', scale: true, name: '首个交易日 = 100' },
     series: [
+      { id: 'account-markers', type: 'line', data: [], silent: true, markLine: ac.accountMarkLine(comparison?.markers) },
       ...comparisonCurves.filter(item => !hiddenCurves.has(item.id)).map(item => ({ name: item.name, type: 'line' as const, showSymbol: false, connectNulls: false, data: item.curve.data })),
       ...(!hiddenCurves.has('SPY') && comparisonSpy.length ? [{ name: 'SPY', type: 'line' as const, showSymbol: false, data: ac.normalizedEquity(comparisonSpy.map(row => ({ session: row.session, equity: row.close }))) }] : []),
     ],
@@ -199,6 +202,7 @@
   const paramFields = [
     ['risk_pct', '单笔风险比例'], ['single_cap', '单票上限比例'], ['total_cap', '总持仓上限比例'], ['fee_per_trade', '每笔费用'],
     ['max_positions', '最多持仓数'], ['reconcile_tolerance_pct', '对账容差比例'], ['reconcile_tolerance_abs', '对账容差金额'],
+    ['sector_cap', '行业敞口上限'], ['max_per_sector', '每行业最多持仓数'],
   ]
   let paramsOpen = $state(false)
   let paramValues = $state<Record<string, string>>({})
@@ -211,16 +215,20 @@
   function editParams() {
     paramsGeneration++; paramBusy = false
     paramValues = Object.fromEntries(Object.entries(detail?.account.params ?? {}).map(([key, value]) => [key, String(value)]))
+    paramValues.sector_cap ??= '0.35'; paramValues.max_per_sector ??= '3'
     paramReason = ''; paramError = ''; paramRequestId = wb.newRequestId(); paramTargetId = detail?.account.id ?? ''; paramsOpen = true
   }
   async function saveParams(event: Event) {
     event.preventDefault()
     if (!detail || paramBusy || !paramReason.trim() || paramTargetId !== accountId) return
+    const sectorCap = Number(paramValues.sector_cap), maxPerSector = Number(paramValues.max_per_sector)
+    if (!Number.isFinite(sectorCap) || sectorCap < 0.05 || sectorCap > 1) { paramError = '行业敞口上限须在 0.05–1.0 之间'; return }
+    if (!Number.isInteger(maxPerSector) || maxPerSector < 1 || maxPerSector > 10) { paramError = '每行业最多持仓数须为 1–10 的整数'; return }
     const generation = routeGeneration, dialog = paramsGeneration, targetId = paramTargetId
     const current = () => currentAction(generation, targetId) && dialog === paramsGeneration
     paramBusy = true; paramError = ''
     try {
-      const params = Object.fromEntries(Object.entries(paramValues).filter(([, value]) => value.trim()).map(([key, value]) => [key, key === 'max_positions' ? Number(value) : value]))
+      const params = Object.fromEntries(Object.entries(paramValues).filter(([, value]) => value.trim()).map(([key, value]) => [key, ['max_positions', 'max_per_sector'].includes(key) ? Number(value) : value]))
       await ac.changeParams(targetId, { request_id: paramRequestId, params, reason: paramReason.trim() })
       if (!current()) return
       paramsOpen = false; notify.success('参数已记录，下一交易日生效'); await refresh()
@@ -500,6 +508,7 @@
         </DataBlock>
       </Section>
       <CompareTable view={comparison} valuationWarnings={comparisonValuationWarnings} />
+      <Markers markers={comparison.markers} />
     {:else if detail}
       {#if detail.account.status === 'closed'}<DataBlock state="degraded" message="账户已关闭，只读查看历史记录。" />{/if}
       {#if tab === 'overview'}
@@ -694,6 +703,7 @@
                     <Button variant="link" size="sm" aria-label={`${expandedDay === day.session ? '收起' : '展开'} ${day.session}`}
                             aria-expanded={expandedDay === day.session} onclick={() => toggleDay(day.session)}>{day.session}</Button>
                     <StatusPill domain="paper_decision" value={day.status} />
+                    {#if day.agent_version}<VersionChip version={day.agent_version} />{/if}
                     <span class="text-xs text-muted-foreground">下单 {day.orders_placed ?? '—'} · 拒绝 {day.orders_rejected ?? '—'}{day.status_reason ? ` · ${ac.decisionReasonText(day.status_reason)}` : ''}</span>
                   </div>
                   {#if expandedDay === day.session}
@@ -724,8 +734,8 @@
     <form class="grid gap-3" onsubmit={saveParams}>
       <div class="grid gap-3 sm:grid-cols-2">
         {#each paramFields as [key, label]}
-          <Field {label} id={`${uid}-param-${key}`}>
-            {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode={key === 'max_positions' ? 'numeric' : 'decimal'} class={NUM} bind:value={paramValues[key]} disabled={paramBusy} />{/snippet}
+          <Field {label} id={`${uid}-param-${key}`} hint={key === 'sector_cap' ? '0.05–1.0，默认 0.35' : key === 'max_per_sector' ? '1–10，默认 3' : undefined}>
+            {#snippet children({ id, describedby })}<Input {id} aria-describedby={describedby} inputmode={['max_positions', 'max_per_sector'].includes(key) ? 'numeric' : 'decimal'} class={NUM} bind:value={paramValues[key]} disabled={paramBusy} />{/snippet}
           </Field>
         {/each}
       </div>

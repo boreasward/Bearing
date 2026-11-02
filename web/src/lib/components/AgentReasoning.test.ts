@@ -59,11 +59,55 @@ beforeEach(() => {
   vi.spyOn(api, 'getReasoning').mockResolvedValue(reasoning())
   Element.prototype.scrollIntoView = vi.fn()
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 const headings = () => screen.getAllByRole('heading', { level: 4 }).map(h => h.textContent!.replace(/ⓘ/g, '').trim())
 
 describe('AgentReasoning', () => {
+  it('renders research section with facts by kind and blocked list', async () => {
+    vi.mocked(api.getReasoning).mockRestore()
+    const payload = reasoning({ run: run({ agent_version: 'agent-4' }), steps: [
+      { kind: 'read', title: '研究员读了什么', concept: 'agent.tool_calls', calls: [call(7, 'get_price_bars')] },
+      { kind: 'research', title: '公司研究', concept: 'agent.company_researcher', status: 'ok', reason: null, output: { summary: '公司研究摘要', facts: [{ text: '披露营收增长', kind: 'disclosure', refs: ['call:7'] }, { text: '增长有望延续', kind: 'inference', refs: ['call:7'] }], risks: [], blocked: [{ what: '本季指引', why: '工具没有返回' }] } },
+      { kind: 'proposal', title: '提议', concept: 'agent.action_levels', action: 'pass', reasons: [{ text: '缺本季指引，等待披露', refs: ['call:7'] }] },
+    ] })
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+      if (path === '/api/workbench/agent-runs/run-1/reasoning') return Response.json(payload)
+      throw new Error(`Unexpected request ${path}`)
+    }))
+    render(AgentReasoning, { runId: 'run-1' })
+    const region = await screen.findByRole('region', { name: '公司研究' })
+    expect(region.querySelector('[data-source="披露事实"]')).not.toBeNull()
+    expect(region.querySelector('[data-source="推断"]')).not.toBeNull()
+    expect(region).toHaveTextContent('本季指引：工具没有返回')
+    expect(headings()).toEqual(['研究员读了什么', '公司研究', '提议'])
+    await fireEvent.click(within(region).getAllByRole('button', { name: 'call:7' })[0])
+    expect(document.querySelector('[data-call="run-1-7"]')).toHaveAttribute('data-highlighted', 'true')
+  })
+  it('a carried research segment shows its provenance and never jumps into this run\'s calls', async () => {
+    vi.mocked(api.getReasoning).mockRestore()
+    const output = { summary: '沿用的研究', facts: [{ text: '原运行读到的事实', kind: 'disclosure' as const, refs: ['call:1'] }], risks: [], blocked: [] }
+    const mine = reasoning({ run: run({ agent_version: 'agent-4' }), steps: [
+      { kind: 'read', title: '提议者读了什么', concept: 'agent.tool_calls', calls: [call(1, 'get_price_bars')] },
+      { kind: 'research', title: '公司研究', concept: 'agent.company_researcher', status: 'carried', reason: null, output, carried_from: 'run-0', original_status: 'ok' },
+    ] })
+    const original = reasoning({ run: run({ id: 'run-0', agent_version: 'agent-4' }), steps: [
+      { kind: 'read', title: '研究员读了什么', concept: 'agent.tool_calls', calls: [call(1, 'get_price_bars')] },
+    ] })
+    vi.stubGlobal('fetch', vi.fn(async (path: string) => {
+      if (path === '/api/workbench/agent-runs/run-1/reasoning') return Response.json(mine)
+      if (path === '/api/workbench/agent-runs/run-0/reasoning') return Response.json(original)
+      throw new Error(`Unexpected request ${path}`)
+    }))
+    render(AgentReasoning, { runId: 'run-1' })
+    const region = await screen.findByRole('region', { name: '公司研究' })
+    expect(region).toHaveTextContent('沿用研究（原状态：研究完成）')
+    expect(region).toHaveTextContent('引用编号属于原运行')
+    expect(within(region).queryByRole('button', { name: 'call:1' })).toBeNull()      // not a jump link: call:1 here is a different call
+    await fireEvent.click(within(region).getByRole('button', { name: '看原运行的推理' }))
+    expect(await within(region).findByRole('region', { name: '研究员读了什么' })).toBeInTheDocument()
+    expect(document.querySelector('[data-call="run-1-1"]')).not.toHaveAttribute('data-highlighted')
+  })
   it('fetches on mount only', async () => {
     const { rerender } = render(AgentReasoning, { runId: 'run-1' })
     await screen.findByText('回应：本版之后还没有复查')

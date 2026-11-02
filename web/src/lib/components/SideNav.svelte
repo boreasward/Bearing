@@ -16,6 +16,7 @@
     { id: 'today', label: '今日', icon: 'calendar-days' },
     { id: 'instrument', label: '标的', icon: 'search' },
     { id: 'account', label: '账户', icon: 'activity' },
+    { id: 'research', label: '研究', icon: 'microscope' },
     {
       id: 'review', label: '复盘', icon: 'clipboard-list', children: [
         { id: 'cards', label: '复盘卡' },
@@ -32,6 +33,10 @@
         { id: 'mine', label: '我的知识' },
       ],
     },
+    { id: 'roadmap', label: '路线', icon: 'map', children: [
+      { id: 'route', label: '路线', href: '#roadmap' }, { id: 'proposals', label: '提案' },
+      { id: 'decisions', label: '决策' }, { id: 'evidence', label: '证据' },
+    ] },
     {
       id: 'settings', label: '设置', icon: 'settings', children: [
         { id: 'system',    label: '系统' },
@@ -39,6 +44,7 @@
         { id: 'discord',   label: '推送配置' },
         { id: 'jobs',      label: '定时任务' },
         { id: 'env',       label: '环境变量' },
+        { id: 'features',  label: '功能开关' },
       ],
     },
   ]
@@ -92,6 +98,10 @@
   // 概念页是知识区的默认页：没有子路径（或 concepts / 具体的卡）时都算「概念」；mine 与 mine/… 是「我的知识」。
   function isChildCurrent(item: NavItem, child: NavChild): boolean {
     if (item.id !== current) return false
+    if (item.id === 'roadmap') {
+      if (child.id === 'route') return !sub || sub === 'route' || sub.startsWith('versions/')
+      return sub === child.id || !!sub?.startsWith(`${child.id}/`)
+    }
     if (item.id === 'knowledge') {
       const mine = sub === 'mine' || !!sub?.startsWith('mine/')
       if (child.id === 'principles') return sub === 'principles'

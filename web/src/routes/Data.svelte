@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Alert, AlertDescription } from '$lib/ui/alert/index'
   import { Button } from '$lib/ui/button/index'
+  import * as Card from '$lib/ui/card/index'
   import DataTable from '$lib/ui/data-table/DataTable.svelte'
   import type { Column } from '$lib/ui/data-table/types'
   import DataBlock from '$lib/ui/domain/DataBlock.svelte'
@@ -8,8 +9,9 @@
   import PageHeader from '$lib/ui/domain/PageHeader.svelte'
   import Section from '$lib/ui/domain/Section.svelte'
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
+  import SourceBadge from '$lib/ui/domain/SourceBadge.svelte'
   import * as api from '../lib/api'
-  import { KNOWN_FAMILIES, triggerLabel, type DataOverview, type FamilyDetail, type FetchRun } from '../lib/data-families'
+  import { KNOWN_FAMILIES, triggerLabel, type DataOverview, type FamilyDetail, type FetchRun, type IndicatorItem } from '../lib/data-families'
   import { fmtBeijing } from '../lib/format'
   import DataFamilyCard from '../lib/components/DataFamilyCard.svelte'
   import DataBrowse from '../lib/components/DataBrowse.svelte'
@@ -27,6 +29,14 @@
   let familyId = $derived(sub && (KNOWN_FAMILIES as readonly string[]).includes(sub) ? sub : null)
   let coverageRows = $derived(detail?.rows.filter(row => !onlyLagging || row.lagging) ?? [])
   let targets = $derived(detail?.rows.map(row => row.target) ?? [])
+  const cards = $derived([...(overview?.families ?? [])].sort((a, b) => {
+    const rank = (id: string) => id === 'indicators' ? 99 : (KNOWN_FAMILIES as readonly string[]).indexOf(id)
+    return rank(a.id) - rank(b.id)
+  }))
+  const indicatorColumns: Column<IndicatorItem>[] = [
+    { key: 'title', header: '指标', cell: indicator }, { key: 'basis', header: '口径' },
+    { key: 'window', header: '窗口', value: r => r.window ?? '不适用' }, { key: 'used_by', header: '使用方', value: r => r.used_by.join('、') },
+  ]
 
   async function load(id: string | null) {
     const token = ++generation
@@ -72,8 +82,12 @@
   const coverageColumns: Column<Coverage>[] = [
     { key: 'target', header: '目标' }, { key: 'latest', header: '最新时点', value: r => latestText(r.latest_at) },
     { key: 'lagging', header: '是否滞后', cell: laggingCell }, { key: 'failure', header: '最近失败原因', cell: lastFailureCell },
+    { key: 'source_used', header: '实际来源', cell: sourceCell },
   ]
 </script>
+
+{#snippet indicator(row: IndicatorItem)}<a class="text-primary underline" href={`#knowledge/${row.concept}`}>{row.title}</a> <code class="text-xs text-muted-foreground">{row.id}</code>{/snippet}
+{#snippet sourceCell(row: Coverage)}{#if row.source_used}<SourceBadge source={row.source_used} fallback={!!row.fallback?.tried} />{:else}<span>未记录来源</span>{/if}{#if row.fallback?.reason}<p>{row.fallback.reason}</p>{/if}{/snippet}
 
 {#snippet statusCell(run: FetchRun)}<StatusPill domain="fetch" value={run.status} text={run.status} />{/snippet}
 {#snippet jobCell(run: FetchRun)}{run.job}{#if run.detail?.targets_source}
@@ -133,8 +147,13 @@
       {/key}
     {:else}
       <div class="grid gap-3 md:grid-cols-2">
-        {#each overview.families as card (card.id)}
-          <DataFamilyCard {card} pageEvidence={overview.evidence} onfetched={() => load(familyId)} />
+        {#each cards as card (card.id)}
+          {#if card.id === 'indicators'}
+            <Card.Root size="sm" role="article" aria-label="指标" class="md:col-span-2"><Card.Content class="grid gap-3">
+              <h2 class="text-base font-medium">指标</h2><p class="text-xs text-muted-foreground">派生计算：口径与窗口由注册表定义，数据完整不代表信号有效。</p>
+              <DataBlock state={card.items.length ? 'ready' : 'empty'} message="指标注册表为空"><DataTable columns={indicatorColumns} rows={card.items} rowKey={r => r.id} ariaLabel="指标注册表" /></DataBlock>
+            </Card.Content></Card.Root>
+          {:else}<DataFamilyCard {card} pageEvidence={overview.evidence} onfetched={() => load(familyId)} />{/if}
         {/each}
       </div>
     {/if}

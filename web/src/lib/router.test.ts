@@ -7,7 +7,13 @@ describe('parseHash', () => {
   it('places accounts between instruments and review in the main navigation', () => {
     const { container } = render(SideNav, { current: 'today' })
     const labels = [...container.querySelectorAll('[data-nav-item]')].map(el => (el.getAttribute('aria-label') ?? el.textContent ?? '').trim())
-    expect(labels.slice(0, 7)).toEqual(['今日', '标的', '账户', '复盘', '数据', '知识', '设置'])
+    expect(labels.slice(0, 9)).toEqual(['今日', '标的', '账户', '研究', '复盘', '数据', '知识', '路线', '设置'])
+  })
+  it('parses research and roadmap nested paths', () => {
+    expect(parseHash('#research/request-id/2')).toEqual({ zone: 'research', sub: 'request-id/2' })
+    expect(parseHash('#roadmap/versions/v2.15')).toEqual({ zone: 'roadmap', sub: 'versions/v2.15' })
+    expect(parseHash('#roadmap/proposals/12')).toEqual({ zone: 'roadmap', sub: 'proposals/12' })
+    expect(parseHash('#settings/features')).toEqual({ zone: 'settings', sub: 'features' })
   })
   it.each([
     ['#account', undefined], ['#account/00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001'],

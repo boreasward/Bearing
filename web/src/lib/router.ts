@@ -1,11 +1,11 @@
 import { RUN_ID_RE } from './runs'
 import { REAL_ACCOUNT_ID } from './accounts'
-export type Zone = 'today' | 'instrument' | 'account' | 'review' | 'data' | 'knowledge' | 'tools' | 'settings' | 'plan' | 'discuss'
+export type Zone = 'today' | 'instrument' | 'account' | 'review' | 'data' | 'knowledge' | 'tools' | 'settings' | 'plan' | 'discuss' | 'research' | 'roadmap'
 export const workbenchZones: Zone[] = ['today', 'instrument', 'account', 'review']
-export const zones: Zone[] = [...workbenchZones, 'data', 'knowledge', 'tools', 'settings', 'plan', 'discuss']
+export const zones: Zone[] = [...workbenchZones, 'data', 'knowledge', 'tools', 'settings', 'plan', 'discuss', 'research', 'roadmap']
 
 // Zones whose pages have a path of their own below the first segment: #review/cards/12, #knowledge/mine/3@2.
-const nestedZones: Zone[] = ['review', 'knowledge', 'account']
+const nestedZones: Zone[] = ['review', 'knowledge', 'account', 'research', 'roadmap']
 
 export function parseHash(hash: string): { zone: Zone; sub: string | undefined } {
   const [rawZone, ...rest] = hash.replace(/^#/, '').split('?')[0].split('/')

@@ -14,6 +14,7 @@
   import * as api from '../lib/api'
   import Watchlist from '../lib/components/Watchlist.svelte'
   import AgentConnection from '../lib/components/AgentConnection.svelte'
+  import FeatureFlags from '../lib/components/settings/FeatureFlags.svelte'
 
   let { sub = 'system' }: { sub?: string } = $props()
   let loading = $state(true)
@@ -50,7 +51,7 @@
           api.getStatus(),
           api.getOperations().then((r: any) => r.operations ?? []),
         ])
-      } else if (sub === 'watchlist') {
+      } else if (sub === 'watchlist' || sub === 'features') {
         // Shared editor owns its read-back lifecycle.
       } else if (sub === 'discord') {
         ;[notify, env] = await Promise.all([api.getNotifySettings(), api.getEnvStatus()])
@@ -123,6 +124,7 @@
   const SETTINGS_TABS = [
     { id: 'system', label: '系统' }, { id: 'watchlist', label: '关注列表' }, { id: 'discord', label: '推送配置' },
     { id: 'jobs', label: '定时任务' }, { id: 'env', label: '环境变量' },
+    { id: 'features', label: '功能开关' },
   ]
   const tabs = $derived(SETTINGS_TABS.map(t => ({ href: `#settings/${t.id}`, label: t.label, current: sub === t.id || (t.id === 'env' && !SETTINGS_TABS.some(x => x.id === sub)) })))
 
@@ -210,6 +212,8 @@
   </div>
 {:else if sub === 'watchlist'}
   <Watchlist />
+{:else if sub === 'features'}
+  <FeatureFlags />
 {:else if sub === 'discord'}
   <div class="grid max-w-lg gap-4">
     <h2 class="text-lg font-medium">通知</h2>

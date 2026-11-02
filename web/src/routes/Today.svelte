@@ -14,6 +14,7 @@
   import { notify } from '$lib/ui/toast'
   import PlanTable from '../lib/components/PlanTable.svelte'
   import RunOverview from '../lib/components/RunOverview.svelte'
+  import PortfolioCheck from '../lib/components/today/PortfolioCheck.svelte'
   import * as api from '../lib/api'
   import * as tl from '../lib/timeline'
   import * as wb from '../lib/workbench'
@@ -197,6 +198,7 @@
   {/if}
 
   {#if view}
+    <PortfolioCheck check={view.portfolio_check} />
     <div class="grid gap-4 md:grid-cols-2">
       <Card.Root size="sm" role="region" aria-label="筛选" class="gap-2 px-3 text-sm">
         <div class="flex flex-wrap items-center gap-2">

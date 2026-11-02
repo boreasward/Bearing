@@ -110,13 +110,14 @@
 
   type Row = Record<string, unknown>
   type Column = { key: string; label: string; format?: (value: unknown) => string; link?: string; concept?: string }
-  const text = (value: unknown): string => value == null ? '—' : Array.isArray(value) ? value.join(', ') : String(value)
+  const text = (value: unknown): string => value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value)
   const columns: Record<string, Column[]> = {
     bars: [
       { key: 'price_date', label: '日期' }, { key: 'open', label: '开' }, { key: 'high', label: '高' },
       { key: 'low', label: '低' }, { key: 'close', label: '收' }, { key: 'adj_close', label: 'adj_close' },
       { key: 'volume', label: '成交量' }, { key: 'split_factor', label: '拆股因子' },
       { key: 'revisions', label: '修订次数' }, { key: 'fetched_at', label: '采集时间', format: fmtBeijing },
+      { key: 'source', label: '来源' },
     ],
     atr: [
       { key: 'price_date', label: '日期' }, { key: 'close', label: 'close' },
@@ -139,9 +140,12 @@
     ],
     fred: [{ key: 'obs_date', label: '观测日期' }, { key: 'value', label: '实际值' }, { key: 'revisions', label: '修订次数' }],
     universe: [{ key: 'ticker', label: '标的' }, { key: 'latest_bar', label: '最近日线日期' }],
+    sector: [{ key: 'ticker', label: '标的' }, { key: 'sic', label: 'SIC' }, { key: 'sic_description', label: '行业描述' }, { key: 'group', label: '行业组' }, { key: 'source', label: '来源' }, { key: 'fetched_at', label: '采集时间', format: fmtBeijing }],
+    fundamentals: [{ key: 'metric', label: '指标' }, { key: 'value', label: '值' }, { key: 'period', label: '财季' }],
   }
   const tableNames: Record<string, string> = {
     bars: '日线原始值', atr: 'ATR 原始值', news: '资讯原始值', fred: 'FRED 原始值', universe: '范围成员',
+    sector: '行业归类', fundamentals: '财季数据', sec_text: 'SEC 原文与事实', earnings: '财报日',
   }
   let rows = $derived(Array.isArray(result?.rows) ? result.rows : [])
 </script>
@@ -234,7 +238,7 @@
       <h3 class="text-sm font-medium">sec_8k（未入 filings）</h3>
       {@render rawTable('sec_8k（未入 filings）', result.sec_8k ?? [], columns.sec_8k)}
     {:else}
-      {@render rawTable(tableNames[family.id], rows, columns[family.id])}
+      {@render rawTable(tableNames[family.id], rows, columns[family.id] ?? [...new Set(rows.flatMap(row => Object.keys(row)))].map(key => ({ key, label: key })))}
     {/if}
   {:else if byTicker}
     <DataBlock state="empty" message="请选择或输入标的" />

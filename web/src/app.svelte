@@ -10,6 +10,8 @@
   import Instrument from './routes/Instrument.svelte'
   import Review from './routes/Review.svelte'
   import Account from './routes/Account.svelte'
+  import Research from './routes/Research.svelte'
+  import Roadmap from './routes/Roadmap.svelte'
   import Data from './routes/Data.svelte'
   import Knowledge from './routes/Knowledge.svelte'
   import Plan from './routes/Plan.svelte'
@@ -61,6 +63,10 @@
       <Review {sub} />
     {:else if zone === 'account'}
       <Account {sub} />
+    {:else if zone === 'research'}
+      <Research {sub} />
+    {:else if zone === 'roadmap'}
+      <Roadmap {sub} />
     {:else if zone === 'data'}
       <Data {sub} />
     {:else if zone === 'knowledge'}

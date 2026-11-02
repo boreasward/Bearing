@@ -12,6 +12,7 @@
   import AgentReasoning from './AgentReasoning.svelte'
   import FetchTable from './FetchTable.svelte'
   import NodeGraph from './NodeGraph.svelte'
+  import PortfolioResult from './account/PortfolioResult.svelte'
   import * as api from '../api'
   import { fmtBeijing } from '../format'
   import {
@@ -19,7 +20,7 @@
     RUN_STATUS_TEXT, TRIGGER_TEXT,
     durationText, nyDay, resumeErrorText,
   } from '../runs'
-  import type { RunDetail, RunNode } from '../runs'
+  import type { DataRequestCounts, RunDetail, RunNode } from '../runs'
   import { OUTCOME_TEXT } from '../timeline'
   import { REGIME_LABELS, describeError, newRequestId, ruleLabel } from '../workbench'
 
@@ -33,6 +34,10 @@
   const MODE_TEXT: Record<string, string> = { propose: '建议', interpret: '解读', review: '复查' }
   const RETRO_KIND_TEXT: Record<string, string> = { card: '复盘卡', weekly: '周度复盘', monthly: '月度复盘' }
   const INTERNAL_RESULT_TEXT: Record<string, string> = { inserted: '新写入', existing: '已存在' }
+  const REQUEST_COUNT_TEXT: Record<keyof DataRequestCounts, string> = { queued: '排队中', fetched: '已补采', failed: '失败', deferred: '暂缓', reruns: '重跑' }
+  const requestCounts = (value: DataRequestCounts) => (Object.keys(REQUEST_COUNT_TEXT) as (keyof DataRequestCounts)[]).map(key => `${REQUEST_COUNT_TEXT[key]} ${value[key]}`).join(' · ')
+  const PROPOSAL_SOURCE_TEXT: Record<string, string> = { data: '数据', agent_quality: 'Agent 质量', route: '路线' }
+  const COMMENTARY_TEXT: Record<string, string> = { ok: '组合经理已完成', error: '组合经理出错', rejected: '组合经理未通过校验', missing: '仅有硬结果', skipped: '组合经理跳过', disabled: '组合经理已关闭' }
 
   let detail = $state<RunDetail | null>(null)
   let error = $state('')
@@ -376,6 +381,15 @@
                         <span><a class="text-primary underline" href={`#instrument/${encodeURIComponent(item.ticker)}`}>{item.ticker}</a>
                           · {item.signal_date} · {OUTCOME_TEXT[item.outcome as keyof typeof OUTCOME_TEXT] ?? item.outcome}
                           {#if item.plan_id} · <a class="text-primary underline" href={`#plan/${item.plan_id}`}>计划</a>{/if}</span>
+                      {:else if results.kind === 'portfolio'}
+                        <div class="grid gap-2 rounded-md border border-border p-2">
+                          <a class="text-primary underline" href={`#account/${item.account_id}`}>{item.name}</a>
+                          <div class="flex flex-wrap gap-2"><StatusPill domain="portfolio_verdict" value="ok" text={`可执行 ${count(item.ok)}`} /><StatusPill domain="portfolio_verdict" value="blocked" text={`被拦截 ${count(item.blocked)}`} /><StatusPill domain="portfolio_verdict" value="deferred" text={`暂缓 ${count(item.deferred)}`} /></div>
+                          <p>{item.commentary_status == null ? '组合经理未运行（只有硬结果或检查未完成）' : COMMENTARY_TEXT[item.commentary_status] ?? item.commentary_status}</p>
+                          <PortfolioResult accountId={item.account_id} name={item.name} session={detail.session} />
+                        </div>
+                      {:else if results.kind === 'proposals'}
+                        <span class="flex flex-wrap items-center gap-2"><a class="text-primary underline" href={`#roadmap/proposals/${item.id}`}>{item.title}</a><span>{PROPOSAL_SOURCE_TEXT[item.source] ?? item.source}</span><StatusPill domain="proposal" value={item.status} /></span>
                       {:else if results.kind === 'push'}
                         <span>{item.sent ? `已发送 ${count(item.messages)} 条` : '未发送'}{item.channel ? ` · ${item.channel}` : ''}{item.reason ? ` · ${item.reason}` : ''}</span>
                       {:else if results.kind === 'retro'}
@@ -395,6 +409,10 @@
                 </ul>
               {/if}
             </Section>
+          {/if}
+          {#if node.id === 'agent'}
+            {#if node.did?.research_requests != null}<Section title="研究请求" level={3}><p>{node.did.research_requests}</p><a class="text-primary underline" href="#research">查看研究档案</a></Section>{/if}
+            {#if node.did?.data_requests != null}<Section title="补查请求" level={3}><p>{requestCounts(node.did.data_requests)}</p></Section>{/if}
           {/if}
           </Card.Content>
         </Card.Root>

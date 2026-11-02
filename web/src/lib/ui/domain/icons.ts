@@ -21,9 +21,15 @@ import Loader from '@lucide/svelte/icons/loader'
 import Menu from '@lucide/svelte/icons/menu'
 import PanelLeftClose from '@lucide/svelte/icons/panel-left-close'
 import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open'
+import Microscope from '@lucide/svelte/icons/microscope'
+import Map from '@lucide/svelte/icons/map'
+import ToggleLeft from '@lucide/svelte/icons/toggle-left'
 
 // The explicit icon table: a new icon is one import and one line here (no wildcard import, so the bundle only carries these).
 export const ICONS = {
+  microscope: Microscope,
+  map: Map,
+  'toggle-left': ToggleLeft,
   'calendar-days': CalendarDays,
   search: Search,
   'clipboard-list': ClipboardList,

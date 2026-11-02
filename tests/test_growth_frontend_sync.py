@@ -5,7 +5,6 @@ The front end keeps its own copies of the retro texts (`web/src/lib/growth.ts`),
 `growth-fixtures.ts`). Offline: reads source files, no database."""
 import re
 
-import pytest
 from pathlib import Path
 
 from investment_assistant.analysis import agent
@@ -46,7 +45,6 @@ def test_end_and_status_texts_match():
     assert set(retro.CARD_STATUS_TEXT) == set(retro.CARD_STATUSES)
 
 
-@pytest.mark.xfail(strict=False, reason='Task 5 front end (v2.12-v2.15 vocabulary) not merged yet; Task 7 removes')
 def test_agent_reason_text_matches():
     text = WORKBENCH_TS.read_text(encoding='utf-8')
     frontend = _ts_table(text, 'AGENT_REASON_TEXT')

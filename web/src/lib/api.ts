@@ -124,6 +124,7 @@ export const patchScheduledJob = (name: string, body: object) =>
 // data families (the Data menu; 503 details opt in so migration notices surface verbatim)
 export const getDataFamilies = () =>
   get<df.DataOverview>('/api/data/families', { errorDetails: true })
+export const getIndicators = () => get<df.IndicatorList>('/api/data/indicators', { errorDetails: true })
 export const getDataFamily = (id: string) =>
   get<df.FamilyDetail>(`/api/data/families/${encodeURIComponent(id)}`, { errorDetails: true })
 export const fetchDataFamily = (id: string, ticker?: string) =>
