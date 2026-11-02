@@ -1,17 +1,18 @@
 """Explicit collection and local-only US research views; never sends notifications."""
 from __future__ import annotations
 
-import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from investment_assistant.config import load_config
 from investment_assistant.core import tx as core_tx
 from investment_assistant.db import list_filings, list_watchlist_items
 from investment_assistant.data import repo, research_rows
 from investment_assistant.data.fundamentals import stock_id
+from investment_assistant.data.sec.local_evidence import (
+    monitor_metadata, owned_path as _owned_path, verified_sec_url as _verified_sec_url,
+)
 
 DATASETS = ('financials', 'market', 'filings')
 _ACCESSION = re.compile(r'\d{10}-\d{2}-\d{6}')
@@ -43,38 +44,17 @@ def _market_rows(payload):
     return rows, {'acquisitions': snapshots, 'limitations': payload.get('limitations', [])}
 
 
-def _owned_path(raw, root, ticker, accession):
-    path = Path(raw).resolve()
-    if not path.is_relative_to(root / ticker) or accession not in path.name or not path.is_file():
-        raise ValueError('本地原文缺失或证券归属无效')
-    return str(path)
-
-
-def _verified_sec_url(raw, accession):
-    url = urlsplit(raw or '')
-    if (url.scheme == 'https' and url.hostname in {'www.sec.gov', 'sec.gov'} and not url.username
-            and not url.password and not url.query and not url.fragment
-            and re.fullmatch(r'/Archives/edgar/data/\d+/' + accession.replace('-', '') + r'/[^/]+', url.path)):
-        return raw
-    return ''
-
-
 def _local_filing_rows(conn, ticker, *, config=None):
     """Read indexed original documents and verified monitor metadata only."""
     from investment_assistant.data.sec.extraction import analyze_files
     config = config if config is not None else load_config()
     root = config.filings.output_dir.resolve()
-    metadata, metadata_error = {}, None
-    if config.sec_monitor.state_dir:
-        state_path = Path(config.sec_monitor.state_dir) / 'state.json'
-        if state_path.exists():
-            try:
-                state = json.loads(state_path.read_text())
-                if state.get('version') != 1 or not isinstance(state.get('files'), dict):
-                    raise ValueError('invalid monitor metadata')
-                metadata = state['files']
-            except Exception:
-                metadata_error = 'SEC本地来源元数据不可用；未采用未验证链接或附件'
+    metadata_error = None
+    try:
+        metadata = monitor_metadata(config.sec_monitor.state_dir)
+    except Exception:
+        metadata = {}
+        metadata_error = 'SEC本地来源元数据不可用；未采用未验证链接或附件'
     rows, errors = [], []
     # No arbitrary page limit: parse the complete already-indexed security library.
     with conn.cursor() as cur:

@@ -71,7 +71,7 @@ def fetch_series(series_id: str, *, start: date, end: date, api_key: str | None,
     return rows
 
 
-def _fetch(target, *, session, start, end, deps):
+def _fetch(target, *, session, start, end, deps, now):
     metadata = {}
     def transport(url, *, params):
         value, meta = (deps.macro_fetcher(url, params=params) if deps.macro_fetcher else

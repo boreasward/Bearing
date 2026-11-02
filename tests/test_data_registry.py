@@ -262,3 +262,12 @@ def test_target_schema_capabilities_are_explicit_not_missing_table_fallback(monk
     facts = TargetFacts(pool=('MU',), research_requests_ready=False, paper_accounts_ready=False)
     assert registry.get('bars').targets(None, 'daily', facts=facts,
         universe_loader=lambda: SimpleNamespace(tickers=('AAPL',))) == ['SPY', 'SMH', 'XLK', 'QQQ', 'AAPL', 'MU']
+
+
+def test_source_receives_immutable_run_cutoff():
+    seen = []
+    def fetch(target, *, session, start, end, deps, now):
+        seen.append(now)
+        return []
+    assert detail(run(adapter(fetch)))[0]['ok']
+    assert seen == [NOW]

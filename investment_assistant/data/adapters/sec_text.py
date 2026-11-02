@@ -9,11 +9,13 @@ from copy import copy
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from investment_assistant.data import fetch_policy
 from investment_assistant.data import http as data_http
 from investment_assistant.data.fetch_policy import FetchError, FetchPolicy
-from investment_assistant.data.sources.edgar import edgar_acceptance, edgar_items
+from investment_assistant.data.sources.edgar import edgar_acceptance, edgar_items, drop_after_cutoff, exhibit_urls
+from investment_assistant.data.sec.local_evidence import monitor_metadata, owned_path, verified_sec_url
 from investment_assistant.data.sources.edgar import EdgarSource, atomic_write, ACCESSION
 from investment_assistant.data import repo
 from investment_assistant.data.adapter_types import Source
@@ -171,10 +173,50 @@ def select_filings(rows):
     return selected
 
 
-def _fetch(target, *, session, start, end, deps):
+def _document_url(url, accession):
+    parsed = urlsplit(url)
+    if (not verified_sec_url(url, accession) or parsed.netloc not in {'www.sec.gov', 'sec.gov'}
+            or not re.fullmatch(r'[A-Za-z0-9_.-]+', Path(parsed.path).name)
+            or Path(parsed.path).name in {'.', '..'}):
+        raise ValueError('SEC document URL is not verified for this accession')
+    return url
+
+
+def _filing_documents(meta, *, root, indexed, archived, prior_sources):
+    """Owned primary plus all previously verified originals; no silently poorer successor."""
+    ticker, accession, doc = meta['ticker'], meta['accession_number'], meta['primary_document']
+    primary_url = _document_url(meta['edgar_url'], accession)
+    if Path(urlsplit(primary_url).path).name != doc:
+        raise ValueError('SEC primary URL/document mismatch')
+    raw_path = indexed or root / ticker / meta['form'] / f'{accession}-{doc}'
+    path = owned_path(raw_path, root, ticker, accession, must_exist=False)
+    if Path(path).name != f'{accession}-{doc}':
+        raise ValueError('SEC indexed document identity mismatch')
+    documents = {path: primary_url}
+    if archived:
+        if (archived.get('ticker') != ticker or archived.get('accession_number') != accession
+                or archived.get('form') != meta['form'] or Path(archived.get('path', '')).resolve() != Path(path)):
+            raise ValueError('monitor metadata identity mismatch')
+        for raw in archived.get('attachments', []):
+            local = owned_path(raw, root, ticker, accession, must_exist=False)
+            documents[local] = _document_url(archived.get('document_urls', {}).get(raw, ''), accession)
+    for item in prior_sources:
+        local = owned_path(item['path'], root, ticker, accession, must_exist=False)
+        if local != path:
+            documents[local] = _document_url(item.get('url', ''), accession)
+    for local, url in documents.items():
+        if (url.rsplit('/', 1)[0] != primary_url.rsplit('/', 1)[0]
+                or Path(local).name != accession + '-' + Path(urlsplit(url).path).name):
+            raise ValueError('SEC attachment identity mismatch')
+    return path, documents
+
+
+def _fetch(target, *, session, start, end, deps, now):
     if deps.sec_text_dir is None:
         raise ValueError('sec_text_dir must be the configured persistent filings.output_dir')
-    root = Path(deps.sec_text_dir)
+    if not re.fullmatch(r'[A-Z][A-Z0-9.-]{0,14}', target):
+        raise ValueError('invalid SEC ticker')
+    root = Path(deps.sec_text_dir).resolve()
     source = sec_source(deps)
     if isinstance(source, EdgarSource):
         # A private policy view: never mutate another family's shared retry policy.
@@ -194,32 +236,59 @@ def _fetch(target, *, session, start, end, deps):
                 raise FetchError('SEC text target timed out this session; retry next session', kind='timeout')
             try:
                 if isinstance(source, EdgarSource):
-                    found = source.discover_one(target, start.isoformat(), end.isoformat(), include_annual=True)
+                    found = source.discover_one(target, start.isoformat(), end.isoformat(),
+                                                drop_after=now, include_annual=True)
                 else:
                     found = source.discover_one(target, start.isoformat(), end.isoformat())
-                selected = select_filings(found)
+                eligible, _ = drop_after_cutoff(found, now)
+                selected = select_filings(eligible)
                 with deps.transaction() as conn:
                     indexed = repo.indexed_filing_paths(conn, target)
+                    prior = repo.filing_analysis_sources(conn, target)
+                archived = monitor_metadata(deps.sec_monitor_state_dir)
                 for meta in selected:
                     accession, doc = meta['accession_number'], meta['primary_document']
-                    if not ACCESSION.fullmatch(accession) or not re.fullmatch(r'[A-Za-z0-9_.-]+', doc):
+                    if (meta.get('ticker') != target or not ACCESSION.fullmatch(accession)
+                            or not re.fullmatch(r'[A-Za-z0-9_.-]+', doc) or doc in {'.', '..'}):
                         raise FetchError('invalid SEC filing identity', kind='parse')
-                    existing = indexed.get(accession)
-                    dest = (Path(existing) if existing and Path(existing).is_file()
-                            else root / target / meta['form'] / f'{accession}-{doc}')
-                    downloaded = False
-                    if not dest.is_file():
-                        if accession in budget['attempted'] or len(budget['attempted']) >= SEC_TEXT_DAILY_MAX:
+                    primary, documents = _filing_documents(meta, root=root, indexed=indexed.get(accession),
+                        archived=archived.get(target + ':' + accession, {}).get('meta', {}),
+                        prior_sources=prior.get(accession, []))
+                    if meta['form'] == '8-K':
+                        base = meta['edgar_url'].rsplit('/', 1)[0] + '/'
+                        index_url = meta.get('index_url') or base + accession + '-index.html'
+                        _document_url(index_url, accession)
+                        for url in exhibit_urls({**meta, 'index_url': index_url}, source.get(index_url)):
+                            _document_url(url, accession)
+                            if url not in documents.values():
+                                name = Path(urlsplit(url).path).name
+                                dest = root / target / meta['form'] / f'{accession}-{name}'
+                                documents[owned_path(dest, root, target, accession, must_exist=False)] = url
+                    downloaded = 0
+                    complete = True
+                    for local, url in documents.items():
+                        dest = Path(local)
+                        if dest.is_file():
                             continue
-                        # Reserve before I/O: failures and interrupted processes also consume the cap.
-                        budget['attempted'].append(accession)
+                        key = accession + ':' + Path(urlsplit(url).path).name
+                        # Legacy accession-only reservations count as an attempted primary document.
+                        attempted = key in budget['attempted'] or (local == primary and accession in budget['attempted'])
+                        if attempted or len(budget['attempted']) >= SEC_TEXT_DAILY_MAX:
+                            if meta['form'] == '8-K' or local != primary:
+                                raise FetchError('SEC text incomplete: document budget exhausted; retry next session', kind='other')
+                            complete = False
+                            break
+                        budget['attempted'].append(key)
                         atomic_write(budget_path, json.dumps(budget).encode())
-                        content = source.get(meta['edgar_url'])
+                        content = source.get(url)
                         if not content:
                             raise FetchError('SEC text is empty', kind='empty')
                         atomic_write(dest, content)
-                        downloaded = True
-                    rows.append({**meta, 'path': str(dest), 'downloaded': downloaded})
+                        downloaded += 1
+                    if complete:
+                        rows.append({**meta, 'path': primary, 'attachments': [p for p in documents if p != primary],
+                                     'document_urls': documents, 'downloaded': bool(downloaded),
+                                     'downloaded_documents': downloaded})
             except Exception as exc:
                 if fetch_policy.classify_exception(exc)[0] == 'timeout':
                     budget['timeout'] = True

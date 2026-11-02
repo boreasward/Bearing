@@ -115,14 +115,14 @@ def fill_from_backup(conn, ticker, *, session, rows, store) -> dict:
     return store(conn, [selected[d] for d in sorted(selected)])
 
 
-def _fetch(target, *, session, start, end, deps):
+def _fetch(target, *, session, start, end, deps, now):
     rows, skipped = normalize_history(fetch_history(target, start, end, fetcher=deps.bar_fetcher))
     if not rows:
         raise fetch_policy.FetchError('no valid bars', kind='empty')
     return rows
 
 
-def fetch_backup(target, *, session, start, end, deps):
+def fetch_backup(target, *, session, start, end, deps, now):
     """Testable D46 source wrapper; intentionally absent from the official sources tuple."""
     with deps.transaction() as conn:
         missing = repo.missing_bar_sessions(conn, target, last_n_sessions(session, BACKUP_FILL_SESSIONS))

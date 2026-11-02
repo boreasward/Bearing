@@ -16,7 +16,7 @@ def classify(sic: str | None, *, groups: dict, overrides: dict, ticker) -> str |
     return groups.get(sic[:2]) if sic else None
 
 
-def _fetch(target, *, session, start, end, deps):
+def _fetch(target, *, session, start, end, deps, now):
     source = sec_source(deps)
     def fetch():
         answer = fetch_sic(target, deps=deps)

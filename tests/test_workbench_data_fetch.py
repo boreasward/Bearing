@@ -287,7 +287,8 @@ def test_ready_manual_sector_uses_adapter_and_one_frozen_context(db, tmp_path, m
     db.execute(Path('migrations/031_five_layers.sql').read_text())
     db.commit()
     monkeypatch.setattr(data_view, 'load_config', lambda: SimpleNamespace(
-        filings=SimpleNamespace(output_dir=tmp_path/'persistent-texts')))
+        filings=SimpleNamespace(output_dir=tmp_path/'persistent-texts'),
+        sec_monitor=SimpleNamespace(state_dir=str(tmp_path/'persistent-state'))))
     source_calls = []
     class SectorSource(Sources):
         def _company_tickers(self):
@@ -318,6 +319,7 @@ def test_ready_manual_sector_uses_adapter_and_one_frozen_context(db, tmp_path, m
     assert context['deps'].transaction is core_tx._tx
     assert context['deps'].filing_source is source
     assert context['deps'].sec_text_dir == tmp_path/'persistent-texts'
+    assert context['deps'].sec_monitor_state_dir == tmp_path/'persistent-state'
     assert context['deps'].news_fetcher == source.news
     row = repo.latest_sectors(db, ['MU'], cutoff_at=NOW)['MU']
     assert row['sic'] == '3571' and row['group'] == '科技硬件'

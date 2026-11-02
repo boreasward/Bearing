@@ -93,7 +93,7 @@ def filing_news(metas: list[dict[str, Any]]) -> list[tuple[dict[str, Any], list[
     return out
 
 
-def _fetch(target, *, session, start, end, deps):
+def _fetch(target, *, session, start, end, deps, now):
     rows, _ = normalize_yfinance(fetch_yfinance(target, fetcher=deps.news_fetcher), ticker=target)
     return rows
 

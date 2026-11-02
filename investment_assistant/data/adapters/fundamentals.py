@@ -7,7 +7,7 @@ from investment_assistant.data.research_rows import financial_rows
 from investment_assistant.data.sources.fundamentals import PolicyUSSources
 
 
-def _fetch(target, *, session, start, end, deps):
+def _fetch(target, *, session, start, end, deps, now):
     source = sec_source(deps)
     def fetch():
         payload = PolicyUSSources(source).companyfacts(target)

@@ -76,12 +76,12 @@ def _earliest(calendar: Any, today: date) -> dict:
     return {'status': 'known', 'earnings_date': upcoming[0]}
 
 
-def _fetch(target, *, session, start, end, deps):
+def _fetch(target, *, session, start, end, deps, now):
     row, outcome = fetch_next_with_outcome(target, fetcher=deps.earnings_fetcher, today=session)
     return fetch_policy.Fetched([row], outcome.attempts, outcome.elapsed_ms)
 
 
-def _nasdaq(target, *, session, start, end, deps):
+def _nasdaq(target, *, session, start, end, deps, now):
     return [nasdaq.fetch_earnings_date(target, today=session)]
 
 

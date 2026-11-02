@@ -79,4 +79,5 @@ class AdapterDeps:
     universe_loader: Callable | None = None
     fred_api_key: str | None = None
     sec_text_dir: Path | None = None
+    sec_monitor_state_dir: Path | None = None
     sleep: Callable = time.sleep

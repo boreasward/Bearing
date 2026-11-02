@@ -6,7 +6,7 @@ from investment_assistant.data.adapter_support import ONCE, discover_one, make_a
 from investment_assistant.data.sources.edgar import drop_after_cutoff
 
 
-def _fetch(target, *, session, start, end, deps):
+def _fetch(target, *, session, start, end, deps, now):
     source = sec_source(deps)
     return sec_outcome(source, lambda: discover_one(source, target, start.isoformat(), end.isoformat()))
 

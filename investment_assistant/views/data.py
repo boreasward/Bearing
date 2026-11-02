@@ -58,12 +58,15 @@ def _require_family_ready(conn, family_id):
 
 
 def _adapter_deps(deps: service.Deps) -> AdapterDeps:
+    config = load_config()
     return AdapterDeps(transaction=core_tx._tx, bar_fetcher=deps.bar_fetcher,
                        news_fetcher=deps.news_fetcher, earnings_fetcher=deps.earnings_fetcher,
                        macro_fetcher=deps.macro_fetcher, filing_source=deps.filing_source,
                        universe=deps.universe, universe_loader=deps.universe_loader,
                        fred_api_key=os.environ.get('FRED_API_KEY'),
-                       sec_text_dir=load_config().filings.output_dir, sleep=collect.FETCH_SLEEP)
+                       sec_text_dir=config.filings.output_dir,
+                       sec_monitor_state_dir=Path(config.sec_monitor.state_dir) if config.sec_monitor.state_dir else None,
+                       sleep=collect.FETCH_SLEEP)
 
 
 class FetchBusy(RuntimeError):

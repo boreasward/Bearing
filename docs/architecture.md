@@ -91,7 +91,8 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `data/adapters/sec_listing.py` | SEC 目录与接受时间填充，保留原披露截止 |
 | `data/adapters/fundamentals.py` | companyfacts 原归一化与财务观察版本存储 |
 | `data/adapters/sector.py` | SIC 配置覆盖优先、两位分组；仅答案变化追加 |
-| `data/adapters/sec_text.py` | 最新 K/Q 与财报 8-K 主文；配置目录下持久日预算，每只每 session 最多三份，超时次 session 再试 |
+| `data/adapters/sec_text.py` | 冻结截止前的最新 K/Q 与财报 8-K 主文 / EX-99.1；配置目录下每只每 session 最多三次原文下载（附件共用预算），超时次 session 再试 |
+| `data/sec/local_evidence.py` | 共享本地原文归属、SEC 链接与监控元数据读取；适配器保留已验证附件，恢复安全索引路径，观察新增数独立于下载数 |
 | `data/sources/stooq.py`、`data/sources/nasdaq.py` | 离线验证的 CSV / 财报日解析；Stooq 仅保留机制，不登记为可用备源 |
 | `data/sources/edgar.py` | SEC 源、观察名单、SIC 与受理时间截止；旧监控 TSLA 年报默认不变 |
 | `data/sources/fundamentals.py` | 基本面公共来源、原始字节与安全传输错误 |

@@ -69,7 +69,7 @@ def load_for(deps: Any):
     return load()
 
 
-def _fetch(target, *, session, start, end, deps):
+def _fetch(target, *, session, start, end, deps, now):
     loaded = load_for(deps)
     return [{'name': loaded.name, 'as_of': loaded.as_of, 'source': loaded.source, 'tickers': loaded.tickers}]
 

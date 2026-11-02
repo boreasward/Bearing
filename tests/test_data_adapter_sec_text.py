@@ -31,9 +31,12 @@ def test_sec_text_daily_budget_existing_files_and_repeated_calls(tmp_path, monke
     class Source:
         def discover_one(self, *args, **kwargs): return metas()
         def get(self, url):
+            if url.endswith('-index.html'):
+                return b'<table summary="Document Format Files"></table>'
             downloads.append(url)
             return b'<html><body>Item 2.02 financial report</body></html>'
     monkeypatch.setattr(repo, 'indexed_filing_paths', lambda *args: {})
+    monkeypatch.setattr(repo, 'filing_analysis_sources', lambda *args: {})
     monkeypatch.setattr(repo, 'store_filing_texts', lambda conn, rows, **kw: {
         'inserted': len([r for r in rows if r['downloaded']]),
         'existing': len([r for r in rows if not r['downloaded']]), 'latest': DAY})
@@ -58,6 +61,7 @@ def test_sec_text_timeout_has_no_inner_or_outer_retry(tmp_path, monkeypatch):
         def discover_one(self, *args, **kwargs): return metas()
     monkeypatch.setenv('SEC_USER_AGENT', 'test@example.invalid')
     monkeypatch.setattr(repo, 'indexed_filing_paths', lambda *args: {})
+    monkeypatch.setattr(repo, 'filing_analysis_sources', lambda *args: {})
     source = Source(tmp_path/'evidence', session=Session(), policy=FetchPolicy(backoff_s=(0, 0)))
     deps = AdapterDeps(transaction=memory_tx, filing_source=source, sec_text_dir=tmp_path/'text')
     item = detail(run(registry.get('sec_text'), deps=deps))[0]
@@ -73,6 +77,7 @@ def test_sec_text_explicitly_includes_tsla_annual_without_changing_monitor_defau
     import json
     monkeypatch.setenv('SEC_USER_AGENT', 'offline@example.invalid')
     monkeypatch.setattr(repo, 'indexed_filing_paths', lambda *args: {})
+    monkeypatch.setattr(repo, 'filing_analysis_sources', lambda *args: {})
     class Session:
         def get(self, url, **kwargs):
             if '/Archives/' in url:
@@ -87,7 +92,7 @@ def test_sec_text_explicitly_includes_tsla_annual_without_changing_monitor_defau
     source = EdgarSource(tmp_path/'evidence', session=Session(), policy=FetchPolicy(backoff_s=()))
     assert source.discover_one('TSLA', '2025-01-01', str(DAY)) == []
     deps = AdapterDeps(transaction=memory_tx, filing_source=source, sec_text_dir=tmp_path/'texts')
-    result = sec_text.ADAPTER.sources[0].fetch('TSLA', session=DAY, start=DAY-timedelta(days=420), end=DAY, deps=deps)
+    result = sec_text.ADAPTER.sources[0].fetch('TSLA', session=DAY, start=DAY-timedelta(days=420), end=DAY, deps=deps, now=NOW)
     rows = result.value if isinstance(result, Fetched) else result
     assert [r['form'] for r in rows] == ['10-K']
 
@@ -97,6 +102,7 @@ def test_injected_transport_timeout_is_still_timeout_not_parse(tmp_path, monkeyp
         def discover_one(self, *args, **kwargs): return metas()
         def get(self, url): raise TimeoutError('transport deadline')
     monkeypatch.setattr(repo, 'indexed_filing_paths', lambda *args: {})
+    monkeypatch.setattr(repo, 'filing_analysis_sources', lambda *args: {})
     deps = AdapterDeps(transaction=memory_tx, filing_source=Source(), sec_text_dir=tmp_path)
     item = detail(run(registry.get('sec_text'), deps=deps))[0]
     assert item['error_kind'] == 'timeout' and item['rows'] == 0 and item['attempts'] == 1
@@ -123,3 +129,19 @@ def test_sec_text_discovery_timeout_blocks_cross_scope_until_next_session(tmp_pa
             run_id=None, session=day, now=NOW, deps=deps, features={'backup_sources': True})
         assert detail(tally)[0]['error_kind'] == 'timeout'
     assert len(calls) == 2  # fresh deps/scope cannot erase the session's timeout fact
+
+
+def test_real_edgar_receives_frozen_cutoff_without_mutating_source(tmp_path, monkeypatch):
+    received = []
+    class Source(EdgarSource):
+        def discover_one(self, ticker, start, end, *, drop_after=None, include_annual=False):
+            received.append((drop_after, include_annual))
+            return []
+    monkeypatch.setattr(repo, 'indexed_filing_paths', lambda *args: {})
+    monkeypatch.setattr(repo, 'filing_analysis_sources', lambda *args: {})
+    monkeypatch.setattr(repo, 'store_filing_texts', lambda *args, **kwargs: {'inserted': 0, 'latest': None})
+    source = Source(tmp_path/'evidence')
+    item = detail(run(sec_text.ADAPTER, deps=AdapterDeps(
+        transaction=memory_tx, filing_source=source, sec_text_dir=tmp_path/'text')))[0]
+    assert item['ok'] and received == [(NOW, True)]
+    assert source.drop_after is None

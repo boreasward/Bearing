@@ -55,7 +55,7 @@ def run_adapter(adapter, targets, *, scope, trigger, run_id, session, now, deps,
                     fallback = {'tried': True, 'reason': sanitize_reason(primary_error)}
                 try:
                     outcome = fetch_policy.fetch(target, partial(source.fetch, target, session=session,
-                        start=session - timedelta(days=HISTORY_DAYS), end=session, deps=deps),
+                        start=session - timedelta(days=HISTORY_DAYS), end=session, deps=deps, now=now),
                         policy=source.policy, sleep=deps.sleep)
                     if isinstance(outcome.value, Fetched):
                         outcome = outcome.value

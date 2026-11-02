@@ -735,6 +735,13 @@ def indexed_filing_paths(conn, ticker) -> dict:
         'SELECT accession_number, file_path FROM filings WHERE ticker = %s ORDER BY id', (ticker.upper(),))}
 
 
+def filing_analysis_sources(conn, ticker) -> dict:
+    """Latest indexed analysis sources keep previously acquired exhibits from being dropped."""
+    return {row['natural_key']: row['payload'].get('analysis', {}).get('sources', []) for row in _all(conn,
+        'SELECT DISTINCT ON (natural_key) natural_key,payload FROM us_research_observations '
+        "WHERE security_id = %s AND dataset = 'filings' ORDER BY natural_key,id DESC", (stock_id(ticker),))}
+
+
 def store_filing_texts(conn, rows, *, target, now):
     observations = []
     for row in rows:
@@ -753,15 +760,14 @@ def store_filing_texts(conn, rows, *, target, now):
                    'accession_number': row['accession_number'], 'filing_date': str(row['filing_date']),
                    'source_url': row['edgar_url'], 'path': row['path'], 'analysis': analysis,
                    'snapshots': [{'source_url': s['url'], 'source_hash': s['sha256'], 'snapshot_path': s['path']}
-                                 for s in analysis['sources']], 'limitations': []}
+                                 for s in analysis['sources']],
+                   'limitations': [] if row.get('accepted_at') else ['SEC接受时间未知；不以申报日推定披露时刻']}
         observations.append({'natural_key': row['accession_number'], 'payload': payload,
-            'disclosed_at': row['filing_date'], 'source_url': row['edgar_url'],
+            'disclosed_at': row.get('accepted_at'), 'source_url': row['edgar_url'],
             'source_hash': analysis['sources'][0]['sha256']})
     fill_filing_acceptance(conn, rows)
     result = store_observation_rows(conn, stock_id(target), 'filings', observations, now=now)
-    # An existing local text parsed/indexed again is not newly downloaded data.
-    result['inserted'] = min(result['inserted'], sum(bool(r['downloaded']) for r in rows))
-    result['existing'] = len(rows) - result['inserted']
+    result['downloaded_documents'] = sum(r.get('downloaded_documents', int(r['downloaded'])) for r in rows)
     return result
 
 

@@ -287,31 +287,37 @@ class EdgarSource:
         documents = [(meta["primary_document"], primary)]
         if meta["form"] != "8-K":
             return True, documents
-        page = html.fromstring(self.get(meta["index_url"]))
-        tables = page.xpath('//table[contains(@summary,"Document Format Files")]')
-        if not tables:
-            raise ValueError("SEC 8-K 文件索引缺少 Document Format Files 表格")
-        exhibits: list[str] = []
-        for row in tables[0].xpath('.//tr'):
-            cells = row.xpath('./td')
-            if len(cells) >= 4 and cells[3].text_content().strip().upper() == "EX-99.1":
-                links = cells[2].xpath('.//a/@href')
-                if not links:
-                    raise ValueError("SEC EX-99.1 缺少链接")
-                url = urljoin(meta["index_url"], links[0])
-                # Inline-XBRL links wrap the actual Archives URL.
-                if "/ix?doc=" in url or "/ixviewer/doc/action?doc=" in url:
-                    from urllib.parse import parse_qs
-                    url = urljoin("https://www.sec.gov", parse_qs(urlparse(url).query)["doc"][0])
-                if not url.startswith(meta["edgar_url"].rsplit("/", 1)[0] + "/"):
-                    raise ValueError("SEC EX-99.1 链接不在本申报目录")
-                exhibits.append(url)
+        exhibits = exhibit_urls(meta, self.get(meta["index_url"]))
         text = " ".join(html.fromstring(primary).text_content().split())
         selected = bool(re.search(r"\bItem\s*2\s*\.\s*02\b", text, re.IGNORECASE) or exhibits)
         if selected:
             for url in dict.fromkeys(exhibits):
                 documents.append((Path(urlparse(url).path).name, self.get(url)))
         return selected, documents
+
+
+def exhibit_urls(meta: dict, content: bytes) -> list[str]:
+    """Parse EX-99.1 links without fetching originals; callers reserve document budget before I/O."""
+    page = html.fromstring(content)
+    tables = page.xpath('//table[contains(@summary,"Document Format Files")]')
+    if not tables:
+        raise ValueError("SEC 8-K 文件索引缺少 Document Format Files 表格")
+    exhibits: list[str] = []
+    for row in tables[0].xpath('.//tr'):
+        cells = row.xpath('./td')
+        if len(cells) >= 4 and cells[3].text_content().strip().upper() == "EX-99.1":
+            links = cells[2].xpath('.//a/@href')
+            if not links:
+                raise ValueError("SEC EX-99.1 缺少链接")
+            url = urljoin(meta["index_url"], links[0])
+            # Inline-XBRL links wrap the actual Archives URL.
+            if "/ix?doc=" in url or "/ixviewer/doc/action?doc=" in url:
+                from urllib.parse import parse_qs
+                url = urljoin("https://www.sec.gov", parse_qs(urlparse(url).query)["doc"][0])
+            if not url.startswith(meta["edgar_url"].rsplit("/", 1)[0] + "/"):
+                raise ValueError("SEC EX-99.1 链接不在本申报目录")
+            exhibits.append(url)
+    return list(dict.fromkeys(exhibits))
 
 
 def fetch_sic(ticker, *, deps) -> dict:
