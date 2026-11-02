@@ -2,7 +2,9 @@
 
 v2.3.0 新增：让每类数据看得见。六个数据族（日线、SEC 申报、资讯、ATR、FRED 利差、纳指 100 范围）的用途、覆盖、最新时点、最近拉取成败在「数据」菜单可见，可单族手动拉取，可浏览原始值。设计见[数据基础 spec](../specs/2026-10-26-v2.3-data-foundation-design.md)。
 
-## 注册表集成状态（五层发布 Task3，尚未整体上线）
+## v2.12 注册表：九族与指标卡（随 v2.15.0 发布，待使用验收）
+
+九族、真实主备、补查与 22 项标准指标的产品说明见 [数据注册表](data-registry.md)，验收条目见 [验收清单 §1](../roadmap/v2.12-v2.15-acceptance.md)。
 
 - 数据层的唯一注册项依序为 `bars / news / sec_filings / earnings / fred / universe / fundamentals / sec_text / sector`。覆盖、最新时点与手动采集由真实 Adapter 提供；手动采集冻结一次开关和依赖，保持族锁、独立事务与追加记录。目标先由宿主提供池 / 持仓 / 活跃链事实，再由适配器统一集合；单只目标不扩成全池，池或范围文件降级仍给说明。
 - **未迁移 031 的兼容性**：原五个数据族和 ATR 只读投影仍可用（六张卡，含 ATR 派生卡）；不访问尚不存在的开关 / 研究请求 / 行业表。旧族手动拉取显式使用 `pre_031_primary_only` 上下文，备源不开启，这是 schema 能力边界，不是用户关闭了开关。新增四族手动 / 详情 / 浏览与指标卡在外部工作前返回 503「需执行迁移 031」。031 就绪后，总览返回九张适配器卡（按注册顺序）加一张「标准指标」卡，读取真实默认开启的开关；`atr` 卡由指标卡取代（旧 ATR 详情 / 浏览保留为视图投影，不是数据族）。
@@ -12,7 +14,9 @@ v2.3.0 新增：让每类数据看得见。六个数据族（日线、SEC 申报
 - SEC 正文适配器用有效配置 `filings.output_dir`，`.budgets` 与正文同根持久保留，**不能在两次运行间清理**。每只每 session 最多预留三次原文下载（主文与 EX-99.1 附件共用）；下载前扣额，失败不释放；发现或下载超时后同 session 跨入口不再请求，次 session 可重试。宿主同时传入 `sec_monitor.state_dir` 读取已验证附件，缺失附件 / 预算不足不发布残缺分析；冻结 `now` 先过滤接受时间再选择与下载，未知接受时间保持未知。安全范围内的缺失索引原文原位恢复；Tally 的新增数是实际观察行 / 修订，不是下载数。SEC 监控节点的下载与研究刷新已改接该适配器（`scope='sec_monitor'`，其 `data_fetch_runs` 行的族是 `sec_text`、`detail.scope='sec_monitor'`；每族每 scope 一行，数据菜单按族汇总），日批 `collect` 的 `sec_text` 行覆盖其余目标并跳过本次已处理的监控目标。
 - `Tally` 的 `source_counts / source_counts_complete` 在 600 项明细截断前按所有目标末次成功结果统计。SQL→提案证据保留 `backup_incomplete_runs`；历史缺来源或截断时，已知备源使用数只是下界，不能解读为准确零。每日 `collect` 节点、筛选新成员补采（`scope = 'screen_new_members'`）、SEC 监控与回补（`sec_text`）和数据菜单手动拉取都走同一个 `run_adapter`（主源 → 备源 → 降级，按运行冻结的 `backup_sources`），旧的逐族拉取函数和 `refresh_local_filings` 已删除。命令行 `python -m investment_assistant.data.registry list / fetch <family> [--ticker T]` 与菜单同一路径（逐只族必须给 `--ticker`）。
 
-以下为既有页面 / 浏览使用说明；完整九族与指标产品说明在后续文档任务更新。
+- 每族**每 scope** 记行，数据菜单按族汇总、按 scope 展开。不把未知 SIC 当拦截，不把旧记录没有来源当主源成功。
+
+下文「六张卡」、ATR 浏览与旧拉取范围描述的是 v2.3–v2.11 的页面口径（迁移 031 未执行的库仍是这个样子）；031 就绪后的九族 + 指标卡以上面各条和 [数据注册表](data-registry.md) 为准，验收不复用下文旧六卡条数。
 
 ## 做什么
 

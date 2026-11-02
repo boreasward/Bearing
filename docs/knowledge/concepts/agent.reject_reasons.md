@@ -4,7 +4,7 @@ title: "作废与跳过原因"
 group: agent
 version: 1
 applies_to: [agent-3, agent-2, agent-1, agent-review-2, agent-review-1, agent-retro-1, agent-discuss-1]
-summary: "Agent 一份建议为什么被作废、跳过或出错，共 33 个原因代码，每个有固定的中文文案；被作废的建议只显示原因、不显示内容。"
+summary: "Agent 一份建议为什么被作废、跳过或出错，共 55 个原因代码，每个有固定的中文文案；被作废的建议只显示原因、不显示内容。"
 related: [agent.action_levels, agent.citation, agent.review_outcome, agent.invalidation]
 sources: [investment_assistant/analysis/agent/__init__.py, investment_assistant/core/llm/model.py, investment_assistant/analysis/agent/runner.py]
 ---
@@ -13,7 +13,7 @@ sources: [investment_assistant/analysis/agent/__init__.py, investment_assistant/
 Agent 运行的状态有五种：`ok`（通过）、`pass`（不建议买）、`rejected`（校验作废）、`error`（出错）、`skipped`（没有运行）。后三种都带一个原因代码，页面上显示对应的中文文案。作废（`rejected`）的建议**只显示原因，不显示内容**，因为内容没通过校验，不能当作建议看待。
 
 ## 怎么算 / 从哪来
-原因代码与文案由系统固定，下表是全部 33 个：
+原因代码与文案由系统固定，下表是全部 55 个：
 
 | 代码 | 文案 | 一般出现的情形 |
 | --- | --- | --- |
@@ -50,8 +50,32 @@ Agent 运行的状态有五种：`ok`（通过）、`pass`（不建议买）、`
 | `stop_lowered` | 持仓期不能下移止损 | 持仓期的修订把止损定得比上一版低 |
 | `stop_above_close` | 持仓期止损不能高于最新收盘 | 持仓期的修订把止损定在复查日收盘价或以上 |
 | `active_chain` | 已有进行中的计划链，这次触发已并入 | 这只股票已有活跃链，新触发并入它而不是另开（`agent` 阶段的跳过原因，也是手动重新运行的 409），见[再次触发](agent.retrigger.md) |
+| `research_malformed` | 研究输出格式无效 | 研究员输出不是合法 JSON，或字段不是 facts / risks / blocked / summary 四项、类型不对 |
+| `research_facts_count` | 研究事实数量不符 | facts 不在 1 到 12 条 |
+| `research_kind` | 研究事实种类无效 | 事实的 `kind` 不在登记的种类里 |
+| `research_inference_unsupported` | 研究推断缺少事实支持 | 推断没有引用，或推断超过 3 条，或推断与非推断事实没有共同引用 |
+| `research_refs_invalid` | 研究引用无效 | 引用不是本次研究阶段真实存在的工具调用 |
+| `research_summary_length` | 研究摘要长度不符 | 摘要为空或超过 300 字 |
+| `research_blocked_shape` | 研究缺失数据说明无效 | blocked 超过 6 条，或某条不是"缺什么 / 为什么"两个文本字段 |
+| `pm_malformed` | 组合评论格式无效 | 组合经理输出不是合法 JSON，或字段、类型不对 |
+| `pm_summary_length` | 组合摘要长度不符 | 摘要为空或超过 300 字 |
+| `pm_levels_forbidden` | 组合评论不得修改价位或股数 | 评论里出现了价位或股数字段；组合经理只给意见，不改数字 |
+| `pm_ranking_invalid` | 组合排序无效 | 排序引用了不可执行或重复的计划，或名次不是不重复的正整数 |
+| `pm_refs_invalid` | 组合评论引用无效 | 权衡的引用不是本次真实工具调用，也不是组合检查事实 |
+| `proposal_malformed` | 提案格式无效 | 提案输出不是合法 JSON，或某条的字段缺失、类型不对 |
+| `proposal_source` | 提案来源无效 | 来源不是 data / agent_quality / route 之一 |
+| `proposal_title` | 提案标题为空 | 标题为空 |
+| `proposal_length` | 提案字段长度不符 | 改什么 / 理由 / 预期 / 验收超出长度上限 |
+| `proposal_refs_invalid` | 提案证据引用无效 | 引用不在这一轮冻结的证据包里 |
+| `proposal_duplicate_title` | 提案标题重复 | 与已有未决提案或本轮前面的提案同名 |
+| `proposal_limit` | 超出每次三条提案上限 | 一轮最多留三条有效提案，其余丢弃 |
+| `brief_empty` | 实施说明为空 | 实施说明为空 |
+| `brief_length` | 实施说明过长 | 实施说明超过 20000 字 |
+| `brief_acceptance_missing` | 实施说明缺少验收小节 | 没有非空的验收小节 |
 
 大致规律：校验类原因（`malformed` 到 `no_change` 一带，`invalid_entry_type`、`invalid_max_hold`、`stop_lowered`、`stop_above_close`，以及 `retro_malformed`、`lesson_invalid`、`answer_malformed`）对应 `rejected`；`migration_027_missing`、`discussion_busy`、`draft_exists` 是复盘卡与讨论的前置检查拒绝的原因，不生成 Agent 运行；预算和可用性类（`active_chain`、`disabled`、`quota_exhausted`、`token_budget`、`stage_budget`、`max_attempts`、`not_connected`、`model_unavailable` 等）对应 `skipped`；`model_error`、`checkpoint_unavailable` 对应 `error`。
+
+新增的 `research_*`、`pm_*`、`proposal_*`、`brief_*` 都是校验类：研究段、组合评论或实施说明整体未通过时只显示原因、不显示内容；提案则逐条校验，一条不合格只丢这一条，不连累同批其它提案，丢弃原因记在该轮运行里。
 
 ## 在系统里哪里看到
 「今日」Agent 块的"Agent 未给出计划：原因"；复盘卡页的起草失败原因与讨论里"这次回答没有通过引用校验"；计划页复查记录里的跳过、出错和"修订未通过"的原因；「运行一览」阶段行的跳过原因。

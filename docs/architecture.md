@@ -3,6 +3,7 @@
 > 版本 v2.11.0（2026-10-31，本地实现与发布准备）。只做美股；真实交易由人决定并下单，模拟账户由程序结算，不连接券商。
 > 本文写到模块级。每个功能怎么用、怎么验证见 `features/`；怎么运行和维护见 `operations/`。
 > 迁移 030 的真实库执行、服务重启与真实数据验收尚待单独授权。
+> v2.12–v2.15 合并实施：代码已在主干，发布为 `v2.15.0`（日期 TBD），迁移 031 的真实库执行、重启与使用验收尚待单独授权。模块表已含五层新增模块；十一节点图保留为 daily-2 / stages-5 的旧版本，十三节点图见 §3。
 
 ---
 
@@ -40,7 +41,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 
 箭头表示依赖：每层只能依赖自身或左边的层，`workflow` 与 `views` 位于业务层之上，API、服务、任务、通知位于最外层。`db.py`、`config.py`、`runtime_paths.py`、`migrate.py` 是底层设施。守护测试检查全部 import（含函数内）与顶层模块环。SQL 按层归属，事务由调用方管理，公共事务入口唯一定义在 `core/tx.py`。
 
-五层代码布局、迁移 031 仓储与纯函数注册表 / 校验器已准备。数据菜单手动采集已调用统一适配器；现行 `stages-5`、`daily-2`、`agent-portfolio-1` 保持，批处理、研究、组合经理、提案节点与新指标接口仍待接线。工作台规则、计划、影子引擎、纪律、月度收益、三方对比、账户账本和订单校验仍是纯函数。下列路径相对于 `investment_assistant/`；各包 `__init__.py` 仅作包标识，Agent 包另保留公共版本与原因文案。
+五层代码布局、迁移 031 仓储、纯函数注册表 / 校验器与编排接线已在主干：新运行为 `stages-6`、`daily-3`、`agent-4`、`agent-portfolio-2`，十三节点；031 未执行的库仍按旧版本读取（`stages-5` / `daily-2` / `agent-portfolio-1`）。工作台规则、计划、影子引擎、纪律、月度收益、三方对比、账户账本和订单校验仍是纯函数。下列路径相对于 `investment_assistant/`；各包 `__init__.py` 仅作包标识，Agent 包另保留公共版本与原因文案。
 
 ### core：共享底座
 
@@ -207,7 +208,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 
 | 模块 | 做什么 |
 | --- | --- |
-| `workflow/graph.py` | daily-2 十一个节点、检查点、自动重试、run / resume、有效行与运行状态 |
+| `workflow/graph.py` | daily-3 十三个节点（旧 daily-2 十一个节点按旧版本读取）、检查点、自动重试、run / resume、有效行与运行状态 |
 | `workflow/context.py` | NodeContext：预算、依赖、记录器、发送 / SEC 端口 |
 | `workflow/state.py` | 跨节点状态、时间、池与记账辅助；`breadth_sample`（与 `regime` 节点同一份广度样本，冻结给 Agent 工具）、`runtime_flags`（无冻结开关时读当前开关，缺行即开，不用空字典） |
 | `workflow/batch.py` | 原 run_batch 薄壳 |
@@ -240,7 +241,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `views/instrument.py` | 标的跨层用例、关注焦点、关键数据与背景 |
 | `views/chart.py` | 拆股调整 K 线、均线与候选 / 成交 / 计划标注 |
 | `views/account.py` | 账户、权益、持仓、订单、决策、对账、比较与只读 show CLI |
-| `views/data.py` | 手动采集投影 AdapterDeps 与冻结开关；031 就绪显示九族，旧库保留原五族与 ATR 视图；新增四族原始浏览暂明确拒绝，待 Task4 |
+| `views/data.py` | 手动采集投影 AdapterDeps 与冻结开关；031 就绪显示九族，旧库保留原五族与 ATR 视图；新增四族有原始浏览 |
 | `views/derivation.py` | 按冻结 inputs 读取推导事实、trigger_note、运行证据与批量核对记账 |
 | `views/reasoning.py` | Agent 运行的证据、提议、校验、反方、回应与结果阅读视图 |
 | `views/agent_runs.py` | Agent 运行列表、覆盖率与详情 |
@@ -259,6 +260,8 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 ---
 
 ## 3. 主线数据流
+
+### daily-2 / stages-5：十一节点（旧运行按此读取）
 
 ```mermaid
 flowchart TD
@@ -301,6 +304,22 @@ flowchart TD
 
 运行详情（`#tools/runs/<run_id>`）读 `run_detail.detail`：节点状态图、每个节点做了什么、拉取详情和结果详情，失败的节点上有「从此节点继续」（`POST /api/jobs/daily/resume`：前置检查同步做、不写任何行，通过后后台续跑），Agent 单元上有「重新运行 Agent」（`POST /api/workbench/agent-runs/rerun`：写一行 `agent_attempt_resets` 重置尝试次数闸）。
 
+### daily-3 / stages-6：十三节点（v2.15.0）
+
+```mermaid
+flowchart LR
+    S[① sec_monitor] --> C[② collect] --> SC[③ screen] --> R[④ regime]
+    R --> SG[⑤ signals] --> P[⑥ plan] --> A[⑦ agent] --> RV[⑧ review]
+    RV --> PF[⑨ portfolio] --> AC[⑩ accounts] --> PU[⑪ push]
+    PU --> RT[⑫ retro] --> PR[⑬ propose]
+```
+
+13 指每节点最大 attempt 的有效行数，旧 stages-5/daily-2 仍 11 行、stages-4/daily-1 仍 10 行。collect 统一九族、每族每 scope 记账；首版研究在 agent 子图内，不另占日图节点，修订 / 续期 / 补查 carried。研究入口只出档案，daily 忙时 200 queued；补查本轮不可见，事务后采集、新 cutoff 重跑。features 在新运行冻结、续跑沿用。
+
+portfolio 启用时按账户硬检查，真实账户另 PM；K2 关闭整个节点 skipped/feature_disabled，不执行硬检查，fact「本版未检查」、validate_orders(None) 不作组合拦截、accounts 照常、Today not_computed。启用且硬结果已存后 PM 失败才 degraded / 保硬结果。propose 按运行 cutoff 的北京日期是周六运行（即纽约周五收盘后的那次，唯一口径 `optimize.evidence.is_proposal_day`，`--force-propose` 可不等周六），生成包存 `agent_runs.output.evidence_pack`；批准前无路线 / brief 引用，批准才提交 brief，pending 须读回。O2 是运行级后续成功修订代理统计，不证明逐条采纳或因果关系。
+
+各预算：agent+review 1500、PM 300、accounts 600、retro 1500、propose 600 秒；手动研究 900 秒，token 同计每日总量。综合核对仍走 1D 的 `investment_assistant.workflow check`；031 缺失拒绝新 daily，新接口 503。验收见 [合并清单](roadmap/v2.12-v2.15-acceptance.md)。
+
 ---
 
 ## 4. 数据表分组
@@ -320,6 +339,11 @@ flowchart TD
 | 成长闭环 | `review_cards`（复盘卡，冻结事实，`event_key` 唯一）、`review_card_drafts`（每次起草一行，每卡至多一份成功草稿）、`review_card_verdicts`（一卡一审定）、`discussions`、`discussion_turns`（就此计划讨论）、`knowledge_items`、`knowledge_versions`、`knowledge_status`（我的知识：版本连续不分叉，归档是状态记录）、`knowledge_drafts`、`knowledge_draft_verdicts`（教训草稿及其决定，一稿一决定）、`knowledge_citations`（计划与复查引用了哪一版知识）；迁移 027，十一张都只追加（`repository` 对它们只有 `INSERT` / `SELECT`），不在 `WORKBENCH_TABLES` 里，缺表时按 `growth_ready` 降级 |
 | 工作台 · 复盘 | `weekly_reviews`、`monthly_reviews`、`rule_backchecks`、`review_pushes` |
 | 主线 · 基本面 | `us_research_observations`、`us_research_collection_state`（`data/repo.py` 与 `analysis/fundamentals.py`；迁移 022 删除 v1 遗留的 6 张表，见 operations） |
+| 合并实施 · 功能开关（031，真实库待迁移） | `feature_flag_changes`：只追加变更与理由、请求幂等；无行默认开启 |
+| 合并实施 · 数据（031） | `data_requests`：queued 到 fetched / failed / deferred 一次终态更新；`sector_classifications`：答案变化才追加；data_fetch_runs 扩九族与触发种类 |
+| 合并实施 · 研究（031） | `research_requests`：期望前态约束的多次合法转换，不在一次更新名单；`research_versions`：结论版本只追加；agent_runs / agent_tool_calls 扩模式与阶段，计划 schema 仍 agent-3 |
+| 合并实施 · 组合（031） | `portfolio_checks`：每 account_id/session 一行硬结果，commentary 允许一次补写；stage_runs 扩十三节点 |
+| 合并实施 · 路线（031） | `roadmap_goals`、`roadmap_versions`、`roadmap_decisions`、`roadmap_evidence`：version / supersedes 只追加；`roadmap_proposals`：proposed 到 approved / rejected 一次决定；`roadmap_briefs`：每次 ok/error 追加 |
 
 迁移清单与执行方式见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md)。
 
@@ -335,6 +359,8 @@ flowchart TD
 旧任务 `workbench`、`workbench_review`、`filings` 已并入 `daily`（SEC 监控是第一个节点，周 / 月复盘在最后一个节点），代码与调度行都已删除；`job_reports.task` 里它们的历史值保留只读。服务仍只有一个 LaunchAgent，`daily` 由 API 进程内的调度线程执行，plist 不需要改。
 
 调度细节见 [operations/scheduling-and-notifications.md](operations/scheduling-and-notifications.md)。
+
+合并实施新增前端：`#research` / `#research/<id>` 的档案与原引用；`#roadmap` 四页签、真实 revision 历史、冻结 evidence_rows 与 brief 状态读回；`#settings/features` 当前值与真实历史；Today 组合结果、账户三类 markers、运行详情三个新增分支。组件与五组逐字状态词见 [设计标准](design-system.md)，使用见 [研究](features/research.md)、[路线](features/roadmap-in-system.md)、[功能开关](features/feature-flags.md)。概念目录 129 张、原理页 13 个阶段小节，`python -m investment_assistant.core.knowledge check` 与 `tests/test_knowledge_catalog.py` 守护。
 
 前端（`web/`，Svelte 5）：主线入口是「今日」「标的」（K 线图与基本面）「账户」（账本、持仓、成交、模拟决策与账户对比）「复盘」（复盘卡、纪律、对照组、周度、月度、轨道对比、上线前检查）；「数据」展示六族状态、族详情与原始值表格；「更多」下是共享底座的「工具」（任务中心、运行记录、SEC 文件）与「设置」（系统、关注列表、推送、定时任务、环境变量）。计划推导整页地址 `#plan/<id>`（不进侧栏，「复盘」轨道对比里的计划链接指向它；无 id 回落「今日」）。旧地址（#technicals、#strategy、#trade）回落到「今日」。
 

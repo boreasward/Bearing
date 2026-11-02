@@ -1,7 +1,9 @@
 import copy
 from datetime import date
+from pathlib import Path
 from uuid import UUID
 
+from investment_assistant.optimize import roadmap
 from investment_assistant.optimize.export import render_markdown
 
 
@@ -82,3 +84,40 @@ def test_export_keeps_every_record_revision_and_unknown_metadata():
     assert '  原话有空格，不能删。  ' in text
     assert '修订后的原话。' in text
     assert '补充上下文不可丢。' in text
+
+
+# ---- the committed seed files (config/roadmap) ----
+
+SEED_DIR = Path(__file__).resolve().parents[1] / 'config' / 'roadmap'
+
+
+def test_seed_files_load_and_counts():
+    """The four seed files pass the real importer's loader and carry the agreed counts (spec §8.2, §20)."""
+    loaded = roadmap._load(SEED_DIR)                    # no database: parse, normalise and type-check only
+    assert {name: len(rows) for name, rows in loaded.items()} == {
+        'goals': 1, 'versions': 17, 'decisions': 124, 'evidence': 11}
+    versions = {row['version_id']: row for row in loaded['versions']}
+    assert set(versions) == {'v1'} | {f'v2.{minor}' for minor in range(16)}
+    for version_id in ('v2.12', 'v2.13', 'v2.14', 'v2.15'):
+        assert versions[version_id]['status'] == 'planned' and versions[version_id]['tag'] is None
+        assert versions[version_id]['spec_path'] == \
+            'docs/specs/2026-11-01-v2.12-v2.15-five-layers-and-agent-roles-design.md'
+    numbers = [row['decision_no'] for row in loaded['decisions']]
+    assert len(numbers) >= 114 and numbers == list(range(1, len(numbers) + 1))     # continuous, no duplicates
+    for row in loaded['decisions']:
+        assert set(row['version_ids']) <= set(versions)
+    for row in loaded['evidence']:
+        assert row['version_id'] in versions and (SEED_DIR.parents[1] / row['source_path']).is_file()
+    for row in loaded['versions']:
+        for key in ('spec_path', 'plan_path'):
+            assert row[key] is None or (SEED_DIR.parents[1] / row[key]).is_file()
+
+
+def test_seed_export_keeps_every_decision_and_quote():
+    loaded = roadmap._load(SEED_DIR)
+    text = render_markdown(**loaded, proposals=[])
+    assert text.count('### 决策 #') == 124 and text.count('### 版本 ') == 17
+    for row in loaded['decisions']:
+        assert row['question'] in text and row['decision'] in text
+        if row['quote']:
+            assert row['quote'] in text

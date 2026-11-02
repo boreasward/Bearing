@@ -5,7 +5,7 @@ group: family
 version: 1
 applies_to: []
 summary: "每只标的每个交易日一根 K 线：拆股调整的开高低收加全复权收盘价；规则、计划、筛选和 K 线图都读它。"
-related: [family.atr, indicator.moving_average, indicator.atr14, system.cutoff, system.append_only]
+related: [indicator.registry, indicator.moving_average, indicator.atr14, system.cutoff, system.append_only]
 sources: [investment_assistant/data/adapters/bars.py, investment_assistant/data/families.py, docs/features/data-menu.md, docs/features/daily-plan.md]
 ---
 

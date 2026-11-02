@@ -4,6 +4,34 @@
 
 设计：[工作台](../specs/2026-10-23-us-research-workbench-design.md)、[P1 规则计划与推送](../specs/2026-10-23-p1-rule-plans-and-push-design.md)。
 
+## v2.12–v2.15 十三个节点（随 v2.15.0 发布，待使用验收）
+
+新运行是 `daily-3 / stages-6`，一次发布 `v2.15.0`（TBD）。下文十一个节点是 daily-2 / stages-5 的既有基线；旧运行继续按它自己的版本显示，不能给历史补造 portfolio / propose 行。新图顺序：
+
+| # | 节点 | 新版责任 |
+| --- | --- | --- |
+| 1 | sec_monitor | 正文调 sec_text 适配器，按 sec_monitor scope 留证 |
+| 2 | collect | 按注册表顺序九族采集，每族每 scope 记行；真实来源与 attempts |
+| 3 | screen | 原筛选与显式新成员补采 |
+| 4 | regime | 原 regime-2 |
+| 5 | signals | 原规则候选 |
+| 6 | plan | 原 plan-2 与独立推导 |
+| 7 | agent | agent-4 首版研究 → 提议 / 反方 / 校验，随后 FIFO 研究请求、补查 |
+| 8 | review | 原复查；修订 carried 研究段，尾部共用补查处理器 |
+| 9 | portfolio | 启用时逐账户硬组合检查，真实账户另 PM；关闭整节点 skipped/feature_disabled |
+| 10 | accounts | 原结算顺序，Agent 自管 agent-portfolio-2 读取硬结果 |
+| 11 | push | 在新计划消息后增加「🧩 组合检查」 |
+| 12 | retro | 原复盘卡与周 / 月复盘 |
+| 13 | propose | 北京周六（运行 cutoff 的北京日期；即纽约周五收盘后）生成至多 3 条证据提案，`tasks.daily run --force-propose` 可不等周六 |
+
+initial_state 冻结四项 features，续跑沿用，summary.features 留证；中途翻动下次 daily 生效。预算为 agent+review 共用 1500 秒（研究请求 / 补查只用剩余），PM 300、accounts 600、retro 1500、propose 600 秒，手动研究独立 900 秒；token 共用每日上限。031 缺失时 daily 拒跑，新接口 503，旧历史仍可读。
+
+「今日」运行一览之后增加 [组合检查](portfolio-manager.md)。K2：关闭 portfolio_manager 不做硬检查，fact 写「本版未检查」，None 不拦组合订单，accounts 照常、Today not_computed；开启且硬结果已存后 PM 失败才 degraded / 保硬结果。portfolio 节点失败下游账户仍运行，实际续跑入口以检查点 / resume.allowed 为准，不能只凭 failed 标签承诺续跑。
+
+运行详情新增 portfolio.results（按账户 ok/blocked/deferred/commentary_status，展开取实际硬结果）、propose.results（提案链接）、agent.did：research_requests 为处理数，data_requests 为 `{queued,fetched,failed,deferred,reruns}`。补查先结束事务再采集，新数据本轮不可见，有新行才新 cutoff 重跑；[研究](research.md)只出档案，daily 忙时 200 queued。
+
+验证步骤见 [四版清单](../roadmap/v2.12-v2.15-acceptance.md)：新运行核对 13 条有效行、开关冻结 / 续跑、各账户硬结果、运行详情三个分支、未连接时非模型部分继续；均尚未执行。综合检查用 `python -m investment_assistant.workflow check --session D`，不另设 optimize check（D45）；下面的已迁移 CLI 路径保留。
+
 ## 每日流程
 
 | 时间（北京） | 发生什么 | 你要做的 |

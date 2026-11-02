@@ -1,11 +1,11 @@
 ---
 title: 系统每天怎么跑
-version: 3
+version: 4
 ---
 
 ## 系统做什么、不做什么
 
-系统每个交易日收盘后（一个定时任务 `daily`，北京时间周二至周六 11:30）对你的观察池和持仓跑一遍固定流程，共十一个节点：先扫描 SEC 申报，再采集数据、筛选、判断市场环境、按规则找出候选、生成价位计划、让 Agent 提议并每天复查，结算账户并作模拟决策，把摘要推送给你，最后检测已结束的交易并起草复盘卡、在到期时生成周 / 月复盘。节点出错会等 60 秒自动重试一次，再失败就停在那里，你可以在运行详情里从失败的节点继续，见[每日工作流](concepts/system.daily_workflow.md)。下面按这个顺序一步一步讲。
+系统每个交易日收盘后（定时任务 `daily`，北京时间周二至周六11:30）按 `daily-3` / `stages-6` 跑十三节点：SEC监控 → 数据采集 → 筛选 → 市场环境 → 信号 → 规则计划 → Agent建议 → 每日复查 → 组合检查 → 账户 → 推送 → 复盘 → 优化提案。一般未处理异常等60秒重试一次，再失败停链，可从检查点续跑；各节点已处理的降级按下文继续，见[每日工作流](concepts/system.daily_workflow.md)。旧运行按旧版本读取，不补造新节点。
 
 **做什么**：出研究候选和计划，每个价位都能追溯到规则、数据和它的输入。**你决定、你下单、你录入成交**：系统不接券商，不会替你买卖，也不会自动调整你的持仓。
 
@@ -13,29 +13,31 @@ version: 3
 
 三条贯穿全系统的口径：规则、计划和 Agent 的数据类工具只读[截止时间](concepts/system.cutoff.md)之前已入库的数据，所以能还原"当时知道什么"（不是严格的历史回测；`get_trigger`、`get_position` 读当日候选与持仓记录，不按截止时间过滤）；业务记录[只追加](concepts/system.append_only.md)，更正是新记录指向旧记录，错误不会被悄悄抹掉；每套口径都有版本号，旧记录保留它当时的版本。
 
+数据、推导、分析、执行、优化各有职责，[分层](concepts/system.layers.md)不改公式；[功能开关](concepts/system.feature_flags.md)在运行开始冻结，续跑沿用。portfolio_manager 关闭时跳过整个组合节点，今日显示未计算；开启且已产出硬结果后 PM 失败，才保留硬结果并降级。手动研究只产档案，优化提案获批前不创建版本或 brief，所有新增计算与模型判断仍是 Gate HOLD。
+
 读这一页时，每一步都有「当天这一步」的链接，点开会回到「今日」顶部的运行一览，看当天这一步实际做了什么、跳过了什么。
 
-## ⓪ SEC 监控
+## ① SEC 监控
 
 **做什么**：每天第一步先看 SEC。扫描你的 SEC 观察名单里各公司的新申报（10-Q、10-K，以及主文含 Item 2.02 或带 EX-99.1 附件的 8-K），把原文归档到本地、提取正文里的营收、毛利、营业利润、利润率和摊薄 EPS（带期间、单位和原文位置），再以 Bot 身份直接发到指定的 Discord 频道；已经通知过的申报不会重发。这一步属于 [SEC 申报](concepts/family.sec_filings.md)这个数据族，与后面的计划判断互不依赖，所以放在最前面。
 
-**读什么、写什么**：读 SEC EDGAR，写归档文件、申报索引和通知记录，并在拉取记录里记一行 SEC 申报的结果；运行期间持有该数据族的锁，与「数据」菜单的手动拉取不会同时进行。
+**读什么、写什么**：读 SEC EDGAR，写归档文件、申报索引和通知记录；正文处理走[SEC 正文](concepts/family.sec_text.md)适配器，记录 `family=sec_text, scope=sec_monitor`。各入口共享有效 `config.filings.output_dir` 与其中 `.budgets` 的下载前预留额度，每标的每 session 最多3份，失败也占名额；超时当 session 阻断，不能在运行间清理预算文件。采集节点跳过已下载正文，族锁沿用。
 
 **怎么失败与降级**：单只股票查不到只记为该节点的逐目标失败，其余照常（节点"部分成功"）；整次扫描失败时会另发一条失败通知，且不会把"没有新申报"当成结论。休市日整个节点跳过。
 
 [当天这一步](#stage-sec_monitor)
 
-## ① 数据采集
+## ② 数据采集
 
-**做什么**：给后面所有阶段打底。逐只采集观察池和持仓的数据（纳指 100 范围成分的日线与财报日也在这一步采集），包括六个数据族：[日线](concepts/family.bars.md)（开高低收按拆股调整、不按分红调整，另存全复权收盘价）、[SEC 申报](concepts/family.sec_filings.md)列表、[资讯](concepts/family.news.md)标题、由日线现算的 [ATR](concepts/family.atr.md)、[FRED 利差](concepts/family.fred.md)，以及手动维护的[纳指 100 范围](concepts/family.universe.md)。此外还采财报日。仍有有效 Agent 计划链的标的，即使已不在观察池和持仓里，也会单独采集日线、资讯和财报日，但不跑规则。
+**做什么**：按[适配器注册表](concepts/system.adapter_registry.md)的九族顺序打底：[日线](concepts/family.bars.md)、[资讯](concepts/family.news.md)、[SEC列表](concepts/family.sec_filings.md)、[财报日](concepts/family.earnings.md)、[FRED](concepts/family.fred.md)、手工维护的[纳指范围](concepts/family.universe.md)、[公司基本面](concepts/family.fundamentals.md)、[SEC正文](concepts/family.sec_text.md)、[行业归类](concepts/family.sector.md)。日线宽集合含ETF、池、真实/模拟持仓与挂单、活跃链、纳指范围、活跃研究请求；其它族按自身目标规则。研究或手动的显式单标的范围不扩大。ATR 已归[指标注册表](concepts/indicator.registry.md)，现算、不单独采集。
 
-**读什么、写什么**：读数据源（日线、资讯、财报日、SEC、FRED），写进数据库；数据源改了数值就追加一个修订版本，不覆盖旧值。每个数据族各记一行拉取结果。
+**读什么、写什么**：取数、存储、覆盖与补查共用适配器；数值变化追加 revision，不覆盖旧行，每族每 scope 记拉取结果。目标事实由宿主既有池/持仓算法传入，数据层不复制上层规则。指标包装保留两套 close/adj_close 均线、SPY/QQQ 相强差异，数值不改。
 
-**怎么失败与降级**：每个外部请求连接 10 秒、总共 30 秒，失败按目标重试两次（[外部请求策略](concepts/system.fetch_policy.md)）；单只标的采集失败记为该阶段的逐目标失败，其余照常，阶段状态是"部分成功"而不是"成功"，运行详情的"拉取详情"能看到每个目标的结果和原因；某个数据源没配置（例如没有 FRED 密钥）会如实记录，不会假装有数据。休市日整个阶段跳过。
+**怎么失败与降级**：沿用[外部请求策略](concepts/system.fetch_policy.md)，已有内部重试不再外套；备源单次尝试，attempts 合并真实次数。财报日实际启用 Nasdaq；日线正式只有 yfinance，Stooq 仅有解析/补缺机制，未启用。逐目标显示 source_used 与 fallback，取数成功但落库失败仍失败；某源没配置如实记，休市日跳过，见[备源](concepts/system.backup_source.md)。
 
 [当天这一步](#stage-collect)
 
-## ② 筛选（screen-1）
+## ③ 筛选（screen-1）
 
 **做什么**：在纳指 100 范围里按固定阈值挑出值得多看一眼的股票，让它们并入扩展观察池，之后规则照常运行。过滤条件是 20 日平均成交额达到 5000 万美元（见 [20 日平均成交额](concepts/indicator.dollar_volume_20.md)）、避开今天至其后第 5 个交易日内的已知财报（财报日未知的不排除）；触发了买入规则的股票排在前面，形态合格的再按[相对强弱](concepts/indicator.screen_rs.md)补齐，每天新入选不超过 20 只。成员有保留期和上限，细节见[每日筛选](concepts/system.screen.md)；它们属于扩展池，见[观察池分层](concepts/system.pool_tiers.md)。
 
@@ -45,7 +47,7 @@ version: 3
 
 [当天这一步](#stage-screen)
 
-## ③ 市场环境（regime-2）
+## ④ 市场环境（regime-2）
 
 **做什么**：给当天的市场打一个粗略的标签，并看行业强弱和利率背景，帮你判断一份买入计划是顺风还是逆风。四个部分：[广度](concepts/indicator.breadth.md)（范围与手动池里站上 MA50 和 MA200 的占比、新高新低数）；[区制](concepts/indicator.regime.md)（据广度判成进攻、中性、防守，样本不足 20 只时为样本不足）；[行业强弱](concepts/indicator.sector_strength.md)（SMH、XLK、QQQ 相对 SPY 的 20 与 60 日强弱）；利差背景，[HY 信用利差](concepts/indicator.hy_oas.md)与 [2s10s 利差](concepts/indicator.t10y2y.md)。
 
@@ -55,7 +57,7 @@ version: 3
 
 [当天这一步](#stage-regime)
 
-## ④ 信号与候选
+## ⑤ 信号与候选
 
 **做什么**：规则 v1 在观察池和持仓上逐只评估，阈值事先固定、不用历史数据调参。下面是八条规则，每条的条件原文：
 
@@ -78,7 +80,7 @@ version: 3
 
 [当天这一步](#stage-signals)
 
-## ⑤ 规则计划（plan-1）
+## ⑥ 规则计划（plan-2）
 
 **做什么**：只为"建议买入、无冲突、未决定"的单元生成规则计划。公式固定，价位四舍五入到 0.01：
 
@@ -102,13 +104,15 @@ version: 3
 
 [当天这一步](#stage-plan)
 
-## ⑥ Agent 建议
+## ⑦ Agent 建议
 
-**做什么**：Agent 是"挑战者"：对每个买入候选独立给出一份计划，并行展示在规则计划旁，不改主计划。整个流程：
+**做什么**：Agent 是"挑战者"：对每个买入候选独立给出一份计划，并行展示在规则计划旁。运行版本为 `agent-4`，计划 schema 仍为 `agent-3`。首版流程：
 
-- **取数**：Agent 只能调用九个只读工具：`get_trigger`、`get_price_bars`、`get_indicators`、`get_filings`、`get_news`、`get_earnings`、`get_market_context`、`get_position`，以及 `get_concept`。工具不接受日期参数，读价格、申报、资讯、财报日和市场环境时只读截止时间之前入库的数据（`get_trigger`、`get_position` 读当日候选与持仓记录，不按截止时间过滤），只允许查本单元标的和 SPY、SMH、XLK、QQQ，每次调用的参数、返回值和 SHA-256 都留痕。见[工具调用](concepts/agent.tool_calls.md)。
+- **公司研究**：[研究员](concepts/agent.company_researcher.md)先读基本面、披露与截止前档案，不用价格工具、不写价位。facts/risks/blocked/summary 经引用校验后作为 `[fact:research]` 给提议者和反方，保留原 call 编号；失败或关闭只标原因，不阻断单元。
+- **取数**：各阶段按版本化白名单使用工具；提议者/反方在既有十工具外增加 `get_indicator` 与 `request_data`。价格、申报等只读截止前入库数据，标的限制与调用参数/结果/哈希留痕继续保留，见[工具调用](concepts/agent.tool_calls.md)。补查工具只缓存请求，随运行落库，不能让本轮看到新数据，见[补查请求](concepts/system.data_request.md)。
 - **`get_concept` 的例外**：它读的是概念卡（也就是你正在读的这类解释），随代码版本走，**不按截止时间回读**，结果标 `point_in_time: false`，记录里照样留痕。卡里只有定义，没有行情；见[概念卡](concepts/system.concept_card.md)。
 - **提议**：给出买或不买，买时给入场区间、止损、T1，加 1 到 3 条[论点](concepts/agent.thesis.md)、1 到 5 条[失效条件](concepts/agent.invalidation.md)和 0 到 3 条[下次复查条件](concepts/agent.review_when.md)。每个价位和论点都必须[引用](concepts/agent.citation.md)本次真实发生的工具调用，价位还必须引用价格类工具；见[动作与价位](concepts/agent.action_levels.md)。
+- **研究证据约束**：研究成功时首版至少一条论点引用研究阶段 call；研究非 ok 时豁免。修订/再触发/补查重跑沿用最近研究段，不重跑研究员，也不重复施加首版约束。
 - **反方**：另一轮调用逐条对论点找[关键反证](concepts/agent.counter.md)，不能改价位和动作。
 - **校验**：引用、价位顺序与 ±50% 区间、论点条数、条件合法性逐项检查，任一项不过整版作废，只显示原因，见[作废与跳过原因](concepts/agent.reject_reasons.md)。
 - **第 0 版**：通过校验的建议成为[版本链](concepts/agent.version_chain.md)的第 0 版，之后每天复查。
@@ -116,11 +120,13 @@ version: 3
 
 **读什么、写什么**：读上述工具能读到的数据，写 Agent 运行、全部工具调用、计划行、版本行和简报，同一事务里写入，任一步失败整体回滚。Agent 在全部规则计划写完之后才开始，失败只影响 Agent 轨道。
 
+**研究入口与补查**：单元后先按 FIFO 处理[指定研究请求](concepts/agent.research_request.md)，再处理补查，共用剩余预算。daily 忙时研究提交仍成功返回200 queued；批外研究独立900秒、每日最多5次。研究只追加[档案](concepts/agent.research_dossier.md)，buy 结论也不写计划或开链。补采有新行才开新 cutoff 的一轮，每单元每天至多一次；剩余少于120秒则 deferred。运行明细分别给 research_requests 数字和 data_requests 五计数。
+
 **怎么失败与降级**：每个单元最多尝试 3 次（用尽后可在运行详情里"重新运行 Agent"，重置记录只追加、不删旧运行）；从 Agent 节点开始计 1500 秒，之后不再启动新单元，前面采集的重试和等待不占这段时间；额度用尽或达到每日 token 上限时其余单元记为跳过；未连接 ChatGPT 或被关闭时整阶段跳过。价位来自模型，不是投资建议，也未经验证。
 
 [当天这一步](#stage-agent)
 
-## ⑦ 每日复查
+## ⑧ 每日复查
 
 **做什么**：对每条处于入场期或持仓期的 Agent 计划链（见[版本链状态](concepts/review.chain_state.md)）复查一次，结论是维持、修订或作废。复查先由系统自己看七项[系统信号](concepts/agent.signals.md)：新 8-K、异常波动、触及止损、触及 T1、临近到期、区制变化、新的用户输入；并判断最新版的失效条件和复查条件。然后按固定顺序得出[复查结论](concepts/agent.review_outcome.md)：
 
@@ -129,6 +135,8 @@ version: 3
 3. 预算闸门（超出时限、Agent 不可用、额度或 token 上限）：写一条跳过记录。
 4. 否则调用一次单阶段复查，让 Agent 判定维持、修订或作废。
 5. 结论为修订时，再走一遍完整的提议、反方、校验；通过才成为[版本链](concepts/agent.version_chain.md)的新一版，并写明[相对上版变化](concepts/agent.changes.md)。
+
+复查模型口径仍为 `agent-review-2`；修订运行使用 agent-4 并原样带入最近研究段，研究员不重跑。review 尾部也由同一 handler 处理补查，与 agent 共用预算；原运行截止时间不被修改。
 
 **v2.9 起的三处变化**：① **一只股票一条活跃链**——入场期、持仓期、退出期的链都算活跃，同一只股票同一时间至多一条；它再次触发买入规则时，不开新链，而是作为[再次触发](concepts/agent.retrigger.md)并入已有的链：入场期的链跳过单阶段复查、直接产出修订版（价位不变也可以只顺延有效期）。② **持仓期的作废是退出指令**——止损触及、[时间止损](concepts/plan.max_hold.md)成立、失效条件成立或 Agent 判作废，都不再让链"结束"，而是进入退出期：不再复查，只每天写持仓状态，直到你把这些买入全部卖出。③ **每个持仓每天一行[持仓状态](concepts/review.holding_status.md)**——不论复查成功、跳过、出错还是 Agent 不可用，也不论有没有对应的链；这是"每天都有一行"的保证。
 
@@ -140,21 +148,33 @@ version: 3
 
 [当天这一步](#stage-review)
 
-## 账户与模拟交易
+## ⑨ 组合检查
+
+**做什么**：组合功能开启时，先由宿主为真实账户和每个活跃模拟账户各算[组合硬检查](concepts/account.portfolio_check.md)，再为真实账户尝试一次[组合经理意见](concepts/agent.portfolio_manager.md)。硬结果不是 PM 意见：经理只能解释取舍和对 ok 计划建议排序，不能改任何价位或股数。
+
+**读什么、写什么**：按本账户持仓、有效挂单、现金、权益和参数重算候选股数及行业敞口。只有入场期链头有 verdict/order/conflicts，持仓链不再次作为候选。行业上限默认0.35、同行业数量默认3；按链信号日与 ticker 贪心装入，装不下为 deferred。未归类单列 sector_unknown，仅提示、不受行业上限阻断。保存 portfolio-check-1 硬结果、cutoff 与参数；PM 成功才有 commentary。
+
+**关闭功能**：`portfolio_manager=false` 时整个 portfolio 节点 `skipped/feature_disabled`，不运行硬检查；`[fact:portfolio_check]` 写「本版未检查」，`validate_orders` 收到 `None`，不作组合拦截；Today 为 `not_computed`，accounts 与原有现金、股数等订单校验照常。
+
+**怎么失败与降级**：只有 `portfolio_manager=true`、硬结果已成功产出而后续 PM 模型失败时，才保留硬结果，显示 `degraded` /「只有硬结果」；真正缺行也是 `not_computed`，不显示空组合成功。PM 独立300秒、token 同计每日额度。有本账户硬结果时，模拟账户的 Agent 决策对 blocked 买单取首硬理由拒绝；照计划执行对照不接新 gate。硬检查仍是 Gate HOLD。
+
+[当天这一步](#stage-portfolio)
+
+## ⑩ 账户与模拟交易
 
 **账本怎么记**：[账户账本](concepts/account.ledger.md)按本账户的初始现金、出入金与成交算现金，按先进先出与拆股算持仓，再以截止日或之前最近收盘估值。真实账户开账时已有持仓作为实物转入，不再扣现金；券商快照退为[对账](concepts/account.reconciliation.md)，有差额只提示，不改写账本。缺行情会注明；完整月报在未开账或缺月末权益端点时回退快照公式，并注明来源。
 
 **模拟账户怎么行动**：[模拟账户](concepts/account.paper.md)从已有 Agent 计划中交易，分为[Agent 自管](concepts/account.agent_portfolio.md)与[照计划执行](concepts/account.follow_plans.md)。前者选择计划、股数、撤单与提前卖出，后者在上限内逐项按最大允许股数挂单；两者都不能改计划价位或取消自动退出。它们共用[模拟成交规则](concepts/account.fill_rules.md)：按日线结算，止损、T1 卖半与时间止损由宿主执行，默认费用 0、无滑点，结果不是真实成交。
 
-**顺序与版本**：`stages-5` / `daily-2` 在每日复查后、推送前执行 `accounts`：逐日补结算已有挂单与退出，写 `account-1` 权益与持仓状态，再为本次交易日作明日决策。成交是 `paper-fill-1`，两种决策分别为 `agent-portfolio-1` / `follow-plans-1`，完整月报为 `monthly-5`；这些都是带版本的计算口径，旧记录保留原版本。Agent 不可用时仍结算已有订单和自动退出，只跳过新的 Agent 决策。
+**顺序与版本**：`stages-6` / `daily-3` 在组合检查节点后、推送前执行 accounts，即使组合功能关闭而节点跳过也照常：逐日补结算已有挂单与退出，写 account-1 权益与持仓状态，再作明日决策。成交仍 paper-fill-1，Agent 决策升为 agent-portfolio-2、增加组合检查事实段（关闭时为「本版未检查」），follow-plans-1 与 monthly-5 不变。旧决策保留 agent-portfolio-1 与原证据；账户页显示真实 agent_version，并标开关/版本/参数分界。Agent 不可用仍结算已有订单和自动退出，只跳过新决定。
 
 **怎么比较**：[账户对比](concepts/account.comparison.md)使用同一截止时间与公式，曲线以各自开账当日或之后首个交易日的完整权益归一到 100；首日缺数据不改用更晚基准，并标明开账日、首个交易日、资金与缺数据。账户页本月收益计算上月末交易日至当前 session 的本月至今，完整月报仍按月末端点冻结。不排名，也不据此证明策略有效；周 / 月复盘与复盘卡仍只处理真实账户。
 
 [当天这一步](#stage-accounts)
 
-## ⑨ 复核与推送
+## ⑪ 复核与推送
 
-**做什么**：组装今日视图，把摘要推送到 Discord。消息按顺序是：概览（含"复盘卡 上次推送后新增 a · 待审定 b"，有数据族没拿全时另加一行数据降级提示）、新计划、计划更新（有更新时才发）、持仓、待处理与异常、筛选报告，平常五条，有计划更新时六条，细节见[每日推送](concepts/system.push.md)。推送范围是核心池、持仓和可决定的筛选单元，扩展池不推送，见[观察池分层](concepts/system.pool_tiers.md)。
+**做什么**：组装今日视图，把摘要推送到 Discord。概览、新计划之后增加「🧩 组合检查」，再发计划更新（有更新时）、持仓、待处理与异常、筛选报告；组合消息区分硬判定与经理意见，无意见不补造理由。概览继续注明数据降级与复盘卡计数，见[每日推送](concepts/system.push.md)。推送范围仍是核心池、持仓与可决定的筛选单元，见[观察池分层](concepts/system.pool_tiers.md)。
 
 **读什么、写什么**：读当天所有结果，写发送记录进运行报告。
 
@@ -162,7 +182,7 @@ version: 3
 
 [当天这一步](#stage-push)
 
-## ⑩ 复盘
+## ⑫ 复盘
 
 **做什么**：推送之后收尾，做两件事，哪件到期做哪件。其一，交易日检测最近 5 个交易日内结束的交易：持仓全部平掉，或你写过备注的未成交计划止损、到 T1、过期未成交、作废（有持仓的计划不因过期或作废而结束，只看平仓），见[结束事件](concepts/review.retro_end.md)。每个结束事件只建一张[复盘卡](concepts/review.retro_card.md)：程序把当时各版本的价位、之后的日线、三条轨道的 R、你的执行（成交关联了哪份计划、当时的备注）、持仓期的每日状态和纪律判定冻结成十一个事实（v2.9 之前的旧卡是十个，讲的是你的决定），Agent 只负责把这些事实讲成一段话并起草 0–3 条教训，数字它不能改。每次最多起草 5 张，起草不出来的卡之后再试，最多三次，起草有自己独立的 1500 秒时限。其二，任何日子都判断[周度复盘](concepts/review.weekly.md)和月度复盘是否到期：到期就生成冻结快照并推送（手动运行只生成不推送）。两件都没做时这一步记"今天没有到期的复盘"。
 
@@ -171,6 +191,18 @@ version: 3
 **怎么失败与降级**：这一步出错不会影响已经发出的计划推送。Agent 不可用、超出时限、额度或 token 上限时，卡照常建好，起草留到下一次；周 / 月复盘两部分各自独立，一个出错不拦另一个；某个标的读数出错只影响它自己，下次再试。
 
 [当天这一步](#stage-retro)
+
+## ⑬ 优化提案
+
+**做什么**：仅北京时间周六的运行（纽约周五 session）在复盘后生成[优化提案](concepts/agent.optimize_proposal.md)，至多3条。宿主先冻结数据失败、Agent质量、重复教训、路线状态与未决提案五类证据；模型引用真实证据行才能写 proposed，不自动改代码、prompt 或策略。
+
+**读什么、写什么**：读固定窗口事实与最新真实路线 revision，冻结证据包到该 optimize 运行 output.evidence_pack；页面 evidence_rows 从原包按 refs 取，不拿今日SQL重算旧证据。反方相关观测只是运行级后续成功修订比例（counter_followed_by_successful_revision），不证明逐条反方意见被采纳或因果关系。缺观测不伪造成零。
+
+**批准边界**：[路线记录](concepts/system.roadmap_records.md)以系统内记录为准，历史只读真实 revision。批准前不得写版本或 brief；批准后才建 planned 版本与决定，并后台生成[实施 brief](concepts/agent.implementation_brief.md)。提交任务仅 pending，读回才知道 ok/error；brief 失败可重试，不撤销版本，更不自动实施。开关只停止新提案，不关闭这些阅读与决定入口。
+
+**怎么失败与降级**：非提案日或开关关闭跳过，证据包全空则不调模型、记录 no_evidence；非法引用的提案丢弃，其余保留。独立600秒，token 同计每日上限。此节点在 push 与 retro 之后，提示进下一次周度复盘推送。所有优化判断仍为 Gate HOLD。
+
+[当天这一步](#stage-propose)
 
 ## 你做什么：决定与成交
 
@@ -207,10 +239,12 @@ version: 3
 
 不用读仓库文档，下面几个页面各回答一类问题：
 
-- **今天这次运行跑了什么**：「今日」顶部的运行一览，十一个节点各一句话，附计数、状态和跳过原因，可以选日期看往日。状态含义见[阶段状态](concepts/system.stage_status.md)，节点定义见[每日节点](concepts/system.stages.md)。
+- **今天这次运行跑了什么**：「今日」顶部的运行一览，十三节点各一句话，附计数、状态和跳过原因，可以选日期看往日，旧运行按原版本展示。状态含义见[阶段状态](concepts/system.stage_status.md)，节点定义见[每日节点](concepts/system.stages.md)。
 - **哪个数据源对哪个目标没拿到、为什么、卡在哪个节点**：「工具 → 运行记录」点进一次运行的详情页：节点状态图、每个节点的"做了什么 / 拉取详情 / 结果详情"；失败的节点上有"从此节点继续"，续跑后已完成的节点只有第 1 次记录（见[每日工作流](concepts/system.daily_workflow.md)）。
 - **一份计划的价位怎么来的**：计划卡上的"展开推导"，顺着触发条件、输入快照、逐项计算和校验看一遍，并告诉你推导是否一致。
-- **一份 Agent 计划的每个字段和数字从哪来**：计划卡展开后的推理阅读视图，按时间顺序看提议者读了什么、论点与价位、反方提了什么反证、之后的复查与修订，以及校验结果。
-- **采集到了什么数据**：「数据」菜单，看六个数据族的覆盖、拉取记录和原始值。
+- **一份 Agent 计划的每个字段和数字从哪来**：推理阅读先看公司研究，再看提议者、反方与复查；原 call 编号不变，缺研究段注明原因。研究页另看请求档案，不把研究结论当自动开链。
+- **采集到了什么数据**：「数据」菜单，看九族覆盖、逐目标来源/失败与原始值；指标组列22项真实窗口与口径，不另造 ATR 数据族。
+- **硬约束与经理建议分别是什么**：今日/账户按真实 result/commentary 展示；组合功能关闭或缺行是 not_computed，开启且已成功产出硬结果、后续 PM 失败才是 degraded，完整为 ready。
+- **路线为何改变**：Roadmap 看真实修订、生成时冻结证据、人工决定与 brief 状态；设置页看四开关的全部真实变更历史，当前值不能冒充历史。
 - **某个词是什么意思**：「知识」菜单的"概念"，或者在各页面上点带虚线下划线的概念名，就地展开摘要，再一跳到完整的概念卡。
 - **某只股票今天为什么值得关注**：「标的」页，首屏列出信号与计划，K 线上标出候选、各版本计划价位和你的成交。

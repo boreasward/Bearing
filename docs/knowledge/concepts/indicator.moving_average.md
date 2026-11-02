@@ -2,11 +2,11 @@
 id: indicator.moving_average
 title: 均线 MA20 / MA50 / MA200
 group: indicator
-version: 1
-applies_to: [rules-1]
-summary: "最近 20 / 50 / 200 个交易日收盘价的简单平均；趋势类规则、筛选形态和 K 线图都用它判断趋势方向。"
-related: [rule.trend_reclaim, rule.trend_break, rule.volume_breakout, indicator.breadth]
-sources: [investment_assistant/analysis/rules.py, investment_assistant/views/chart.py, investment_assistant/analysis/agent/tools.py, investment_assistant/analysis/regime.py]
+version: 2
+applies_to: [indicator-1, rules-1, screen-1, regime-2]
+summary: "20/50/200根的简单均线分别登记 close 与 adj_close 两套：Agent/图表用拆股调整收盘价，规则/筛选/广度用全复权价，本版不统一数值。"
+related: [indicator.registry, rule.trend_reclaim, rule.trend_break, rule.volume_breakout, indicator.breadth]
+sources: [investment_assistant/derivation/indicators/registry.py, investment_assistant/derivation/indicators/_price_math.py, investment_assistant/derivation/indicators/screen_metrics.py, investment_assistant/derivation/indicators/breadth.py]
 ---
 
 ## 是什么
@@ -16,8 +16,10 @@ sources: [investment_assistant/analysis/rules.py, investment_assistant/views/cha
 ## 怎么算 / 从哪来
 
 - MAn = 最近 n 个收盘价的简单平均，n 取 20、50、200；历史不足 n 根时不算。
-- **规则 v1 和市场广度用全复权收盘价 `adj_close`**（含分红调整），避免除息日出现假的「跌破」。
+- **规则 v1、筛选和市场广度用全复权收盘价 `adj_close`**（含分红调整），避免除息日出现假的「跌破」。注册项为 `ma20_adj_close`、`ma50_adj_close`、`ma200_adj_close`。
 - **「标的」页 K 线和 Agent 的 `get_indicators` 用拆股调整的收盘价 `close`**。没有分红时两者相同，有分红时数值会略有差异——所以图上均线与规则候选里冻结的 `ma50` 可能差几分钱，以规则候选里冻结的取值为准。
+- close 注册项为 `ma20_close`、`ma50_close`、`ma200_close`；两套窗口均为20/50/200根，不设混淆口径的 `ma20` 注册别名。旧 Agent dict 的 ma20/ma50/ma200 仍映射 close 版，原数值/类型不变。
+- `indicator-1` 只包装原公式，没有统一两种价格口径；这种统一要另行改口径与验证，不能在注册搬家时悄悄完成。
 
 ## 在系统里哪里看到
 

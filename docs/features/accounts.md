@@ -2,6 +2,18 @@
 
 真实账户把已录入的成交和出入金算成每日账本权益；模拟账户按同一批计划分别执行「照计划执行」和「Agent 自管」，保留下单、校验、成交与持仓证据。模拟订单只在本地账本结算，不连接券商。设计见 [v2.11 账户与模拟交易](../specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md)。
 
+## v2.14 合并实施增量（随 v2.15.0 发布，待使用验收）
+
+日图为 daily-3 / stages-6，新增 portfolio 位于 review 后、accounts 前；accounts 成为第 10 节点。后文 daily-2、七段证据为 v2.11 的旧版本口径，历史决策按原 agent_version 显示。组合证据第八段 `[fact:portfolio_check]` 在未传入组合结果时明确为 `{"status":"missing"}`，缺段不冒充已检查通过；订单校验仅在传入组合结果时拦截 blocked 计划的买单，用第一条硬原因，`None` 保持旧行为，卖出 / 撤单不受影响。详细口径见 [组合经理](portfolio-manager.md)。
+
+- 每账户 / session 一份硬结果；verdict、order 与互斥只对入场期链头，持仓只计敞口与只数。真实账户另有 PM 建议，模拟账户不额外调 PM；Agent 自管升 agent-portfolio-2，证据加 `[fact:portfolio_check]`，照计划执行仍 follow-plans-1、不读取组合检查。
+- 参数新增 sector_cap（默认 0.35，0.05–1.0）、max_per_sector（默认 3，整数 1–10）；沿用理由 / request_id、下一交易日起生效。`POST /api/accounts/{id}/params` 接受这两个键。
+- 硬拒绝新增 sector_cap「超过行业集中度上限」、max_per_sector「超过同行业标的数量上限」、single_cap「超过单笔风险或单票敞口上限」、total_cap「超过组合总敞口上限」、held_ticker「已持有、在挂或重复的标的」。未归类 sector_unknown 只提示、deferred_by_cash 只暂缓，不列硬拒绝；原现金 / 股数检查照常。
+- K2：portfolio_manager 关闭时整个 portfolio skipped/feature_disabled，不执行硬检查；fact 为「本版未检查」，validate_orders(None) 不作组合拦截，Today not_computed。开启、硬结果已产出而 PM 失败才是保留硬结果的 degraded，不能混淆。
+- `GET /api/accounts/{id}/portfolio-check?session=` 返回 `{status,reason,session,cutoff_at,result,commentary}`，与 Today 共用；缺行不是空组合成功。决策列表增加真实 agent_version；对比 / equity 增加 `markers:[{session,kind,label}]`，feature 虚线、version 实线、params 点线，图下列出分界。
+
+待执行核对：各账户硬结果隔离与重算、修改参数后的证据与首 reason、未归类提示、关闭 / 模型失败差别、对照账户不变、三类分界。综合核对走 `python -m investment_assistant.workflow check`，账户只读 CLI 仍为下文的 `investment_assistant.views.account show`；这些核对步骤尚未执行。
+
 ## 账户与开账
 
 系统只有一个真实账户。开账填写期初现金、开账日及可选的已有持仓；期初现金必须大于零，已有持仓按开账日纽约 16:00 的期初买入保存，标记 `opening_position`，不重复扣减现金，也不关联计划。已有成交或出入金时，开账日不能晚于最早一笔有效记录。真实账户只允许开账一次，不能关闭。
@@ -12,15 +24,9 @@
 
 参数修改必须写理由和 `request_id`，追加审计记录，下一交易日起用于决策；不会重算已经完成的模拟结算。关闭模拟账户也要写理由，并在同一事务里把该账户全部在挂订单撤成 `cancelled`（原因 `account_closed`，结算日为关闭时的纽约日期）；之后仅保留历史读取，不再结算、估值或决策。账户接口只返回公开参数，不暴露审计中用于幂等判断的元数据。
 
-## 组合硬检查准备（五层发布 Task3）
-
-新增纯函数 `execution.portfolio.check` 复用原 `max_shares`，按账户重算候选、行业敞口与现金顺序；`sector_cap` 默认 0.35（允许 0.05–1），`max_per_sector` 默认 3（整数 1–10）。只有入场期链头进入裁决，持仓链不重复计候选。未知行业单列提示不拦；现金不足可暂缓。订单校验仅在显式传入组合结果时拦截 blocked 计划的买单，使用第一条硬原因；`None` 保持旧行为，卖出 / 撤单不受此 gate 影响。
-
-当前每日图与账户节点尚未传入新结果，仍按下述 `daily-2 / stages-5` 运行；这不是已启用组合经理的声明。Task4 负责计算 / 写入与接线，Task5 负责前端五个新硬拒绝码及状态文案同步。组合证据增加第八段 `[fact:portfolio_check]`，未提供时明确为 `{"status":"missing"}`；缺段不冒充已检查通过。
-
 ## 每日结算与决策
 
-每日图 `daily-2` 的第九个节点 `accounts` 位于 `review` 之后、`push` 之前，阶段口径为 `stages-5`（十一节点）。休市日跳过。节点按以下顺序处理：
+每日图 `daily-3` 的第十个节点 `accounts` 位于 `portfolio` 之后、`push` 之前，阶段口径为 `stages-6`（十三节点；旧运行 `daily-2` / `stages-5` 中它是第九个节点，位于 `review` 之后）。休市日跳过。节点按以下顺序处理：
 
 1. 结算全部已开账、活跃的模拟账户，从各自 `settled_through` 后第一个交易日逐日补到本次交易日；每个账户独立事务，某个账户失败不会阻止其他账户。
 2. 追加真实账户的账本权益。未开账时不生成；每次重算至少最近五个交易日，停机更久则补齐中间日期，用现在已经知道的补录与作废信息重算，变化才追加新版本。

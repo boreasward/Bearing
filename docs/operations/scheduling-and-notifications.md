@@ -1,5 +1,26 @@
 # 调度与通知
 
+## v2.12–v2.15 合并实施运行口径（随 v2.15.0 发布，待使用验收）
+
+新运行为 daily-3 / stages-6（13 节点），本页下方 daily-2 / stages-5 的 11 节点说明保留给旧版本运行。031 真实迁移、导入、重启与使用验收尚待单独授权；以下是操作和核对说明，不是执行记录。
+
+- 节点顺序：sec_monitor → collect → screen → regime → signals → plan → agent → review → portfolio → accounts → push → retro → propose。每节点取最大 attempt；旧版本仍按旧列表显示，不回填新节点。
+- propose 按运行 cutoff 的**北京日期是周六**判定（默认周二至周六 11:30 的计划里就是周六那次，对应纽约周五收盘后；夏令时与冬令时都一样，唯一口径 `optimize.evidence.is_proposal_day`），其他运行为 skipped/not_proposal_day；获准手动演练可用 `python -m investment_assistant.tasks.daily run --manual --force-propose`（开关关着仍跳过）。不是另加一个定时任务。
+- propose 位于 push 和 retro 之后，本次新提案进**下一次**周度复盘推送末尾：「本周提案 N 条，到 roadmap 页查看」。空证据为 success/no_evidence，不调用模型；开关关闭为 skipped/feature_disabled。
+- 四开关默认全开，新运行冻结 features、续跑沿用、summary.features 留证。K2：关闭 portfolio_manager 是整节点 skipped/feature_disabled、不执行硬检查，fact「本版未检查」、validate_orders(None) 不作组合拦截，accounts 照常、Today not_computed；开启且硬结果已产出后 PM 模型失败才保留硬结果、Today degraded。
+- agent+review 共用 1500 秒（研究请求和补查用剩余），PM 300、accounts 600、retro 1500、propose 600 秒，手动研究 900 秒；token 统一当日上限。研究请求遇 daily 正在跑仍 200 queued。模型未连接只跳过模型段，启用时硬检查与非模型记账照常。
+- 新接口缺 031 为 503 migration_031_missing，daily 拒跑；综合核对入口为 `python -m investment_assistant.workflow check --session D`（D45，不另设 optimize check）。续跑仍看真实检查点 / resume.allowed；不把节点失败但已跑完的图写成可续跑。
+
+## SEC 正文目录与日预算（v2.12，A2）
+
+全部正文入口（sec_monitor、collect、手动族拉取、指定研究、补查）必须把**有效配置的 `filings.output_dir`** 投影为同一个 AdapterDeps.sec_text_dir，不能各建临时正文根。正文、索引与预算一同保留；不需要固定用户机器的私有绝对路径。
+
+`<filings.output_dir>/.budgets/<ticker>-<session>.json` 是跨 scope、跨 Deps 实例共享的**日预算事实**：在文件锁内、下载前预留每 ticker/session 最多 3 份的名额，失败或进程中断也不返还；同 session 超时会阻断后续下载，下一 session 才再试。已索引或已存在正文不重复下载、不扣新下载名额，可回补索引和观察。
+
+**不得在运行间清理 `.budgets`**，也不能通过换目录重置预算。维护 / 备份正文目录时连同预算保留；排查「为什么今天没下载」需一起查看预算与真实目标失败原因。首日可能 partial；成功发现文件不等于成功下载 / 存储。
+
+数据采集统一由注册表按族锁调度，每族每 scope 记行；sec_monitor 正文记 `family=sec_text, detail.scope=sec_monitor`，collect 跳过本次已有正文。SEC/FRED/earnings 已有内部 fetch policy，不在外层再乘一次重试，attempts 记录真实主备总次数。正式 bars 无 Stooq 备源，财报日 Nasdaq 可用，见 [注册表](../features/data-registry.md)。获准后按 [验收清单](../roadmap/v2.12-v2.15-acceptance.md) 验证。
+
 ## 调度线程
 
 调度线程随 API 进程启动（`api/app.py` 的 lifespan 拉起 `tasks/scheduler.py:run_forever`），`SCHEDULER_ENABLED=0` 或缺数据库时不启动。它每 `SCHEDULER_TICK_SECONDS`（默认 60 秒）醒一次：

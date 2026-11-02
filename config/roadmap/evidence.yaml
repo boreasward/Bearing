@@ -1,0 +1,103 @@
+# 每个验收 Markdown 一条；kind=manual 表示人工汇编核对记录，body 明确区分定时观察、用户确认与待办。
+# observed_on 为所摘已完成事实的最新记录日期，不表示整版通过。
+- evidence_id: acceptance-v2.2
+  version: 1
+  version_id: v2.2
+  kind: manual
+  body: |-
+    10-26 第二次手动批处理 success、errors 为空，screen 入选 20；区制仍引用第一次部分样本快照并记 conflict。只读回放 5 日、13 表行数不变；Discord 收到 5 条；任务中心北京时间与说明核对通过。
+    定时记录列出 10-27、10-28、10-29、10-30 四次观察；10-28 运行 error、是否算有效验收日待用户裁定。页头仍写 1 / 5，不自行改判为 4 / 5 或完成。整体 user_acceptance_pending。
+  observed_on: '2026-10-30'
+  source_path: docs/roadmap/v2.2-acceptance.md
+- evidence_id: acceptance-v2.3
+  version: 1
+  version_id: v2.3
+  kind: manual
+  body: |-
+    10-27 重启后总览、单族拉取、失败可见、原始数据浏览、任务中心五项通过；单族拉取不改变计划、候选、池、任务与推送表。MU 120 日收盘与 K 线一致，FRED 最近 5 观测逐值一致，三份计划 ATR 一致；用户 10-27 确认浏览可用。
+    定时 10-28 至 10-30 共 3 / 5，记录五族与 filings、日线推进及失败可见；未完成连续 5 日。工程自查与保留偏差仍在原文件，不宣称发布或验收完成，保持 user_acceptance_pending。
+  observed_on: '2026-10-30'
+  source_path: docs/roadmap/v2.3-acceptance.md
+- evidence_id: acceptance-v2.4
+  version: 1
+  version_id: v2.4
+  kind: manual
+  body: |-
+    10-27 迁移后手动批处理虽有 Yahoo 3 个失败目标，7 行阶段证据齐全，run_id 与计数核对通过。全部 8 份历史计划推导 consistent，核对前后业务表行数不变；规则与 Agent 价位手算通过，页面只读核对通过，用户确认推导可读。
+    无资金快照，股数无对象可核；定时进度 0 / 5，不能把降级运行或无样本项写成整版验收通过。整体 user_acceptance_pending。
+  observed_on: '2026-10-27'
+  source_path: docs/roadmap/v2.4-acceptance.md
+- evidence_id: acceptance-v2.5
+  version: 1
+  version_id: v2.5
+  kind: manual
+  body: |-
+    10-28 迁移 026、重启与手动运行完成，stages-2 恰好 8 行。review 对象 0，计数与库一致；plan_review check、derivation stages、derivation check 三项只读核对通过（9 份计划 consistent）；旧 agent-1 的 legacy 与无链接口符合记录。
+    本文件的 agent-2 首版、用户输入与系统修订、决定、推送均待办，定时 0 / 10；0 个复查对象不是有效链验收。保持 user_acceptance_pending；不把其他版本后来的案例回填成此文件已通过。
+  observed_on: '2026-10-28'
+  source_path: docs/roadmap/v2.5-acceptance.md
+- evidence_id: acceptance-v2.6
+  version: 1
+  version_id: v2.6
+  kind: manual
+  body: |-
+    10-28 无迁移重启；88 张概念卡与 12 节原理通过，运行一览 8 阶段逐字段比较 0 处不同，就地展开与标的页核对通过。CSCO agent-2 首版推理通过；agent-1 页面入口同日补齐后通过。
+    复查推理、get_concept 调用、成交标注待有对象；运行一览连续抽查 0 / 5，用户解释计划与首屏的使用验收待确认。整体 user_acceptance_pending。
+  observed_on: '2026-10-28'
+  source_path: docs/roadmap/v2.6-acceptance.md
+- evidence_id: acceptance-v2.7
+  version: 1
+  version_id: v2.7
+  kind: manual
+  body: |-
+    10-29 迁移 027、重启完成；手动 stages-3 共 9 行，retro 事件与卡片均 0、核对通过。我的知识版本、归档恢复与页面可读通过；讨论修复解析问题后回答 ok、引用齐全、只写讨论与草稿；两条验收测试知识最终均归档。
+    截止时间核对是 0 调用、0 引用，仅部分通过；不能当作真实知识已被引用。复盘卡、审定真实教训、表现回看、周度推送等待事件，定时 0 / 10，用户一周使用待确认。整体 user_acceptance_pending。
+  observed_on: '2026-10-29'
+  source_path: docs/roadmap/v2.7-acceptance.md
+- evidence_id: acceptance-v2.8
+  version: 1
+  version_id: v2.8
+  kind: manual
+  body: |-
+    10-30 迁移 028、重启、ChatGPT 连接完成；手动运行 10 节点，FER 在 gpt-6-astra 通过引用校验（输入 23,191 / 输出 2,340 token）。regime 故障注入后续跑成功，前三节点仅 attempt 1，10 条有效行；SEC 回补、旧运行展示、删除智谱核对通过，手动 6 / 8 项通过。
+    首个定时 daily（session 10-29）degraded、无需介入，连续 10 日仅第 1 天。max_attempts 重跑待出现，详情页 3 天使用待用户回答，siwc_precheck 与逐项模型行为核查尚未做。整体 user_acceptance_pending。
+  observed_on: '2026-10-30'
+  source_path: docs/roadmap/v2.8-acceptance.md
+- evidence_id: acceptance-v2.9
+  version: 1
+  version_id: v2.9
+  kind: manual
+  body: |-
+    10-30 上线前只读核查受影响对象均为 0；迁移 029、重启完成。手动 daily 10 行、plan_review check 与 derivation stages 通过；今日三组计划表无决定按钮，旧决定与旧周报原样显示。第 1、6 条在现有数据范围内通过；tag v2.9.0 与 main 已于 20:56 获授权推送。
+    无旧复盘卡、被取代链或持仓可验；retrigger 待出现，成交与备注待用户，时间止损、10 日定时及两周使用待积累。整体 user_acceptance_pending。
+  observed_on: '2026-10-30'
+  source_path: docs/roadmap/v2.9-acceptance.md
+- evidence_id: acceptance-v2.10
+  version: 1
+  version_id: v2.10
+  kind: manual
+  body: |-
+    10-31 无迁移重建前端并重启，画廊、口径 / 样本量 / 时点、空态、键盘与侧栏核对通过。375px 长标签及 1024–1280px 整页溢出修复后真实服务复测通过，第 5 条改判通过，第 1–6 条全部通过；修复随 v2.10.1 发布。
+    画廊首屏是否闪浅色仍待用户肉眼确认；第 7 条一周使用待积累。原文件「推送由你完成」是后续安排，不能当作已推送（11-01 v2.11 记录明确仍未推）。整体 user_acceptance_pending。
+  observed_on: '2026-10-31'
+  source_path: docs/roadmap/v2.10-acceptance.md
+- evidence_id: acceptance-v2.11
+  version: 1
+  version_id: v2.11
+  kind: manual
+  body: |-
+    10-31 只读预检四张业务表均 0；11-01 获授权后备份、执行迁移 030、重建前端与重启、打 v2.11.0 tag。手动 daily 为 stages-5 / daily-2、11 节点各一行，accounts 成功处理 0 个账户，check 通过；账户菜单与接口可读。两个模拟账户已建，各 100 000 美元，11-02 开户。
+    第 1 条通过，但 0 个活跃账户不证明每日决策与成交已验证；第 3、7 条部分，其余需用户输入或等事件，定时从开户日起积累。main 与 v2.11.0、v2.10.0、v2.10.1 推送仍待授权。整体 user_acceptance_pending。
+  observed_on: '2026-11-01'
+  source_path: docs/roadmap/v2.11-acceptance.md
+- evidence_id: acceptance-v2.12-v2.15-spike
+  version: 1
+  version_id: v2.12
+  kind: manual
+  body: |-
+    合并验收文件当前只有 Task 0 §0 备源 spike 的已完成事实，关联 v2.12，不代表 v2.13–v2.15 有已完成验收。
+    11-01 04:12 UTC 一次性只读端点探测：Stooq 五只均 HTTP 404，诊断变体同样 404，无数据可比、无法验证 NVDA 拆股调整；按已批准 Q3，Stooq 不实现，日线 sources 只留主源。
+    Nasdaq analyst 五只均 HTTP 200 / JSON，财报日期来自 announcement；SPY / QQQ data=null，需按无数据处理。calendar 10-30 返回 66 行、11-01 返回 0 行，time 常为 time-not-supplied；Nasdaq 财报日备源可用。
+    四版仍实施中，迁移 031、运行时、真实导入、连续定时与用户使用验收均无此文件的通过记录，种子版本保持 planned。
+  observed_on: '2026-11-01'
+  source_path: docs/roadmap/v2.12-v2.15-acceptance.md

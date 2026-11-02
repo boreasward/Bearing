@@ -2,6 +2,43 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/roadmap/roadmap.md)。
 
+## v2.15.0 — TBD
+
+**尚未发布、尚未完成使用验收。** v2.12–v2.15 一次发布为 v2.15.0，不打 v2.12.0–v2.14.0 空 tag。范围依据 [冻结 spec](docs/specs/2026-11-01-v2.12-v2.15-five-layers-and-agent-roles-design.md)；代码、概念卡与文档已合入主干，最终测试结果、差异与发布日期由收尾任务据实际结果填写。真实迁移 031 / roadmap 导入 / 重启 / tag / push 均待单独授权。
+
+### 搬家
+
+- 五层包与 core / workflow / views 边界，删除旧 workbench Python 包，公共事务与版本下沉、依赖方向守护；活文档使用 1D 新路径，冻结历史不改写。
+- 数值快照、独立推导、既有账户输入保持原口径；最终全量验证结果由收尾任务填写。
+
+### v2.12：数据层注册表
+
+- 九族适配器、真实主备来源 / attempts / scope、补查队列与 22 项标准指标；两套 MA 与 SPY / QQQ 基准保留。
+- Task0 探测事实为 Stooq 404、Nasdaq 可用；Stooq 仅解析与补缺机制，正式未注册，不能记为已上线备源。SEC 正文共用有效 filings.output_dir 与跨 scope 的 .budgets。
+
+### v2.13：公司研究员与指定标的研究
+
+- 首版 agent-4 公司研究，计划 schema 仍 agent-3；失败不阻断，修订 / 续期 / 补查 carried；指定研究只出档案，daily 忙时 200 queued。
+- 真实原引用、档案版本与缺记录说明，研究页及推理阅读待使用验收。
+
+### v2.14：组合经理
+
+- 逐账户硬组合检查、真实账户 PM 意见、agent-portfolio-2 证据与拒单、行业参数、账户三类 markers。
+- K2：关闭 portfolio_manager 跳过整个节点、不执行硬检查、None 不作组合拦截、Today not_computed；开启且硬结果已存后 PM 失败才 degraded / 保硬结果。
+
+### v2.15：系统内 roadmap 与优化提案
+
+- 人工种子、带 revision 的路线记录、北京周六（纽约周五收盘后）提案、冻结 evidence_pack、批准后 planned 版本与后台 brief、pending 读回和 Markdown 导出。
+- 四开关默认全开、下次 daily 冻结、续跑沿用与真实变更历史；十三节点 daily-3 / stages-6，概念卡 129 张、原理页 13 个阶段小节；新功能文档与未执行验收清单。
+
+### 与 spec 的差异
+
+<!-- 收尾任务按最终主树事实填写：差异、裁决依据、影响与对应证据。 -->
+
+### 限制与待验收
+
+<!-- 收尾任务填最终测试/审查、真实授权执行、使用验收、定时观察与未完成项；不得把 TBD 写成已发布。 -->
+
 ## 未发布
 
 ### 修正

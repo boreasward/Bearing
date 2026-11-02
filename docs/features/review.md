@@ -4,6 +4,17 @@
 
 设计：[P1](../specs/2026-10-23-p1-rule-plans-and-push-design.md)（影子、纪律、月度收益）、[P4 复盘扩展](../specs/2026-10-25-p4-review-expansion-design.md)（三方对比、推送）、[v2.5 计划时间线 §9](../specs/2026-10-28-v2.5-plan-timeline-design.md#9-影子跟踪与三方对比)（每版影子、三方对比取决定时看到的版本）、[v2.7 我的成长闭环](../specs/2026-10-28-v2.7-growth-loop-design.md)（复盘卡、周度「你学到了什么」）。
 
+## v2.15 优化提案衔接（待发布与验收）
+
+合并实施图 daily-3 / stages-6 将 retro 顺延为第 12 节点，后接第 13 节点 propose；旧 stages-5 仍为下文的 11 行。影子、纪律、tracks-2、review-8、monthly-5 的公式及冻结快照保持原口径，策略 / 指标仍 Gate HOLD。
+
+- 优化层按纽约周五 session（默认北京周六运行）汇总近 7 日采集失败 / Agent 质量、近 30 日同 scope 重复教训、待验收版本与主指标复查信号，生成至多 3 条 [路线提案](roadmap-in-system.md)。复盘卡草稿作为优化证据不等于已采纳知识。
+- O2 的 `counter_followed_by_successful_revision` 是「运行级后续修订比例，不证明逐条反方意见被采纳或因果关系」，不能写成反方意见已被采纳率。主指标仍按 monthly-5，端点不全明确缺失，不造零。
+- propose 在 push、retro 之后，当次周度消息已经生成；提案提示进入**下一次**周度复盘推送，末尾「本周提案 N 条，到 roadmap 页查看」，不声称同次已发。
+- 提案证据显示生成时冻结 `agent_runs.output.evidence_pack`，历史缺包明确缺记录。批准前无版本 / brief 变更；approved 也不等于上线，brief error / pending 要真实读回。
+
+待执行核对：周五 session 提案与非提案日跳过、下一次周度提示、证据原行与历史包、批准前不变；综合核对为 `python -m investment_assistant.workflow check`。上线前规则检查入口继续为 `python -m investment_assistant.optimize.backcheck`（1D 搬迁后的路径），相关命令本轮未执行。
+
 ## 口径
 
 成交与资金表单已迁入[账户页](accounts.md#页面)。纪律与轨道对比可通过 `account_id` 查询指定账户，默认真实账户；每次计算只取该账户的成交、FIFO 批次与持仓状态，计算公式不变。模拟持仓按冻结入场计划判断，不用真实账户的全局链修订。模拟账户的 `discipline-2` 只按冻结计划与本账户持仓状态判定，不读链头和 `plan_stop` 事件，因此「早卖」「死扛」的输入与真实账户不同。周月快照、复盘卡与推送仍默认真实账户，组合 `portfolio` 运行不进入单元覆盖率与计划三轨样本。

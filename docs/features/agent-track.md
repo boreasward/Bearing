@@ -4,11 +4,18 @@
 
 设计：[P3 Agent 轨道](../specs/2026-10-24-p3-agent-track-design.md)、[P4 复盘扩展](../specs/2026-10-25-p4-review-expansion-design.md)（解读并入 Agent 轨道）、[v2.5 计划时间线](../specs/2026-10-28-v2.5-plan-timeline-design.md)（`agent-2` 结构与版本链）。
 
-## 纯校验准备（五层发布 Task3）
+## v2.13–v2.14 合并实施增量（随 v2.15.0 发布，待使用验收）
 
-已加入 `research_check` 与 `pm_check`，当前模型图尚未激活研究员 / PM 阶段。研究事实须 1–12 条、推断最多三条且引用本段非推断事实所用的有效 `call:N`；研究摘要、风险、blocked 结构分别校验，事实块保留原调用编号。PM 只能排序宿主 `ok` 计划，不得写价位 / 股数，引用只认本次调用与 `fact:portfolio_check`。
+以下新增口径以 [公司研究](research.md)、[组合经理](portfolio-manager.md) 为准；后文按版本保留旧运行、旧计划与十工具说明，不能据此给新阶段授予所有工具。
 
-标准指标已有 22 项注册：close 与 adj_close 三组均线分别登记，Agent 相对强弱用 SPY、筛选用 QQQ，既有工具 dict 的键序 / 数值不变；独立推导仍不调注册表计算。优化层已有证据汇总、提案 / brief 校验与 Markdown 导出纯函数，但尚无提案节点激活。counter 的可观测比例仅为「带反方意见运行后来出现成功修订后继」的比例，不证明逐条意见采纳或因果关系；提案引用必须落在生成时的证据行 ID，坏条目单独丢弃。
+- 新运行 `agent-4`，计划 schema 仍 `agent-3`（D38）；首版在提议者前串行跑公司研究员，通过的 facts/risks/blocked/summary 以 `[fact:research]` 带原 `call:N`，成功研究至少一条 ref 被首版 thesis 引用。研究拒绝 / 模型错误不阻断提议者。
+- `output.research={status,reason,output}` 的五态为 ok/rejected/error/disabled/carried。复查修订、再次触发续期、补查重跑只 carried 最近研究段，不重新调用研究员；引用规则只对首版生效（D42）。研究请求只写档案，不开链；daily 正在运行返回 200 queued，不套用下文旧 rerun 的 daily_running409。
+- 按 `analysis/agent/toolsets.py` 的 prompt 版本白名单授予工具；提议 / 反方新增 get_indicator 与 request_data，研究员专用财季 / 指引 / 正文工具且无价格工具，另可读 get_research_dossier；Agent 自管账户白名单多 get_indicator。request_data 只缓存请求、结束时同事务写队列，本轮不可见；agent / review 尾部预算内补采后新 cutoff 重跑一次。
+- 推理 `reading.steps` 在提议者之前增加 `{kind:'research',title:'公司研究',concept:'agent.company_researcher',status,reason,output}`，事实按种类、blocked 单列，引用仍为原 call 编号。档案 output 保留原结构及独立 counter；未记录的催化 / 下一步不补写。
+- Agent 自管升 `agent-portfolio-2`，第八段为本账户硬组合结果，blocked 买单按首 reason 拒绝。K2：冻结开关 portfolio_manager=false 跳过整个 portfolio，不做硬检查，fact 写「本版未检查」，validate_orders(None) 不作组合拦截；开启且硬结果已存后 PM 失败才保留硬结果、显示 degraded。照计划执行对照不读组合检查。
+- 标准指标 22 项注册（`indicator-1`）：close 与 adj_close 三组均线分别登记，Agent 相对强弱用 SPY、筛选用 QQQ，既有工具 dict 的键序与数值不变；独立推导不调注册表计算。研究入口的反方是独立阶段（档案 `output.counter`，状态在 `counter_status`）。提案侧的 counter 比例只是「带反方意见的运行后来出现成功修订后继」的运行级比例，不证明逐条意见被采纳或因果关系；提案引用必须落在生成时的证据行。
+
+待执行：抽查首版研究引用、失败继续、carried 修订、补查新 cutoff、研究 200 排队和不开链，以及组合关闭 / PM 失败两条独立路径，见 [合并验收](../roadmap/v2.12-v2.15-acceptance.md)。
 
 ## 怎么工作
 

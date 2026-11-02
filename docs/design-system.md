@@ -118,6 +118,28 @@
 | `paper_order` | `paper_orders.status` | `pending` 信息；`filled` 成功；`voided`、`expired`、`cancelled` 中性；`rejected` 危险 |
 | `paper_decision` | `paper_decisions.status` | `ok` 成功；`skipped` 中性；`rejected` 危险 |
 | `reconcile` | 账户对账结果（`RECONCILE_TEXT`） | `matched` 成功；`mismatch` 危险（文字「待核对」）；`no_ledger` 中性（文字「暂无账本权益」） |
+| `research_request` | 请求五态 + 结论版本 error 的共用展示域 | queued 信息；running 运行中；waiting_data 警告；concluded 成功；closed 中性；error 危险 |
+| `proposal` | roadmap_proposals.status | proposed 信息；approved 成功；rejected、superseded 中性 |
+| `portfolio_verdict` | 硬检查 verdict | ok 成功；blocked 危险；deferred 警告 |
+| `data_request` | data_requests.status | queued 信息；fetched 成功；failed 危险；deferred 警告 |
+| `feature_flag` | 功能当前值 | enabled 成功；disabled 中性 |
+| `roadmap_version` | roadmap_versions.status | planned 信息；in_progress 运行中；engineering_done 成功；user_acceptance_pending 警告；done 成功；dropped 中性 |
+
+### 合并实施的五组中文（v2.12–v2.15 词表）
+
+下列常量在 `web/src/lib/` 的前端常量里逐字出现；后端 `core.texts` 与跨端 sync 测试须保持一致，修改时三处一起改：
+
+```ts
+export const RESEARCH_STATUS_TEXT = { queued: '排队中', running: '研究中', waiting_data: '等待数据', concluded: '已得结论', closed: '已结束', error: '出错' } as const
+export const PROPOSAL_STATUS_TEXT = { proposed: '待决定', approved: '已批准', rejected: '已驳回', superseded: '已取代' } as const
+export const PORTFOLIO_VERDICT_TEXT = { ok: '可执行', blocked: '被拦截', deferred: '暂缓' } as const
+export const DATA_REQUEST_STATUS_TEXT = { queued: '排队中', fetched: '已补采', failed: '失败', deferred: '暂缓' } as const
+export const FEATURE_FLAG_TEXT = { enabled: '已开启', disabled: '已关闭' } as const
+```
+
+research_request 展示域的 error 只用于结论版本；请求 SQL 集合仍只有 queued/running/waiting_data/concluded/closed，不得放宽为六态。路线版本另为 planned「已规划」、in_progress「实施中」、engineering_done「工程完成」、user_acceptance_pending「待用户验收」、done「已完成」、dropped「已放弃」。approved「已批准」不代表已上线或已验收。
+
+组合五硬拒绝码逐字：sector_cap「超过行业集中度上限」、max_per_sector「超过同行业标的数量上限」、single_cap「超过单笔风险或单票敞口上限」、total_cap「超过组合总敞口上限」、held_ticker「已持有、在挂或重复的标的」。sector_unknown「行业未归类」、deferred_by_cash「现金不足，暂缓执行」仅提示 / 暂缓，不进硬拒绝表。
 
 与 spec §4.4 表的差异（D16）：表里写的 `green` / `yellow` / `red`、`done`、`gate_hold` 等在后端没有对应枚举（数据族卡显示的是拉取记录状态，即 `fetch` 域），不进词汇表；旧 `StatusPill` 的这几个键无调用方。
 
@@ -182,14 +204,14 @@
 | 组件 | props | 职责 |
 | --- | --- | --- |
 | `StatusPill` | `{ domain: StatusDomain; value: string; text?: string; title?: string }` | 按第 4 节词汇表显示状态：圆点 + 文字，`running` 语气带 `animate-running`；`text` 覆盖文字（填好占位符的模板），语气不变；`title` 写原因。DOM 带 `data-domain` / `data-status` / `data-tone` |
-| `VersionChip` | `{ version: number; latest?: number \| null; href?: string; latestHref?: string; ref?: string }` | `第 k 版`；`version === latest` 时后缀「最新」；`latest > version` 时附链接「最新第 n 版」（没给 `latestHref` 则是纯文字）；`ref`（`concept:<id>@<v>` / `know:<id>@<v>`）作原生 `title`，同时放 `data-ref` |
+| `VersionChip` | `{ version: number \| string; latest?: number \| null; href?: string; latestHref?: string; ref?: string }` | 数字版本保持 `第 k 版` 与最新版本链接；合并实施扩展字符串版本用于账户 agent_version，显示真实版本标识；`ref`（`concept:<id>@<v>` / `know:<id>@<v>`）作原生 `title`，同时放 `data-ref` |
 | `CutoffTime` | `{ at: string \| null \| undefined; label?: string }`（默认「截止」） | `{label} {fmtBeijing(at)}`，后缀是 `fmtBeijing` 的「北京」（D17，`lib/format.ts` 不改）；`<time datetime>` 的 `title` 是相对时间（「3 小时前」「45 分钟前」「2 天前」「刚刚」）；`at` 为空显示 `StatusPill block.not_computed`，不透传「—」；无法解析的值原样显示、不带提示 |
 | `SampleSize` | `{ n: number \| null; min?: number }`（默认 5） | `n = {n}`；`n < min`（含 0）加 `block.insufficient`；`null` 显示 `block.not_computed`（没算） |
 | `CalcVersion` | `{ version: string; concept?: string }` | `口径 ` + 等宽代码样式的版本号；有 `concept` 时链接到 `#knowledge/<concept>` |
 | `MetricValue` | `{ value: number \| null \| undefined; raw?: string \| null; unit?: string; digits?: number; signed?: boolean; percent?: boolean; tone?: 'updown' \| 'none' }`（`digits` 默认 2，`tone` 默认 `none`） | 等宽数字（`tabular-nums`），单位前加半角空格（`12 股`），`percent` 的值是小数（0.032 → `3.2%`，与 `fmtPct` 一致，无空格），`signed` 给正数加 `+`；`updown` 时正 `text-up`、负 `text-down`、零不着色；`-0.00` 归一成 `0.00`；`null` / `undefined` / `NaN` 显示 `block.not_computed`；传非空 `raw` 时优先显示原文，不解析或舍入后端 Decimal 字符串，`unit` 仍保留，长值可换行 |
 | `PlanLevels` | `{ low: number \| null; high: number \| null; stop: number \| null; target1: number \| null; shares?: number \| null; lead?: string; sharesLabel?: string }` | 一行标准写法 `入场 95.10–97.30 · 止损 91.40 · T1 104.70`，有股数时加 ` · 建议 120 股`；`lead`（默认「入场」）换掉区间前的词，`sharesLabel`（默认「建议」，空字符串则只写 `120 股`）换掉股数前的词——`PlanTable` 窄屏价位行传入场类型文字和空 `sharesLabel`，保持旧写法 `区间限价 95.10–97.30 · 止损 91.40 · T1 104.70 · 120 股`（价格两位小数，区间用 U+2013）；props 是数字，而接口里的价位是字符串（`"95.10"`）：**调用方用 `Number()` 转换**再传（接口不变；无法转成数字的值按缺失处理）。缺的价位写「没算」，四个都缺时是一个 `block.not_computed` 徽标。格式取自现有 `PlanHistoryTable` / `PlanTimeline` / `RuleBaseline` / `PlanRowDetail` 的写法，`PlanLevels.test.ts` 钉住的是数字格式（两位小数、U+2013、缺值写「没算」）和 `lead` / `sharesLabel` 的默认值 |
 | `RefLink` | `{ ref: string; onFact?: (key) => void; onCall?: (ref) => void; expanded?: boolean }` | `RefList` 单项的渲染：`fact:` 有 `onFact` 时是调用回调的链接式按钮，否则纯文字；`call:` 有 `onCall`（调用方能展开）时是 `aria-expanded` 按钮，否则纯文字；`know:` 链到 `knowHref`；`concept:` 用 `ConceptTerm` 就地展开；其余（`user:` 等）纯文字。列表外壳与展开的工具调用区域仍归调用方（`RefList`） |
-| `SourceBadge` | `{ source: string; fallback?: boolean }` | 数据来源名（等宽）；`fallback` 时加淡警告底与文字「备源」。为 v2.11 预留，本版只定义并进画廊，不接页面 |
+| `SourceBadge` | `{ source: string; fallback?: boolean }` | 数据来源名（等宽）；`fallback` 时加淡警告底与文字「备源」。合并实施用于数据来源及研究事实种类，不把推断显示为披露事实 |
 | `DataBlock` | `{ state; message?; skeleton?: 'row' \| 'block' \| 'table'; onRetry?; retryLabel?: string; page?: boolean; children? }` | 第 5 节五态包装；`degraded` 先 `Alert` 再渲染 `children`，`error` 有 `onRetry` 时加一个按钮（默认「重试」），`page` 撑满内容区（`min-h-[50vh]`） |
 | `PageHeader` | `{ title: string; level?: 1 \| 2 \| 3; meta?: Snippet; actions?: Snippet }`（`level` 默认 2） | 标题 + `meta` 次要行 + 右侧一个动作区（`data-slot="page-header-actions"`）。**迁移时每个标题保持原有级别**（测试按 `level` 查标题） |
 | `Section` | `{ title?: string; level?: 2 \| 3 \| 4; description?: string; actions?: Snippet; children: Snippet }`（`level` 默认 3） | 分段；有标题时是 `aria-labelledby` 命名的 `region`；级别规则同上 |
@@ -204,6 +226,19 @@
 - **`StatusPill` 的文字不着状态色**，原因见第 2 节要点：淡底上的同色文字在浅色主题下对比度不足 AA。
 - **卡片视图里的长状态标签换行。** `Badge` 默认不换行（表格列宽按内容算，允许换行会把中文标签挤成一字一行）；`DataTable` 的 `cards="narrow"` 卡片里，徽标改为可换行、最宽到单元格宽度、圆角 10px（单行时仍是胶囊形），所以「Agent 未给出计划：模型调用失败，以下为规则基线」这样的长标签在 375px 下折成两行，不撑出屏幕。其他窄屏场景里放长标签，要自己给容器留宽度或换写法。
 - **`CutoffTime` 的相对时间用原生 `title`**，不用 `Tooltip`（不依赖 Provider，任何地方可用）。`VersionChip` 的 `ref` 同理。
+
+### 6.4 研究、路线与组合页面的组合方式
+
+沿用 PageHeader、Section、DataTable、DataBlock、StatusPill、CutoffTime、CalcVersion、ConfirmDialog、Card，不另建页面样式体系：
+
+- `Research.svelte` / `research/DossierList`、RequestForm、DossierVersion、Facts：列表展示问题、状态、截止与预算；提交前 ConfirmDialog 提示额度；版本导航用 TabNav，每版按「论点 / 事实与来源 / 催化 / 反证 / 价格与情景 / 下一步」分 Section。Facts 用 SourceBadge 分 disclosure/guidance/price_fact/user/inference，blocked 单列；未记录的催化 / 下一步写「本版未记录」。AgentReasoning 懒加载，公司研究在提议者前，原 call:N 可跳转，不重新编号。切换请求时清空旧关闭对话框，不将旧异步结果画到新请求。
+- `Roadmap.svelte` / `roadmap/RouteTab`、ProposalsTab、DecisionsTab、EvidenceTab：四个导航页签，列表 DataTable、详情 Section，批准 / 驳回用 ProposalDecide + ConfirmDialog 填理由，批准另填 version_id；版本和决策展示真实最新行与全部 revision（含当前）。evidence_rows 只展开生成时原 body；空包说明「历史证据包缺少该引用的记录」。
+- `roadmap/Brief.svelte` 共用版本页与提案页，not_requested/pending/ok/error 分开；retry 返回 pending 后必须 GET 读回，pending 可「刷新 brief」、error 可重试。提交任务不显示成生成成功，不拼假的历史行或 brief。
+- `settings/FeatureFlags.svelte` 读真实 flags/history；双向理由必填、关闭确认，POST 成功后 GET 读回两者，空历史才显示「尚无变更记录」。
+- `today/PortfolioCheck.svelte` 与 `account/PortfolioResult.svelte`：硬结果按 order，经理 ranking 另列，行业敞口用语义 meter、互斥用表。K2 关闭整个节点为 not_computed；开启且硬结果已存后 PM 失败才用 DataBlock degraded 显示「只有硬结果」。缺行不能当 empty/ready 的空组合。
+- RunDetail 的 portfolio 按账户计数展开真实结果，proposals 链到路线页，agent 显示五项补查计数与数字研究请求数；节点列表由后端版本决定，不给旧运行补两节点。
+
+路径均相对 `web/src/lib/components/`（两个路由在 `web/src/routes/`）。人工目检记录在 [验收清单](roadmap/v2.12-v2.15-acceptance.md)，尚未执行。
 
 ## 7. 交互规范
 
@@ -224,6 +259,12 @@
 - ECharts：`web/src/lib/charts/theme.ts` 的 `readChartTheme()` 在挂载与主题切换时读取 `--foreground`、`--muted-foreground`、`--border`、`--chart-*` 生成十六进制的主题对象；`EChart.svelte` 以该对象初始化，主题切换时销毁重建并重新 `setOption`。系列色按来源角色（规则 / 自定 / Agent）而不是序号。
 - K 线：涨跌用 `--up` / `--down`；标记与价位线按 `--chart-rule` / `--chart-own` / `--chart-agent`；作废计划用 `--chart-fill` 淡显；代码里不再写十六进制。候选标记（买入 / 卖出箭头、观察圆点）由规则引擎产生，标记本身不带计划来源，统一用规则色 `--chart-rule`，方向靠形状；成交标记 B / S 用 `--up` / `--down`；价位线按计划来源三色。lightweight-charts 的线条描边直接认 `#rrggbbaa`，所以 `--chart-fill` 的透明度对作废计划的价位线有效（只有它的辅助标签路径会丢 alpha，`CandleChart` 不走那条路）。`candleOptions(theme)` 返回 `{ chart, series }`：`chart` 给 `createChart` / `applyOptions`，`series` 给 `addCandlestickSeries`；图表背景用 `card`。
 - 图表旁必有文字说明口径与时点（`CalcVersion` + `CutoffTime`）。
+
+### 账户分界 markers（合并实施）
+
+compare 与 equity 响应共用 `markers:[{session,kind,label}]`。ECharts 以交易日作 xAxis 的 markLine，颜色仍取主题；feature「功能开关」为 dashed 虚线、version「版本」为 solid 实线、params「参数」为 dotted 点线，不能只靠颜色区别。来源分别为真实 feature_flag_changes、paper_decisions 首次新 agent_version 的 session、account_param_changes.effective_from。
+
+`account/Markers.svelte` 在曲线下用 Section「分界」和 DataTable 列「交易日 / 种类 / 分界说明」，按 session 排序。markers 缺字段为 not_computed「接口尚未提供分界记录」；真实空列表为 empty「本区间没有功能、版本或参数分界」。两者不混淆，不从曲线形状猜变更。导航新增 `microscope`（研究）、`map`（路线），走现有 Icon 映射。
 
 ## 9. 文案
 

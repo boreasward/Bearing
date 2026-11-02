@@ -22,6 +22,11 @@
 | [review.md](features/review.md) | 影子跟踪、可切换账户的纪律与三方对比、真实账户周/月复盘（`review-8` / `monthly-5`；缺账本端点回退快照）、复盘推送 |
 | [pool-and-context.md](features/pool-and-context.md) | 观察池分层、每日筛选（纳指 100 `screen-1`、成员轮换、报告与只读回放）、市场环境（广度、区制、行业、FRED）、上线前检查 |
 | [data-menu.md](features/data-menu.md) | 「数据」菜单：数据族覆盖与最新时点、拉取记录、单族手动拉取、原始值浏览 |
+| [data-registry.md](features/data-registry.md) | v2.12，随 v2.15.0 发布，待验收：九族来源、真实主备与补查、22 标准指标、两套 MA / 基准 |
+| [research.md](features/research.md) | v2.13，随 v2.15.0 发布，待验收：首版公司研究、carried 修订、指定研究只出档案、排队与截止时间 |
+| [portfolio-manager.md](features/portfolio-manager.md) | v2.14，随 v2.15.0 发布，待验收：逐账户硬结果、PM 建议、关闭与失败区别、参数与分界 |
+| [roadmap-in-system.md](features/roadmap-in-system.md) | v2.15，随 v2.15.0 发布，待验收：路线记录、冻结证据提案、批准与 brief 读回、导入 / 导出 |
+| [feature-flags.md](features/feature-flags.md) | 合并实施，待验收：四开关默认全开、下次 daily 冻结、续跑沿用与真实历史 |
 | [knowledge.md](features/knowledge.md) | 知识层：版本化的概念卡与原理页——卡的格式与校验、引用形式、加载与缓存、`/api/knowledge/*` 接口、`knowledge check` / `show` 命令 |
 | [sec-filings.md](features/sec-filings.md) | SEC 下载器与 SEC 监控 |
 | [fundamentals.md](features/fundamentals.md) | 「标的」页的基本面一栏：美股财季数据与公司指引 |
@@ -40,7 +45,7 @@
 
 | 位置 | 内容 |
 | --- | --- |
-| [roadmap/roadmap.md](roadmap/roadmap.md) | 唯一的路线文档：最终目标与成功标准、原则与边界、版本总览（v2.0–v2.11 已完成，最新 `v2.11.0` 于 2026-11-01 发布）、当前路线 v2.12–v2.15（2026-10-31 定稿、2026-11-01 写成正文，决策 #99–#113：一天一跑、分层不分服务、LangGraph 保留 / Temporal 暂缓、系统提案人实施——v2.12 数据层注册表、v2.13 公司研究员与指定标的研究、v2.14 组合经理、v2.15 系统内 roadmap 与优化提案，均未开工）、远期方向、backlog、DoD 与状态用语、决策记录；同目录 `v2.x-acceptance.md` 是各版验收证据 |
+| [roadmap/roadmap.md](roadmap/roadmap.md) | 当前受限维护的路线源：目标、历史证据、四版合并实施（路线 B、目标 v2.15.0 TBD）、决策 #1–#124；真实导入并发布后成为系统记录的导出件。各版已发布与待验收分开记，同目录 v2.x-acceptance.md 保存真实证据；[四版清单](roadmap/v2.12-v2.15-acceptance.md) §0 是已做 spike，§1–§4 尚未执行 |
 | [roadmap/v2.8-runtime-feasibility.md](roadmap/v2.8-runtime-feasibility.md) | 本地 CLI 运行时可行性报告（2026-10-28）：`claude-code`、`codex`、`pi` 在无人值守、禁用自带工具、接本地 MCP、token 用量、批处理时限五项上的实测。**同日被 roadmap 决策 #63 取代**（v2.8 不再做运行时切换），保留为历史依据 |
 | [specs/](specs/) | 各阶段的设计 spec |
 | [plans/](plans/) | 各阶段的实施 plan |
@@ -51,7 +56,7 @@
 
 | 类别 | 回答的问题 | 什么时候改 |
 | --- | --- | --- |
-| roadmap | 往哪走、为什么、走到哪一步了 | 方向变化时改；进度文档按周更新；版本完成后冻结 |
+| roadmap | 往哪走、为什么、走到哪一步了 | 真实导入并发布后：roadmap 以系统内记录为准，仓库里的 `roadmap.md` 是导出件，改路线走系统内提案；spec / plan 仍留仓库 |
 | spec | 某个阶段为什么这样设计 | 写成后冻结，只增不改；命名 `specs/YYYY-MM-DD-<topic>-design.md` |
 | plan | 某个阶段怎么实施 | 写成后冻结，只增不改；命名 `plans/YYYY-MM-DD-<topic>.md` |
 | features / architecture / operations | 系统现在能做什么、怎么用、怎么验证 | 和代码在同一个提交里更新 |
@@ -59,3 +64,5 @@
 | knowledge（概念卡与原理） | 系统里每个概念是什么意思、系统怎么跑 | 与改口径的代码同一个提交更新；口径变了该卡 `version` 加 1（改措辞、补例子不加）；改卡后需重启服务生效 |
 
 冻结文档只修失效链接，不改正文。`tests/test_docs_links.py` 会检查所有相对链接都指向存在的文件。
+
+过渡期：真实库尚未导入，不把当前 roadmap 整页替换成导出、不新建伪冻结件；仅修改本轮批准区域。批准、工程完成、发布、使用验收是不同事实，最终状态由真实记录回填，不能从草稿或测试通过推成 done。

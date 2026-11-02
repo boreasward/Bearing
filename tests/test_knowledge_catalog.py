@@ -31,6 +31,7 @@ from investment_assistant.execution.paper import fill as paper_fill
 from investment_assistant.execution.paper import strategies as paper_strategies
 from investment_assistant.execution import plan_levels as plans
 from investment_assistant.core import knowledge
+from investment_assistant.core import versions
 from investment_assistant.derivation import chain as derivation
 from investment_assistant.analysis.agent import REASON_TEXT
 from investment_assistant.analysis.agent import graph
@@ -41,8 +42,9 @@ from investment_assistant.review.discuss_tools import DISCUSS_TOOLS
 from investment_assistant.core.knowledge import DEFAULT_ROOT, load
 
 REQUIRED_IDS = (
-    # family (6)
-    'family.bars', 'family.sec_filings', 'family.news', 'family.atr', 'family.fred', 'family.universe',
+    # family (9)
+    'family.bars', 'family.sec_filings', 'family.news', 'family.fred', 'family.universe',
+    'family.earnings', 'family.fundamentals', 'family.sec_text', 'family.sector',
     # indicator (14)
     'indicator.atr14', 'indicator.moving_average', 'indicator.high_low', 'indicator.volume_ratio',
     'indicator.relative_strength', 'indicator.volatility_20', 'indicator.gap', 'indicator.breadth',
@@ -80,6 +82,11 @@ REQUIRED_IDS = (
     # v2.11 accounts and paper trading (7)
     'account.ledger', 'account.paper', 'account.agent_portfolio', 'account.follow_plans',
     'account.fill_rules', 'account.reconciliation', 'account.comparison',
+    # v2.12–v2.15: the other fourteen new cards (four new families above; ATR is an indicator)
+    'system.adapter_registry', 'system.backup_source', 'system.data_request', 'indicator.registry',
+    'agent.company_researcher', 'agent.research_request', 'agent.research_dossier',
+    'account.portfolio_check', 'agent.portfolio_manager', 'system.feature_flags',
+    'system.roadmap_records', 'agent.optimize_proposal', 'agent.implementation_brief', 'system.layers',
 )
 
 STAGE_STATUSES = ('success', 'partial', 'degraded', 'failed', 'skipped')
@@ -128,11 +135,18 @@ CURRENT_VERSIONS = {
     'paper_fill.PAPER_FILL_VERSION': paper_fill.PAPER_FILL_VERSION,
     'paper_strategies.FOLLOW_PLANS_VERSION': paper_strategies.FOLLOW_PLANS_VERSION,
     'graph.PORTFOLIO_AGENT_VERSION': graph.PORTFOLIO_AGENT_VERSION,
+    # v2.12–v2.15 shared constants (core.versions)
+    'versions.AGENT_RUN_VERSION': versions.AGENT_RUN_VERSION,
+    'versions.PLAN_SCHEMA_VERSION': versions.PLAN_SCHEMA_VERSION,
+    'versions.PORTFOLIO_AGENT_VERSION': versions.PORTFOLIO_AGENT_VERSION,
+    'versions.PM_AGENT_VERSION': versions.PM_AGENT_VERSION,
+    'versions.OPTIMIZE_AGENT_VERSION': versions.OPTIMIZE_AGENT_VERSION,
+    'versions.BRIEF_AGENT_VERSION': versions.BRIEF_AGENT_VERSION,
+    'versions.STAGES_VERSION': versions.STAGES_VERSION,
+    'versions.DAILY_GRAPH_VERSION': versions.DAILY_GRAPH_VERSION,
+    'versions.PORTFOLIO_CHECK_VERSION': versions.PORTFOLIO_CHECK_VERSION,
+    'versions.INDICATOR_VERSION': versions.INDICATOR_VERSION,
 }
-
-
-# Task 6 owns the concept cards for the v2.12-v2.15 vocabulary; remove these markers when the cards land.
-TASK6_CARDS = pytest.mark.xfail(strict=False, reason="Task 6 concept cards")
 
 
 @pytest.fixture(scope='module')
@@ -145,11 +159,10 @@ def body_of(catalog, card_id: str) -> str:
 
 
 def test_catalog_loads_and_matches_required_ids(catalog):
-    assert len(REQUIRED_IDS) == 112 and len(set(REQUIRED_IDS)) == 112
+    assert len(REQUIRED_IDS) == 129 and len(set(REQUIRED_IDS)) == 129
     assert set(catalog.concepts) == set(REQUIRED_IDS)
 
 
-@TASK6_CARDS
 def test_families_and_rules_have_cards(catalog):
     for family in data_families.FAMILIES:
         assert f'family.{family.id}' in catalog.concepts, family.id
@@ -182,13 +195,7 @@ CODE_SET_CASES = [
 ]
 
 
-CODE_SET_PARAMS = [
-    pytest.param(*case, id=case[0], marks=TASK6_CARDS if case[0] in ('reason_text', 'stage_ids') else ())
-    for case in CODE_SET_CASES
-]
-
-
-@pytest.mark.parametrize('name,items,card_ids', CODE_SET_PARAMS)
+@pytest.mark.parametrize('name,items,card_ids', CODE_SET_CASES, ids=[case[0] for case in CODE_SET_CASES])
 def test_code_sets_mentioned_in_cards(catalog, name, items, card_ids):
     assert items, name
     text = '\n'.join(body_of(catalog, card_id) for card_id in card_ids)
@@ -201,34 +208,38 @@ def test_discipline_cards(catalog):
         assert f'review.discipline_{flag}' in catalog.concepts, flag
 
 
-@TASK6_CARDS
 def test_current_versions_in_applies_to(catalog):
     used = {version for card in catalog.concepts.values() for version in card.applies_to}
     missing = {name: version for name, version in CURRENT_VERSIONS.items() if version not in used}
     assert not missing, f'没有任何一张卡的 applies_to 含：{missing}'
 
 
-@TASK6_CARDS
 def test_principles_structure(catalog):
     principles = catalog.principles
     assert principles is not None
     headings = [section.heading for section in principles.sections]
-    assert len(headings) == 16                       # v2.11 adds the accounts node before push
+    assert len(headings) == 18                       # thirteen nodes plus five explanatory sections
     assert headings[0] == '系统做什么、不做什么'
     assert headings[-1] == '怎么在系统里核对'
     staged = [section for section in principles.sections if section.stage]
     assert [section.stage for section in staged] == list(stages.STAGE_IDS)
-    assert len({section.stage for section in staged}) == len(staged) == 11      # one section per node, accounts included
+    assert len({section.stage for section in staged}) == len(staged) == 13      # portfolio and propose included
     for section in staged:
         assert section.concepts, f'{section.heading}: 阶段小节没有链任何概念卡'
-    assert [section.heading for section in principles.sections[12:15]] == ['你做什么：决定与成交', '从计划到成交', '复盘口径']
-    first, last = principles.sections[1], principles.sections[11]
-    assert first.stage == 'sec_monitor' and first.heading == '⓪ SEC 监控' and 'family.sec_filings' in first.concepts
-    assert last.stage == 'retro' and last.heading == '⑩ 复盘'                    # after push, with the weekly / monthly part
-    assert set(last.concepts) == {'review.retro_card', 'review.retro_end', 'review.weekly'}
-    assert principles.sections[10].stage == 'push' and principles.sections[2].stage == 'collect'
-    accounts = principles.sections[9]
-    assert accounts.stage == 'accounts' and accounts.heading == '账户与模拟交易'
+    assert [section.heading for section in principles.sections[14:17]] == ['你做什么：决定与成交', '从计划到成交', '复盘口径']
+    first, last = principles.sections[1], principles.sections[13]
+    assert first.stage == 'sec_monitor' and first.heading == '① SEC 监控' and 'family.sec_filings' in first.concepts
+    assert last.stage == 'propose' and last.heading == '⑬ 优化提案'
+    assert set(last.concepts) == {'agent.optimize_proposal', 'system.roadmap_records', 'agent.implementation_brief'}
+    retro = principles.sections[12]
+    assert retro.stage == 'retro' and retro.heading == '⑫ 复盘'
+    assert set(retro.concepts) == {'review.retro_card', 'review.retro_end', 'review.weekly'}
+    assert principles.sections[11].stage == 'push' and principles.sections[2].stage == 'collect'
+    portfolio = principles.sections[9]
+    assert portfolio.stage == 'portfolio' and portfolio.heading == '⑨ 组合检查'
+    assert set(portfolio.concepts) == {'account.portfolio_check', 'agent.portfolio_manager'}
+    accounts = principles.sections[10]
+    assert accounts.stage == 'accounts' and accounts.heading == '⑩ 账户与模拟交易'
     assert set(accounts.concepts) == {'account.ledger', 'account.paper', 'account.agent_portfolio',
                                      'account.follow_plans', 'account.fill_rules', 'account.reconciliation',
                                      'account.comparison'}
