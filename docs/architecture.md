@@ -158,7 +158,7 @@ core ← data ← derivation ← execution ← analysis ← review ← optimize
 | `analysis/units.py` | 单元、池同步、活跃链合并与再触发 |
 | `analysis/fundamentals.py` | 财季 / 申报 / 指引读取与指引用例；行情投影只读 price_bars |
 | `analysis/fundamental_templates.py` | 基本面开放问题模板 |
-| `analysis/research_requests.py` | 研究请求的创建（幂等、配额、开关）、前台 / 后台运行（进入 `running` 之后任何失败都落成 `error` 版本，满三次 `closed / max_attempts`，不会卡在 `running`）、结束与详情；`python -m investment_assistant.analysis.research_requests run <request_id> / show <request_id>`（`run` 前台跑一次排队中或等数据的请求，`show` 打印请求与各版结论） |
+| `analysis/research_requests.py` | 研究请求的创建（幂等、配额、开关）、前台 / 后台运行（进入 `running` 之后任何失败都落成 `error` 版本，满三次 `closed / max_attempts`，不会卡在 `running`）、结束与详情、`close_stale`（agent 节点每次 daily 先结算：30 个自然日无新版的非终态请求 `closed / no_new_version_30d`）；`python -m investment_assistant.analysis.research_requests run <request_id> / show <request_id>`（`run` 前台跑一次排队中或等数据的请求，`show` 打印请求与各版结论） |
 | `analysis/agent/graph.py` | 提议 + 反方、解读、逐链复查与组合决策子图 |
 | `analysis/agent/tools.py` | 十个只读工具与并发安全调用记录；`ToolContext` 由宿主带入冻结的 `breadth_tickers`（`get_indicator('breadth')` 的样本，未提供与已知为空不同）与 `sec_text_dir`（`get_filing_text` 的原文根） |
 | `analysis/agent/research.py` | 公司研究员阶段与六个研究工具；第二入口的档案链 `run_chain`：研究员（`research@agent-4`）→ 撰写人（`propose@agent-4`，价格工具给 `price_scenarios` 取证）→ `check_conclusion` → 独立反方（`counter@agent-4`，写 `output.counter` 与 `counter_status`；撰写人不写反方）；`RESEARCH_DEADLINE_S` 到期后不再开新阶段 |

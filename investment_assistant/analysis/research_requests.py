@@ -19,7 +19,7 @@ from investment_assistant.core import features as core_features
 from investment_assistant.core import runner as core_runner
 from investment_assistant.core import schema as core_schema
 from investment_assistant.core import tx as core_tx
-from investment_assistant.core.constants import NY, RESEARCH_DAILY_MAX
+from investment_assistant.core.constants import NY, RESEARCH_AUTO_CLOSE_DAYS, RESEARCH_DAILY_MAX
 from investment_assistant.core.llm import model as agent_model
 from investment_assistant.data.adapters import bars as bars_module
 from investment_assistant.data.identity import stock_id
@@ -28,6 +28,7 @@ QUESTION_MAX = 500
 HORIZON_RANGE = (1, 365)
 COLLECT_FAMILIES = ('bars', 'news', 'sec_filings', 'earnings', 'fundamentals', 'sec_text', 'sector')
 MAX_ATTEMPTS = 3
+AUTO_CLOSE_REASON = 'no_new_version_30d'      # closed_reason of D28's automatic close (manual: free text; cap: max_attempts)
 
 
 class FeatureDisabled(RuntimeError):
@@ -122,6 +123,24 @@ def close(*, request_id: str, reason: str, now: datetime) -> dict:
         closed = analysis_repo.research_request(conn, request_id)
         assert closed is not None
         return closed
+
+
+def close_stale(*, now: datetime) -> int:
+    """D28 housekeeping, once per daily run: every open dossier (queued / waiting_data / concluded) with no new
+    version for more than ``RESEARCH_AUTO_CLOSE_DAYS`` natural days (New York dates, counted from the newest
+    version, or from creation when it has none) becomes ``closed / no_new_version_30d``. Independent of the
+    ``company_researcher`` flag (closing a file is not a dossier run); a no-op before 031. Each close is the guarded
+    one-shot ``update_research_status``, so a request someone just moved is skipped. Returns how many closed."""
+    closed = 0
+    with core_tx._tx() as conn:
+        if not _ready(conn):
+            return 0
+        for row in analysis_repo.stale_research_requests(conn, today=now.astimezone(NY).date(),
+                                                         days=RESEARCH_AUTO_CLOSE_DAYS):
+            if analysis_repo.update_research_status(conn, row['id'], from_status=row['status'], to_status='closed',
+                                                    closed_reason=AUTO_CLOSE_REASON):
+                closed += 1
+    return closed
 
 
 VERSION_KEYS = ('version_no', 'status', 'action', 'summary', 'cutoff_at', 'agent_run_id', 'output', 'review_when',

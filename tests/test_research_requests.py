@@ -224,7 +224,7 @@ def test_three_failures_close(wired_db, monkeypatch, scripted_model):
         research_requests.run(made['id'], now=NOW, deps=core_tx.Deps())
 
 
-def _agent_node(budget_left_s, summary):
+def _agent_node(budget_left_s, summary, features=None):
     """The real ``agent`` node on an empty day: no units, so only the tail runs, with ``budget_left_s`` of the
     shared AGENT_DEADLINE_S left (the legacy shell's ``window_start`` fixes when the window opened)."""
     from investment_assistant.core.llm.model import AgentSettings
@@ -237,7 +237,7 @@ def _agent_node(budget_left_s, summary):
     ctx = NodeContext(recorder=None, deps=deps, clock=deps.clock, wall_now=None, notify_cfg=None, legacy=True,
                       window_start=10_000.0 - (AGENT_DEADLINE_S - budget_left_s))
     state = {'cutoff_at': NOW.isoformat(), 'session': SESSION.isoformat(), 'run_id': 'daily-r1',
-             'summary': summary, 'features': {}}
+             'summary': summary, 'features': {} if features is None else features}
     return agent_node.run(state, ctx, None)
 
 
@@ -267,6 +267,102 @@ def test_agent_node_drains_queue_within_budget(wired_db, monkeypatch, scripted_m
     assert ran == [first['ticker'], second['ticker']] and out['summary']['agent']['research_requests'] == 2
     assert summary['errors'] == []
     assert _agent_node(900, summary)['summary']['agent']['research_requests'] == 0      # drained: nothing left
+
+
+# ---------------------------------------------------------------- D28: 30 natural days without a new version
+
+def _aged(db, *, created_days=0, version_days=None, status='queued', reason=None, attempts=0):
+    """Insert a request ``created_days`` before NOW (and optionally one version ``version_days`` before NOW)."""
+    created = NOW - timedelta(days=created_days)
+    row = analysis_repo.insert_research_request(db, {
+        'id': str(uuid.uuid4()), 'ticker': 'AMD', 'question': None, 'horizon_days': None, 'source': 'manual',
+        'request_id': str(uuid.uuid4()), 'created_at': created})
+    if version_days is not None:
+        stamp = NOW - timedelta(days=version_days)
+        analysis_repo.insert_research_version(db, {
+            'request_id': row['id'], 'version_no': 1, 'cutoff_at': stamp, 'status': 'concluded', 'action': 'wait',
+            'summary': '旧结论', 'created_at': stamp})
+    path = {'queued': [], 'waiting_data': ['running', 'waiting_data'], 'concluded': ['running', 'concluded'],
+            'closed': ['closed']}[status]
+    before = 'queued'
+    for step in path:
+        fields = {'closed_reason': reason, 'attempts': attempts} if step == 'closed' else {}
+        assert analysis_repo.update_research_status(db, row['id'], from_status=before, to_status=step, **fields)
+        before = step
+    db.commit()
+    return row['id']
+
+
+def _status(db, request_id):
+    row = analysis_repo.research_request(db, request_id)
+    assert row is not None
+    return row['status'], row['closed_reason']
+
+
+def test_close_stale_boundary_is_thirty_natural_days(wired_db, monkeypatch):
+    context_monkey(wired_db, monkeypatch)
+    at_30 = _aged(wired_db, created_days=90, version_days=30, status='concluded')
+    at_31 = _aged(wired_db, created_days=90, version_days=31, status='concluded')
+    never_30 = _aged(wired_db, created_days=30)                      # no version: the creation counts
+    never_31 = _aged(wired_db, created_days=31)
+    waiting = _aged(wired_db, created_days=90, version_days=45, status='waiting_data')
+    recent = _aged(wired_db, created_days=90, version_days=2, status='concluded')   # a new version keeps it open
+    assert research_requests.close_stale(now=NOW) == 3
+    assert _status(wired_db, at_30)[0] == 'concluded' and _status(wired_db, never_30)[0] == 'queued'
+    assert _status(wired_db, recent)[0] == 'concluded'
+    for closed in (at_31, never_31, waiting):
+        assert _status(wired_db, closed) == ('closed', research_requests.AUTO_CLOSE_REASON)
+    assert research_requests.AUTO_CLOSE_REASON not in ('max_attempts', '')
+    assert research_requests.close_stale(now=NOW) == 0                  # settled once: a second pass finds nothing
+
+
+def test_close_stale_leaves_manual_max_attempts_and_running_alone(wired_db, monkeypatch):
+    context_monkey(wired_db, monkeypatch)
+    manual = _aged(wired_db, created_days=100, version_days=60, status='closed', reason='不需要了')
+    capped = _aged(wired_db, created_days=100, version_days=60, status='closed', reason='max_attempts', attempts=3)
+    running = _aged(wired_db, created_days=100)
+    for before, after in (('queued', 'running'),):
+        analysis_repo.update_research_status(wired_db, running, from_status=before, to_status=after)
+    wired_db.commit()
+    assert research_requests.close_stale(now=NOW) == 0
+    assert _status(wired_db, manual) == ('closed', '不需要了')
+    assert _status(wired_db, capped) == ('closed', 'max_attempts')
+    assert _status(wired_db, running)[0] == 'running'                    # never close under an in-flight attempt
+    assert analysis_repo.research_request(wired_db, capped)['attempts'] == 3
+
+
+def test_agent_node_closes_stale_before_draining_and_counts_it(wired_db, monkeypatch):
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    stale = _aged(wired_db, created_days=40)
+    fresh = _aged(wired_db, created_days=1)
+    ran = []
+
+    def fake_run(request_id, *, now, deps):
+        ran.append(request_id)
+        return {'id': request_id, 'status': 'concluded', 'version': {'status': 'concluded'}}
+
+    monkeypatch.setattr(research_requests, 'run', fake_run)
+    summary = {'agent': {'runs': {}}, 'briefs': {}, 'errors': [], 'sources': {}, 'timings': {}}
+    out = _agent_node(900, summary)
+    assert out['summary']['agent']['research_auto_closed'] == 1
+    assert ran == [fresh] and _status(wired_db, stale) == ('closed', research_requests.AUTO_CLOSE_REASON)
+    assert summary['errors'] == []
+
+
+def test_auto_close_is_housekeeping_and_ignores_the_researcher_flag(wired_db, monkeypatch):
+    """Spec D28 is silent on the flag; closing a stale file is not a dossier run, so it happens with the flag off
+    (and the frozen value is irrelevant), while the drain itself stays off."""
+    no_background(monkeypatch)
+    context_monkey(wired_db, monkeypatch)
+    stale = _aged(wired_db, created_days=40)
+    fresh = _aged(wired_db, created_days=1)
+    ran = []
+    monkeypatch.setattr(research_requests, 'run', lambda request_id, **kw: ran.append(request_id))
+    summary = {'agent': {'runs': {}}, 'briefs': {}, 'errors': [], 'sources': {}, 'timings': {}}
+    out = _agent_node(900, summary, features={'company_researcher': False})
+    assert out['summary']['agent']['research_auto_closed'] == 1 and out['summary']['agent']['research_requests'] == 0
+    assert ran == [] and _status(wired_db, stale)[0] == 'closed' and _status(wired_db, fresh)[0] == 'queued'
 
 
 # ---------------------------------------------------------------- read side

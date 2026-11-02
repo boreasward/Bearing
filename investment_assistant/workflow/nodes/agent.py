@@ -6,17 +6,25 @@ from investment_assistant.core import stages as stages_module
 from investment_assistant.core import redact as families
 from investment_assistant.core.constants import AGENT_DEADLINE_S
 from investment_assistant.core.tx import Unavailable
+from investment_assistant.analysis import research_requests
 from investment_assistant.analysis.agent import runner as analysis_agent_runner
 from investment_assistant.views.derivation import _check_derivations
 from investment_assistant.workflow.state import _moment, _wall, agent_window, breadth_sample
 
 def _tail(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, *, now, session, summary: dict[str, Any],
           started: float, clock, sample=None) -> None:
-    """After the units: research requests FIFO, then the data requests (§5.5), each inside what is left of the
+    """After the units: stale dossiers closed (D28), research requests FIFO, then the data requests (§5.5), each inside what is left of the
     shared budget. A failure of a tail is a ``summary['errors']`` line; the units already written stand."""
     features = state.get('features')              # None: no frozen run state (the v2.7 shell) → current flags
     research = {'requests': 0}
+    auto_closed = 0
     requests = dict.fromkeys(('queued', 'fetched', 'failed', 'deferred', 'reruns'), 0)
+    try:                        # D28 housekeeping first: a stale dossier is closed, not drained
+        auto_closed = research_requests.close_stale(now=now)
+    except Unavailable:
+        raise
+    except Exception as exc:    # noqa: BLE001 - housekeeping never fails the agent stage
+        summary['errors'].append(f'research_auto_close: {families.sanitize_reason(exc)}')
     try:
         research = analysis_agent_runner.drain_research_requests(
             session, now=now, deps=ctx.deps, summary=summary,
@@ -34,9 +42,11 @@ def _tail(state: dict[str, Any], ctx, acc: stages_module.StageAcc | None, *, now
     except Exception as exc:    # noqa: BLE001 - nor do the supplementary fetches
         summary['errors'].append(f'data_requests: {families.sanitize_reason(exc)}')
     summary.setdefault('agent', {})['research_requests'] = research['requests']
+    summary['agent']['research_auto_closed'] = auto_closed
     summary['agent']['data_requests'] = requests
     if acc is not None:
         acc.detail['research_requests'] = research['requests']
+        acc.detail['research_auto_closed'] = auto_closed
         acc.detail['data_requests'] = dict(requests)
 
 

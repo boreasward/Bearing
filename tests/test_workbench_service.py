@@ -1052,6 +1052,7 @@ def test_summary_agent_keys(db, scripted_model):
     assert summary['agent'] == {'runs': {'NVDA': 'ok'}, 'briefs': {'NVDA': 'ok'},
                                 'tokens': {'input': 60, 'output': 30}, 'quota_exhausted': False, 'merged': {},
                                 'research_requests': 0,      # v2.13: the node's tails (empty queues here)
+                                'research_auto_closed': 0,   # D28 housekeeping
                                 'data_requests': {'queued': 0, 'fetched': 0, 'failed': 0, 'deferred': 0,
                                                   'reruns': 0}}
     assert 'agent' in summary['sources'] and 'agent' in summary['timings']

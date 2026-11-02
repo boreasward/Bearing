@@ -74,6 +74,17 @@ def queued_research_requests(conn):
                 'ORDER BY created_at, id', ())
 
 
+def stale_research_requests(conn, *, today: date, days: int):
+    """D28: open dossiers (queued / waiting_data / concluded; a running attempt is never closed under it) whose
+    newest version, or their creation when they have none, lies more than ``days`` New York calendar days before
+    ``today``."""
+    return _all(conn, "SELECT r.* FROM research_requests r "
+                "WHERE r.status IN ('queued', 'waiting_data', 'concluded') "
+                "AND %s::date - (COALESCE((SELECT max(v.created_at) FROM research_versions v WHERE v.request_id = r.id), "
+                "r.created_at) AT TIME ZONE 'America/New_York')::date > %s ORDER BY r.created_at, r.id",
+                (today, days))
+
+
 def insert_research_version(conn, row) -> dict[str, Any]:
     """Append a conclusion/error version; retain SQL NULL rather than JSON null for absent outputs."""
     saved = _one(conn, 'INSERT INTO research_versions '

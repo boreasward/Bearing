@@ -28,7 +28,7 @@ initial_state 冻结四项 features，续跑沿用，summary.features 留证；�
 
 「今日」运行一览之后增加 [组合检查](portfolio-manager.md)。K2：关闭 portfolio_manager 不做硬检查，fact 写「本版未检查」，None 不拦组合订单，accounts 照常、Today not_computed；开启且硬结果已存后 PM 失败才 degraded / 保硬结果。portfolio 节点失败下游账户仍运行，实际续跑入口以检查点 / resume.allowed 为准，不能只凭 failed 标签承诺续跑。
 
-运行详情新增 portfolio.results（按账户 ok/blocked/deferred/commentary_status，展开取实际硬结果）、propose.results（提案链接）、agent.did：research_requests 为处理数，data_requests 为 `{queued,fetched,failed,deferred,reruns}`。补查先结束事务再采集，新数据本轮不可见，有新行才新 cutoff 重跑；[研究](research.md)只出档案，daily 忙时 200 queued。
+运行详情新增 portfolio.results（按账户 ok/blocked/deferred/commentary_status，展开取实际硬结果）、propose.results（提案链接）、agent.did：research_requests 为处理数，research_auto_closed 为本次因 30 个自然日无新版自动结束的研究请求数（先于队列处理结算），data_requests 为 `{queued,fetched,failed,deferred,reruns}`。补查先结束事务再采集，新数据本轮不可见，有新行才新 cutoff 重跑；[研究](research.md)只出档案，daily 忙时 200 queued。
 
 验证步骤见 [四版清单](../roadmap/v2.12-v2.15-acceptance.md)：新运行核对 13 条有效行、开关冻结 / 续跑、各账户硬结果、运行详情三个分支、未连接时非模型部分继续；均尚未执行。综合检查用 `python -m investment_assistant.workflow check --session D`，不另设 optimize check（D45）；下面的已迁移 CLI 路径保留。
 

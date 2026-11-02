@@ -11,7 +11,7 @@
 - D42：只在首版 propose（批处理及 research 模式）调用研究员；复查修订、再次触发续期、补查重跑携带最近研究员段，状态 `carried`，不再调用研究员，首版引用规则不重复施加。
 - 第二入口由你指定股票、问题和期限：先补采该 ticker 的七个 per-ticker 族，再冻结 cutoff、运行研究员 → 提议者 → 校验 → 反方，写 `research_versions`。**研究只出档案，不自动开链，不生成 trade_plan；action=buy 也只是结论。** 以后有规则信号时，可用 `get_research_dossier(ticker)` 读取截止时间前的档案。
 - daily 未运行则即时后台提交，独立 900 秒，每天手动请求上限 5，token 计当日总额。daily 正在运行仍成功 **200 `{id,status:'queued'}`**，按 FIFO 由 agent 节点在单元之后、补查之前用剩余预算处理；之后 daily 开始不等已在跑的研究，靠族锁与共享 token 约束。
-- 请求五态 `queued/running/waiting_data/concluded/closed`；版本可为 `concluded/waiting_data/error`。缺数据且 wait 留 `waiting_data`，后续队列再取。模型、额度、超时失败记错误版本并回 queued，三次失败关闭为 `max_attempts`；可手动结束，30 个自然日无新版自动结束。状态转换核对期望前态，不把请求改成 SQL 不允许的 error。
+- 请求五态 `queued/running/waiting_data/concluded/closed`；版本可为 `concluded/waiting_data/error`。缺数据且 wait 留 `waiting_data`，后续队列再取。模型、额度、超时失败记错误版本并回 queued，三次失败关闭为 `max_attempts`；可手动结束；每次 daily 的 agent 节点在处理队列之前做一次结算，把已超过 30 个自然日（纽约日期）没有新版本的 `queued/waiting_data/concluded` 请求（从最新版本算起，没有版本则从创建算起）置为 `closed`、原因 `no_new_version_30d`，不受 `company_researcher` 开关影响，正在 `running` 的不动，数量记在节点明细 `research_auto_closed`。状态转换核对期望前态，不把请求改成 SQL 不允许的 error。
 - 补查本轮不可见；Recorder 缓存，运行结束同事务落队列，事务后才采集。预算内有新行才新 cutoff 重跑至多一次；agent/review 共用处理器和剩余预算，研究入口也在预算内处理，见 [注册表](data-registry.md)。
 
 ## 页面

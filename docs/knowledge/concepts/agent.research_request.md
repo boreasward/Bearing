@@ -19,7 +19,7 @@ sources: [investment_assistant/analysis/repo.py, investment_assistant/analysis/a
 - daily 未运行时后台启动，独立900秒窗口；daily 已运行仍返回 HTTP 200 的 `{id,status:'queued'}`，由 agent 节点按 FIFO、剩余预算处理。不是 `daily_running` 409。token 同计每日总量；已启动研究与后来开始的 daily 共用族锁，不另加全局互斥。
 - 宿主先对该标的补采 bars/news/sec_filings/earnings/fundamentals/sec_text/sector，再冻结 cutoff，问题放 `[fact:question]`。补查只在预算内同步处理，有新行至多再出一版，仍遵守本轮不可见。
 - 请求只有五态：`queued` 排队中、`running` 研究中、`waiting_data` 等待数据、`concluded` 已得结论、`closed` 已结束；合法前态可多次转换，waiting_data 会被队列再次取到。结论版本另可为 `error` 出错，不能把 error 加进请求状态集合。
-- 模型/额度/超时失败记 error 版本与原因，请求回队列；三次失败由业务层关闭为 `max_attempts`。也可手动结束，30个自然日无新版自动结束；队列等待本身不冒充一次成功研究。
+- 模型/额度/超时失败记 error 版本与原因，请求回队列；三次失败由业务层关闭为 `max_attempts`。也可手动结束；每次 daily 在 agent 节点先结算一次，超过30个自然日（纽约日期）没有新版本（没有版本则从创建算起）的非终态请求自动 `closed`，原因 `no_new_version_30d`，与手动结束、`max_attempts` 可区分；队列等待本身不冒充一次成功研究。
 
 ## 在系统里哪里看到
 

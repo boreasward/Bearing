@@ -40,3 +40,4 @@ RESEARCH_DEADLINE_S = 900   # v2.13 researcher deadline
 DATA_REQUEST_MIN_S = 120    # v2.13 minimum spacing between agent data requests
 BACKUP_FILL_SESSIONS = 10   # v2.12 how many sessions a backup source may fill retroactively
 RESEARCH_DAILY_MAX = 5      # v2.13 research requests accepted per day
+RESEARCH_AUTO_CLOSE_DAYS = 30   # v2.13 D28: natural days without a new research version before a dossier closes itself
