@@ -44,7 +44,9 @@ def run_adapter(adapter, targets, *, scope, trigger, run_id, session, now, deps,
     ``workers > 1`` fetches and stores several targets concurrently (a bounded pool; the
     store itself runs inside each worker's own transaction) while every ``tally`` update,
     ``observe`` call and the whole-call stop decision stay in the caller thread, in input
-    order — the row a pooled run books is the row the sequential default would book.
+    order — the row a pooled run books is the row the sequential default would book; when
+    the whole-call ``'*'`` stops the booking, already-submitted fetches still run and their
+    results are never booked.
 
     ``observe(target, source_id, rows, result)`` (optional) sees each stored target before it is booked, so a host can
     build its own summary from the fetched rows and the store receipt; it must not raise. A target's final failure

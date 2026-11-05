@@ -47,10 +47,11 @@ def load_inputs(conn, *, session: date, now: datetime, cfg: AssistantConfig) -> 
         return data_repo.read_bars(conn, ticker, session, cutoff_at=now, limit=300)
 
     sectors = data_repo.latest_sectors(conn, stocks, cutoff_at=now)
+    etf_bars = {etf: bars_of(etf) for etf in cfg.v3.sector_etfs}
     return {'stocks': stocks,
             'bars_by_ticker': {ticker: bars_of(ticker) for ticker in stocks},
-            'etf_bars': {etf: bars_of(etf) for etf in cfg.v3.sector_etfs},
-            'benchmark_bars': {etf: bars_of(etf) for etf in cfg.v3.sector_etfs}.get(screen_module.BENCHMARK, []),
+            'etf_bars': etf_bars,
+            'benchmark_bars': etf_bars.get(screen_module.BENCHMARK, []),
             'spy_bars': bars_of(BENCHMARK),
             'earnings_by_ticker': {ticker: data_repo.latest_earnings(conn, ticker, cutoff_at=now)
                                    for ticker in stocks},
