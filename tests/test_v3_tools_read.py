@@ -106,7 +106,7 @@ def test_bad_arguments_return_error_envelope(env, v3_tx):
     assert call(env, 'get_indicators', {'ticker': 'ZZZZ'})['error'].startswith('no_bars')
     rows = v3_tx.execute('SELECT error FROM v3_tool_calls ORDER BY seq').fetchall()
     assert len(rows) == 7                                                # 每次调用（含出错的）记一行
-    assert [r[0] for r in rows[:5]] != [None] * 5                        # 出错的调用 error 列有值
+    assert all(r[0] for r in rows[:5])                                  # 出错的调用 error 列有值
     assert call(env, 'get_market', {})['data']['label'] == 'neutral'     # 之后的正常调用照常成功
 
 

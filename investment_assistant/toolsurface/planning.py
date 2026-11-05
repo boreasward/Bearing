@@ -127,16 +127,8 @@ def save_plan(env: ToolEnv, *, ticker: str, thesis: str, invalidation: str,
     if not isinstance(thesis, str) or not isinstance(invalidation, str) or not isinstance(counter, str) \
             or any(not isinstance(ref, str) for ref in refs):
         raise ValueError('invalid_argument: thesis / invalidation / counter / refs 类型不符')
-    if entry_type not in ENTRY_TYPES:
-        allowed = '、'.join(ENTRY_TYPES)
-        raise ValueError(f'invalid_entry_type: 需为 {allowed} 之一')
     hold = max_hold_sessions if isinstance(max_hold_sessions, int) \
         and not isinstance(max_hold_sessions, bool) else None
-    if hold is None or not MAX_HOLD_RANGE[0] <= hold <= MAX_HOLD_RANGE[1]:
-        raise ValueError(f"invalid_max_hold: 需为 {MAX_HOLD_RANGE[0]}–"
-                         f"{MAX_HOLD_RANGE[1]} 的整数")
-    if levels is not None and not isinstance(levels, dict):
-        raise ValueError('invalid_argument: levels 必须是对象')
 
     def _work(conn):
         if not in_scope(env.mode, ticker, top_tickers(conn, env)):
@@ -144,6 +136,14 @@ def save_plan(env: ToolEnv, *, ticker: str, thesis: str, invalidation: str,
         verdict = facts_repo.verdicts(conn, env.session).get(ticker)
         if verdict is None or verdict['verdict'] != 'confirm':
             raise ValueError('no_confirm_verdict')
+        if entry_type not in ENTRY_TYPES:
+            allowed = '、'.join(ENTRY_TYPES)
+            raise ValueError(f'invalid_entry_type: 需为 {allowed} 之一')
+        if hold is None or not MAX_HOLD_RANGE[0] <= hold <= MAX_HOLD_RANGE[1]:
+            raise ValueError(f"invalid_max_hold: 需为 {MAX_HOLD_RANGE[0]}–"
+                             f"{MAX_HOLD_RANGE[1]} 的整数")
+        if levels is not None and not isinstance(levels, dict):
+            raise ValueError('invalid_argument: levels 必须是对象')
         bars, atr = _bars_atr(conn, env, ticker)
         last_close = Decimal(str(bars[-1]['close']))
         chosen, source, sizing_ref = _levels_of(env, conn, ticker, levels, last_close, atr)

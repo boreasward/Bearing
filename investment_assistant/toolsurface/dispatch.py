@@ -120,13 +120,13 @@ def call(env: ToolEnv, name: str, args: dict) -> dict:
     try:
         _check_args(defn, args)
         data = defn.fn(env, **args)
+        return _finish(env, name, args, data, None)   # 成功路径也在异常链内，序列化出错不停服务循环
     except ValueError as exc:
         return _finish(env, name, args, None, str(exc) or 'invalid_argument')
     except core_tx.Unavailable:
         return _finish(env, name, args, None, 'unavailable')
     except Exception as exc:                      # noqa: BLE001 - 错误信封报告后继续服务下一条
         return _finish(env, name, args, None, f'invalid_argument: {str(exc)[:200]}')
-    return _finish(env, name, args, data, None)
 
 
 def _check_args(defn: ToolDef, args: dict) -> None:

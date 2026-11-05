@@ -64,6 +64,18 @@ def test_compute_plan_levels_uses_host_arithmetic(v3_tx):
     assert d['entry_types'] == ['zone_limit', 'breakout_stop', 'next_open'] and d['max_hold_range'] == [3, 30]
 
 
+def test_save_plan_check_order_scope_and_verdict_first(v3_tx):
+    """钉住检查顺序：范围 → 确认结论 → 入场类型 → 最长持有（spec §6）。"""
+    _seed(v3_tx)
+    env = _env(v3_tx, agent='t-order')
+    # 名单外标的带非法入场类型 -> 先报范围，不报 invalid_entry_type
+    assert call(env, 'save_plan', {'ticker': 'ZZZZ', **TEXTS, 'entry_type': 'market'})['error'] \
+        .startswith('out_of_scope')
+    # 名单内但未确认的标的带越界最长持有 -> 先报没有确认结论，不报 invalid_max_hold
+    assert call(env, 'save_plan', {'ticker': TOP5[0], **TEXTS, 'max_hold_sessions': 40})['error'] \
+        .startswith('no_confirm_verdict')
+
+
 def test_save_plan_rejections(v3_tx):
     _seed(v3_tx)
     env = _env(v3_tx)
