@@ -6,6 +6,7 @@
 | `verify_cross_market.py` | 美股研究数据的只读验收：只读事务 + HTTP GET，不采集、不迁移、不通知 | `.venv/bin/python scripts/verify_cross_market.py --help` |
 | `siwc_precheck.py` | v2.8 开工前核查：Sign in with ChatGPT 登录 → `GET /v1/models` → Responses 调用（含函数工具与被拒字段探测）→ 打印脱敏摘要；**只由你本人执行一次** | 见下文 |
 | `archive_v2_docs.py` | 一次性（v3 plan Task 1，已执行）：把 v2 的 `docs/roadmap/`、`docs/features/`、`docs/architecture.md` 移入 `docs/archive/v2/`，并改写所有 Markdown 链接与概念卡 `sources` 路径 | 无需再运行 |
+| `pi_precheck/mini_mcp.py`、`pi_precheck/run_checks.py` | v3 开工前核查（spec §10 第 0 步）：无依赖迷你 stdio MCP 服务 + Pi 1.5.0 无人值守可行性十项检查；提供方与模型只经 `--provider/--model` 参数传入，结果见 [docs/operations/pi-unattended.md](../docs/operations/pi-unattended.md) | `.venv/bin/python scripts/pi_precheck/run_checks.py --provider <provider> --model <model-id> [--launchd]` |
 
 本机服务的启动、重启与日志见 [docs/operations/local-service.md](../docs/operations/local-service.md)。
 
