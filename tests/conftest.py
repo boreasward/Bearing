@@ -68,18 +68,22 @@ def _workbench_schema(migrations):
     if not url:
         pytest.skip('explicit test database URL required; disposable schema only')
     import psycopg
+    from psycopg import sql
     schema = f'wb_test_{uuid.uuid4().hex[:12]}'
     with psycopg.connect(url) as conn:
-        conn.execute(f'CREATE SCHEMA {schema}')
-        conn.execute(f'SET search_path TO {schema}')
+        # Identifier composition is psycopg's parameterized form for schema names; the migration
+        # files are trusted repo sources (multi-statement, plain-string simple protocol).
+        # pi-lens-ignore: python-sql-injection -- Identifier() IS psycopg's parameterized form for DDL schema names
+        conn.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
+        conn.execute(sql.SQL('SET search_path TO {}').format(sql.Identifier(schema)))  # pi-lens-ignore: python-sql-injection -- Identifier() composition
         for name in migrations:
-            conn.execute(Path('migrations', name).read_text(encoding='utf-8'))
+            conn.execute(Path('migrations', name).read_text(encoding='utf-8'))  # type: ignore[call-overload, arg-type]  # pi-lens-ignore: python-sql-injection -- trusted repo migration files from the constant tuples above
         conn.commit()
         try:
             yield conn
         finally:
             conn.rollback()
-            conn.execute(f'DROP SCHEMA {schema} CASCADE')
+            conn.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(schema)))  # pi-lens-ignore: python-sql-injection -- Identifier() composition
             conn.commit()
 
 
@@ -87,6 +91,30 @@ def _workbench_schema(migrations):
 def workbench_db():
     """The full workbench schema, migrations 002–031."""
     yield from _workbench_schema(WORKBENCH_MIGRATIONS)
+
+
+V3_MIGRATIONS = (*WORKBENCH_MIGRATIONS, '032_v3_agent_first.sql')
+
+
+@pytest.fixture
+def v3_db():
+    """The workbench schema plus migration 032 (the seven v3_ tables)."""
+    yield from _workbench_schema(V3_MIGRATIONS)
+
+
+@pytest.fixture
+def v3_tx(v3_db, monkeypatch):
+    """v3_db with core.tx.connection swapped to it, as tests/test_api_features.py's api_db."""
+    from contextlib import contextmanager
+
+    from investment_assistant.core import tx as core_tx
+
+    @contextmanager
+    def connection():
+        yield v3_db
+
+    monkeypatch.setattr(core_tx, 'connection', connection)
+    return v3_db
 
 
 @pytest.fixture

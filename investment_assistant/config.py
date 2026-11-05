@@ -87,6 +87,24 @@ class PriceConfig:
 
 
 @dataclass(frozen=True)
+class V3Config:
+    """v3 agent-first phase parameters (v3 spec §15.6); fixed values are the spec's, verbatim."""
+
+    top_n: int = 5
+    collect_workers: int = 6
+    sec_workers: int = 3
+    replay_sessions: int = 20
+    hold_sessions: int = 5
+    min_triggers: int = 10
+    win_hi: float = 0.60
+    win_lo: float = 0.40
+    min_group: int = 3
+    sector_etfs: tuple[str, ...] = ('QQQ', 'SMH', 'XLK', 'XLV', 'XLY', 'XLP', 'XLE', 'XLF',
+                                    'XLI', 'XLB', 'XLU', 'XLRE', 'XLC')
+    briefs_dir: str = ''
+
+
+@dataclass(frozen=True)
 class AssistantConfig:
     watchlist: list[str] = field(default_factory=lambda: ["CRDO", "MU", "RKLB", "NVDA"])
     filings: FilingsConfig = field(default_factory=FilingsConfig)
@@ -96,6 +114,7 @@ class AssistantConfig:
     workbench: WorkbenchConfig = field(default_factory=WorkbenchConfig)
     fundamentals: FundamentalsConfig = field(default_factory=FundamentalsConfig)
     prices: PriceConfig = field(default_factory=PriceConfig)
+    v3: V3Config = field(default_factory=V3Config)
     vault_ro: Path = DEFAULT_VAULT_RO
     draft_dir: Path = DEFAULT_DRAFT_DIR
     brief_time_local: str = "08:30"
@@ -142,6 +161,8 @@ def _config_from_dict(data: dict[str, Any]) -> AssistantConfig:
         cfg = replace(cfg, macro=_dataclass_from_dict(data["macro"], cfg.macro))
     if "workbench" in data:
         cfg = replace(cfg, workbench=_validate_workbench(_dataclass_from_dict(data["workbench"], cfg.workbench)))
+    if "v3" in data and isinstance(data["v3"], dict):
+        cfg = replace(cfg, v3=_validate_v3(_dataclass_from_dict(data["v3"], cfg.v3)))
     if "prices" in data and isinstance(data["prices"], dict):
         cfg = replace(cfg, prices=_dataclass_from_dict(data["prices"], cfg.prices))
     return cfg
@@ -193,6 +214,35 @@ def _validate_workbench(cfg: WorkbenchConfig) -> WorkbenchConfig:
     if len(tiers) != 3 or not all(a > b for a, b in zip(tiers, tiers[1:])):
         raise ValueError("workbench.return_tiers must be three strictly descending thresholds")
     return replace(cfg, return_tiers=tiers)
+
+
+def _validate_v3(cfg: V3Config) -> V3Config:
+    if not 1 <= cfg.top_n <= 20:
+        raise ValueError("v3.top_n must be in [1, 20]")
+    if not 1 <= cfg.collect_workers <= 6:
+        raise ValueError("v3.collect_workers must be in [1, 6]")
+    if not 1 <= cfg.sec_workers <= 4:
+        raise ValueError("v3.sec_workers must be in [1, 4]")
+    if not 5 <= cfg.replay_sessions <= 60:
+        raise ValueError("v3.replay_sessions must be in [5, 60]")
+    if not 1 <= cfg.hold_sessions <= 20:
+        raise ValueError("v3.hold_sessions must be in [1, 20]")
+    if not 0 < cfg.win_lo < cfg.win_hi < 1:
+        raise ValueError("v3.win_lo / v3.win_hi must satisfy 0 < win_lo < win_hi < 1")
+    if cfg.min_group < 2:
+        raise ValueError("v3.min_group must be >= 2")
+    return replace(cfg, sector_etfs=tuple(str(etf).strip().upper() for etf in cfg.sector_etfs))
+
+
+def briefs_dir(cfg: AssistantConfig) -> Path:
+    """Where the v3 daily brief lands: cfg.v3.briefs_dir, else $INVESTMENT_ASSISTANT_RUNTIME_BASE/briefs,
+    else the repo-local .local/v3/briefs."""
+    if cfg.v3.briefs_dir:
+        return Path(cfg.v3.briefs_dir)
+    base = os.environ.get("INVESTMENT_ASSISTANT_RUNTIME_BASE")
+    if base:
+        return Path(base) / "briefs"
+    return Path(".local/v3/briefs")
 
 
 def _normalize_tickers(raw: Any) -> list[str]:

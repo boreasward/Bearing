@@ -5,8 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / 'investment_assistant'
 LAYERS = ['core', 'data', 'derivation', 'execution', 'analysis', 'review', 'optimize']
-TOP = ['workflow', 'views']
-EDGE = ['api', 'services', 'tasks', 'notify']
+TOP = ['workflow', 'views', 'facts']
+EDGE = ['api', 'services', 'tasks', 'notify', 'toolsurface']
 RANK = {**{name: index for index, name in enumerate(LAYERS)},
         **dict.fromkeys(TOP, 7), **dict.fromkeys(EDGE, 8),
         **dict.fromkeys(['db', 'config', 'runtime_paths', 'migrate'], -1)}
