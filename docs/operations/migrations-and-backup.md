@@ -57,7 +57,7 @@ shasum -a 256 .local/us-workbench/backups/investment_assistant-before-<编号>-<
 psql "$INVESTMENT_ASSISTANT_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=1 -f migrations/<编号>_<名称>.sql
 ```
 
-执行后统计受影响表的行数并记入 [roadmap](../roadmap/roadmap.md)，再重载服务（[本机服务](local-service.md)）。
+执行后统计受影响表的行数并记入 [roadmap](../archive/v2/roadmap/roadmap.md)，再重载服务（[本机服务](local-service.md)）。
 
 > 注意：真实库的 `schema_migrations` 只记录到 `017`，`018` 之后都是用 `psql` 手动执行的。不要对真实库运行 `migrate` 入口，否则它会把 `018` 之后的迁移重跑一遍。
 
@@ -118,7 +118,7 @@ psql "$INVESTMENT_ASSISTANT_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=
 | 4. 验证 | `screen_runs`、`screen_results` 已建（各 0 行），索引 `idx_screen_runs_session`、`idx_screen_results_ticker` 在；`pool_tiers.source` 为 `text NOT NULL DEFAULT 'watchlist'`，CHECK `pool_tiers_source_check` 在，8 行旧数据全部为 `watchlist`；`filings` 为 `Asia/Shanghai 09:30`（周一至周五），`next_run_at` = 2026-10-27 09:30 +0800（周二，当天 09:30 已过）；`workbench`（06:30 周二至周六）与 `workbench_review`（08:00 每天）未变；`public` 表数 32 → 34 |
 | 5. 重启服务 | 重启前进程 pid 1196 启动于 2026-10-25 18:04（旧代码，`GET /api/workbench/screen` 为 404），无运行中任务；10:28:30 +0800 `launchctl kickstart -k`，新进程 pid 42156 启动于 10:29:00；`/api/health`：数据库、调度线程（轮询运行中）、SEC、Yahoo、Discord、FRED 均 up，3 项 `systemctl` 检查在 macOS 上为 down（重启前即如此，与本次无关）；`/api/workbench/screen`（`report: null`，尚无筛选记录）、`/api/workbench/today`、`/api/jobs/scheduled`、`/api/status` 均 200；`/api/jobs/scheduled` 三个任务都是 `Asia/Shanghai` 并带 `description` |
 
-服务重启与手动验收（spec §11.2）见 [v2.2 验收记录](../roadmap/v2.2-acceptance.md)。
+服务重启与手动验收（spec §11.2）见 [v2.2 验收记录](../archive/v2/roadmap/v2.2-acceptance.md)。
 
 ### 024 的真实库执行（逐步手动，每步先征得用户同意）
 
@@ -134,7 +134,7 @@ psql "$INVESTMENT_ASSISTANT_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=
 | 4. 验证 | `data_fetch_runs` 0 行，索引 `data_fetch_runs_pkey`、`idx_data_fetch_runs_family` 在，CHECK 约束 7 条；`public` 表数 34 → 35；`trade_plans` 8、`signal_candidates` 12、`pool_tiers` 30、`job_reports` 65、`scheduled_jobs` 3，与预检相同 |
 | 5. 重启服务 | 10:05:19 +0800 `launchctl kickstart -k`，新进程 pid 96706 启动于 10:05:49；`/api/health`：数据库、调度线程（轮询运行中）、Yahoo、Discord、FRED up，SEC 首次探测为代理 SSL 中断、数秒后复查 up，3 项 `systemctl` 检查在 macOS 上为 down（与本次无关）；`/api/data/families`、`/api/data/families/bars`、`/api/data/browse/bars?ticker=MU`、`/api/workbench/today`、`/api/jobs/scheduled`、`/api/status` 均 200 |
 
-手动验收（spec §11.2）见 [v2.3 验收记录](../roadmap/v2.3-acceptance.md)。
+手动验收（spec §11.2）见 [v2.3 验收记录](../archive/v2/roadmap/v2.3-acceptance.md)。
 
 ### 025 的真实库执行（逐步手动，每步先征得用户同意）
 
@@ -178,7 +178,7 @@ psql "$INVESTMENT_ASSISTANT_DATABASE_URL" --single-transaction -v ON_ERROR_STOP=
 
 回滚：`pg_restore --clean -d "$INVESTMENT_ASSISTANT_DATABASE_URL" <上面的 dump>`，再重启到 v2.6 代码。执行记录写进 `docs/roadmap/v2.7-acceptance.md` 的「迁移 027 执行记录」一节。
 
-2026-10-29 已在真实库执行（13:39 备份、执行，13:40 重启），记录见 [v2.7 验收记录](../roadmap/v2.7-acceptance.md)。
+2026-10-29 已在真实库执行（13:39 备份、执行，13:40 重启），记录见 [v2.7 验收记录](../archive/v2/roadmap/v2.7-acceptance.md)。
 
 ## 一次性测试库
 
@@ -236,7 +236,7 @@ Unix socket 路径太长时启动会失败，所以用 `-k ''` 关掉 socket、�
 
 | 步骤 | 结果 |
 | --- | --- |
-| 1. 确认状态 | 20:41 +0800：`agent_connections` 在（028 已执行），`chain_retriggers` 不存在；没有运行中的任务（最近一次是 11:30 的定时 `daily`，11:42 结束）；服务进程 pid 29512，10:33 启动（v2.8 代码，早于 v2.9 的第一个提交）；`public` 表数 53。v2.8 的手动 `daily` 与失败续跑演练已于同日上午完成（D37）。上线前只读核查见 [v2.9 验收记录](../roadmap/v2.9-acceptance.md) 第 1 节 |
+| 1. 确认状态 | 20:41 +0800：`agent_connections` 在（028 已执行），`chain_retriggers` 不存在；没有运行中的任务（最近一次是 11:30 的定时 `daily`，11:42 结束）；服务进程 pid 29512，10:33 启动（v2.8 代码，早于 v2.9 的第一个提交）；`public` 表数 53。v2.8 的手动 `daily` 与失败续跑演练已于同日上午完成（D37）。上线前只读核查见 [v2.9 验收记录](../archive/v2/roadmap/v2.9-acceptance.md) 第 1 节 |
 | 2. 全库备份 | 20:42:02 +0800，`.local/us-workbench/backups/investment_assistant-before-029-20261030-204202.dump`（6,995,224 字节，sha256 `52db024683502ea558c6a54d488b4f40cbfa26c1431ba5639f7d20471703bd43`）；`pg_restore --list` 可读，53 张表与线上一致 |
 | 3. 执行 | 20:42:17 +0800，`psql --single-transaction -v ON_ERROR_STOP=1 -f migrations/029_executable_plans.sql`，退出码 0（15 个 `ALTER TABLE`、2 个 `DO` 块、3 个 `CREATE TABLE`、3 个 `CREATE INDEX`）；六条 `NOTICE` 都是首次执行时 `DROP CONSTRAINT IF EXISTS` 找不到具名约束，属预期 |
 | 4. 核对 | `repository.executable_ready` 与 `daily_ready` 为真；`trades` 有 `plan_id` 与 `trades_link_one_check`；`trade_plans` 有 `entry_type`、`max_hold_sessions`、`trade_plans_entry_type_check`、`trade_plans_max_hold_check`、`trade_plans_exec_fields_check` 与新的 `trade_plans_levels_check`（017 的旧价位约束已删，只剩这一条）；17 行旧计划两列全为空；`plan_reviews_agent_run_check` 允许 `decided_by = 'host'`；`chain_retriggers`、`holding_status`、`plan_notes` 各 0 行；`public` 表数 53 → 56；`trades` 0、`trade_plans` 17、`plan_reviews` 2、`signal_decisions` 4、`agent_plan_versions` 3、`job_reports` 84、`stage_runs` 105、`agent_runs` 23，与执行前一致 |
@@ -258,7 +258,7 @@ Unix socket 路径太长时启动会失败，所以用 `-k ''` 关掉 socket、�
 
 #### 执行记录（2026-11-01，手动 psql 执行）
 
-10:06:51 +0800 全库备份 `.local/us-workbench/backups/investment_assistant-before-030-20261101-100649.dump`（7,882,416 字节，sha256 `2b19b706…2b01`，`pg_restore --list` 可读，56 张表）；10:06:57 单事务执行，退出码 0，七条 `NOTICE` 属预期；核对全部通过（`accounts` 一行、四列默认值、`holding_status` 新唯一键、三处放宽、`paper_orders` 约束与索引，`public` 表数 56 → 62，旧表行数不变）；10:07 在 `main@d32a9a3` 重建 `web/dist`，10:08:06 重启到 v2.11 代码。逐项结果见 [v2.11 验收记录](../roadmap/v2.11-acceptance.md) 第 2、3 节。
+10:06:51 +0800 全库备份 `.local/us-workbench/backups/investment_assistant-before-030-20261101-100649.dump`（7,882,416 字节，sha256 `2b19b706…2b01`，`pg_restore --list` 可读，56 张表）；10:06:57 单事务执行，退出码 0，七条 `NOTICE` 属预期；核对全部通过（`accounts` 一行、四列默认值、`holding_status` 新唯一键、三处放宽、`paper_orders` 约束与索引，`public` 表数 56 → 62，旧表行数不变）；10:07 在 `main@d32a9a3` 重建 `web/dist`，10:08:06 重启到 v2.11 代码。逐项结果见 [v2.11 验收记录](../archive/v2/roadmap/v2.11-acceptance.md) 第 2、3 节。
 
 **测试库**：`tests/conftest.WORKBENCH_MIGRATIONS` 已含 030（v2.11 Task 1 加入）；`tests/_daily_db.py::daily_db` 在此基础上执行 031，031 专项测试则从 001–030 建独立 schema。
 

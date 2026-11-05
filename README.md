@@ -4,21 +4,7 @@
 
 不接券商，不自动下单。所有规则都**未经验证**（Phase 0 Gate HOLD），系统输出的价位和仓位只是你所设规则的算术结果，不构成投资建议。
 
-当前版本：**v2.10.0**（2026-10-31），见 [CHANGELOG](CHANGELOG.md)。
-
-v2.10 状态：`engineering_done`、`user_acceptance_pending`（2026-10-31 发布 `v2.10.0` 与修正版 `v2.10.1`，无迁移、无 `.env` 变化；前端界面重构，功能、接口、口径与地址不变；服务已以 v2.10 代码重启；手动验收第 1–6 条通过，验收发现的两项布局问题已修复并随 `v2.10.1` 发布，进度见 [v2.10 验收记录](docs/roadmap/v2.10-acceptance.md)）。实现偏差与已知限制见 [CHANGELOG](CHANGELOG.md)。设计标准见 [docs/design-system.md](docs/design-system.md)。
-
-v2.9 状态：`engineering_done`、`user_acceptance_pending`、`runtime_unverified`（代码已合入 `main`；迁移 029 尚未在真实库执行，服务尚未以 v2.9 代码重启，手动验收未做；上线当天对持仓的两类影响——时间止损的退出指令与止损口径变化——需先用只读脚本核对）。实现偏差与已知限制见 [CHANGELOG](CHANGELOG.md)。
-
-v2.8 状态：`engineering_done`、`user_acceptance_pending`、`runtime_unverified`（代码已合入 `main`；迁移 028 尚未在真实库执行，服务尚未以 v2.8 代码重启，ChatGPT 连接尚未登录，核查脚本 `scripts/siwc_precheck.py` 尚未由你运行，模型层选路按 spec §8.7 先走路径 A、未经核查；连续 10 个交易日定时验收未开始）。实现偏差与已知限制见 [CHANGELOG](CHANGELOG.md)。
-
-v2.7 状态：`engineering_done`、`user_acceptance_pending`（迁移 027 已于 2026-10-29 在真实库执行，服务已以 v2.7 代码重启；手动验收与定时验收进度见 [v2.7 验收记录](docs/roadmap/v2.7-acceptance.md)）。实现偏差与已知限制见 [CHANGELOG](CHANGELOG.md)。
-
-v2.6 状态：`engineering_done`、`user_acceptance_pending`、`runtime_unverified`（没有迁移；代码已合入 `main`，服务尚未重启跑 v2.6 代码，没有真实浏览器验收）。实现偏差与已知限制见 [CHANGELOG](CHANGELOG.md)。
-
-v2.5 状态：`engineering_done`、`user_acceptance_pending`（迁移 026 已于 2026-10-28 在真实库执行并重启；手动验收进行中，见 [v2.5 验收记录](docs/roadmap/v2.5-acceptance.md)；用户验收与连续 10 个交易日定时验收未完成）。实现偏差与已知限制见 [CHANGELOG](CHANGELOG.md)。
-
-v2.4 状态：`engineering_done`、`user_acceptance_pending`（迁移 025 已于 2026-10-27 在真实库执行；手动验收已核对、用户已确认推导可读，连续 5 个交易日定时验收自 10-28 起积累，见[验收记录](docs/roadmap/v2.4-acceptance.md)）。实现偏差与已知限制见 [CHANGELOG](CHANGELOG.md) 与 [roadmap](docs/roadmap/roadmap.md)。v2.3 的定时验收证据仍在积累（见[验收记录](docs/roadmap/v2.3-acceptance.md)）。
+v3 重做进行中，路线与进度见 [docs/roadmap.md](docs/roadmap.md)。旧系统（v2.15）在切换到 v3 前照常运行。v2 的路线、功能与架构文档已归档到 [docs/archive/v2/](docs/archive/v2/)，只读；各版变更见 [CHANGELOG](CHANGELOG.md)。
 
 ## 组成
 
@@ -28,7 +14,7 @@ v2.4 状态：`engineering_done`、`user_acceptance_pending`（迁移 025 已于
 - **外部数据**：yfinance、SEC EDGAR、FRED；Agent 用 LangGraph + 你的 ChatGPT 订阅（设置里一次性登录）；通知走 Discord。
 - **运行**：本机 macOS LaunchAgent，只监听 `127.0.0.1:8787`。
 
-详见 [架构](docs/architecture.md)。
+详见 [架构](docs/archive/v2/architecture.md)。
 
 ## 快速开始
 

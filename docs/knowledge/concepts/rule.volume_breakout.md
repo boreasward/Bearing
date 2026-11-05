@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "买入候选：收盘创前 20 日收盘新高，成交量不低于前 50 日均量的 1.5 倍，且收盘在 MA50 之上。"
 related: [rule.trend_reclaim, indicator.high_low, indicator.volume_ratio, indicator.moving_average]
-sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

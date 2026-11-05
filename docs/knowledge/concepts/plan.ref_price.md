@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "规则计划所有价位的起点：信号日（T 日）的收盘价，生成时冻结；它不是让你下单的价格。"
 related: [plan.entry_zone, plan.stop, plan.target1, indicator.atr14]
-sources: [investment_assistant/execution/plan_levels.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

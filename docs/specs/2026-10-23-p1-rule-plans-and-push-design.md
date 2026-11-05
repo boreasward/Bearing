@@ -1,7 +1,7 @@
 # P1 规则计划与推送 — 设计
 
 日期：2026-10-23。基线 `main@4c72960`。本文是已确认的设计，不是实施计划；实施计划另写。
-上位文档：[roadmap v2](../roadmap/roadmap.md#81-v2-路线2026-10-23) 的 P1。在[美股投研工作台设计](2026-10-23-us-research-workbench-design.md)之上扩展，原设计未改动的部分继续有效。
+上位文档：[roadmap v2](../archive/v2/roadmap/roadmap.md#81-v2-路线2026-10-23) 的 P1。在[美股投研工作台设计](2026-10-23-us-research-workbench-design.md)之上扩展，原设计未改动的部分继续有效。
 
 ## 1. 目标与非目标
 

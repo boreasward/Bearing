@@ -43,7 +43,7 @@ cd web && npm install && npm run build && cd ..
 ### 配置文件（`config/local.json`，示例见 `config/investment-assistant.example.json`）
 
 - `workbench`：`risk_pct`（单笔风险，默认 0.01）、`single_cap`（单票上限 0.25）、`total_cap`（总持仓上限 1.0）、`public_url`（推送链接前缀，默认 `http://localhost:8787`）、`return_tiers`（月度分档，默认 `[0.20, 0.10, 0.0]`）。参数会冻结进每份计划。
-- `filings`、`sec_monitor`：SEC 下载与监控，见 [features/sec-filings.md](features/sec-filings.md)。
+- `filings`、`sec_monitor`：SEC 下载与监控，见 [features/sec-filings.md](archive/v2/features/sec-filings.md)。
 - `watchlist`：只给 v1 遗留任务用；工作台的观察池来自数据库观察名单。
 
 ## 建库
@@ -56,7 +56,7 @@ cd web && npm install && npm run build && cd ..
 
 然后在「设置 → 关注列表」添加美股并勾选核心池（≤ 15 只）。
 
-要启用 Agent 轨道，启动服务后在「设置 → Agent 连接」点「连接 ChatGPT」，在本机浏览器里完成登录，再选一个模型（不连接也能用：规则轨道照常，Agent 记 `not_connected`）。步骤与排错见 [operations/local-service.md](operations/local-service.md) 的「Agent 连接」，Agent 怎么工作见 [features/agent-track.md](features/agent-track.md)。
+要启用 Agent 轨道，启动服务后在「设置 → Agent 连接」点「连接 ChatGPT」，在本机浏览器里完成登录，再选一个模型（不连接也能用：规则轨道照常，Agent 记 `not_connected`）。步骤与排错见 [operations/local-service.md](operations/local-service.md) 的「Agent 连接」，Agent 怎么工作见 [features/agent-track.md](archive/v2/features/agent-track.md)。
 
 ## 启动
 

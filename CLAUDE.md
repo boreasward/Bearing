@@ -2,7 +2,7 @@
 
 - **主干开发为主。** 默认直接在 `main` 上开发、测试和提交，不另开分支或 worktree。只有用户明确要求隔离时才用分支或 worktree，完成后快进合并回 `main`，并删除该分支和 worktree。
 - **文档位置。** 设计 spec 放 `docs/specs/YYYY-MM-DD-<topic>-design.md`，实施 plan 放 `docs/plans/YYYY-MM-DD-<topic>.md`，写成后只增不改；功能、架构与运维文档随代码同一个提交更新。分类与维护规则见 `docs/README.md`。
-- **Roadmap 记录。** v2.15 真实导入并发布后：roadmap 以系统内记录为准，仓库里的 `roadmap.md` 是导出件，改路线走系统内提案；spec / plan 仍在仓库。导入前只改已批准区域，不提前替换整页或伪造导入、发布、验收完成；批准提案不等于完成实施，真实证据分别回填。
+- **Roadmap 记录。** roadmap 是仓库里的 `docs/roadmap.md`，直接修改。v2 的路线与功能文档已归档到 `docs/archive/v2/`，只读。spec / plan 仍在 `docs/specs/`、`docs/plans/`。
 
 # plan 与执行约定
 

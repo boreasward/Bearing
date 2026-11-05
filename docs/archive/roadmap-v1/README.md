@@ -1,6 +1,6 @@
 # Roadmap — 投研 + 量化投资系统
 
-> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../../roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
+> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../v2/roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
 
 > 创建：2026-06-30 ｜ 状态校准：2026-10-17（基线 `6fd63f8`）
 > 本目录保留长期方向与历史设计；**当前交付和验收状态**以 [实施状态](implementation-status-2026-10-17.md)及 [Phase 0 评审](reports/2026-10-17-phase0-review.md)为准。历史周数是原估算，不是本轮新排期。
@@ -22,7 +22,7 @@
 | 文档 | 内容 | 给谁看 |
 |------|------|--------|
 | [08-living-collaboration.md](08-living-collaboration.md) | 当前切片、调度边界和每周回顾 | **先看近况**；阶段原则仍先读 00 |
-| [09-long-term-decision-loop.md](../../roadmap/roadmap.md) | 2026-10-23 逐项讨论后确认的长期路线：数据 → 交易计划 → 复盘，P1–P4 分阶段，含决策记录 | 长期方向；各阶段开工前另写 spec |
+| [09-long-term-decision-loop.md](../v2/roadmap/roadmap.md) | 2026-10-23 逐项讨论后确认的长期路线：数据 → 交易计划 → 复盘，P1–P4 分阶段，含决策记录 | 长期方向；各阶段开工前另写 spec |
 | [工作台形态](workbench-shape-2026-10-17.md) | 五层形态，以及从 vibe trading 项目吸收和拒绝的部分 | 长期草案，不代替实施状态 |
 | [00-principles-and-direction.md](00-principles-and-direction.md) | 方向判断、量化陷阱（过拟合/小样本/幸存者偏差）、护城河论证、系统定位 | **先读这篇**，它解释了后面所有优先级排序的依据 |
 | [01-phase0-data-quality-and-event-study.md](01-phase0-data-quality-and-event-study.md) | 数据质量与事件研究：框架已落地，本轮修复最终复核；归档探索已评审 | **全部正式 Gate HOLD** |

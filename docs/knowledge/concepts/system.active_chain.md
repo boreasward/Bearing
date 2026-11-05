@@ -6,7 +6,7 @@ version: 1
 applies_to: [timeline-2]
 summary: "入场期、持仓期、退出期的链都算活跃，同一只股票同一时间至多一条；新触发并入它，不再另开；上线前的重复旧链判为被取代。"
 related: [agent.retrigger, review.chain_state, review.holding_status, agent.version_chain, system.append_only]
-sources: [investment_assistant/execution/timeline.py, investment_assistant/execution/chains.py, docs/features/agent-track.md]
+sources: [investment_assistant/execution/timeline.py, investment_assistant/execution/chains.py, docs/archive/v2/features/agent-track.md]
 ---
 
 ## 是什么

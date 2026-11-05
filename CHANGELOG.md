@@ -1,10 +1,10 @@
 # Changelog
 
-版本号与 roadmap 版本对应，见 [roadmap](docs/roadmap/roadmap.md)。
+版本号与 roadmap 版本对应，见 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
 ## v2.15.0 — 2026-11-03
 
-**已在本机发布，使用验收未全部通过。** v2.12–v2.15 一次发布为 v2.15.0，不打 v2.12.0–v2.14.0 空 tag。范围依据 [冻结 spec](docs/specs/2026-11-01-v2.12-v2.15-five-layers-and-agent-roles-design.md)；工程部分已完成：三套全量、全链路演练（审查修复前后各一次）和一轮最终整体审查的结果见「验证」，与 spec 的差异和限制见下。2026-11-03 经用户授权，对真实库完成备份、迁移 031、roadmap 导入、`web/dist` 重建、服务重启和 spec §16.2 中可自动核对的部分，并在发布提交 `0416b45` 上打 tag `v2.15.0`；推送与替换 `roadmap.md` 未执行。逐项记录见 [验收记录 §1–§4 与 §6](docs/roadmap/v2.12-v2.15-acceptance.md)。
+**已在本机发布，使用验收未全部通过。** v2.12–v2.15 一次发布为 v2.15.0，不打 v2.12.0–v2.14.0 空 tag。范围依据 [冻结 spec](docs/specs/2026-11-01-v2.12-v2.15-five-layers-and-agent-roles-design.md)；工程部分已完成：三套全量、全链路演练（审查修复前后各一次）和一轮最终整体审查的结果见「验证」，与 spec 的差异和限制见下。2026-11-03 经用户授权，对真实库完成备份、迁移 031、roadmap 导入、`web/dist` 重建、服务重启和 spec §16.2 中可自动核对的部分，并在发布提交 `0416b45` 上打 tag `v2.15.0`；推送与替换 `roadmap.md` 未执行。逐项记录见 [验收记录 §1–§4 与 §6](docs/archive/v2/roadmap/v2.12-v2.15-acceptance.md)。
 
 ### 搬家
 
@@ -147,13 +147,13 @@
 ### 修正
 
 - **Agent 单元被「`'str' object has no attribute '__cause__'`」记成 `model_error`**（2026-10-31 定时运行，ROP）：`data/fetch_policy._chain` 沿异常链走时把 `reason` 属性也当异常压栈，而 `ssl.SSLError.reason` 是字符串，下一步取 `__cause__` 就崩；这一步只在「POST 不重发」策略判断请求是否发出时经过，所以恰好打在 ChatGPT 令牌续期经代理出 TLS 错误的那一次，AttributeError 穿过 `_run_agent_unit` 被记成模型错误，真正的网络错误文本也丢了。现在链上只跟进异常对象；新增测试 `test_post_policy_survives_a_string_reason_in_the_chain`。
-- **代理抖动被当成「Yahoo 无数据」，筛选 `benchmark_missing`**（同一次运行，QQQ 等 19 只 10/30 日线缺失）：yfinance 默认 `hide_exceptions=True`，`history()` 与时区查询遇到任何传输错误都只打一行「possibly delisted; no price data found」并返回空表，`bars.py` 只能记成不重试的 `empty`。现在建立共享 yfinance 会话时关掉 `hide_exceptions`：传输失败按 `network` / `timeout` 走 fetch-1 重试，日线那一路只把 `YFPricesMissingError` / `YFTzMissingError` 收成原来的 `empty`（失败文案不变）。顺带的口径变化：财报日的 `4xx` / `5xx` 与资讯搜索的解析失败从此是该目标的失败而不是空结果。概念卡 `system.fetch_policy` 升到 `version: 2`；[data-menu.md](docs/features/data-menu.md) 同步。新增测试 `test_yfinance_transport_failure_surfaces_as_a_network_error`（死代理端口）与 `test_yfinance_no_data_answer_is_still_an_empty_result`。
-- **并行工具调用撞 `agent_tool_calls` 的 `(run_id, seq)` 唯一键，整个单元记成 `model_error`**（2026-10-29 MU 2026-10-28 attempt 2 的 `seq 10`、2026-10-31 14:30 手动重跑 LIN 2026-10-30 的 `seq 8`，都在反方阶段）：`Recorder.record` 用 `len(calls) + 1` 编号再追加，两步不是原子的；模型一轮里并行发出多个工具调用时LangGraph 的 `ToolNode` 在线程池里同时执行它们，两个调用算出同一个 `call:N`（检查点里能看到 MU 的 `get_indicators` / `get_news` 都是 `call:10`、LIN 的 `get_trigger` / `get_concept` 都是 `call:8`，各缺一个号），运行结束逐条 INSERT 时撞唯一键，事务回滚、token 白花。现在编号与追加在同一把锁内完成，`call:N` 引用形式不变。新增测试 `test_concurrent_records_get_distinct_monotonic_seqs`（屏障确定性复现）与 `test_parallel_tool_calls_in_one_round_get_distinct_refs`（走真实 `ToolNode`）；[agent-track.md](docs/features/agent-track.md) 工具层一段补上编号规则。
+- **代理抖动被当成「Yahoo 无数据」，筛选 `benchmark_missing`**（同一次运行，QQQ 等 19 只 10/30 日线缺失）：yfinance 默认 `hide_exceptions=True`，`history()` 与时区查询遇到任何传输错误都只打一行「possibly delisted; no price data found」并返回空表，`bars.py` 只能记成不重试的 `empty`。现在建立共享 yfinance 会话时关掉 `hide_exceptions`：传输失败按 `network` / `timeout` 走 fetch-1 重试，日线那一路只把 `YFPricesMissingError` / `YFTzMissingError` 收成原来的 `empty`（失败文案不变）。顺带的口径变化：财报日的 `4xx` / `5xx` 与资讯搜索的解析失败从此是该目标的失败而不是空结果。概念卡 `system.fetch_policy` 升到 `version: 2`；[data-menu.md](docs/archive/v2/features/data-menu.md) 同步。新增测试 `test_yfinance_transport_failure_surfaces_as_a_network_error`（死代理端口）与 `test_yfinance_no_data_answer_is_still_an_empty_result`。
+- **并行工具调用撞 `agent_tool_calls` 的 `(run_id, seq)` 唯一键，整个单元记成 `model_error`**（2026-10-29 MU 2026-10-28 attempt 2 的 `seq 10`、2026-10-31 14:30 手动重跑 LIN 2026-10-30 的 `seq 8`，都在反方阶段）：`Recorder.record` 用 `len(calls) + 1` 编号再追加，两步不是原子的；模型一轮里并行发出多个工具调用时LangGraph 的 `ToolNode` 在线程池里同时执行它们，两个调用算出同一个 `call:N`（检查点里能看到 MU 的 `get_indicators` / `get_news` 都是 `call:10`、LIN 的 `get_trigger` / `get_concept` 都是 `call:8`，各缺一个号），运行结束逐条 INSERT 时撞唯一键，事务回滚、token 白花。现在编号与追加在同一把锁内完成，`call:N` 引用形式不变。新增测试 `test_concurrent_records_get_distinct_monotonic_seqs`（屏障确定性复现）与 `test_parallel_tool_calls_in_one_round_get_distinct_refs`（走真实 `ToolNode`）；[agent-track.md](docs/archive/v2/features/agent-track.md) 工具层一段补上编号规则。
 - 三处都是后端修正，**无迁移，`.env` 与 LaunchAgent plist 不变**；需要重启服务生效，10/30 缺失的日线要手动补拉一次并重跑筛选，MU 2026-10-28 与 LIN 2026-10-30 两个单元要手动「重新运行 Agent」。
 
 ## v2.11.0 — 2026-11-01
 
-账户与模拟交易（[spec](docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md)）：真实账户改为从成交与出入金计算权益，券商快照用于对账；新增 Agent 自管与照计划执行两种模拟账户，分别记录订单、成交、每日权益和决策依据。2026-11-01 复核通过后合入 `main`，前端包版本 `2.11.0`；测试与审查结果见下。[真实库只读核查](docs/roadmap/v2.11-acceptance.md)已于 2026-10-31 完成；**备份与迁移 030、重建 `web/dist` 与服务重启、真实数据验收、tag 和推送均待逐项单独授权**。
+账户与模拟交易（[spec](docs/specs/2026-10-31-v2.11-accounts-and-paper-trading-design.md)）：真实账户改为从成交与出入金计算权益，券商快照用于对账；新增 Agent 自管与照计划执行两种模拟账户，分别记录订单、成交、每日权益和决策依据。2026-11-01 复核通过后合入 `main`，前端包版本 `2.11.0`；测试与审查结果见下。[真实库只读核查](docs/archive/v2/roadmap/v2.11-acceptance.md)已于 2026-10-31 完成；**备份与迁移 030、重建 `web/dist` 与服务重启、真实数据验收、tag 和推送均待逐项单独授权**。
 
 ### 交付
 
@@ -217,7 +217,7 @@
 
 - **「今日」在 1024–1280px 下整页横向滚动**（v2.10 验收发现，CHANGELOG v2.10.0「已知限制」里预判过的那条）：计划表最小宽度约 1200px，`DataTable` 在 ≥ 1024px 为了粘性表头让容器 `overflow-visible`，表格经由几层 grid 祖先（`min-width: auto`）把卡片、页头和整页一起撑宽，页头右侧按钮被推出可视区。现在 `sticky` 的表先测量（`ResizeObserver` 加窗口 `resize`，测量时临时把容器设成可滚动），放得下才让容器 `visible`、表头吸顶，放不下就在容器内横向滚动；`sticky={false}` 的表（含「今日」计划表）与测量前一律在容器内滚动。真实服务上复测：1024 / 1280 / 1440 下 `main` 不再横向溢出，1280 下「运行记录」表放得下、表头照常吸顶。
 - **375px 下「今日」计划卡溢出**（v2.10 验收发现）：状态行的长标签「Agent 未给出计划：模型调用失败，以下为规则基线」是不换行的 `Badge`，宽 305px，超出屏幕 55px。`DataTable` 卡片视图里的徽标改为可换行（最宽到单元格、圆角 10px，单行仍是胶囊形）；表格视图不变。复测 375px 下没有元素超出屏幕。
-- 两处只改 `web/src/lib/ui/data-table/DataTable.svelte`（原 1 条测试改写为 5 条，前端 1003 条全过，`svelte-check` 0 错误）与 [design-system.md](docs/design-system.md) 对应规则；验收记录见 [v2.10 验收记录](docs/roadmap/v2.10-acceptance.md) §6。
+- 两处只改 `web/src/lib/ui/data-table/DataTable.svelte`（原 1 条测试改写为 5 条，前端 1003 条全过，`svelte-check` 0 错误）与 [design-system.md](docs/design-system.md) 对应规则；验收记录见 [v2.10 验收记录](docs/archive/v2/roadmap/v2.10-acceptance.md) §6。
 
 ## v2.10.0 — 2026-10-31
 
@@ -333,7 +333,7 @@
 
 ## v2.9.0 — 2026-10-30
 
-可执行的计划（[spec](docs/specs/2026-10-30-v2.9-executable-plans-design.md)、[实施 plan](docs/plans/2026-10-30-v2.9-executable-plans.md)）：一只股票同一时间只有一条活跃的计划链，同一标的再次触发不再开第二份互不相关的计划，而是作为 `retrigger` 信号并入这条链、在入场期直接出修订版（可续期）；计划写成可以照着执行的指令——入场类型、开盘落在区间内 / 跳空高开 / 跳空低开各做什么、本计划何时作废、最长持有；「今日」改成入场期 / 持仓中 / 已结束三组的计划表，「标的」页新增计划历史表；取消「采纳 / 否决 / 降级」按钮，采纳由成交关联的计划推出；持仓每个交易日有一行持仓状态（距止损、距 T1、已持有与剩余天数、指令与维持理由），持满最长持有仍没到成本 + 1R 就给退出指令（时间止损），止损触及或失效条件成立进入退出期；新计划与影子口径 `plan-2` / `plan-shadow-2` 与旧 `plan-1` / `plan-shadow-1` 并列、不混算。**有迁移 029**（`trades.plan_id`、`trade_plans` 加两列并替换价位约束、三张新表、`plan_reviews` 约束放宽）。规则 v1、`screen-1`、`regime-2`、`stages-4`、`daily-1`（节点、顺序、行数不变）、`agent-brief-1`、`agent-discuss-1`、模型层一字未动；`agent-2` 的提议、反方、解读提示词逐字不变（逐个比对过大写字符串常量的 sha256，只有 `RETRO_AGENT_VERSION` 与 `REVIEW_VERSION` 两个版本号翻转）。状态：`engineering_done`、`user_acceptance_pending`、`runtime_unverified`——**迁移 029 尚未在真实库执行、服务尚未以 v2.9 代码重启、手动验收未做**（见「待你核查后确认」）。实现偏差与已知限制见下文与 [roadmap](docs/roadmap/roadmap.md)。
+可执行的计划（[spec](docs/specs/2026-10-30-v2.9-executable-plans-design.md)、[实施 plan](docs/plans/2026-10-30-v2.9-executable-plans.md)）：一只股票同一时间只有一条活跃的计划链，同一标的再次触发不再开第二份互不相关的计划，而是作为 `retrigger` 信号并入这条链、在入场期直接出修订版（可续期）；计划写成可以照着执行的指令——入场类型、开盘落在区间内 / 跳空高开 / 跳空低开各做什么、本计划何时作废、最长持有；「今日」改成入场期 / 持仓中 / 已结束三组的计划表，「标的」页新增计划历史表；取消「采纳 / 否决 / 降级」按钮，采纳由成交关联的计划推出；持仓每个交易日有一行持仓状态（距止损、距 T1、已持有与剩余天数、指令与维持理由），持满最长持有仍没到成本 + 1R 就给退出指令（时间止损），止损触及或失效条件成立进入退出期；新计划与影子口径 `plan-2` / `plan-shadow-2` 与旧 `plan-1` / `plan-shadow-1` 并列、不混算。**有迁移 029**（`trades.plan_id`、`trade_plans` 加两列并替换价位约束、三张新表、`plan_reviews` 约束放宽）。规则 v1、`screen-1`、`regime-2`、`stages-4`、`daily-1`（节点、顺序、行数不变）、`agent-brief-1`、`agent-discuss-1`、模型层一字未动；`agent-2` 的提议、反方、解读提示词逐字不变（逐个比对过大写字符串常量的 sha256，只有 `RETRO_AGENT_VERSION` 与 `REVIEW_VERSION` 两个版本号翻转）。状态：`engineering_done`、`user_acceptance_pending`、`runtime_unverified`——**迁移 029 尚未在真实库执行、服务尚未以 v2.9 代码重启、手动验收未做**（见「待你核查后确认」）。实现偏差与已知限制见下文与 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
 ### 新增
 
@@ -350,7 +350,7 @@
 - **推送**（`notify/templates.py`、`digest.py`）：「新计划」每个入场期链或规则基线三行（入场类型 L–U · 止损 · T1 · 股数 · 有效至；开盘一行；最长持有一行），再次触发写「第 n−1 → n 版」，持仓状态一行（退出行前加「⚠」，维持也推），退出指令单独一条；推送里不再有「未决定单元」。
 - **检查与命令行**：`plan_review check` 新增三项——同一标的不得有两条活跃链、并入记录必须有对应处理、每个持仓每天有一行持仓状态；`plan_review chain` 输出 `timeline-2` 的链视图（含并入记录、持仓状态、每版执行状态）。
 - **概念卡共 105 张**（新增 `plan.entry_type`、`plan.open_scenarios`、`plan.max_hold`、`agent.retrigger`、`system.active_chain`、`review.holding_status`、`review.execution_status`；`plan.validity`、`plan.own`、`review.chain_state`、`review.version_basis`、`review.control_group`、`review.plan_shadow`、`review.retro_card`、`system.decision`、`system.versions`、`agent.signals`、`agent.invalidation`、`agent.review_when`、`agent.reject_reasons`（33 个原因码）等随改），原理页 15 节（新增「从计划到成交」，相关各节随改）。
-- **前端**：`PlanTable`、`PlanRowDetail`、`PlanNotes`、`PlanHistoryTable` 四个组件；「今日」只剩筛选 / 市场环境 / 计划表，没有任何决定按钮；成交录入的「关联计划」下拉；计划页版本链多入场类型 / 最长持有 / 执行状态、并入的单元、退出期与持仓状态历史；复盘卡「你的执行与纪律」；详见 [architecture](docs/architecture.md)。
+- **前端**：`PlanTable`、`PlanRowDetail`、`PlanNotes`、`PlanHistoryTable` 四个组件；「今日」只剩筛选 / 市场环境 / 计划表，没有任何决定按钮；成交录入的「关联计划」下拉；计划页版本链多入场类型 / 最长持有 / 执行状态、并入的单元、退出期与持仓状态历史；复盘卡「你的执行与纪律」；详见 [architecture](docs/archive/v2/architecture.md)。
 - **新增版本号**：`timeline-2`、`condition-2`、`plan-2`、`plan-shadow-2`、`agent-3`、`agent-review-2`、`agent-retro-2`、`entry-1`、`execution-1`、`discipline-2`、`tracks-2`、`retro-2`、`review-8`、`monthly-4`（`knowledge.KNOWN_VERSIONS` 另加 `discipline-1`，旧快照与旧卡能引用它）。
 
 ### 变更
@@ -479,7 +479,7 @@
 
 ## v2.8.0 — 2026-10-29
 
-每日工作流（[spec](docs/specs/2026-10-29-v2.8-daily-workflow-design.md)、[实施 plan](docs/plans/2026-10-29-v2.8-daily-workflow.md)）：三个定时任务（`filings`、`workbench`、`workbench_review`）合成一个任务 `daily`，北京 11:30（周二至周六）跑一次，十个节点串成一张 LangGraph 图；每个节点把检查点写进库，失败的运行能从失败节点续跑而不重跑已完成的部分；外部请求统一套紧超时与有限重试；新增运行详情页（节点状态图、逐目标拉取明细、结果明细）；Agent 改走你自己的 ChatGPT 订阅（Sign in with ChatGPT），删除智谱。**有迁移 028**（一张表加列改约束、三张新表、调度行合并），规则 v1、`screen-1`、`regime-2`、`plan-1`、`agent-2` 的结构与校验、四张子图的提示词与判定一字未动。状态：`engineering_done`、`user_acceptance_pending`、`runtime_unverified`——**迁移 028 尚未在真实库执行、服务尚未以 v2.8 代码重启、尚未登录 ChatGPT；你的核查脚本 `scripts/siwc_precheck.py` 尚未运行，模型层按 spec §8.7 先走路径 A，其请求形状全部未对真实 ChatGPT 端点验证**（见「待你核查后确认」）。保留偏差与已知限制见下文与 [roadmap](docs/roadmap/roadmap.md)。
+每日工作流（[spec](docs/specs/2026-10-29-v2.8-daily-workflow-design.md)、[实施 plan](docs/plans/2026-10-29-v2.8-daily-workflow.md)）：三个定时任务（`filings`、`workbench`、`workbench_review`）合成一个任务 `daily`，北京 11:30（周二至周六）跑一次，十个节点串成一张 LangGraph 图；每个节点把检查点写进库，失败的运行能从失败节点续跑而不重跑已完成的部分；外部请求统一套紧超时与有限重试；新增运行详情页（节点状态图、逐目标拉取明细、结果明细）；Agent 改走你自己的 ChatGPT 订阅（Sign in with ChatGPT），删除智谱。**有迁移 028**（一张表加列改约束、三张新表、调度行合并），规则 v1、`screen-1`、`regime-2`、`plan-1`、`agent-2` 的结构与校验、四张子图的提示词与判定一字未动。状态：`engineering_done`、`user_acceptance_pending`、`runtime_unverified`——**迁移 028 尚未在真实库执行、服务尚未以 v2.8 代码重启、尚未登录 ChatGPT；你的核查脚本 `scripts/siwc_precheck.py` 尚未运行，模型层按 spec §8.7 先走路径 A，其请求形状全部未对真实 ChatGPT 端点验证**（见「待你核查后确认」）。保留偏差与已知限制见下文与 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
 ### 新增
 
@@ -495,7 +495,7 @@
 - **一次性核查脚本** `scripts/siwc_precheck.py`（说明见 [scripts/README.md](scripts/README.md)）：由你在运行服务的这台 Mac 上执行，把末尾的「核查摘要」追加到 spec §17；脚本不打印令牌，邮箱脱敏。
 - **3 张概念卡与原理页新一节**：概念卡共 98 张（新增 `system.fetch_policy`、`system.daily_workflow`、`system.agent_connection`；`system.stages`、`system.stage_status`、`system.versions`、`system.push`、`agent.reject_reasons` 随改），原理页 14 节（十个节点各一节，新增 `#stage-sec_monitor`）。
 - **新增版本号**：`stages-4`、`daily-1`、`fetch-1`、`siwc-1`；不变：`stages-1/2/3`（历史）、`agent-2`、`agent-review-1`、`agent-brief-1`、`agent-retro-1`、`agent-discuss-1`、`retro-1`、`review-7`、`monthly-3`、`screen-1`、`regime-2`、`plan-1`。
-- **前端**：运行详情页（`RunDetail`、`NodeGraph`、`FetchTable`）、「设置 → 系统」下的 Agent 连接（`AgentConnection`）、计划页的「重新运行 Agent」、任务中心对 `daily` / `sec_backfill` 的处理；详见 [architecture](docs/architecture.md)。
+- **前端**：运行详情页（`RunDetail`、`NodeGraph`、`FetchTable`）、「设置 → 系统」下的 Agent 连接（`AgentConnection`）、计划页的「重新运行 Agent」、任务中心对 `daily` / `sec_backfill` 的处理；详见 [architecture](docs/archive/v2/architecture.md)。
 
 ### 变更
 
@@ -645,7 +645,7 @@
 
 ## v2.7.0 — 2026-10-29
 
-我的成长闭环（[spec](docs/specs/2026-10-28-v2.7-growth-loop-design.md)、[实施 plan](docs/plans/2026-10-28-v2.7-growth-loop.md)）：每笔结束的交易有一张复盘卡（事实冻结、Agent 只讲不算、你审定后教训才进「我的知识」）；「我的知识」只追加、带版本，Agent 用 `get_knowledge` 按截止时间读、用 `know:<id>@<版本>` 引用，引用记入 `knowledge_citations`；每条知识有表现回看；计划卡与「标的」页有「就此计划讨论」；周度复盘多一段「你学到了什么」。**有迁移 027**（十一张新表、放宽三处约束），规则、`plans.py`、`tracks.py`、`discipline.py` 等口径一字未动。状态：`engineering_done`、`user_acceptance_pending`（迁移 027 已于 2026-10-29 在真实库执行、服务已以 v2.7 代码重启；手动验收与定时验收进度见 [v2.7 验收记录](docs/roadmap/v2.7-acceptance.md)）。保留偏差与已知限制见下文与 [roadmap](docs/roadmap/roadmap.md)。
+我的成长闭环（[spec](docs/specs/2026-10-28-v2.7-growth-loop-design.md)、[实施 plan](docs/plans/2026-10-28-v2.7-growth-loop.md)）：每笔结束的交易有一张复盘卡（事实冻结、Agent 只讲不算、你审定后教训才进「我的知识」）；「我的知识」只追加、带版本，Agent 用 `get_knowledge` 按截止时间读、用 `know:<id>@<版本>` 引用，引用记入 `knowledge_citations`；每条知识有表现回看；计划卡与「标的」页有「就此计划讨论」；周度复盘多一段「你学到了什么」。**有迁移 027**（十一张新表、放宽三处约束），规则、`plans.py`、`tracks.py`、`discipline.py` 等口径一字未动。状态：`engineering_done`、`user_acceptance_pending`（迁移 027 已于 2026-10-29 在真实库执行、服务已以 v2.7 代码重启；手动验收与定时验收进度见 [v2.7 验收记录](docs/archive/v2/roadmap/v2.7-acceptance.md)）。保留偏差与已知限制见下文与 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
 ### 新增
 
@@ -658,7 +658,7 @@
 - **`know:<id>@<版本>` 引用**与 `knowledge_citations`：Agent 引用必须带版本，且只能引用本次运行 `get_knowledge` 返回过的版本；`know:` 不能单独支撑价位。引用记录与计划同事务写入、同生共死；作废、`pass`、被反方丢弃的条目不留引用。计划卡、版本链与推理视图显示「引用的知识」，之后有新版时注明。
 - **接口**：`GET/POST /api/workbench/review-cards`（列表、卡页、`/verdict`、`/redraft`）、`/api/workbench/my-knowledge`（列表、新建、条目页、`/versions`、`/status`、`/performance`）、`/api/workbench/my-knowledge-drafts`（列表、`/verdict`）、`/api/workbench/discussions`（建讨论、列表、讨论页、`/turns`）；已有 `today`、`chains`、`instruments/{ticker}`、`weekly-reviews` 只新增键（`knowledge_refs`、`knowledge`、`stats.learning`）。写接口都带 `request_id` 幂等。
 - **两个 CLI**：`python -m investment_assistant.workbench.retro_cards detect | draft | show | check`；`python -m investment_assistant.workbench.my_knowledge show | check-cutoff`（把「知识受截止时间约束」的校验落到真实数据）。
-- **页面与组件**：「复盘」页新增「复盘卡」页签（`#review/cards[/<id>]`，`ReviewCardList`、`ReviewCard`、`CardVerdictForm`）；「知识」菜单新增「我的知识」（`#knowledge/mine[/new|/drafts|/<id>[@<版本>]]`，`KnowledgeList`、`KnowledgeItem`、`KnowledgeForm`、`KnowledgePerformance`）；`KnowledgeRefs`、`RefList`、`DiscussButton`；讨论页 `#discuss/<id>`（`Discussion`）；「标的」页新增「我的知识」一段；周度复盘新增「你学到了什么」。详见 [architecture](docs/architecture.md)。
+- **页面与组件**：「复盘」页新增「复盘卡」页签（`#review/cards[/<id>]`，`ReviewCardList`、`ReviewCard`、`CardVerdictForm`）；「知识」菜单新增「我的知识」（`#knowledge/mine[/new|/drafts|/<id>[@<版本>]]`，`KnowledgeList`、`KnowledgeItem`、`KnowledgeForm`、`KnowledgePerformance`）；`KnowledgeRefs`、`RefList`、`DiscussButton`；讨论页 `#discuss/<id>`（`Discussion`）；「标的」页新增「我的知识」一段；周度复盘新增「你学到了什么」。详见 [architecture](docs/archive/v2/architecture.md)。
 - **7 张概念卡与原理页新一节**：概念卡共 95 张（`review.retro_card`、`review.retro_end`、`review.knowledge_performance`、`review.weekly_learning`、`system.my_knowledge`、`system.discussion`、`agent.knowledge_citation`），原理页 13 节（新增 `#stage-retro`）。
 
 ### 变更
@@ -727,11 +727,11 @@
 ### 验收
 
 - 测试：离线 pytest 1863 passed / 616 skipped；一次性库 pytest 2479 passed；前端 `npm test` 586 passed（45 个文件），`npm run build` 通过；`knowledge check` 通过（95 张卡、原理页 13 节）。
-- **验收未完成**：2026-10-29 经用户授权，先 `pg_dump` 全库备份，再在真实库执行迁移 027 并以 v2.7 代码重启服务；§16.2 手动验收第 1、4、6 条通过、第 5 条部分通过，其余待出现，§16.3 定时观察待积累（[v2.7 验收记录](docs/roadmap/v2.7-acceptance.md)）；不宣称用户验收已过。
+- **验收未完成**：2026-10-29 经用户授权，先 `pg_dump` 全库备份，再在真实库执行迁移 027 并以 v2.7 代码重启服务；§16.2 手动验收第 1、4、6 条通过、第 5 条部分通过，其余待出现，§16.3 定时观察待积累（[v2.7 验收记录](docs/archive/v2/roadmap/v2.7-acceptance.md)）；不宣称用户验收已过。
 
 ## v2.6.0 — 2026-10-28
 
-看懂系统（[spec](docs/specs/2026-10-28-v2.6-understanding-the-system-design.md)、[实施 plan](docs/plans/2026-10-28-v2.6-understanding-the-system.md)）：在系统里就能看懂系统——「今日」顶部的运行一览、仓库内版本化的 88 张概念卡与「知识」菜单、「原理」页、四处就地展开、Agent 推理阅读视图、「标的」页四段重排与 K 线标注，另给 Agent 加只读工具 `get_concept`。没有迁移、没有新表，不改任何计算口径与 Agent 流程。状态：`engineering_done`、`user_acceptance_pending`（2026-10-28 以 v2.6 代码重启服务，§14.2 手动验收见 [验收记录](docs/roadmap/v2.6-acceptance.md)；复查推理、`get_concept` 调用、成交标注与你的使用验收待积累）。保留偏差与已知限制见下文与 [roadmap](docs/roadmap/roadmap.md)。
+看懂系统（[spec](docs/specs/2026-10-28-v2.6-understanding-the-system-design.md)、[实施 plan](docs/plans/2026-10-28-v2.6-understanding-the-system.md)）：在系统里就能看懂系统——「今日」顶部的运行一览、仓库内版本化的 88 张概念卡与「知识」菜单、「原理」页、四处就地展开、Agent 推理阅读视图、「标的」页四段重排与 K 线标注，另给 Agent 加只读工具 `get_concept`。没有迁移、没有新表，不改任何计算口径与 Agent 流程。状态：`engineering_done`、`user_acceptance_pending`（2026-10-28 以 v2.6 代码重启服务，§14.2 手动验收见 [验收记录](docs/archive/v2/roadmap/v2.6-acceptance.md)；复查推理、`get_concept` 调用、成交标注与你的使用验收待积累）。保留偏差与已知限制见下文与 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
 ### 新增
 
@@ -780,7 +780,7 @@
 
 ## v2.5.0 — 2026-10-28
 
-计划时间线（[spec](docs/specs/2026-10-28-v2.5-plan-timeline-design.md)、[实施 plan](docs/plans/2026-10-28-v2.5-plan-timeline.md)）：Agent 计划结构化为可复查的论点并成为默认复查对象，同一单元的 Agent 计划组成版本链，批处理每日复查，系统信号与你贴入的信息触发修订，每版各自影子跟踪。状态：`engineering_done`、`user_acceptance_pending`（迁移 026 已于 2026-10-28 在真实库执行、服务已重启跑 v2.5 代码；没有真实浏览器验收与定时运行证据）。保留偏差与已知限制见下文与 [roadmap](docs/roadmap/roadmap.md)。
+计划时间线（[spec](docs/specs/2026-10-28-v2.5-plan-timeline-design.md)、[实施 plan](docs/plans/2026-10-28-v2.5-plan-timeline.md)）：Agent 计划结构化为可复查的论点并成为默认复查对象，同一单元的 Agent 计划组成版本链，批处理每日复查，系统信号与你贴入的信息触发修订，每版各自影子跟踪。状态：`engineering_done`、`user_acceptance_pending`（迁移 026 已于 2026-10-28 在真实库执行、服务已重启跑 v2.5 代码；没有真实浏览器验收与定时运行证据）。保留偏差与已知限制见下文与 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
 ### 新增
 
@@ -829,13 +829,13 @@
 
 ### 迁移与验收
 
-- **026 已在真实库执行**（2026-10-28，用户授权 Task 14）：备份后 `psql --single-transaction` 执行，再重启服务（**先迁移后重启**）；记录见 [迁移记录](docs/operations/migrations-and-backup.md#026-的真实库执行逐步手动用户-2026-10-28-授权执行-v25-plan-task-14)，手动验收见 [v2.5 验收记录](docs/roadmap/v2.5-acceptance.md)。026 未执行时批处理照常（`stages-1`、Agent 提议记 `skipped / migration_026_missing`、不复查、不发「计划更新」），新接口返回 503。
+- **026 已在真实库执行**（2026-10-28，用户授权 Task 14）：备份后 `psql --single-transaction` 执行，再重启服务（**先迁移后重启**）；记录见 [迁移记录](docs/operations/migrations-and-backup.md#026-的真实库执行逐步手动用户-2026-10-28-授权执行-v25-plan-task-14)，手动验收见 [v2.5 验收记录](docs/archive/v2/roadmap/v2.5-acceptance.md)。026 未执行时批处理照常（`stages-1`、Agent 提议记 `skipped / migration_026_missing`、不复查、不发「计划更新」），新接口返回 503。
 - 测试（`41b4738`）：离线 pytest 1347 passed / 480 skipped；一次性库 SQL pytest 1827 passed；前端 `npm test` 322 passed（29 个文件），`npm run build` 通过。全量 code review（`53d9ed5` 以来）无 Critical，Important 1 条（过时前端测试）与 5 条 Minor 已在 `41b4738` 修复。
 - **验收未完成**：本轮只有自动化测试，没有真实浏览器用户验收、没有迁移后的定时运行证据（spec §14.3 连续 10 个交易日等）；不宣称用户验收或定时验收已过。打 tag、推送不在本轮执行，各自先征得用户同意。
 
 ## v2.4.0 — 2026-10-27
 
-计划推导链与批处理 workflow 底座（[spec](docs/specs/2026-10-27-v2.4-derivation-and-workflow-design.md)、[实施 plan](docs/plans/2026-10-27-v2.4-derivation-and-workflow.md)）。状态：`engineering_done`、`user_acceptance_pending`（迁移 025 已于 2026-10-27 在真实库执行、服务已重启跑 v2.4 代码；§12.2 手动验收已核对、用户已确认推导可读，§12.3 连续 5 个交易日定时验收待完成，见[验收记录](docs/roadmap/v2.4-acceptance.md)）。保留偏差与已知限制见下文与 [roadmap](docs/roadmap/roadmap.md)。
+计划推导链与批处理 workflow 底座（[spec](docs/specs/2026-10-27-v2.4-derivation-and-workflow-design.md)、[实施 plan](docs/plans/2026-10-27-v2.4-derivation-and-workflow.md)）。状态：`engineering_done`、`user_acceptance_pending`（迁移 025 已于 2026-10-27 在真实库执行、服务已重启跑 v2.4 代码；§12.2 手动验收已核对、用户已确认推导可读，§12.3 连续 5 个交易日定时验收待完成，见[验收记录](docs/archive/v2/roadmap/v2.4-acceptance.md)）。保留偏差与已知限制见下文与 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
 ### 新增
 
@@ -864,7 +864,7 @@
 
 ## v2.3.0 — 2026-10-26
 
-数据底座与「数据」菜单（[spec](docs/specs/2026-10-26-v2.3-data-foundation-design.md)、[实施 plan](docs/plans/2026-10-26-v2.3-data-foundation.md)）。状态：`engineering_done`、`user_acceptance_pending`（迁移 024 已于 2026-10-27 在真实库执行、服务已重启跑 v2.3 代码；§11.2 手动验收已核对、用户已确认浏览可用，§11.3 定时验收待完成，见[验收记录](docs/roadmap/v2.3-acceptance.md)）；全范围 final review 已完成并修复，保留偏差与后续验收条件见 [v2.3 验收记录](docs/roadmap/v2.3-acceptance.md#工程自查与验收边界)。
+数据底座与「数据」菜单（[spec](docs/specs/2026-10-26-v2.3-data-foundation-design.md)、[实施 plan](docs/plans/2026-10-26-v2.3-data-foundation.md)）。状态：`engineering_done`、`user_acceptance_pending`（迁移 024 已于 2026-10-27 在真实库执行、服务已重启跑 v2.3 代码；§11.2 手动验收已核对、用户已确认浏览可用，§11.3 定时验收待完成，见[验收记录](docs/archive/v2/roadmap/v2.3-acceptance.md)）；全范围 final review 已完成并修复，保留偏差与后续验收条件见 [v2.3 验收记录](docs/archive/v2/roadmap/v2.3-acceptance.md#工程自查与验收边界)。
 
 ### 新增
 
@@ -966,6 +966,6 @@ v2 路线的收尾版：收拢 v1 遗留功能（[spec](docs/specs/2026-10-25-v2
 ### 已知限制
 
 - 所有规则都未经验证（Phase 0 正式 Gate HOLD）；复盘只给描述性统计。
-- 已在真实库验收的部分有：迁移、服务重载、页面与接口检查、一次真实周度推送。尚未出现第一个无冲突的买入单元，所以真实数据上的计划价位、Agent 计划和三方对比还没有核对。待验收清单见 [roadmap §6.4](docs/roadmap/roadmap.md#64-未完成的使用验收)。
+- 已在真实库验收的部分有：迁移、服务重载、页面与接口检查、一次真实周度推送。尚未出现第一个无冲突的买入单元，所以真实数据上的计划价位、Agent 计划和三方对比还没有核对。待验收清单见 [roadmap §6.4](docs/archive/v2/roadmap/roadmap.md#64-未完成的使用验收)。
 - v1 遗留功能（Hermes、市场信号与策略评分、事件研究、美股财季数据与研究观察卡）原样保留，下一版决定合并还是删除。
 - yfinance 资讯源不稳定；Agent 额度错误码按文档初值实现，还需要用真实响应核对。

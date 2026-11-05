@@ -1,6 +1,6 @@
 # 04 — Phase 3：复盘引擎 + 区制条件化 + LLM 校准
 
-> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../../roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
+> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../v2/roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
 
 > 目标：把 DeepSeek + Hermes 从「泛泛宏观解读」聚焦到你真正想要的「拿我的交易记录做归因复盘」。复盘的火力在**跨笔行为模式识别**和**三方业绩对比**，不是单笔点评。
 > 依赖：Phase 2 的 `trade_journal` / `execution_plans` / 期望值统计；Phase 0 事件研究基线；现有 `hermes/deepseek_client.py`（已修好真实模型 ID）、`hermes/agents.py`（agent 框架）、`hermes/run_log.py`。

@@ -6,7 +6,7 @@ version: 1
 applies_to: []
 summary: "只存新闻标题与链接，不抓正文；发布时间未知时如实标注；免费来源不稳定。"
 related: [family.sec_filings, agent.tool_calls, system.cutoff]
-sources: [investment_assistant/data/adapters/news.py, investment_assistant/data/families.py, docs/features/daily-plan.md]
+sources: [investment_assistant/data/adapters/news.py, investment_assistant/data/families.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

@@ -1,36 +1,29 @@
 # 文档索引
 
-建议按这个顺序读：[architecture.md](architecture.md) 了解系统由哪些部分组成；[getting-started.md](getting-started.md) 在本机跑起来；再读 `features/` 了解每个功能。
+建议按这个顺序读：[roadmap.md](roadmap.md) 看 v3 走到哪一步；v3 的设计见 [specs/](specs/)、实施 plan 见 [plans/](plans/)；旧系统（v2.15）怎么跑见 [getting-started.md](getting-started.md)。
 
 ## 系统现在是什么样
 
+v3 重做进行中；旧系统（v2.15）在切换到 v3 前照常运行。
+
 | 文档 | 内容 |
 | --- | --- |
-| [architecture.md](architecture.md) | 运行形态、代码分层、主线数据流、数据表分组、定时任务与前端 |
-| [getting-started.md](getting-started.md) | 安装、配置（`.env` 与配置文件）、建库、启动、测试 |
-| [design-system.md](design-system.md) | 设计标准：原则、令牌（浅 / 深取值）、布局、状态词汇与语气、数据块五态、组件清单与 API、交互、图标与图表、文案；组件画廊在 `npm run dev` → `#_ui` |
+| [roadmap.md](roadmap.md) | v3 路线：一句目标、spec §15.6 第 0–5 步与状态；直接修改维护 |
+| [specs/2026-11-05-agent-first-rebuild-design.md](specs/2026-11-05-agent-first-rebuild-design.md) | v3 设计：agent 入口与每日简报、规则草稿、MCP 工具面、页面服务与对话、保留与删除 |
+| [plans/2026-11-05-v3-facts-and-tools.md](plans/2026-11-05-v3-facts-and-tools.md) | v3 第一阶段实施 plan：文档归档、Pi 无人值守可行性验证、事实层与工具面 |
+| [operations/](operations/) | 运维文档：本地服务、调度与通知、迁移与备份；v3 新增的运维说明也写在这里 |
+| [design-system.md](design-system.md) | 设计标准：原则、令牌（浅 / 深取值）、布局、状态词汇与语气、数据块五态、组件清单与 API、交互、图标与图表、文案；组件画廊在 `npm run dev` → `#_ui`（v3 保留的组件层仍以它为标准，spec §15.1） |
+| [getting-started.md](getting-started.md) | 旧系统（v2）的上手指南：安装、配置（`.env` 与配置文件）、建库、启动、测试；切换前照用 |
 
-### 功能（features/）
+### v2（已归档）
 
-每篇都写：做什么、页面与 API/CLI 入口、怎么验证一次、已知限制。
+v2 的路线、功能与架构文档已移入 [archive/v2/](archive/v2/)，只读：
 
-| 文档 | 功能 |
+| 位置 | 内容 |
 | --- | --- |
-| [daily-plan.md](features/daily-plan.md) | 每日工作流（`daily-3` / `stages-6` 的十三个节点、检查点与续跑、运行详情页）、规则 v1、交易计划（`plan-2` 的执行字段）、「今日」计划表与成交关联计划（v2.9）、持仓止损、每日推送 |
-| [agent-track.md](features/agent-track.md) | Agent 轨道：ChatGPT 订阅模型层与连接、工具层、提议与反方、引用校验、预算、解读；一只股票一条活跃链、再次触发、退出期与持仓状态（v2.9） |
-| [accounts.md](features/accounts.md) | 真实账本与券商对账、开账与参数、Agent 自管与照计划执行模拟账户、日线成交、订单和决策证据、权益曲线与账户对比（v2.11，本地实现与发布准备） |
-| [review.md](features/review.md) | 影子跟踪、可切换账户的纪律与三方对比、真实账户周/月复盘（`review-8` / `monthly-5`；缺账本端点回退快照）、复盘推送 |
-| [pool-and-context.md](features/pool-and-context.md) | 观察池分层、每日筛选（纳指 100 `screen-1`、成员轮换、报告与只读回放）、市场环境（广度、区制、行业、FRED）、上线前检查 |
-| [data-menu.md](features/data-menu.md) | 「数据」菜单：数据族覆盖与最新时点、拉取记录、单族手动拉取、原始值浏览 |
-| [data-registry.md](features/data-registry.md) | v2.12，随 v2.15.0 发布，待验收：九族来源、真实主备与补查、22 标准指标、两套 MA / 基准 |
-| [research.md](features/research.md) | v2.13，随 v2.15.0 发布，待验收：首版公司研究、carried 修订、指定研究只出档案、排队与截止时间 |
-| [portfolio-manager.md](features/portfolio-manager.md) | v2.14，随 v2.15.0 发布，待验收：逐账户硬结果、PM 建议、关闭与失败区别、参数与分界 |
-| [roadmap-in-system.md](features/roadmap-in-system.md) | v2.15，随 v2.15.0 发布，待验收：路线记录、冻结证据提案、批准与 brief 读回、导入 / 导出 |
-| [feature-flags.md](features/feature-flags.md) | 合并实施，待验收：四开关默认全开、下次 daily 冻结、续跑沿用与真实历史 |
-| [knowledge.md](features/knowledge.md) | 知识层：版本化的概念卡与原理页——卡的格式与校验、引用形式、加载与缓存、`/api/knowledge/*` 接口、`knowledge check` / `show` 命令 |
-| [sec-filings.md](features/sec-filings.md) | SEC 下载器与 SEC 监控 |
-| [fundamentals.md](features/fundamentals.md) | 「标的」页的基本面一栏：美股财季数据与公司指引 |
-| [legacy/](features/legacy/README.md) | v1 遗留功能的墓碑页：逐项列出 v2.1.0 的删除与去向（旧实现见 tag `v2.0.0`） |
+| [architecture.md](archive/v2/architecture.md) | v2 的运行形态、代码分层、主线数据流、数据表分组、定时任务与前端 |
+| [features/](archive/v2/features/) | v2 的各功能文档：每日工作流、Agent 轨道、账本与模拟交易、复盘、观察池与市场环境、数据菜单、数据注册表、研究、组合经理、系统内 roadmap、功能开关、知识层、SEC 下载与监控、基本面、v1 墓碑页 |
+| [roadmap/](archive/v2/roadmap/roadmap.md) | v2 的路线与决策 #1–#124；同目录 `v2.x-acceptance.md` 保存各版真实验收证据 |
 
 ### 运维（operations/）
 
@@ -45,10 +38,11 @@
 
 | 位置 | 内容 |
 | --- | --- |
-| [roadmap/roadmap.md](roadmap/roadmap.md) | 当前受限维护的路线源：目标、历史证据、四版合并实施（路线 B、目标 v2.15.0 TBD）、决策 #1–#124；真实导入并发布后成为系统记录的导出件。各版已发布与待验收分开记，同目录 v2.x-acceptance.md 保存真实证据；[四版清单](roadmap/v2.12-v2.15-acceptance.md) §0 是已做 spike，§1–§4 尚未执行 |
-| [roadmap/v2.8-runtime-feasibility.md](roadmap/v2.8-runtime-feasibility.md) | 本地 CLI 运行时可行性报告（2026-10-28）：`claude-code`、`codex`、`pi` 在无人值守、禁用自带工具、接本地 MCP、token 用量、批处理时限五项上的实测。**同日被 roadmap 决策 #63 取代**（v2.8 不再做运行时切换），保留为历史依据 |
-| [specs/](specs/) | 各阶段的设计 spec |
-| [plans/](plans/) | 各阶段的实施 plan |
+| [roadmap.md](roadmap.md) | v3 路线（直接修改维护）：目标、spec §15.6 第 0–5 步与状态 |
+| [specs/](specs/) | 各阶段的设计 spec（v3：[2026-11-05 agent 优先重做](specs/2026-11-05-agent-first-rebuild-design.md)） |
+| [plans/](plans/) | 各阶段的实施 plan（v3 第一阶段：[2026-11-05 facts and tools](plans/2026-11-05-v3-facts-and-tools.md)） |
+| [archive/v2/](archive/v2/) | **v2（已归档）**：路线与验收记录（[roadmap/](archive/v2/roadmap/roadmap.md)）、功能文档（[features/](archive/v2/features/)）、[architecture.md](archive/v2/architecture.md) |
+| [archive/v2/roadmap/v2.8-runtime-feasibility.md](archive/v2/roadmap/v2.8-runtime-feasibility.md) | 本地 CLI 运行时可行性报告（2026-10-28）：`claude-code`、`codex`、`pi` 在无人值守、禁用自带工具、接本地 MCP、token 用量、批处理时限五项上的实测。同日被 v2 roadmap 决策 #63 取代（v2.8 不再做运行时切换），保留为历史依据 |
 | [archive/roadmap-v1/](archive/roadmap-v1/README.md) | roadmap v1 及其 spec、plan、评审 |
 | [../CHANGELOG.md](../CHANGELOG.md) | 按版本记录的变更 |
 
@@ -56,13 +50,11 @@
 
 | 类别 | 回答的问题 | 什么时候改 |
 | --- | --- | --- |
-| roadmap | 往哪走、为什么、走到哪一步了 | 真实导入并发布后：roadmap 以系统内记录为准，仓库里的 `roadmap.md` 是导出件，改路线走系统内提案；spec / plan 仍留仓库 |
+| roadmap | 往哪走、为什么、走到哪一步了 | 仓库文件 `docs/roadmap.md`，直接修改 |
 | spec | 某个阶段为什么这样设计 | 写成后冻结，只增不改；命名 `specs/YYYY-MM-DD-<topic>-design.md` |
 | plan | 某个阶段怎么实施 | 写成后冻结，只增不改；命名 `plans/YYYY-MM-DD-<topic>.md` |
-| features / architecture / operations | 系统现在能做什么、怎么用、怎么验证 | 和代码在同一个提交里更新 |
+| operations | 系统怎么跑、怎么备份与恢复 | 和代码在同一个提交里更新 |
 | 设计标准（design-system） | 前端用什么令牌、组件、状态词汇和交互规则 | 组件、令牌或交互规则变了，与代码同一个提交更新 `design-system.md` |
 | knowledge（概念卡与原理） | 系统里每个概念是什么意思、系统怎么跑 | 与改口径的代码同一个提交更新；口径变了该卡 `version` 加 1（改措辞、补例子不加）；改卡后需重启服务生效 |
 
 冻结文档只修失效链接，不改正文。`tests/test_docs_links.py` 会检查所有相对链接都指向存在的文件。
-
-过渡期：真实库尚未导入，不把当前 roadmap 整页替换成导出、不新建伪冻结件；仅修改本轮批准区域。批准、工程完成、发布、使用验收是不同事实，最终状态由真实记录回填，不能从草稿或测试通过推成 done。

@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1, plan-2]
 summary: "录入成交时你提交自己的四个价位（和可选的最长持有），系统在同一事务里另存一份 own 计划并让成交关联它；仓位按新价位重算，规则计划的作废原因降为提示。"
 related: [plan.entry_zone, plan.stop, plan.sizing, system.decision, review.execution_status]
-sources: [investment_assistant/execution/plan_levels.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

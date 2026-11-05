@@ -183,7 +183,7 @@ expect(screen.getByRole('link', { name: /原文/ })).toHaveAttribute('href', fix
 - Real NVDA direct revenue 96,221m versus cumulative difference 96,222m leaves revenue TTM null; standard cash PPE/FCF and latest common earnings remain unknown. Unverified market-cap valuations remain null.
 - Browser flows completed with documented limits: native confirmation interaction timed out, drafts remained and were cleared without saving; precise confirm/cancel/unload behavior is automated-component evidence. At 390px the sidebar was collapsed and wide tables scroll internally.
 - Broad review findings 1–4 closed; finding 5 remains partly open: fresh next-day quote/out-of-window historical bars can trigger a conservative old-value warning. This Minor is parked under the one-wave ruling; displayed latest values/provenance remain correct.
-- Evidence and commands: [cross-market-research.md](../../../features/fundamentals.md); local JSON evidence under the primary `.local/cross-market/`. User acceptance remains pending.
+- Evidence and commands: [cross-market-research.md](../../v2/features/fundamentals.md); local JSON evidence under the primary `.local/cross-market/`. User acceptance remains pending.
 
 ## Coverage review
 

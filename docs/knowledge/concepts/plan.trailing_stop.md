@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "触及 T1 后，止损改为 max(开仓以来最高收盘 − 3 ATR, 持仓成本)；每天收盘后更新、次日生效。"
 related: [plan.stop, plan.target1, rule.plan_stop, indicator.atr14]
-sources: [investment_assistant/execution/exits.py, investment_assistant/execution/plan_levels.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/exits.py, investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

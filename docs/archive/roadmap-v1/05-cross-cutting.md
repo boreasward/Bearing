@@ -1,6 +1,6 @@
 # 05 — 横切关注点（贯穿各阶段）
 
-> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../../roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
+> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../v2/roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
 
 > 这些不属于某个单一阶段，而是贯穿始终。按「与核心闭环的耦合度」排序。
 
@@ -45,7 +45,7 @@
 
 **2026-10-17 对齐范围**：README 已说明 FastAPI 与新任务入口，不再要求重写成另一份历史设计。本轮更新 roadmap、事件研究说明与实施状态，将 `engineering_done`、`gate_hold`、`runtime_unverified`、`user_acceptance_pending` 分开记录。原估算不是排期，基线测试不是最终变更测试。
 
-历史审计、[跨市场交付](../../features/fundamentals.md)与 A 股交付（已于 v2.0.0 删除）保留原文，引用其时点上下文；不删除或重写历史数字来迎合当前状态。新增证据集中在 [实施状态](implementation-status-2026-10-17.md)和 [Phase 0 评审](reports/2026-10-17-phase0-review.md)，凭据/DSN 不进入文档。
+历史审计、[跨市场交付](../v2/features/fundamentals.md)与 A 股交付（已于 v2.0.0 删除）保留原文，引用其时点上下文；不删除或重写历史数字来迎合当前状态。新增证据集中在 [实施状态](implementation-status-2026-10-17.md)和 [Phase 0 评审](reports/2026-10-17-phase0-review.md)，凭据/DSN 不进入文档。
 
 ---
 

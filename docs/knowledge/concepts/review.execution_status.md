@@ -6,7 +6,7 @@ version: 1
 applies_to: [execution-1]
 summary: "没有「采纳」按钮：成交关联了某一版计划就是采纳。一份计划版本的执行状态有已采纳、有效期外成交、等待成交、未执行四种，没有关联计划的买入记为计划外；备注只给你自己看。"
 related: [system.decision, plan.own, review.version_basis, review.discipline_unplanned, review.retro_card, system.active_chain]
-sources: [investment_assistant/execution/adoption.py, investment_assistant/execution/ledger.py, investment_assistant/views/plan_table.py, docs/features/review.md]
+sources: [investment_assistant/execution/adoption.py, investment_assistant/execution/ledger.py, investment_assistant/views/plan_table.py, docs/archive/v2/features/review.md]
 ---
 
 ## 是什么

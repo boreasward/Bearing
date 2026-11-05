@@ -6,7 +6,7 @@ version: 1
 applies_to: [regime-2, condition-1]
 summary: "按广度把市场分为进攻 / 中性 / 防守 / 样本不足；只给计划加提示，不改价位、仓位和有效性。"
 related: [indicator.breadth, plan.context_flags, agent.invalidation, agent.review_when, family.fred]
-sources: [investment_assistant/analysis/regime.py, investment_assistant/execution/plan_levels.py, docs/features/pool-and-context.md]
+sources: [investment_assistant/analysis/regime.py, investment_assistant/execution/plan_levels.py, docs/archive/v2/features/pool-and-context.md]
 ---
 
 ## 是什么

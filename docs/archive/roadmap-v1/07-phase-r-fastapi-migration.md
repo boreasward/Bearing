@@ -1,6 +1,6 @@
 # 07 — Phase R：API 层迁移 FastAPI（重构地基）
 
-> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../../roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
+> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../v2/roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
 
 > 创建：2026-07-04 ｜ 状态校准：2026-10-17 ｜ `engineering_done`
 
@@ -47,7 +47,7 @@ Phase 2 闭环（[03](03-phase2-plan-execution-loop.md)）是表单密集型 CRU
 
 ## Phase R 收尾任务（DoD 存量欠账）
 
-以下两项原欠账已在工程上补齐。使用说明见 [事件研究](../../features/legacy/README.md)；本轮真实 HTTP/UI 验收仍待完成，不等于入口缺失：
+以下两项原欠账已在工程上补齐。使用说明见 [事件研究](../v2/features/legacy/README.md)；本轮真实 HTTP/UI 验收仍待完成，不等于入口缺失：
 
 1. 前端「策略」区加事件研究面板（调既有 `GET /api/research/event-study`），含手动触发入口。
 2. 文档补「事件研究：功能说明 + 如何验证示例」（CLI 与 API 两条路径）。

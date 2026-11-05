@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "参考价加 4 倍 ATR14（相当于 2R）；持仓第一次触及后建议卖出一半，余下改用移动止损。"
 related: [indicator.atr14, plan.stop, plan.trailing_stop, rule.plan_target, review.r_multiple]
-sources: [investment_assistant/execution/plan_levels.py, investment_assistant/execution/exits.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/plan_levels.py, investment_assistant/execution/exits.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

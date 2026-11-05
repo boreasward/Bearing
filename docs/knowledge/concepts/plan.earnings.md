@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "有效期内有财报 → 计划作废；之后 10 个交易日内有财报，或财报日未知 → 加提示。"
 related: [plan.validity, plan.status, rule.earnings_gap_up, family.sec_filings]
-sources: [investment_assistant/execution/plan_levels.py, investment_assistant/data/adapters/earnings.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/plan_levels.py, investment_assistant/data/adapters/earnings.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

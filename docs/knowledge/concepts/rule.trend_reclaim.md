@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "买入候选：处于中长期上升趋势的股票，回踩 MA20 下方至少 3 天后重新站上 MA20。"
 related: [rule.volume_breakout, rule.trend_break, indicator.moving_average, system.decision_unit]
-sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "卖出候选：此前至少连续 10 天收在 MA50 上方，当日收盘跌破 MA50。"
 related: [rule.trend_reclaim, indicator.moving_average, system.conflict, system.decision_unit]
-sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

@@ -1,6 +1,6 @@
 # 08 — 长期协作与当前切片
 
-> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../../roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
+> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../v2/roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
 
 > 2026-10-17。本文是活路线，用来排近期待办。阶段设计仍以 [00](00-principles-and-direction.md) 到 [07](07-phase-r-fastapi-migration.md) 为准，验收数字以 [实施状态](implementation-status-2026-10-17.md) 为准。
 > 本文不授权补采、真实库迁移、通知、部署或交易。
@@ -8,7 +8,7 @@
 
 ## 2026-10-23 变化
 
-- 美股投研工作台（采集 → 信号 → 复盘）已在 `main` 落地并部署到本地服务：[设计](../../specs/2026-10-23-us-research-workbench-design.md)、[实施计划](../../plans/2026-10-23-us-research-workbench.md)、[使用文档](../../features/daily-plan.md)。界面收敛为「今日／标的／复盘」三个主入口，原六入口收在「更多」下。
+- 美股投研工作台（采集 → 信号 → 复盘）已在 `main` 落地并部署到本地服务：[设计](../../specs/2026-10-23-us-research-workbench-design.md)、[实施计划](../../plans/2026-10-23-us-research-workbench.md)、[使用文档](../v2/features/daily-plan.md)。界面收敛为「今日／标的／复盘」三个主入口，原六入口收在「更多」下。
 - 真实库执行了迁移 `015` 和 `016`，执行前做了 `pg_dump` 备份。`workbench` 每日任务已启用（北京时间周二至周六 06:30）。
 - 第一次真实批处理暴露并修复了：EDGAR 受理时间实为 UTC、Yahoo 新闻接口 404、财报库缺受理时间、Codex 偶发失败、复权价浮点噪声导致的重复修订。
 - 软件交付与真实运行已验证；用户使用验收与四周使用观察尚未开始。

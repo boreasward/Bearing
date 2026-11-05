@@ -1,6 +1,6 @@
 # 00 — 方向判断与系统定位
 
-> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../../roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
+> **已归档（2026-10-23）**：本文属于 roadmap v1，已被 [roadmap v2](../v2/roadmap/roadmap.md) 取代，仅作历史参考，不再更新。
 
 > 本篇保留 2026-06 的方向论证；2026-10-17 状态见 [实施状态](implementation-status-2026-10-17.md)。FastAPI、事件研究前端与邮件已落地；Phase 0 正式 Gate 全部 HOLD，长期 Phase 1/2/3 不因研究支线完成而自动完成。
 
@@ -155,4 +155,4 @@ Phase 3  跨笔行为 + 三方对比 + 区制条件化 + LLM 校准：未落地
 
 落地方式：[05 C6](05-cross-cutting.md#c6--dod-检查清单模板) 提供 checklist 模板，每个实施 plan 的每个 task 收尾步骤引用。
 
-**存量状态**：事件研究前端入口与 [验证说明](../../features/legacy/README.md)已存在，原 Phase R 欠账在工程上已补齐。本轮仍需最终回归、真实 DB/HTTP/UI 与用户验收证据；不能把功能入口存在等同于研究 Gate 通过。
+**存量状态**：事件研究前端入口与 [验证说明](../v2/features/legacy/README.md)已存在，原 Phase R 欠账在工程上已补齐。本轮仍需最终回归、真实 DB/HTTP/UI 与用户验收证据；不能把功能入口存在等同于研究 Gate 通过。

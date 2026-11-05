@@ -6,7 +6,7 @@ version: 1
 applies_to: [regime-2]
 summary: "样本池里站上 MA50 / MA200 的股票占比与 52 周新高新低数量；合格样本不足 20 只时为「样本不足」。"
 related: [indicator.regime, indicator.moving_average, family.universe, indicator.high_low]
-sources: [investment_assistant/analysis/regime.py, docs/features/pool-and-context.md]
+sources: [investment_assistant/analysis/regime.py, docs/archive/v2/features/pool-and-context.md]
 ---
 
 ## 是什么

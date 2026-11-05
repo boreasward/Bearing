@@ -1,7 +1,7 @@
 # P2 观察池扩展与市场环境 — 设计
 
 日期：2026-10-23。基线 `main@4aec0da`。本文是设计，不是实施计划；实施计划另写。
-上位文档：[roadmap v2](../roadmap/roadmap.md#81-v2-路线2026-10-23) 的 P2。在 [P1 设计](2026-10-23-p1-rule-plans-and-push-design.md) 之上扩展，P1 未改动的部分继续有效。
+上位文档：[roadmap v2](../archive/v2/roadmap/roadmap.md#81-v2-路线2026-10-23) 的 P2。在 [P1 设计](2026-10-23-p1-rule-plans-and-push-design.md) 之上扩展，P1 未改动的部分继续有效。
 
 ## 1. 目标与非目标
 

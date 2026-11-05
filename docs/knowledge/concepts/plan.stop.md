@@ -6,7 +6,7 @@ version: 1
 applies_to: [plan-1]
 summary: "参考价减 2 倍 ATR14，四舍五入到分；之后任一交易日最低价触及即按止损处理。"
 related: [indicator.atr14, plan.ref_price, plan.trailing_stop, review.r_multiple, rule.plan_stop]
-sources: [investment_assistant/execution/plan_levels.py, investment_assistant/execution/exits.py, docs/features/daily-plan.md]
+sources: [investment_assistant/execution/plan_levels.py, investment_assistant/execution/exits.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

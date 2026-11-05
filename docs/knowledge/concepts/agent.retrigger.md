@@ -6,7 +6,7 @@ version: 1
 applies_to: [timeline-2, agent-3, agent-review-2]
 summary: "同一标的又触发买入规则时，不开第二条链，而是并入已有的活跃链：入场期直接修订并顺延有效期，持仓期只当证据，退出期只记录。"
 related: [system.active_chain, agent.signals, agent.changes, plan.validity, review.holding_status]
-sources: [investment_assistant/analysis/units.py, investment_assistant/analysis/agent/runner.py, investment_assistant/execution/timeline.py, docs/features/agent-track.md]
+sources: [investment_assistant/analysis/units.py, investment_assistant/analysis/agent/runner.py, investment_assistant/execution/timeline.py, docs/archive/v2/features/agent-track.md]
 ---
 
 ## 是什么

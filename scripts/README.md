@@ -5,6 +5,7 @@
 | `start_local.py` | 本机服务入口：读取仓库 `.env`，只监听 `127.0.0.1`；由根目录 `start.command` 调用，本机 LaunchAgent 登录时启动它 | `./start.command` |
 | `verify_cross_market.py` | 美股研究数据的只读验收：只读事务 + HTTP GET，不采集、不迁移、不通知 | `.venv/bin/python scripts/verify_cross_market.py --help` |
 | `siwc_precheck.py` | v2.8 开工前核查：Sign in with ChatGPT 登录 → `GET /v1/models` → Responses 调用（含函数工具与被拒字段探测）→ 打印脱敏摘要；**只由你本人执行一次** | 见下文 |
+| `archive_v2_docs.py` | 一次性（v3 plan Task 1，已执行）：把 v2 的 `docs/roadmap/`、`docs/features/`、`docs/architecture.md` 移入 `docs/archive/v2/`，并改写所有 Markdown 链接与概念卡 `sources` 路径 | 无需再运行 |
 
 本机服务的启动、重启与日志见 [docs/operations/local-service.md](../docs/operations/local-service.md)。
 

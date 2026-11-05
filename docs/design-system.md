@@ -238,7 +238,7 @@ research_request 展示域的 error 只用于结论版本；请求 SQL 集合仍
 - `today/PortfolioCheck.svelte` 与 `account/PortfolioResult.svelte`：硬结果按 order，经理 ranking 另列，行业敞口用语义 meter、互斥用表。K2 关闭整个节点为 not_computed；开启且硬结果已存后 PM 失败才用 DataBlock degraded 显示「只有硬结果」。缺行不能当 empty/ready 的空组合。
 - RunDetail 的 portfolio 按账户计数展开真实结果，proposals 链到路线页，agent 显示五项补查计数与数字研究请求数；节点列表由后端版本决定，不给旧运行补两节点。
 
-路径均相对 `web/src/lib/components/`（两个路由在 `web/src/routes/`）。人工目检记录在 [验收清单](roadmap/v2.12-v2.15-acceptance.md)，尚未执行。
+路径均相对 `web/src/lib/components/`（两个路由在 `web/src/routes/`）。人工目检记录在 [验收清单](archive/v2/roadmap/v2.12-v2.15-acceptance.md)，尚未执行。
 
 ## 7. 交互规范
 
