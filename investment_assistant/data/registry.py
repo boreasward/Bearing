@@ -2,6 +2,7 @@
 import argparse
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import timedelta
 from functools import partial
@@ -37,8 +38,13 @@ def tool_families() -> list[Adapter]:
 
 
 def run_adapter(adapter, targets, *, scope, trigger, run_id, session, now, deps, features, tally=None,
-                observe=None, whole_call_target=None) -> Tally:
+                observe=None, whole_call_target=None, workers: int = 1) -> Tally:
     """Fetch and store ``targets`` through the adapter's sources, one target at a time.
+
+    ``workers > 1`` fetches and stores several targets concurrently (a bounded pool; the
+    store itself runs inside each worker's own transaction) while every ``tally`` update,
+    ``observe`` call and the whole-call stop decision stay in the caller thread, in input
+    order — the row a pooled run books is the row the sequential default would book.
 
     ``observe(target, source_id, rows, result)`` (optional) sees each stored target before it is booked, so a host can
     build its own summary from the fetched rows and the store receipt; it must not raise. A target's final failure
@@ -54,12 +60,13 @@ def run_adapter(adapter, targets, *, scope, trigger, run_id, session, now, deps,
             tally.record(target, FetchError('FRED_API_KEY 未配置', kind='other'), rows=0)
         tally.skip('FRED_API_KEY 未配置')
         return tally
-    for target in targets:
+
+    def fetch_one(target):
+        """One target's fetch and store; returns the outcome for booking and never touches the tally."""
         attempts, elapsed = [], 0
         primary_error = None
         fallback = {'tried': False, 'reason': None}
         source_used = None
-        result = None
         try:
             for index, source in enumerate(adapter.sources):
                 if index:
@@ -89,29 +96,53 @@ def run_adapter(adapter, targets, *, scope, trigger, run_id, session, now, deps,
                                                        rows=outcome.value, store=store)
                     else:
                         result = store(conn, outcome.value)
-                if adapter.id == 'universe':
-                    loaded = outcome.value[0]
-                    tally.detail.update(name=loaded['name'], as_of=loaded['as_of'], tickers=len(loaded['tickers']),
-                                        stale=adapter.lagging(loaded['as_of'], session))
-                if observe is not None:
-                    observe(target, source_used, outcome.value, result)
-                tally.record(target, Fetched(outcome.value, attempts, elapsed),
-                             rows=result['inserted'], latest=result['latest'],
-                             source_used=source_used, fallback=fallback)
-                break
-            if result is None:
-                raise primary_error or FetchError('adapter has no sources', kind='other')
+                return {'target': target, 'ok': True, 'rows': outcome.value,
+                        'fetched': Fetched(outcome.value, attempts, elapsed), 'result': result,
+                        'source_used': source_used, 'fallback': fallback}
+            raise primary_error or FetchError('adapter has no sources', kind='other')
         except Unavailable:
             raise                       # database/schema not ready: the host's 503, never a per-target failure
         except Exception as exc:
             kind, status = fetch_policy.classify_exception(exc)
-            whole_call = whole_call_target is not None and getattr(exc, 'target', None) == whole_call_target
-            error = FetchError(str(exc), kind=kind, status=status, attempts=attempts,
-                               target=target, total_ms=elapsed)
-            if whole_call:
-                tally.record('*', error, rows=0)
+            return {'target': target, 'ok': False, 'source_used': source_used, 'fallback': fallback,
+                    'error': FetchError(str(exc), kind=kind, status=status, attempts=attempts,
+                                        target=target, total_ms=elapsed),
+                    'whole_call': whole_call_target is not None and getattr(exc, 'target', None) == whole_call_target}
+
+    def book(outcome) -> bool:
+        """Book one outcome in the caller thread; False stops the run (the whole-call failure)."""
+        if outcome['ok']:
+            if adapter.id == 'universe':
+                loaded = outcome['rows'][0]
+                tally.detail.update(name=loaded['name'], as_of=loaded['as_of'], tickers=len(loaded['tickers']),
+                                    stale=adapter.lagging(loaded['as_of'], session))
+            if observe is not None:
+                observe(outcome['target'], outcome['source_used'], outcome['rows'], outcome['result'])
+            tally.record(outcome['target'], outcome['fetched'], rows=outcome['result']['inserted'],
+                         latest=outcome['result']['latest'], source_used=outcome['source_used'],
+                         fallback=outcome['fallback'])
+            return True
+        error = outcome['error']
+        if outcome['whole_call']:
+            tally.record('*', error, rows=0)
+            return False
+        tally.record(outcome['target'], error, rows=0, source_used=outcome['source_used'],
+                     fallback=outcome['fallback'])
+        return True
+
+    if workers <= 1:
+        for target in targets:
+            if not book(fetch_one(target)):
                 break
-            tally.record(target, error, rows=0, source_used=source_used, fallback=fallback)
+        return tally
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        try:
+            for outcome in executor.map(fetch_one, targets):   # results arrive in input order
+                if not book(outcome):
+                    break
+        except Unavailable:
+            executor.shutdown(wait=False, cancel_futures=True)  # not-yet-started targets are dropped, never booked
+            raise
     return tally
 
 
