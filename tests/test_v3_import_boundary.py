@@ -6,7 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / 'investment_assistant'
 V3_PACKAGES = ('facts', 'toolsurface')
 # plan「新代码的 import 边界」：core 六个保留模块、data/derivation 整包、四个 analysis 模块、
-# 三个 execution 模块、db、config，以及彼此（toolsurface 可 import facts）。
+# 三个 execution 模块、db、config，以及彼此（toolsurface 可 import facts；包内互引）。
+# toolsurface 在 KEPT 里只放开包内互引（目标必须以 investment_assistant.toolsurface. 开头）；
+# facts → toolsurface 仍然由下面那行单独禁止。
 KEPT = ('investment_assistant.core.tx', 'investment_assistant.core.dbutil',
         'investment_assistant.core.constants', 'investment_assistant.core.redact',
         'investment_assistant.core.texts', 'investment_assistant.core.knowledge',
@@ -15,7 +17,8 @@ KEPT = ('investment_assistant.core.tx', 'investment_assistant.core.dbutil',
         'investment_assistant.analysis.regime', 'investment_assistant.analysis.pool',
         'investment_assistant.execution.plan_levels', 'investment_assistant.execution.entry_rules',
         'investment_assistant.execution.positions',
-        'investment_assistant.db', 'investment_assistant.config', 'investment_assistant.facts')
+        'investment_assistant.db', 'investment_assistant.config', 'investment_assistant.facts',
+        'investment_assistant.toolsurface')
 
 
 def _imports(tree, package):
