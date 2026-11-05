@@ -11,6 +11,9 @@ THIS_FILE = 'tests/test_no_zhipu_residue.py'
 SELF_NAME = 'test_no_zhipu_residue'     # frozen docs may name this guard; the name alone is not residue
 # Frozen design documents of this release (dated 2026-10-29, but written about the removal itself).
 RELEASE_DOCS = ('docs/specs/2026-10-29-v2.8-daily-workflow-design.md', 'docs/plans/2026-10-29-v2.8-daily-workflow.md')
+# The v3 design names the model providers configured in the user's Pi, this one among them: Pi replaces the model
+# layer, and which provider it talks to is a user setting (v3 spec §7 「模型设置」), not code in this repository.
+V3_DOCS = ('docs/specs/2026-11-05-agent-first-rebuild-design.md',)
 DATED = re.compile(r'^docs/(?:specs|plans)/(\d{4}-\d{2}-\d{2})-')
 
 
@@ -18,7 +21,7 @@ def _allowed(path: str) -> bool:
     """Spec §9 「允许残留」, verbatim."""
     if path in ('CHANGELOG.md', 'docs/roadmap/roadmap.md', 'docs/roadmap/v2.8-runtime-feasibility.md', THIS_FILE):
         return True
-    if path in RELEASE_DOCS:
+    if path in RELEASE_DOCS or path in V3_DOCS:
         return True
     if path.startswith('docs/archive/'):
         return True
@@ -65,7 +68,8 @@ def test_allow_list_is_exactly_the_spec_list():
     for name in ('CHANGELOG.md', 'docs/roadmap/roadmap.md', 'docs/roadmap/v2.7-acceptance.md',
                  'docs/roadmap/v2.8-runtime-feasibility.md', 'docs/archive/anything.md',
                  'docs/specs/2026-10-24-p3-agent-track-design.md', 'docs/plans/2026-10-28-v2.7-growth-loop.md',
-                 'docs/specs/2026-10-29-v2.8-daily-workflow-design.md', 'docs/plans/2026-10-29-v2.8-daily-workflow.md'):
+                 'docs/specs/2026-10-29-v2.8-daily-workflow-design.md', 'docs/plans/2026-10-29-v2.8-daily-workflow.md',
+                 'docs/specs/2026-11-05-agent-first-rebuild-design.md'):
         assert _allowed(name), name
     for name in ('README.md', 'docs/features/agent-track.md', 'docs/architecture.md', 'docs/knowledge/principles.md',
                  'docs/operations/local-service.md', 'investment_assistant/core/llm/model.py',
