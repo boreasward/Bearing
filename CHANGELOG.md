@@ -2,9 +2,9 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
-## v3（进行中）
+## v3.0.0 — 2026-11-06
 
-v3 agent-first 重做开工（[设计 spec](docs/specs/2026-11-05-agent-first-rebuild-design.md)、[第一阶段 plan](docs/plans/2026-11-05-v3-facts-and-tools.md)，提交 `9ad88ad..c7104de`）。第 0、1 步已落地，全部完成前不打版本号。
+v3 agent-first 重做开工（[设计 spec](docs/specs/2026-11-05-agent-first-rebuild-design.md)、[第一阶段 plan](docs/plans/2026-11-05-v3-facts-and-tools.md)，提交 `9ad88ad..c7104de`）。第 0、1 步已落地；用户在第 0、1、5 步完成后决定发布 v3.0.0，第 2、3、4 步继续在 v3 下迭代。
 
 **第 0、1 步交付：**
 
@@ -38,7 +38,7 @@ v3 agent-first 重做开工（[设计 spec](docs/specs/2026-11-05-agent-first-re
   2. 顺序：原 0 → 1 → 2 → 3 → 4 → 5，现 0 → 1 → 5 → 2 → 3 → 4。
   3. 新旧并行期：不再有；第 2 步的定时直接用 11:30，不必错开到 12:30。
   4. 页面：原为并行期新页面加进现有服务、旧分区原样保留，现为第 3 步直接在外壳上加页面。
-  5. 版本：原为切换完成时记 `v3.0.0`，本次不动版本号，`v3.0.0` 留到第 2、3 步交付之后由用户决定。
+  5. 版本：原为切换完成时记 `v3.0.0`，现为用户在第 0、1、5 步完成后决定发布 v3.0.0，第 2、3、4 步继续在 v3 下迭代。
   6. 删旧表：原为切换时执行，现为迁移写好并验证，执行另行授权。
   7. 验收 4：设计文档写的「`#_ui` 画廊可用」指开发模式（`npm run dev`）；构建产物不含画廊，与 `design-system.md` 一致。
   8. 保留范围：v3 设计 §9 写保留 `derivation/` 整层，实际只保留指标层（`derivation/indicators/`）；`derivation/chain.py`（推导 v2 的计划行，对象表由迁移 033 删除）已删，连带 `execution/plan_levels.py` 里只服务它的计划构造函数、只服务它的常量与版本名。
