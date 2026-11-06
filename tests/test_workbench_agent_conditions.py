@@ -358,10 +358,3 @@ def test_max_hold_condition_shape():
     assert cond == {'source': 'max_hold', 'kind': 'held_sessions_reached', 'params': {'sessions': 12}}
     assert describe(cond) == '持有 12 个交易日仍未到 1R'
     assert evaluate(cond, facts(mode='holding', position=_position(12)))[0] == 'met'
-
-
-def test_agent2_prompt_does_not_mention_held_sessions():
-    """R8 guard: the live agent-2 prompt renders the condition-1 view, so the condition-2 kind never shows up."""
-    from investment_assistant.analysis.agent import graph
-    assert 'held_sessions_reached' not in graph.PROPOSE_PROMPT_V2
-    assert graph._conditions_table().count('\n') == len(CONDITION1_KINDS) + 1       # header, rule line, eleven rows

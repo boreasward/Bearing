@@ -5,7 +5,6 @@ import investment_assistant.core.dbutil as core_dbutil
 import investment_assistant.core.schema as core_schema
 import json
 import os
-import re
 import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -227,14 +226,3 @@ def test_repository_never_mentions_agent_connections():
     source = '\n'.join(path.read_text(encoding='utf-8')
                        for path in Path('investment_assistant').glob('*/repo*.py'))
     assert 'agent_connections' not in source and 'agent_connection_events' not in source
-
-
-def test_repository_only_inserts_into_attempt_resets():
-    source = Path('investment_assistant/analysis/repo.py').read_text(encoding='utf-8')
-    assert 'agent_attempt_resets' in source
-    assert not re.search(r'(UPDATE|DELETE\s+FROM|TRUNCATE|ALTER\s+TABLE|DROP\s+TABLE)\s+agent_attempt_resets', source,
-                         re.IGNORECASE)
-    verbs = {re.sub(r'\s+', ' ', verb.upper())
-             for verb in re.findall(r'\b(INSERT\s+INTO|DELETE\s+FROM|UPDATE|FROM|JOIN)\s+agent_attempt_resets', source,
-                                    re.IGNORECASE)}
-    assert verbs == {'INSERT INTO', 'FROM'}

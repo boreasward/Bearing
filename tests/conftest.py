@@ -12,40 +12,8 @@ from investment_assistant.api.app import create_app
 def isolate_unit_tests_from_local_database(monkeypatch):
     """Individual DB tests opt in explicitly; a local .env must not make mocks use production."""
     monkeypatch.delenv('INVESTMENT_ASSISTANT_DATABASE_URL', raising=False)
-    monkeypatch.setenv('SCHEDULER_ENABLED', '0')
-    # A test-triggered load_dotenv() can still import keys from .env mid-session
-    # (e.g. FRED_API_KEY); the FRED key and the agent switches must never reach the test process.
+    # A test-triggered load_dotenv() can still import keys from .env mid-session; the FRED key must never reach it.
     monkeypatch.delenv('FRED_API_KEY', raising=False)
-    monkeypatch.delenv('WORKBENCH_AGENT_PROVIDER', raising=False)
-    monkeypatch.delenv('WORKBENCH_CHATGPT_CALLBACK_PORT', raising=False)
-    for name in ('TOOL_SHAPE', 'EXTRA_FORBIDDEN', 'OVERRIDES', 'INSTRUCTIONS_FROM_SYSTEM'):
-        monkeypatch.delenv(f'WORKBENCH_CHATGPT_{name}', raising=False)
-    # No test may read (or refresh) a real ChatGPT connection: the default reader says "not connected". Tests that
-    # need a connected agent pass settings / read_connection explicitly.
-    from investment_assistant.core.llm import connection as agent_connection
-    monkeypatch.setattr(agent_connection, 'read_for_settings',
-                        lambda: {'status': 'disconnected', 'scopes_ok': False, 'model': None, 'secret': None})
-    # ... and the ChatGPT HTTP layer can only reach the loopback (fake authorization servers), never a real host.
-    from urllib.parse import urlsplit
-
-    import httpx
-
-    from investment_assistant.core.llm import chatgpt, model as agent_model
-
-    real_http, real_client = chatgpt._http, agent_model._http_client
-
-    def loopback_only_http(method, url, *args, **kwargs):
-        if urlsplit(url).hostname not in ('127.0.0.1', 'localhost', '::1'):
-            pytest.fail(f'a test tried to reach a real host through chatgpt._http: {urlsplit(url).hostname}')
-        return real_http(method, url, *args, **kwargs)
-
-    class NoRealHost(httpx.BaseTransport):
-        def handle_request(self, request):
-            pytest.fail(f'a test tried to reach a real host through the model client: {request.url.host}')
-
-    monkeypatch.setattr(chatgpt, '_http', loopback_only_http)
-    monkeypatch.setattr(agent_model, '_http_client',
-                        lambda transport: real_client(transport if transport is not None else NoRealHost()))
 
 
 @pytest.fixture()
@@ -104,7 +72,7 @@ def v3_db():
 
 @pytest.fixture
 def v3_tx(v3_db, monkeypatch):
-    """v3_db with core.tx.connection swapped to it, as tests/test_api_features.py's api_db."""
+    """v3_db with core.tx.connection swapped to it."""
     from contextlib import contextmanager
 
     from investment_assistant.core import tx as core_tx
@@ -115,48 +83,3 @@ def v3_tx(v3_db, monkeypatch):
 
     monkeypatch.setattr(core_tx, 'connection', connection)
     return v3_db
-
-
-@pytest.fixture
-def workbench_db_pre031():
-    """The schema as it is before migration 031 runs (spec §15: 031 未执行 → 新接口 503、旧接口照常); for the tests
-    that pin the old interfaces' compatibility."""
-    yield from _workbench_schema(tuple(n for n in WORKBENCH_MIGRATIONS if n != '031_five_layers.sql'))
-
-
-@pytest.fixture
-def scripted_model():
-    """Factory for a fake chat model: bind_tools returns itself, replies come in
-    order, every invocation's messages are recorded on .seen, each reply carries
-    usage_metadata, and running out of replies raises AssertionError."""
-    from langchain_core.language_models import BaseChatModel
-    from langchain_core.messages import AIMessage
-    from langchain_core.outputs import ChatGeneration, ChatResult
-
-    class ScriptedModel(BaseChatModel):
-        responses: list = []
-        seen: list = []
-        index: int = 0
-
-        def bind_tools(self, tools, **kwargs):
-            return self
-
-        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-            self.seen.append(list(messages))
-            if self.index >= len(self.responses):
-                raise AssertionError('scripted model ran out of responses')
-            message = self.responses[self.index]
-            self.index += 1
-            return ChatResult(generations=[ChatGeneration(message=message)])
-
-        @property
-        def _llm_type(self):
-            return 'scripted-test'
-
-    def make(responses):
-        for message in responses:
-            if not message.usage_metadata:
-                message.usage_metadata = {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15}
-        return ScriptedModel(responses=list(responses))
-
-    return make

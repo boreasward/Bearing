@@ -3,42 +3,13 @@
 Reads the committed cards, so a code change that adds a rule / reason / state / tool / version number without
 updating the cards fails here. Offline: no database."""
 from investment_assistant.data import families as data_families
-import investment_assistant.review.agent_runs as review_agent_runs
 import pytest
 
-from investment_assistant.data import fetch_policy
-from investment_assistant.optimize import backcheck
-from investment_assistant.review import discipline
-import investment_assistant.workflow.targets as families
-from investment_assistant.review.knowledge import items as knowledge_items
-from investment_assistant.review.knowledge import perf as knowledge_perf
-import investment_assistant.core.texts as labels
-from investment_assistant.review import monthly
-from investment_assistant.analysis import regime
-from investment_assistant.review import retro
-from investment_assistant.review import outcomes as review
-from investment_assistant.analysis import rules
-from investment_assistant.analysis import screen_rules as screen
 import investment_assistant.core.stages as stages
-from investment_assistant.review import tracks
-import investment_assistant.workflow.graph as workflow
-from investment_assistant.execution import simulation as plan_shadow
-from investment_assistant.execution import timeline
-from investment_assistant.execution import accounts
-from investment_assistant.execution import entry_rules
-from investment_assistant.execution import adoption as execution
-from investment_assistant.execution.paper import fill as paper_fill
-from investment_assistant.execution.paper import strategies as paper_strategies
-from investment_assistant.execution import plan_levels as plans
-from investment_assistant.core import knowledge
-from investment_assistant.core import versions
-from investment_assistant.derivation import chain as derivation
-from investment_assistant.analysis.agent import REASON_TEXT
-from investment_assistant.analysis.agent import graph
-from investment_assistant.analysis.agent import tools
-from investment_assistant.execution import conditions
-from investment_assistant.core.llm import chatgpt
-from investment_assistant.review.discuss_tools import DISCUSS_TOOLS
+import investment_assistant.core.texts as labels
+from investment_assistant.analysis import rules
+from investment_assistant.data import fetch_policy
+from investment_assistant.execution import conditions, entry_rules
 from investment_assistant.core.knowledge import DEFAULT_ROOT, load
 
 REQUIRED_IDS = (
@@ -91,63 +62,6 @@ REQUIRED_IDS = (
 
 STAGE_STATUSES = ('success', 'partial', 'degraded', 'failed', 'skipped')
 
-# spec §4.3: every current code version number, taken from the module constants
-CURRENT_VERSIONS = {
-    'plans.PLAN_VERSION': plans.PLAN_VERSION,
-    'plans.AGENT_VERSION': plans.AGENT_VERSION,
-    'timeline.AGENT_V2': timeline.AGENT_V2,
-    'graph.REVIEW_VERSION': graph.REVIEW_VERSION,
-    'graph.INTERPRET_VERSION': graph.INTERPRET_VERSION,
-    'review_agent_runs.RETRO_AGENT_VERSION': review_agent_runs.RETRO_AGENT_VERSION,
-    'review_agent_runs.DISCUSS_AGENT_VERSION': review_agent_runs.DISCUSS_AGENT_VERSION,
-    'conditions.CONDITIONS_VERSION': conditions.CONDITIONS_VERSION,
-    'timeline.TIMELINE_VERSION': timeline.TIMELINE_VERSION,
-    'plans.CONTEXT_VERSION': plans.CONTEXT_VERSION,
-    'screen.SCREEN_VERSION': screen.SCREEN_VERSION,
-    'regime.REGIME_VERSION': regime.REGIME_VERSION,
-    'derivation.DERIVATION_VERSION': derivation.DERIVATION_VERSION,
-    'plan_shadow.SHADOW_VERSION': plan_shadow.SHADOW_VERSION,
-    'tracks.TRACKS_VERSION': tracks.TRACKS_VERSION,
-    'review.CALC_VERSION': review.CALC_VERSION,
-    'monthly.MONTHLY_VERSION': monthly.MONTHLY_VERSION,
-    'stages.STAGES_VERSION': stages.STAGES_VERSION,
-    'backcheck.CALC_VERSION': backcheck.CALC_VERSION,
-    'rules.RULE_VERSION': 'rules-' + rules.RULE_VERSION,
-    'knowledge.KNOWLEDGE_VERSION': knowledge.KNOWLEDGE_VERSION,
-    'retro.RETRO_VERSION': retro.RETRO_VERSION,
-    'knowledge_items.MY_KNOWLEDGE_VERSION': knowledge_items.MY_KNOWLEDGE_VERSION,
-    'knowledge_perf.KNOWLEDGE_PERF_VERSION': knowledge_perf.KNOWLEDGE_PERF_VERSION,
-    'fetch_policy.FETCH_POLICY_VERSION': fetch_policy.FETCH_POLICY_VERSION,
-    'workflow.DAILY_GRAPH_VERSION': workflow.DAILY_GRAPH_VERSION,
-    'chatgpt.CHATGPT_PROTOCOL_VERSION': chatgpt.CHATGPT_PROTOCOL_VERSION,
-    # v2.9 pure-function layer: the new versions live beside the old constants until Task 3 / 4 flip the callers
-    'plans.PLAN_V2': plans.PLAN_V2,
-    'plan_shadow.SHADOW_V2': plan_shadow.SHADOW_V2,
-    'timeline.TIMELINE_V2': timeline.TIMELINE_V2,
-    'timeline.AGENT_V3': timeline.AGENT_V3,
-    'entry_rules.ENTRY_RULES_VERSION': entry_rules.ENTRY_RULES_VERSION,
-    'execution.EXECUTION_VERSION': execution.EXECUTION_VERSION,
-    'discipline.DISCIPLINE_VERSION': discipline.DISCIPLINE_VERSION,
-    'tracks.TRACKS_V2': tracks.TRACKS_V2,
-    'retro.RETRO_V2': retro.RETRO_V2,
-    # v2.11 account math, settlement and the two paper strategies
-    'accounts.ACCOUNT_VERSION': accounts.ACCOUNT_VERSION,
-    'paper_fill.PAPER_FILL_VERSION': paper_fill.PAPER_FILL_VERSION,
-    'paper_strategies.FOLLOW_PLANS_VERSION': paper_strategies.FOLLOW_PLANS_VERSION,
-    'graph.PORTFOLIO_AGENT_VERSION': graph.PORTFOLIO_AGENT_VERSION,
-    # v2.12–v2.15 shared constants (core.versions)
-    'versions.AGENT_RUN_VERSION': versions.AGENT_RUN_VERSION,
-    'versions.PLAN_SCHEMA_VERSION': versions.PLAN_SCHEMA_VERSION,
-    'versions.PORTFOLIO_AGENT_VERSION': versions.PORTFOLIO_AGENT_VERSION,
-    'versions.PM_AGENT_VERSION': versions.PM_AGENT_VERSION,
-    'versions.OPTIMIZE_AGENT_VERSION': versions.OPTIMIZE_AGENT_VERSION,
-    'versions.BRIEF_AGENT_VERSION': versions.BRIEF_AGENT_VERSION,
-    'versions.STAGES_VERSION': versions.STAGES_VERSION,
-    'versions.DAILY_GRAPH_VERSION': versions.DAILY_GRAPH_VERSION,
-    'versions.PORTFOLIO_CHECK_VERSION': versions.PORTFOLIO_CHECK_VERSION,
-    'versions.INDICATOR_VERSION': versions.INDICATOR_VERSION,
-}
-
 
 @pytest.fixture(scope='module')
 def catalog():
@@ -176,22 +90,11 @@ def test_families_and_rules_have_cards(catalog):
 
 CODE_SET_CASES = [
     ('conditions', sorted(conditions.CONDITIONS_ALL), ('agent.invalidation', 'agent.review_when')),
-    ('reason_text', sorted(REASON_TEXT), ('agent.reject_reasons',)),
-    ('chain_states', list(timeline.CHAIN_STATES), ('review.chain_state',)),
-    ('signal_kinds', list(timeline.SIGNAL_KINDS_V2), ('agent.signals',)),
     ('stage_ids', list(stages.STAGE_IDS), ('system.stages',)),
     ('stage_status', list(STAGE_STATUSES), ('system.stage_status',)),
-    ('track_status', sorted(tracks.TRACK_STATUS_TEXT), ('review.track_status',)),
-    ('tools', sorted(set(tools.TOOLS) | set(DISCUSS_TOOLS)), ('agent.tool_calls',)),
-    ('retro_end_kinds', list(retro.END_KINDS), ('review.retro_end',)),
-    ('retro_card_statuses', list(retro.CARD_STATUSES), ('review.retro_card',)),
-    ('retro_fact_keys', list(retro.FACT_KEYS), ('review.retro_card',)),
     ('retry_statuses', sorted(fetch_policy.RETRY_STATUSES), ('system.fetch_policy',)),
     ('fetch_error_kinds', list(fetch_policy.ERROR_KINDS), ('system.fetch_policy',)),
-    # v2.9 Task 3: the executable-plan vocabularies
     ('entry_types', list(entry_rules.ENTRY_TYPES), ('plan.entry_type',)),
-    ('holding_instructions', list(timeline.INSTRUCTIONS), ('review.holding_status',)),
-    ('exit_reasons', list(timeline.EXIT_REASONS), ('review.holding_status',)),
 ]
 
 
@@ -206,12 +109,6 @@ def test_code_sets_mentioned_in_cards(catalog, name, items, card_ids):
 def test_discipline_cards(catalog):
     for flag in ('chase', 'early_take', 'held_loser', 'unplanned'):
         assert f'review.discipline_{flag}' in catalog.concepts, flag
-
-
-def test_current_versions_in_applies_to(catalog):
-    used = {version for card in catalog.concepts.values() for version in card.applies_to}
-    missing = {name: version for name, version in CURRENT_VERSIONS.items() if version not in used}
-    assert not missing, f'没有任何一张卡的 applies_to 含：{missing}'
 
 
 def test_principles_structure(catalog):

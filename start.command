@@ -7,5 +7,5 @@ if [[ ! -x .venv/bin/python ]]; then
   exit 1
 fi
 
-# 本地入口先加载配置再导入服务，避免继承旧调度开关或过早读取端口。
+# 本地入口先加载 .env 再导入服务，避免服务在配置就绪前读取环境变量。
 exec .venv/bin/python scripts/start_local.py

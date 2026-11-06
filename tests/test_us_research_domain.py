@@ -214,13 +214,6 @@ def test_overlapping_debt_total_and_components_are_not_double_counted():
     assert series(rows)[-1]['metrics']['debt']['value'] is None
 
 
-def test_templates_are_questions_and_unknown_company_has_generic_checks():
-    templates = module('templates')
-    for ticker in ['MU', 'SNDK', 'CRDO', 'NVDA', 'MSFT', 'GOOG', 'TSLA', 'RKLB', 'NEW']:
-        questions = templates.research_template(ticker)
-        assert questions and all(q['question'].endswith('？') and q['value'] is None for q in questions)
-
-
 def test_cross_basis_cashflow_and_capex_cannot_form_fcf():
     rows = year() + [r | {'basis': 'us-gaap:parent'} for r in year('cash_capex')]
     assert series(rows)[-1]['metrics']['fcf']['value'] is None

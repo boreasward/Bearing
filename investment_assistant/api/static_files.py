@@ -6,15 +6,12 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from investment_assistant.api.http import StaticResponse
-from investment_assistant.api.status_page import STATUS_PAGE_HTML
 
 STATIC_DIR = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
 def static_response_for_path(path: str) -> StaticResponse | None:
     parsed_path = unquote(urlparse(path).path)
-    if parsed_path == "/status":
-        return StaticResponse(200, "text/html; charset=utf-8", STATUS_PAGE_HTML.encode("utf-8"))
     if parsed_path == "/":
         target = STATIC_DIR / "index.html"
     elif parsed_path.startswith("/assets/"):

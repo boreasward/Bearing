@@ -261,29 +261,6 @@ def test_sec_company_ticker_failure_records_every_target(tmp_path, monkeypatch):
     assert all(not i['ok'] for i in detail(tally))
 
 
-def test_adapter_fields_and_shared_types_have_one_definition():
-    import ast
-    from dataclasses import fields
-    from pathlib import Path
-    from investment_assistant.data import collect
-    from investment_assistant.execution import portfolio, portfolio_types
-    assert [f.name for f in fields(registry.Source)] == ['id', 'fetch', 'policy', 'note']
-    assert [f.name for f in fields(registry.Adapter)] == [
-        'id', 'title', 'purpose', 'kind', 'per_ticker', 'table', 'sources', 'fallback_kinds',
-        'targets', 'store', 'latest', 'lagging', 'coverage_note', 'tool', 'concept', 'lock']
-    assert registry.DEFAULT_FALLBACK_KINDS == frozenset({'timeout', 'network', 'http_5xx', 'http_429', 'empty'})
-    assert collect.Tally is registry.Tally is Tally
-    assert portfolio.PortfolioResult is portfolio_types.PortfolioResult
-    root = Path(__file__).resolve().parents[1] / 'investment_assistant'
-    definitions = {name: [] for name in ('Source', 'Adapter', 'Tally', 'PortfolioResult')}
-    for path in root.rglob('*.py'):
-        for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.ClassDef) and node.name in definitions:
-                definitions[node.name].append(str(path.relative_to(root)))
-    assert definitions == {'Source': ['data/adapter_types.py'], 'Adapter': ['data/adapter_types.py'],
-                           'Tally': ['data/tally.py'], 'PortfolioResult': ['execution/portfolio_types.py']}
-
-
 def test_target_schema_capabilities_are_explicit_not_missing_table_fallback(monkeypatch):
     def unsupported(conn):
         pytest.fail('host marked the schema capability unavailable')

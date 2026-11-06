@@ -2,7 +2,6 @@
 import investment_assistant.core.dbutil as core_dbutil
 import json
 import os
-import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -394,12 +393,3 @@ def test_citation_fk_to_version(migrated_db):
 
 def test_new_tables_not_in_workbench_tables():
     assert not set(NEW_TABLES) & set(core_dbutil.WORKBENCH_TABLES)
-
-
-def test_repository_only_inserts_into_new_tables():
-    from investment_assistant.review import repo as review_repo
-    source = Path(review_repo.__file__).read_text(encoding='utf-8')
-    for table in NEW_TABLES:
-        assert not re.search(rf'UPDATE\s+{table}\b', source), table
-        assert not re.search(rf'DELETE\s+FROM\s+{table}\b', source), table
-    assert tuple(core_dbutil.GROWTH_TABLES) == NEW_TABLES

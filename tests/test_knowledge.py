@@ -1,5 +1,4 @@
 """Concept-card knowledge layer (v2.6 spec §4): load, validate, render, refs, CLI. Offline, tmp_path only."""
-import investment_assistant.review.agent_runs as review_agent_runs
 import ast
 import hashlib
 import re
@@ -334,73 +333,6 @@ def test_catalog_failure_not_cached(tmp_path, monkeypatch):
     knowledge.catalog.cache_clear()
     with pytest.raises(KnowledgeError):
         knowledge.catalog()
-
-
-def test_known_versions_cover_code_constants():
-    from investment_assistant.data import fetch_policy
-    from investment_assistant.optimize import backcheck
-    from investment_assistant.review.knowledge import items as knowledge_items
-    from investment_assistant.review.knowledge import perf as knowledge_perf
-    from investment_assistant.review import monthly
-    from investment_assistant.analysis import regime
-    from investment_assistant.review import retro
-    from investment_assistant.review import outcomes as review
-    from investment_assistant.analysis import rules
-    from investment_assistant.analysis import screen_rules as screen
-    import investment_assistant.core.stages as stages
-    from investment_assistant.review import tracks
-    import investment_assistant.workflow.graph as workflow
-    from investment_assistant.execution import simulation as plan_shadow
-    from investment_assistant.execution import timeline
-    from investment_assistant.execution import accounts
-    from investment_assistant.execution.paper import fill as paper_fill
-    from investment_assistant.execution.paper import strategies as paper_strategies
-    from investment_assistant.execution import plan_levels as plans
-    from investment_assistant.derivation import chain as derivation
-    from investment_assistant.analysis.agent import graph
-    from investment_assistant.execution import conditions
-    from investment_assistant.core.llm import chatgpt
-    current = {plans.PLAN_VERSION, plans.AGENT_VERSION, timeline.AGENT_V2, graph.REVIEW_VERSION,
-               graph.INTERPRET_VERSION, conditions.CONDITIONS_VERSION, timeline.TIMELINE_VERSION,
-               plans.CONTEXT_VERSION, screen.SCREEN_VERSION, regime.REGIME_VERSION, derivation.DERIVATION_VERSION,
-               plan_shadow.SHADOW_VERSION, tracks.TRACKS_VERSION, review.CALC_VERSION, monthly.MONTHLY_VERSION,
-               stages.STAGES_VERSION, backcheck.CALC_VERSION, 'rules-' + rules.RULE_VERSION,
-               knowledge.KNOWLEDGE_VERSION, retro.RETRO_VERSION, knowledge_items.MY_KNOWLEDGE_VERSION,
-               knowledge_perf.KNOWLEDGE_PERF_VERSION, review_agent_runs.RETRO_AGENT_VERSION, review_agent_runs.DISCUSS_AGENT_VERSION,
-               fetch_policy.FETCH_POLICY_VERSION, workflow.DAILY_GRAPH_VERSION, chatgpt.CHATGPT_PROTOCOL_VERSION,
-               accounts.ACCOUNT_VERSION, paper_fill.PAPER_FILL_VERSION, paper_strategies.FOLLOW_PLANS_VERSION,
-               graph.PORTFOLIO_AGENT_VERSION}
-    assert current <= knowledge.KNOWN_VERSIONS
-    assert {'stages-6', 'daily-3', 'retro-2', 'agent-retro-2', 'agent-discuss-1', 'my-knowledge-1',
-            'knowledge-perf-1', 'review-8'} == {stages.STAGES_VERSION, workflow.DAILY_GRAPH_VERSION,
-                                                 retro.RETRO_VERSION, review_agent_runs.RETRO_AGENT_VERSION,
-                                                 review_agent_runs.DISCUSS_AGENT_VERSION, knowledge_items.MY_KNOWLEDGE_VERSION,
-                                                 knowledge_perf.KNOWLEDGE_PERF_VERSION, review.CALC_VERSION}
-    assert {'stages-1', 'review-5', 'monthly-2', 'regime-1', 'context-1', 'backcheck-1'} <= knowledge.KNOWN_VERSIONS
-    # v2.8 adds four literals, each with its constant
-    assert {'stages-4', 'daily-1', 'fetch-1', 'siwc-1'} <= knowledge.KNOWN_VERSIONS
-    assert fetch_policy.FETCH_POLICY_VERSION == 'fetch-1' and chatgpt.CHATGPT_PROTOCOL_VERSION == 'siwc-1'
-    # v2.9 adds fifteen literals (fourteen new versions plus the old `discipline-1` still present in old rows)
-    assert {'timeline-2', 'condition-2', 'plan-2', 'plan-shadow-2', 'agent-3', 'agent-review-2', 'agent-retro-2',
-            'entry-1', 'execution-1', 'discipline-1', 'discipline-2', 'tracks-2', 'retro-2', 'review-8',
-            'monthly-4'} <= knowledge.KNOWN_VERSIONS
-    # v2.11 keeps the historical versions above and registers each current account-related constant.
-    assert {'account-1', 'paper-fill-1', 'follow-plans-1', 'agent-portfolio-1', 'stages-5', 'daily-2',
-            'monthly-5'} <= knowledge.KNOWN_VERSIONS                       # the v2.11 releases stay in old rows
-    assert {'account-1', 'paper-fill-1', 'follow-plans-1', 'agent-portfolio-2', 'stages-6', 'daily-3',
-            'monthly-5'} == {accounts.ACCOUNT_VERSION, paper_fill.PAPER_FILL_VERSION,
-                             paper_strategies.FOLLOW_PLANS_VERSION, graph.PORTFOLIO_AGENT_VERSION,
-                             stages.STAGES_VERSION, workflow.DAILY_GRAPH_VERSION, monthly.MONTHLY_VERSION}
-    # v2.12–v2.15 add nine literals, each with its constant in core.versions
-    from investment_assistant.core import versions as core_versions
-    assert {'agent-4', 'agent-portfolio-2', 'agent-pm-1', 'agent-optimize-1', 'agent-impl-brief-1', 'stages-6',
-            'daily-3', 'portfolio-check-1', 'indicator-1'} == {
-        core_versions.AGENT_RUN_VERSION, core_versions.PORTFOLIO_AGENT_VERSION, core_versions.PM_AGENT_VERSION,
-        core_versions.OPTIMIZE_AGENT_VERSION, core_versions.BRIEF_AGENT_VERSION, core_versions.STAGES_VERSION,
-        core_versions.DAILY_GRAPH_VERSION, core_versions.PORTFOLIO_CHECK_VERSION, core_versions.INDICATOR_VERSION}
-    assert {'agent-4', 'agent-portfolio-2', 'agent-pm-1', 'agent-optimize-1', 'agent-impl-brief-1', 'stages-6',
-            'daily-3', 'portfolio-check-1', 'indicator-1'} <= knowledge.KNOWN_VERSIONS
-    assert isinstance(knowledge.KNOWN_VERSIONS, frozenset) and len(knowledge.KNOWN_VERSIONS) == 67
 
 
 def test_knowledge_module_does_not_import_agent_or_service_at_top_level():

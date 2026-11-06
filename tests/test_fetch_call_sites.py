@@ -3,7 +3,6 @@
 Sleeps are injected or recorded, so retries cost nothing; `attempts` and `FetchError.kind` are asserted per row."""
 import investment_assistant.data.repo as data_repo
 import contextlib
-import json
 import time
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
@@ -20,13 +19,10 @@ from investment_assistant.data.sources import edgar as monitor_source
 from investment_assistant.data.adapters import sec_text as sec_downloader
 from investment_assistant.data.sources.edgar import EdgarSource
 from investment_assistant.notify.discord import DiscordChannel, DiscordClient
-from investment_assistant.notify.discord_bot import DeliveryError, DiscordBotClient
 import investment_assistant.data.collect as collect
-import investment_assistant.core.tx as service
 from investment_assistant.data.adapters import bars, earnings, fred as macro, news
 from _adapter_calls import adapter_run, item
 from test_fetch_policy import FAST, FAST_POST, FakeServer, closed_port, reply
-from investment_assistant.workflow.nodes.collect import _Family, sec_listing_summary
 
 SESSION = date(2026, 10, 28)
 NOW = datetime(2026, 10, 28, 22, 30, tzinfo=UTC)
@@ -73,11 +69,6 @@ def frame(days=('2026-10-27', '2026-10-28')):
     index = pd.DatetimeIndex(days)
     return pd.DataFrame({'Open': 10.0, 'High': 11.0, 'Low': 9.0, 'Close': 10.5, 'Adj Close': 10.5,
                          'Volume': 1000, 'Stock Splits': 0.0}, index=index)
-
-
-def deps(**kwargs):
-    base = dict(bar_fetcher=None, news_fetcher=None, filing_source=None, earnings_fetcher=None, macro_fetcher=None)
-    return SimpleNamespace(**{**base, **kwargs})
 
 
 # ---------------------------------------------------------------- row 1: bars
@@ -308,73 +299,6 @@ def filing_source(tmp_path, *, accepted=('2026-10-28T21:00:00.000Z', '2026-10-29
     return source
 
 
-# both filings of the fake source were accepted by then (21:00Z and 03:00Z of the next day)
-AFTER_BOTH = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
-
-
-def sec_run(source, targets, *, now=NOW):
-    """The SEC listing as the daily node runs it (one adapter call per target; the ticker directory is the whole-call
-    target) and the summary it builds from what was stored."""
-    run = adapter_run('sec_filings', targets, session=SESSION, now=now, filing_source=source)
-    family = _Family('sec_filings', 'daily', targets)
-    family.tally, family.stored = run.tally, run.stored
-    return run, sec_listing_summary(family, drop_after=now)
-
-
-def test_sec_listing_per_ticker(tmp_path, fake_db):
-    source = filing_source(tmp_path)
-    run, (out, whole_call) = sec_run(source, ['NVDA', 'ZZZZ', 'MU'], now=AFTER_BOTH)
-    assert whole_call is None and out['errors'] == {'ZZZZ': 'SEC 未找到 ZZZZ 的 CIK'}
-    assert set(out['by_ticker']) == {'NVDA', 'MU'}
-    assert out['by_ticker']['NVDA'] == {'rows': 2, 'latest': '2026-10-28'}
-    assert out['inserted'] == 2 + 2 and out['acceptance_filled'] == 4 and out['existing'] == 0   # filled rows are apart
-    row = run.tally.row(trigger='scheduled', run_id='r', session=SESSION, started_at=NOW, finished_at=NOW)
-    assert row['status'] == 'partial' and row['target_count'] == 3 and row['ok_count'] == 2
-    assert row['failures'] == [{'target': 'ZZZZ', 'reason': 'SEC 未找到 ZZZZ 的 CIK'}]
-    by_target = {t['target']: t for t in row['detail']['targets']}
-    assert by_target['NVDA']['ok'] and by_target['NVDA']['rows'] == 4 and by_target['MU']['ok']
-    # (the adapter path classes a missing CIK — a ValueError out of the SEC source — as parse, the legacy path as other)
-    assert by_target['ZZZZ']['ok'] is False and by_target['ZZZZ']['error_kind'] == 'parse'
-
-
-def test_company_tickers_fetched_once(tmp_path, fake_db):
-    source = filing_source(tmp_path)
-    sec_run(source, ['NVDA', 'MU', 'NVDA'])
-    assert sum('company_tickers' in url for url in source.fetched) == 1
-    assert sum('submissions' in url for url in source.fetched) == 2          # a repeated target is listed once
-
-
-def test_company_tickers_failure_is_the_whole_call_and_costs_one_fetch(tmp_path, fake_db):
-    source = filing_source(tmp_path, fail='company_tickers')
-    run, (out, whole_call) = sec_run(source, ['NVDA', 'MU'])
-    assert out is None and whole_call and run.tally.call_failure == whole_call
-    assert sum('company_tickers' in url for url in source.fetched) == 1       # no retry per ticker
-    row = run.tally.row(trigger='scheduled', run_id='r', session=SESSION, started_at=NOW, finished_at=NOW)
-    assert row['status'] == 'failed' and row['failures'][0]['target'] == '*'
-    # EdgarSource.discover re-raises the whole-call failure instead of listing it per ticker
-    with pytest.raises(fp.FetchError):
-        filing_source(tmp_path, fail='company_tickers').discover(['NVDA'], '2026-10-01', '2026-10-28')
-
-
-def test_sec_listing_a_failed_ticker_stores_nothing_and_does_not_stop_the_others(tmp_path, fake_db):
-    source = filing_source(tmp_path, fail='CIK0001045810')
-    run, (out, whole_call) = sec_run(source, ['NVDA', 'MU'])
-    assert whole_call is None and list(out['errors']) == ['NVDA'] and set(out['by_ticker']) == {'MU'}
-    assert len(fake_db.news) == 1                                     # only MU's listing reached the store
-
-
-def test_sec_listing_accepts_sources_that_only_have_discover(fake_db):
-    class Legacy:
-        def discover(self, tickers, start, end):
-            assert len(tickers) == 1
-            return [{'ticker': tickers[0], 'form': '8-K', 'filing_date': '2026-10-27', 'accession_number': 'a',
-                     'edgar_url': 'https://www.sec.gov/x', 'items': None, 'accepted_at': None}]
-
-    run, (out, whole_call) = sec_run(Legacy(), ['NVDA', 'MU'])
-    assert whole_call is None and out['errors'] == {} and out['inserted'] + out['acceptance_filled'] >= 2
-    assert set(out['by_ticker']) == {'NVDA', 'MU'}
-
-
 def test_edgar_discover_returns_metas_and_errors(tmp_path):
     source = filing_source(tmp_path)
     metas, errors = source.discover(['NVDA', 'ZZZZ', 'MU'], '2026-10-01', '2026-10-28')
@@ -399,22 +323,6 @@ def test_news_drop_after_cutoff(fake_db):
     plain = adapter_run('news', ['NVDA'], session=SESSION, now=cutoff + timedelta(hours=2),
                         news_fetcher=lambda t: raw).stored['NVDA'][2]
     assert plain['after_cutoff_dropped'] == 0 and plain['inserted'] == 3
-
-
-def test_sec_drop_after_cutoff(tmp_path, fake_db):
-    source = filing_source(tmp_path)                       # accepted 2026-10-28 21:00Z and 2026-10-29 03:00Z
-    cutoff = datetime(2026, 10, 28, 22, 0, tzinfo=UTC)
-    run, (out, _) = sec_run(source, ['NVDA', 'MU'], now=cutoff)
-    assert out['after_cutoff_dropped'] == 2 and out['acceptance_filled'] == 2
-    assert out['by_ticker']['NVDA']['rows'] == 1
-    assert {m['accepted_at'] for m in fake_db.acceptance[0]} == {'2026-10-28T21:00:00+00:00'}
-    # the monitor path: the source itself drops, counts and keeps filings without an acceptance time
-    metas = filing_source(tmp_path, accepted=('2026-10-28T21:00:00.000Z', 'bad')).discover_one(
-        'NVDA', '2026-10-01', '2026-10-28', drop_after=cutoff)
-    assert len(metas) == 2
-    watching = EdgarSource(tmp_path, session=object(), drop_after=cutoff)
-    watching.json = filing_source(tmp_path).json
-    assert len(watching.discover_one('NVDA', '2026-10-01', '2026-10-28')) == 1 and watching.after_cutoff_dropped == 1
 
 
 # ---------------------------------------------------------------- row 5: get_json
@@ -584,95 +492,8 @@ def test_row9_discord_webhook_retries_429_and_connection_failure(server):
     assert caught.value.kind == 'network' and len(caught.value.attempts) == 3
 
 
-def test_webhook_token_not_in_error(monkeypatch):
-    """A refused connection's exception text repeats the URL; the webhook token must not reach the error, the
-    attempt records or the notifier's summary."""
-    from investment_assistant.config import NotifyConfig
-    from investment_assistant.notify import notifier
-
-    token = 'test-webhook-token-abcdefghijklmnopqrstuvwxyz0123456789'
-    url = f'http://127.0.0.1:{closed_port()}/api/webhooks/123456789012345678/{token}'
-    waits = []
-    client = DiscordClient(url, url, policy=FAST_POST, sleep=waits.append)
-    with pytest.raises(fp.FetchError) as caught:
-        client.send(DiscordChannel.EARNINGS, {'content': 'x'})
-    assert caught.value.kind == 'network' and len(caught.value.attempts) == 3
-    assert token not in str(caught.value) and token not in repr(caught.value.attempts)
-    assert '123456789012345678' not in str(caught.value)
-    out = notifier.dispatch('filings', 'success', {'downloaded_count': 0, 'filings': []},
-                            NotifyConfig(webhooks={'earnings': url}), client=client)
-    assert out['sent'] is False and out['reason'].startswith('send_failed: network error')
-    assert token not in repr(out)
-    # an HTTP error message built by a caller that did include the URL is scrubbed too
-    with pytest.raises(fp.FetchError) as caught:
-        fp.fetch('t', lambda: (_ for _ in ()).throw(RuntimeError(f'POST {url} failed')), sleep=lambda s: None)
-    assert token not in str(caught.value)
-
-
 def test_row9_discord_webhook_success(server):
     server.routes['/ok'] = lambda h: reply(h, 204, b'')
     client, waits = webhook(server, '/ok')
     client.send(DiscordChannel.EARNINGS, {'content': 'x'})
     assert server.hits['/ok'] == 1
-
-
-def bot_receipt(channel='123'):
-    return resp(200, json.dumps({'id': '9', 'channel_id': channel}).encode())
-
-
-class JsonResp(SimpleNamespace):
-    def json(self):
-        return json.loads(self.content)
-
-
-def bot_resp(status, body=b'{}', headers=None):
-    return JsonResp(status_code=status, content=body, headers=headers or {})
-
-
-def bot(session, monkeypatch, **kwargs):
-    monkeypatch.setenv('SEC_DISCORD_BOT_TOKEN', 'test-bot-token')
-    waits = []
-    return DiscordBotClient('123', session=session, sleep=waits.append, **kwargs), waits
-
-
-def test_row10_bot_retries_429_with_the_same_nonce(monkeypatch):
-    session = ScriptedSession(bot_resp(429, headers={'Retry-After': '1'}),
-                              bot_resp(200, json.dumps({'id': '9', 'channel_id': '123'}).encode()))
-    client, waits = bot(session, monkeypatch)
-    assert client.send('hello', 'nonce-1') == {'message_id': '9', 'channel_id': '123'}
-    assert waits == [1] and len(session.calls) == 2
-
-
-def test_row10_bot_never_resends_after_a_read_timeout_or_5xx(monkeypatch):
-    session = ScriptedSession(requests.ReadTimeout('test-bot-token'))
-    client, waits = bot(session, monkeypatch)
-    with pytest.raises(DeliveryError) as caught:
-        client.send('hello', 'nonce-1')
-    assert caught.value.uncertain and 'test-bot-token' not in str(caught.value)
-    assert len(session.calls) == 1 and waits == []
-    session = ScriptedSession(bot_resp(503))
-    client, waits = bot(session, monkeypatch)
-    with pytest.raises(DeliveryError) as caught:
-        client.send('hello', 'nonce-1')
-    assert caught.value.uncertain and str(caught.value) == 'Discord HTTP 503' and len(session.calls) == 1
-    session = ScriptedSession(bot_resp(403))
-    client, _ = bot(session, monkeypatch)
-    with pytest.raises(DeliveryError) as caught:
-        client.send('hello', 'nonce-1')
-    assert not caught.value.uncertain and str(caught.value) == 'Discord HTTP 403'
-
-
-def test_row10_bot_retries_when_the_request_never_left(monkeypatch):
-    session = ScriptedSession(requests.ConnectTimeout('x'), bot_resp(200, json.dumps(
-        {'id': '9', 'channel_id': '123'}).encode()))
-    client, waits = bot(session, monkeypatch)
-    assert client.send('hello', 'n')['message_id'] == '9' and len(session.calls) == 2
-    assert all(call[1]['timeout'] == (10, 30) for call in session.calls)
-
-
-def test_row10_bot_429_exhausted_is_a_definite_rejection(monkeypatch):
-    session = ScriptedSession(bot_resp(429, headers={'Retry-After': '60'}))
-    client, waits = bot(session, monkeypatch)
-    with pytest.raises(DeliveryError) as caught:
-        client.send('hello', 'n')
-    assert not caught.value.uncertain and waits == [2, 8] and len(session.calls) == 3

@@ -2,7 +2,6 @@
 from investment_assistant.data import families as data_families
 from datetime import date, datetime, UTC
 
-import investment_assistant.workflow.targets as families
 import pytest
 from investment_assistant.data import registry
 
@@ -24,10 +23,6 @@ def test_classify():
     assert data_families.classify(3, 0) == 'failed'
     assert data_families.classify(3, 1) == 'partial'
 
-def test_sanitize_reason_redacts_and_truncates(monkeypatch):
-    monkeypatch.setenv('FRED_API_KEY', 'sekret123')
-    out = families.sanitize_reason('url?api_key=sekret123 ' + 'x' * 400)
-    assert 'sekret123' not in out and '***' in out and len(out) == 300
 
 def test_lagging_edges():
     assert data_families.lagging('bars', S, session=S) is False

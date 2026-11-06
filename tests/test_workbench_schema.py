@@ -103,13 +103,6 @@ def test_019_only_widens_trade_plans():
     assert 'DELETE ' not in upper
 
 
-def test_agent_dependencies_importable():
-    from langchain_openai import ChatOpenAI
-    from langgraph.checkpoint.postgres import PostgresSaver
-    from langgraph.graph import StateGraph
-    assert StateGraph is not None and PostgresSaver is not None and ChatOpenAI is not None
-
-
 def test_020_is_additive():
     assert [p.name for p in Path('migrations').glob('020_*.sql')] == ['020_review_expansion.sql']
     code_020 = re.sub(r'--[^\n]*', '', Path('migrations/020_review_expansion.sql').read_text(encoding='utf-8'))

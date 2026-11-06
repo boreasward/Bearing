@@ -76,29 +76,3 @@ def render_discord(notification: Notification) -> dict:
             "footer": {"text": notification.footer},
         }]
     }
-
-
-if __name__ == "__main__":
-    import argparse
-
-    from investment_assistant.notify.templates import filings_digest
-
-    parser = argparse.ArgumentParser(description="发送测试消息到指定 Discord 频道")
-    parser.add_argument(
-        "--channel",
-        choices=["earnings", "signals"],
-        default="earnings",
-        help="目标频道（默认：earnings）",
-    )
-    args = parser.parse_args()
-
-    client = DiscordClient.from_env()
-    ch = DiscordChannel(args.channel)
-
-    if ch == DiscordChannel.EARNINGS:
-        n = filings_digest({"downloaded_count": 1, "filings": [
-            {"ticker": "TEST", "form": "10-Q", "filing_date": "2026-07-05"}]})
-    else:
-        n = filings_digest({"downloaded_count": 0, "filings": []})
-    client.send(ch, render_discord(n))
-    print(f"✅ 测试消息已发送至 #{args.channel}")
