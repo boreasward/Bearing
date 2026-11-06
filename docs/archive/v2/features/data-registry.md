@@ -21,7 +21,7 @@
 - `Adapter.targets(conn, scope, *, explicit=None, facts=None, universe_loader=None)` 统一集合；daily 的 `TargetFacts` 由宿主原有池、持仓、模拟持仓、挂单和活跃链算法提供。日线另含 SPY / 行业 ETF / 纳指范围 / 活跃研究请求；财报日与行业组去掉 SPY 和行业 ETF；资讯、申报列表、财季、正文取池 ∪ 真实持仓 ∪ 活跃链 ∪ 活跃研究请求。单 ticker、研究、新成员、补查的显式范围不能扩成全池。
 - `run_adapter(..., deps, features, tally=None)` 使用本次冻结开关。只有主源最终错误为 `timeout/network/http_5xx/http_429/empty`、有第二源且 `backup_sources=true` 才试一次备源；`http_4xx/parse/other` 不切。SEC/FRED/earnings 已有内部 policy，外层不重复套重试，`attempts` 合并真实主备尝试次数。存储或事务退出失败仍是失败，不因写库失败换源。
 - 目标明细为原字段加 `source_used`（来源 id）、`fallback: {tried, reason}`；双源失败保留主源原因。每族每 scope 一行 `data_fetch_runs`；`sec_monitor` 正文记 `family=sec_text, detail.scope=sec_monitor`，collect 跳过已下载文件。历史缺来源的行不补造。
-- SEC 正文每 ticker/session 最多发起 3 份下载；有效 `filings.output_dir` 及 `.budgets` 是全部入口共享的正文根与日预算事实，见 [运维](../../../operations/scheduling-and-notifications.md#sec-正文目录与日预算v212a2)。SIC 无匹配为未归类，不猜行业、不阻断。
+- SEC 正文每 ticker/session 最多发起 3 份下载；有效 `filings.output_dir` 及 `.budgets` 是全部入口共享的正文根与日预算事实，见 [运维](../operations/scheduling-and-notifications.md#sec-正文目录与日预算v212a2)。SIC 无匹配为未归类，不猜行业、不阻断。
 - `request_data(family,ticker)` 只缓存请求，运行结束与 `agent_runs` 同事务写队列；返回「本轮不可见」。事务结束后，agent 与 review 尾部共用 handler 补采；剩余不足 120 秒为 `deferred`，只有 `fetched` 且新行数大于 0 才以新 cutoff 重跑，每单元每天至多一次。已开链走 recheck（`plan_reviews.detail.via=data_request`）；未开链再 propose，受原尝试上限约束。研究员段按 D42 carried，不再调用。
 - 补查行的终态：`queued` 只在产生它的 daily 运行里由 agent / review 尾部结算。手动「重新运行 Agent」、`rerun_agent` 与手动复查 `recheck` 不在手动路径里同步补采，结束时把本次产生且仍 `queued` 的行结算为 `deferred`，原因 `manual_run`；daily 的 review 收尾再把「`run_id` 不是本运行、且 `requested_at` 早于本运行 cutoff」的遗留 `queued` 行结算为 `deferred`，原因 `orphaned`。所以任何一行最终都有终态，`workflow check` 的 `data_requests` 项按交易日窗口过滤 `requested_at`，不会被前几天的孤儿行永久拖成 mismatch。
 

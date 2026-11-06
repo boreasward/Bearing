@@ -23,6 +23,24 @@ v3 agent-first 重做开工（[设计 spec](docs/specs/2026-11-05-agent-first-re
 2. v3 每日采集不含 `sec_text` 族（申报原文下载）：本阶段没有任何工具读原文，采了也没人用；申报列表（`sec_filings`）照采。
 3. 对话模式的记成交、记本金、补数据三个工具提前到本阶段实现：属工具面这一层，且验收 9（记录本金后能算出股数）需要记本金的工具。
 
+**第 5 步提前：移除 v2（2026-11-06）：**
+
+用户决定以 v3 为主要迭代方向、接受第 2 步完成前没有每日推送和页面，所以把 v3 设计的第 5 步（旧系统下线）提前到第 1 步之后做，顺序变为 0 → 1 → 5 → 2 → 3 → 4，现在已落地的是第 0、1、5 步（依据与范围见 [设计 spec](docs/specs/2026-11-06-v2-removal-design.md)、[实施 plan](docs/plans/2026-11-06-v2-removal.md)；提交 `5c8b98d` 前端、`3a8a51e` 后端、`45c02c2` 概念卡、`4db0d3c` 裁剪保留模块与迁移 033）。
+
+- **删除的规模**：后端从 256 个模块、48,601 行降到 103 个模块、10,908 行；前端删除 12 个分区页面与全部业务组件，约 2.9 万行（`5c8b98d`：199 个文件、29,456 行删除）；测试文件从 234 个降到 105 个；概念卡 129 → 40，89 张与原理页归档到 `docs/archive/v2/knowledge/`（保留 `indicator.`、`rule.`、`plan.` 三组；第 1 步当时概念卡推迟归档的出入，现已了结）；`config/roadmap/` 与只为 v2 服务的一次性脚本删除，`docs/operations/scheduling-and-notifications.md` 移入 `docs/archive/v2/operations/`。Python 依赖去掉 `langgraph`、`langgraph-checkpoint-postgres`、`langchain-openai`，前端依赖去掉 `echarts`、`lightweight-charts`。
+- **保留的东西**：v3 闭包（`facts/`、`toolsurface/` 及其依赖）、`data/` 与 `derivation/` 整层、服务外壳（认证、静态托管、占位首页，组件画廊只在开发模式（`npm run dev`）下的 `#_ui` 可用）、Discord 发送通道（`notify/discord.py`、`notify/message.py`）。`facts` 与 `toolsurface` 的行为不变。
+- **迁移 033（删 v2 的表）**：已写好（57 张业务表加 LangGraph 检查点表）并在一次性库验证，**真实库尚未执行，待用户授权**；执行步骤（先 `pg_dump` 备份）见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md)。在那之前真实库比代码多出这些旧表，保留的代码不读不写它们。`migrate` 带删表保护：033 待执行且要删的表里有任何一张存在并有行时，整个 `migrate` 拒绝执行、一条迁移都不应用，需设置 `INVESTMENT_ASSISTANT_ALLOW_DROP_V2_TABLES=1` 确认（空库与新建库不受影响）。
+- **旧服务**：已 `launchctl bootout`，未重新加载；plist 保留，下次登录时 launchd 会加载它并启动外壳，说明见 [docs/operations/local-service.md](docs/operations/local-service.md)。
+- **新增的守护**：`tests/test_no_dangling_imports.py`（包、测试与脚本里没有指向不存在模块或名字的 `investment_assistant.*` 引用）；`tests/test_migration_033.py`（删除清单、保留清单、可重跑、保留的包代码里没有对被删表的引用）；`tests/conftest.py` 的库夹具应用到 033 为止，保留的数据库测试都在已删掉 v2 表的 schema 上跑。
+- **与 v3 设计的出入**：
+  1. 切换条件：原为第 2 步连续 3 个定时交易日产出简报后卸载旧服务，现为第 1 步完成后即下线。
+  2. 顺序：原 0 → 1 → 2 → 3 → 4 → 5，现 0 → 1 → 5 → 2 → 3 → 4。
+  3. 新旧并行期：不再有；第 2 步的定时直接用 11:30，不必错开到 12:30。
+  4. 页面：原为并行期新页面加进现有服务、旧分区原样保留，现为第 3 步直接在外壳上加页面。
+  5. 版本：原为切换完成时记 `v3.0.0`，本次不动版本号，`v3.0.0` 留到第 2、3 步交付之后由用户决定。
+  6. 删旧表：原为切换时执行，现为迁移写好并验证，执行另行授权。
+  7. 验收 4：设计文档写的「`#_ui` 画廊可用」指开发模式（`npm run dev`）；构建产物不含画廊，与 `design-system.md` 一致。
+
 ## v2.15.0 — 2026-11-03
 
 **已在本机发布，使用验收未全部通过。** v2.12–v2.15 一次发布为 v2.15.0，不打 v2.12.0–v2.14.0 空 tag。范围依据 [冻结 spec](docs/specs/2026-11-01-v2.12-v2.15-five-layers-and-agent-roles-design.md)；工程部分已完成：三套全量、全链路演练（审查修复前后各一次）和一轮最终整体审查的结果见「验证」，与 spec 的差异和限制见下。2026-11-03 经用户授权，对真实库完成备份、迁移 031、roadmap 导入、`web/dist` 重建、服务重启和 spec §16.2 中可自动核对的部分，并在发布提交 `0416b45` 上打 tag `v2.15.0`；推送与替换 `roadmap.md` 未执行。逐项记录见 [验收记录 §1–§4 与 §6](docs/archive/v2/roadmap/v2.12-v2.15-acceptance.md)。

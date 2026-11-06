@@ -19,7 +19,7 @@
 
 **不得在运行间清理 `.budgets`**，也不能通过换目录重置预算。维护 / 备份正文目录时连同预算保留；排查「为什么今天没下载」需一起查看预算与真实目标失败原因。首日可能 partial；成功发现文件不等于成功下载 / 存储。
 
-数据采集统一由注册表按族锁调度，每族每 scope 记行；sec_monitor 正文记 `family=sec_text, detail.scope=sec_monitor`，collect 跳过本次已有正文。SEC/FRED/earnings 已有内部 fetch policy，不在外层再乘一次重试，attempts 记录真实主备总次数。正式 bars 无 Stooq 备源，财报日 Nasdaq 可用，见 [注册表](../archive/v2/features/data-registry.md)。获准后按 [验收清单](../archive/v2/roadmap/v2.12-v2.15-acceptance.md) 验证。
+数据采集统一由注册表按族锁调度，每族每 scope 记行；sec_monitor 正文记 `family=sec_text, detail.scope=sec_monitor`，collect 跳过本次已有正文。SEC/FRED/earnings 已有内部 fetch policy，不在外层再乘一次重试，attempts 记录真实主备总次数。正式 bars 无 Stooq 备源，财报日 Nasdaq 可用，见 [注册表](../features/data-registry.md)。获准后按 [验收清单](../roadmap/v2.12-v2.15-acceptance.md) 验证。
 
 ## 调度线程
 
@@ -36,7 +36,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 
 | 任务 | 模块 | 调度 | 说明 |
 | --- | --- | --- | --- |
-| `daily` | `tasks/daily.py`（图在 `workflow/graph.py`） | 迁移 028 种子：北京 11:30，周二至周六（`weekday_mask = 2-6`，`Asia/Shanghai`），`enabled` 沿用原 `workbench` 行 | `daily-3` 的十三个节点，账户结算与模拟决策在 `review` 后、`push` 前，见[每日计划](../archive/v2/features/daily-plan.md#每日流程) |
+| `daily` | `tasks/daily.py`（图在 `workflow/graph.py`） | 迁移 028 种子：北京 11:30，周二至周六（`weekday_mask = 2-6`，`Asia/Shanghai`），`enabled` 沿用原 `workbench` 行 | `daily-3` 的十三个节点，账户结算与模拟决策在 `review` 后、`push` 前，见[每日计划](../features/daily-plan.md#每日流程) |
 | `sec_backfill` | `tasks/filings.py` 的 `backfill` | **不进 `scheduled_jobs`**，只手动 | 按日期回补 SEC 申报；调度器从不执行它，`GET /api/jobs/scheduled` 以 `manual_only: true` 的行列出它 |
 
 北京周二至周六 11:30 = 纽约周一至周五 22:30（冬令时）/ 23:30（夏令时），都在当天收盘后、次日开盘前。LaunchAgent 不需要改：任务是 `scheduled_jobs` 里的行，由 API 进程内的调度线程执行。旧任务名（`workbench`、`workbench_review`、`filings`）调用 `POST /api/jobs/{name}/run` 返回 404。
@@ -73,7 +73,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 
 每日工作流（定时与手动）的 `collect` 节点按固定顺序（`bars`、`news`、`sec_filings`、`fred`）持有会话级 Postgres advisory lock（键 `hashtext('data_family:<id>')`，专用连接、用完即放），避免与数据菜单的手动拉取同时写同一张数据表；`universe` 只读范围文件，不加锁。锁跨进程有效，命令行运行的批处理同样遵守。
 
-`collect` 节点结束时，每个已记录的数据族向 `data_fetch_runs` 各追加一行（`job = daily`，`trigger` 为 `scheduled` / `manual_batch`，记录带该次运行的 `run_id`；显式 `tickers`/`pool` 的调用只写 `bars`、`news`、`sec_filings`、`fred` 四行，没有 `universe` 行）；纳指 100 范围成分的日线与财报日也在这个节点采集，计在 `bars` 族里。`screen` 节点为当天新入池、`collect` 没覆盖的成员补采资讯与 SEC 列表，在本节点取 `news`、`sec_filings` 两把族锁并追加两行（`detail.scope = screen_new_members`）。每个目标的结果（尝试次数、错误类别、HTTP 状态、行数、最新时点、耗时）记在 `detail.targets`，见[外部请求策略](../archive/v2/features/data-menu.md)。写入在独立事务里，失败（包括迁移 024 未执行）只记在运行报告的 `summary.data_status`，不影响运行结果。表结构与状态口径见[数据基础设计](../specs/2026-10-26-v2.3-data-foundation-design.md)。
+`collect` 节点结束时，每个已记录的数据族向 `data_fetch_runs` 各追加一行（`job = daily`，`trigger` 为 `scheduled` / `manual_batch`，记录带该次运行的 `run_id`；显式 `tickers`/`pool` 的调用只写 `bars`、`news`、`sec_filings`、`fred` 四行，没有 `universe` 行）；纳指 100 范围成分的日线与财报日也在这个节点采集，计在 `bars` 族里。`screen` 节点为当天新入池、`collect` 没覆盖的成员补采资讯与 SEC 列表，在本节点取 `news`、`sec_filings` 两把族锁并追加两行（`detail.scope = screen_new_members`）。每个目标的结果（尝试次数、错误类别、HTTP 状态、行数、最新时点、耗时）记在 `detail.targets`，见[外部请求策略](../features/data-menu.md)。写入在独立事务里，失败（包括迁移 024 未执行）只记在运行报告的 `summary.data_status`，不影响运行结果。表结构与状态口径见[数据基础设计](../../../specs/2026-10-26-v2.3-data-foundation-design.md)。
 
 `sec_monitor` 节点（下载器与监控两种模式）持 `sec_filings` 与 `sec_text` 两把族锁；扫描之后，`sec_text` 适配器（`scope = 'sec_monitor'`，D47）只对**本次扫描发现了新申报且扫描没失败**的标的下载并建索引（R27；扫描成功但没有新申报的标的按扫描记成功，来源 `sec`，其余标的由 `collect` 节点的 `sec_text` 行覆盖，并跳过本次已处理的）。结束后追加一行 `sec_text`（`detail.scope = 'sec_monitor'`，`job = daily`，`session` 取本次运行的 session，`trigger` 按本次运行取 `scheduled` / `manual_batch`），记录带该次运行的 `run_id`；`sec_backfill` 写的行是 `job = sec_backfill`、`trigger = manual_family`（族同为 `sec_text`）。目标按模式取实际采集清单：监控模式是监控观察名单文件（`sec_monitor.watchlist_path` 中「采集=是」的成员；成功时即 `summary.tickers`），下载器模式是 `config.watchlist`，与批处理的「当前池 + 持仓」不同，`detail.targets_source` 如实注明。整次采集失败记一条 `{"target": "*"}` 哨兵（不进 `target_count`）；Discord 投递这类非标的错误记在 `detail.non_target_errors`，不伪造成采集目标。写入失败只记在任务返回值的 `data_status`，不影响任务结果与运行报告；同时向 stderr 打一行 `[data_fetch_runs] write failed family=sec_text job=<job> trigger=<trigger> error=<脱敏原因>` 作为可检索落点。
 
@@ -84,7 +84,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 - **节点级重试**：节点体抛出没人接住的异常时，等 60 秒（`NODE_RETRY_WAIT_S`）换新的累加器重试一次，第一次的错误记进该行的 `detail.retry = {first_error, waited_s}`；`service.Unavailable`（数据库不可达）不等、直接失败。第二次仍失败：写 `failed` 行（`reason = aborted: <脱敏异常>`），链停在这里；它后面还没写行的节点各写一行 `skipped`，原因 `upstream_failed`；运行状态为失败。阶段内部已经接住的失败（单个目标、单个 Agent 单元、整阶段的 `review` / `retro` 出错）仍按原来的方式记 `failed` / `partial`，不触发重试；唯一从"记失败继续"改成"停链"的是 `regime`（信号依赖当天区制）。
 - **运行状态**：任一有效行 `failed` → 失败（`job_reports.status = error`）；否则任一 `partial` / `degraded` → 降级；否则成功（`skipped` 不影响）。
 - **整节点跳过的原因**：`not_trading_day`（纽约休市，`push` 之前的九个节点）、`explicit_pool`（`screen`）、`manual_run`（`push`，手动运行不推送）、`already_pushed`、`task_disabled`、`not_due`（`retro`：不是交易日、周 / 月复盘也都没到期）、`upstream_failed`、`agent_unavailable: <原因>`（`agent`；`review` 在没有复查对象时同样如此，有对象时照常记账并标 `degraded`）、`migration_026_missing`（`review`）、`migration_027_missing`（`retro`）。
-- **`retro`**：交易日先做复盘卡检测与起草（计数与 `detail` 见[每日计划 · 复盘卡检测](../archive/v2/features/daily-plan.md#复盘卡检测)，自己的 1500 秒窗口），再在任何日子判断周 / 月复盘（各自 `try`，一个出错不拦另一个；`detail.weekly` / `detail.monthly` 记 `action` 与推送结果；手动运行 `push = manual_run`）；休市日只做后一件；两件都没做才是 `not_due`，交易日不会记 `not_due`。出错只记该节点 `failed` 与 `errors` 一条 `retro: <原因>`，不影响已经发出的计划推送。
+- **`retro`**：交易日先做复盘卡检测与起草（计数与 `detail` 见[每日计划 · 复盘卡检测](../features/daily-plan.md#复盘卡检测)，自己的 1500 秒窗口），再在任何日子判断周 / 月复盘（各自 `try`，一个出错不拦另一个；`detail.weekly` / `detail.monthly` 记 `action` 与推送结果；手动运行 `push = manual_run`）；休市日只做后一件；两件都没做才是 `not_due`，交易日不会记 `not_due`。出错只记该节点 `failed` 与 `errors` 一条 `retro: <原因>`，不影响已经发出的计划推送。
 - 休市日的 `push` 发的是休市一行，记 `detail.closed = true`。
 - 写入失败（含迁移 025 / 028 未执行）只记在运行报告 `summary.stage_status = {"written": n, "error": …}`，不进 `summary.errors`，不改变任务状态。
 - **历史版本**：`stages-1`（7 行）、`stages-2`（8 行）、`stages-3`（9 行，`retro` 在 `push` 之前、没有 `sec_monitor`）、`stages-4`（10 行，没有 `accounts`）保留只读；`derivation stages` 与运行一览都按各自版本的节点集合核对。
@@ -102,7 +102,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 - **补结算**：模拟账户从 `settled_through` 的下一交易日起逐日结算到本次 session，补权益和成交；缺跑的中间日期不补造决策。`collect` 覆盖模拟持仓和在挂买单标的；缺当日日线时该标的当天不成交，记录 `bars_missing`，估值沿用旧收盘时另标 `stale`。
 - **幂等与隔离**：账户锁保护读取、检查与写入；`paper_decisions` 的 `(account_id, session)` 唯一，同一天已有决策（包括 `skipped`）就沿用，不重复调用模型或下单。结算水位、订单状态和链消耗记录防止重复成交；账户间的成交、现金与持仓分别读取，不改全局 Agent 链状态。
 - **模型不可用**：断连、额度、模型错误、每日 token 上限或阶段窗口耗尽时，记 `skipped` 与安全原因；此前的订单结算和自动退出已执行，照计划执行账户照常运行。单个账户出错记逐账户失败，其余账户继续。
-- **运行详情与核对**：`accounts` 的结果列出账户、结算数量、权益、持仓与决策状态；账户页展开订单和决策证据，见[账户与模拟交易](../archive/v2/features/accounts.md)。只读命令行为 `python -m investment_assistant.views.account show [--account UUID或名称] [--session YYYY-MM-DD]`。
+- **运行详情与核对**：`accounts` 的结果列出账户、结算数量、权益、持仓与决策状态；账户页展开订单和决策证据，见[账户与模拟交易](../features/accounts.md)。只读命令行为 `python -m investment_assistant.views.account show [--account UUID或名称] [--session YYYY-MM-DD]`。
 
 真实库备份、迁移 030 的单事务执行与服务重启须在单独授权后进行；本地代码与文档准备不代表这些步骤已执行。迁移须先于运行新代码，缺 030 时账户接口返回 503，`daily` 与续跑前检拒绝运行。真实开账和模拟账户首次运行的结果仍需真实数据验收。
 
@@ -112,7 +112,7 @@ v2.8（迁移 028）把原来的 `workbench`（06:30）、`workbench_review`（0
 - **续跑**：`POST /api/jobs/daily/resume`（body `{run_id, node}`，`services/jobs.resume_daily`）同步做前置检查——`workflow.resume_check`（不写任何行）通过、`daily:run` 锁没被占——然后后台 `tasks.daily.resume` 取锁、从检查点接着跑，立即返回 202 `{run_id, node, status: 'pending', attempt, runner_id}`（`runner_id` 是后台任务 id，`daily_resume-…`）；续跑的 `attempt = 该运行已有的最大 attempt + 1`。拒绝条件（错误体 `{"error": "<代码>"}`；缺 `run_id` / `node`、`run_id` 格式不对或 `node` 不在 `stages-5` → 400）：没有这次运行（404）、运行没有失败的节点（409 `not_failed`；检查点停在一个**没有任何行**的节点——进程在节点中途被杀——也按此拒绝，这样的运行只能整次重新运行，已知限制）、节点不是失败的那个（409 `node_mismatch`）、现在已过下一个交易日的纽约 17:00（409 `resume_window_closed`）、检查点图版本与当前 `DAILY_GRAPH_VERSION` 不一致（409 `graph_version_changed`）、另一次执行正在进行（409 `daily_running`，最后检查），迁移 028 / 029 / 030 未执行或数据库不可达 → 503。续跑沿用原运行的 `session` 与 `trigger`，普通节点仍用原运行的 `cutoff_at`：采集类节点丢掉来源时间晚于截止时间的资讯和申报（数量记 `detail.after_cutoff_dropped`），日线只写到 session，财报日取当时的值（已知限制）。
 - **`accounts` 的独立截止时间**：`service.stage_accounts` 在每次节点尝试开始时只读一次当前墙钟，作为该次账户截止时间，session 不变；本轮上游在节点开始前已提交的计划可用，此后提交的版本仍被排除。先查询并复用同账户同 session 的已有决策，保留原 `detail.cutoff_at`、证据与订单；尚未决策的账户才使用新尝试的截止时间。新时点写入阶段与决策的 `detail.cutoff_at`，有证据时同时写入 `account.cutoff_at`，决策 API 回显该决策所用时点；各数据源仍按 session 与对应截止时间过滤。
 - **Agent 预算窗口**：`agent` 与 `review` 共用一个窗口，从 `agent` 节点开始起 1500 秒（状态里存墙钟 `agent_started_at`，节点内换算成单调时钟）；`accounts` 从账户节点开始另有 600 秒组合决策窗口，`retro` 的复盘卡起草有自己的 1500 秒；token 仍共享每日上限，续跑时从续跑的那个节点重新起算。`BATCH_BUDGET_S` 与 `batch_over_budget` 已删除。
-- **重跑 Agent（`max_attempts`）**：单元的 Agent 尝试闸只数最近一次**重置**之后的运行；重置是追加一行 `agent_attempt_resets`（`request_id` 幂等），不删旧运行，`attempt` 字段仍按全部历史运行数递增。入口是运行详情页与计划页（`POST /api/workbench/agent-runs/rerun` → `service.rerun_agent`；同步执行，条件与错误码见[Agent 轨道](../archive/v2/features/agent-track.md#预算与重新运行v28)）。
+- **重跑 Agent（`max_attempts`）**：单元的 Agent 尝试闸只数最近一次**重置**之后的运行；重置是追加一行 `agent_attempt_resets`（`request_id` 幂等），不删旧运行，`attempt` 字段仍按全部历史运行数递增。入口是运行详情页与计划页（`POST /api/workbench/agent-runs/rerun` → `service.rerun_agent`；同步执行，条件与错误码见[Agent 轨道](../features/agent-track.md#预算与重新运行v28)）。
 - **一次性故障注入（只用于 Task 7 的续跑演练）**：环境变量 `INVESTMENT_ASSISTANT_FAULT_ONCE=<节点 id>` 存在、且本 `run_id` 的该节点还没有任何行时，`workflow.node` 对该节点的两次尝试都抛 `RuntimeError('fault injection')`（续跑时不再注入）。演练用完立即从 `.env` 删掉这个变量并重启，不要让它留在服务环境里。
 
 ### 运行一览（v2.6）

@@ -358,7 +358,7 @@ portfolio 启用时按账户硬检查，真实账户另 PM；K2 关闭整个节�
 
 旧任务 `workbench`、`workbench_review`、`filings` 已并入 `daily`（SEC 监控是第一个节点，周 / 月复盘在最后一个节点），代码与调度行都已删除；`job_reports.task` 里它们的历史值保留只读。服务仍只有一个 LaunchAgent，`daily` 由 API 进程内的调度线程执行，plist 不需要改。
 
-调度细节见 [operations/scheduling-and-notifications.md](../../operations/scheduling-and-notifications.md)。
+调度细节见 [operations/scheduling-and-notifications.md](operations/scheduling-and-notifications.md)。
 
 合并实施新增前端：`#research` / `#research/<id>` 的档案与原引用；`#roadmap` 四页签、真实 revision 历史、冻结 evidence_rows 与 brief 状态读回；`#settings/features` 当前值与真实历史；Today 组合结果、账户三类 markers、运行详情三个新增分支。组件与五组逐字状态词见 [设计标准](../../design-system.md)，使用见 [研究](features/research.md)、[路线](features/roadmap-in-system.md)、[功能开关](features/feature-flags.md)。概念目录 129 张、原理页 13 个阶段小节，`python -m investment_assistant.core.knowledge check` 与 `tests/test_knowledge_catalog.py` 守护。
 
