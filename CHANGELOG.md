@@ -2,6 +2,10 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
+## v3（进行中）
+
+- 迁移 033（删 v2 的表）已于 2026-11-06 经用户授权在真实库执行：先 `pg_dump` 全库备份到 `.local/v3/backup-before-033.dump`，61 张表删除，19 张保留表行数不变，`facts show` 照常；`migrate` 不再被删表保护拒绝，之后的新迁移可以正常应用到真实库。记录见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md)。
+
 ## v3.0.0 — 2026-11-06
 
 v3 agent-first 重做开工（[设计 spec](docs/specs/2026-11-05-agent-first-rebuild-design.md)、[第一阶段 plan](docs/plans/2026-11-05-v3-facts-and-tools.md)，提交 `9ad88ad..c7104de`）。第 0、1 步已落地；用户在第 0、1、5 步完成后决定发布 v3.0.0，第 2、3、4 步继续在 v3 下迭代。

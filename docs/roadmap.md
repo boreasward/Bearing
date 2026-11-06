@@ -9,7 +9,7 @@ v3 重做的目标（spec §2 目标 1–3）：入口是 agent——每天一�
 | 2 | 每日简报 | 未开始 |
 | 3 | 页面服务与对话 | 未开始 |
 | 4 | 概念学习 | 未开始 |
-| 5 | 旧系统下线 | 已提前完成（2026-11-06）：后端、前端、概念卡与文档已移除或归档。两件事没做：迁移 033（删 v2 的表）只在一次性库验证过，真实库执行待用户授权（在那之前 `migrate` 会拒绝对真实库执行）；旧服务已 `launchctl bootout`，未重新加载（见 [operations/local-service.md](operations/local-service.md)） |
+| 5 | 旧系统下线 | 已提前完成（2026-11-06）：后端、前端、概念卡与文档已移除或归档。迁移 033（删 v2 的表）已于 2026-11-06 在真实库执行（先 `pg_dump` 备份，记录见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md)）；旧服务已 `launchctl bootout`，未重新加载（见 [operations/local-service.md](operations/local-service.md)） |
 
 **顺序改为 0 → 1 → 5 → 2 → 3 → 4。** 第 1 步完成后用户决定以 v3 为主要迭代方向，接受第 2 步完成前没有每日推送和页面，所以第 5 步提前做，让第 2、3 步在只剩 v3 的代码上开工。删除的依据、范围与和 v3 设计的出入见 [specs/2026-11-06-v2-removal-design.md](specs/2026-11-06-v2-removal-design.md)，执行过程见 [plans/2026-11-06-v2-removal.md](plans/2026-11-06-v2-removal.md)。
 

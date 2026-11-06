@@ -34,7 +34,7 @@ v2 的路线、功能、架构、概念卡与运维文档已移入 [archive/v2/]
 | 文档 | 内容 |
 | --- | --- |
 | [local-service.md](operations/local-service.md) | 外壳服务：当前状态（已 bootout）、LaunchAgent、启动链路、重新加载与卸载、日志与路径、认证 |
-| [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–033、真实库备份与执行（含 033 的待授权步骤）、一次性测试库 |
+| [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–033、真实库备份与执行（含 033 的执行步骤与记录）、一次性测试库 |
 | [pi-unattended.md](operations/pi-unattended.md) | Pi 无人值守运行可行性（v3 第 0 步）：专用配置目录、实测命令行、事件与成败判定、十项检查结果 |
 | [v3-facts.md](operations/v3-facts.md) | v3 事实任务与工具面（v3 第 1 步）：命令与退出码、草稿位置、`v3` 配置键、并行期共用事实表、迁移 032 与真实库试跑记录 |
 | [../scripts/README.md](../scripts/README.md) | 脚本：`scripts/start_local.py`（本机服务入口）与 `scripts/pi_precheck/`（v3 第 0 步的 Pi 无人值守核查） |

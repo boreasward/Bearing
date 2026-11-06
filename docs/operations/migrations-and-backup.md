@@ -37,9 +37,9 @@
 | 030 | v2.11：账户与模拟交易（spec §7）。新建六张表：`accounts`（真实 / 模拟、策略、初始现金与开户日、参数、关闭，部分唯一索引保证全库恰一个真实账户，另有只前进的 `settled_through` 水位列）、`account_param_changes`（参数与开账变更，下一交易日生效）、`account_equity_days`（每日权益，只追加，读取每 `(account_id, session)` 取 `computed_at` 最新）、`paper_orders`（订单全生命周期，状态列可更新，部分唯一索引「同账户同链至多一个在挂买单」）、`paper_decisions`（每账户每交易日一行，`UNIQUE (account_id, session)`）、`paper_chain_done`（每账户每链的消耗记录）；`trades`、`account_snapshots`、`cash_flows`、`holding_status` 各加 `account_id UUID NOT NULL DEFAULT <真实账户 id>` 与三个索引，`trades` 另加 `recorded_by`（`user` / `host`）与 `detail JSONB`；`holding_status` 的唯一约束从 `(ticker, session)` 换成 `(account_id, ticker, session)`（旧约束按 `pg_constraint` 定义找出后删除，同 029 的做法）。三处放宽：`stage_runs.stage` 加 `accounts`（`stages-5` 的 11 个阶段）、`agent_runs.mode` 加 `portfolio` 且 `ticker` / `signal_date` / `pool` 转可空（新约束 `agent_runs_portfolio_ticker_check`：`ticker` 为空当且仅当 `mode = 'portfolio'`，D27）、`agent_tool_calls.phase` 加 `portfolio`。**本项目第一次写种子行**：只插默认真实账户一行（固定 id `00000000-0000-0000-0000-000000000001`，初始现金与开户日为空），`ON CONFLICT (id) DO NOTHING` 可重跑；旧行由四列默认值归入真实账户，不改写任何旧行。六张新表不进 `WORKBENCH_TABLES`，就绪与否由 `repository.accounts_ready` 判定（六表与 `trades.account_id` 都在）。对 v2.10 代码无害（只新增表 / 列、放宽约束、换唯一键——旧行都满足新键）。**必须先于重启执行**（spec D22）：030 未执行时 v2.11 代码拒绝运行 `daily`（`job_reports` 记 `error / migration_030_missing`），`/api/accounts/*` 返回 503。真实库执行需单独授权，见下文 | 主线 |
 | 031 | v2.12–v2.15 五层与 Agent 角色：新建十二张表 `feature_flag_changes`、`data_requests`、`sector_classifications`、`research_requests`、`research_versions`、`portfolio_checks`、`roadmap_goals`、`roadmap_versions`、`roadmap_decisions`、`roadmap_evidence`、`roadmap_proposals`、`roadmap_briefs`。放宽 `stage_runs.stage`（13 阶段）、`data_fetch_runs.family`（9 族）/ `trigger`（5 来源）、`agent_runs.mode` / 研究 pass / 空 ticker 与 `agent_tool_calls.phase` CHECK；增加 `price_bars.source`（yfinance/stooq）、`earnings_dates.source`（yfinance/nasdaq）CHECK，`news_items_source_check` 不变。不改旧行、不加种子、可重跑。`core.schema.five_layers_ready` 检查十二表与允许 portfolio 的具名阶段 CHECK；未就绪时 daily 的 run / resume / ensure_ready 拒绝并记 `job_reports: error / migration_031_missing`。执行顺序：**备份 → 031 → roadmap import → 重启**；真实库各步需单独授权，导入须等整版代码就绪，见下文 | 主线 |
 | 032 | v3：七张 `v3_` 表（`v3_runs`、`v3_candidates`、`v3_verdicts`、`v3_plans`、`v3_trades`、`v3_equity`、`v3_tool_calls`），只建表，不动任何旧表；2026-11-06 已在真实库执行，记录见 [v3-facts.md](v3-facts.md#迁移-032-的执行记录2026-11-06真实库) | v3 |
-| 033 | 删除 v2 的业务表：57 张表（账户、成交、计划、Agent 运行与连接、复盘、成长闭环、五层、调度与运行报告、通知设置等）加 LangGraph 的四张检查点表（有就删）；保留 11 张事实表、`feature_flag_changes` 与七张 `v3_` 表。一个事务、全部 `IF EXISTS`、不用 `CASCADE`、可重跑。**已在一次性库验证，真实库尚未执行，待用户授权**，步骤见下文 | 删 v2 |
+| 033 | 删除 v2 的业务表：57 张表（账户、成交、计划、Agent 运行与连接、复盘、成长闭环、五层、调度与运行报告、通知设置等）加 LangGraph 的四张检查点表（有就删）；保留 11 张事实表、`feature_flag_changes` 与七张 `v3_` 表。一个事务、全部 `IF EXISTS`、不用 `CASCADE`、可重跑。先在一次性库验证，2026-11-06 经用户授权在真实库执行，步骤与记录见下文 | 删 v2 |
 
-016–031 建出的业务表，除 033 的保留清单外都由 033 删除；在 033 于真实库执行之前，它们仍在库里，保留的代码不读不写它们。
+016–031 建出的业务表，除 033 的保留清单外都由 033 删除；033 已于 2026-11-06 在真实库执行，这些表已不在库里。
 
 LangGraph 的检查点表不是迁移建的（v2 时由 `analysis.agent setup` 命令建，该命令随旧系统移除），033 用 `DROP TABLE IF EXISTS` 一并删除。
 
@@ -274,9 +274,9 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
 
 回滚须另行授权：停服务、按本页恢复备份，再重启到兼容的旧代码；恢复会丢掉备份后的所有写入（包括开关、研究与 roadmap 记录）。
 
-### 033 在真实库的执行步骤（待授权）
+### 033 的真实库执行（用户 2026-11-06 授权；当日已执行）
 
-**状态：已在一次性库验证，真实库尚未执行。** 执行需要用户单独授权，下面是准备好的步骤，不是执行记录。
+**状态：已在真实库执行。** 下面是执行步骤，执行记录在本节末尾。
 
 **删表保护**：`migrate` 在 `033_drop_v2_tables.sql` 待执行、且它要删的表里至少有一张存在并且有行时，会拒绝执行并退出，一条迁移都不应用（包括排在 033 前后的其他待执行迁移）；设置环境变量 `INVESTMENT_ASSISTANT_ALLOW_DROP_V2_TABLES=1` 才确认执行。空库、全新建库（那些表不存在或都是空的）不受影响，不需要这个变量。注意迁移 007、008、013、016、020、028、030 会往 `scheduled_jobs`、`notify_settings`、`accounts` 里写入种子行，所以任何已经应用到 032 的库（哪怕没有业务数据）都会被拒绝，需要带上这个变量。所以在完成 `pg_dump` 并得到授权之前，对真实库运行 `migrate` 会被拒绝，这是预期行为。**033 没执行之前，034 及以后的迁移也无法对真实库执行**（整个 `migrate` 被拒），后续步骤若需要新迁移，要先完成 033 的备份与授权。
 
@@ -322,6 +322,13 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
    再重复第 1 步里的行数循环，与预检逐张对照；最后 `.venv/bin/python -m investment_assistant.facts show` 应照常打印最新草稿。
 
 回滚：`pg_restore --clean --if-exists -d "$INVESTMENT_ASSISTANT_DATABASE_URL" .local/v3/backup-before-033.dump`（会丢掉备份之后的所有写入，包括之后的 `facts run` 记录）。执行后把结果（备份大小与 sha256、`applied` 输出、核对结论）补记到本节。
+
+**执行记录（2026-11-06，真实库，PostgreSQL 17.10）：**
+
+- 预检：没有正在运行的 `investment_assistant` 进程；`schema_migrations` 最新一条为 `032_v3_agent_first.sql`。保留表行数：`price_bars` 37410、`news_items` 4124、`news_item_tickers` 4737、`filings` 72、`earnings_dates` 191、`macro_observations` 188、`sector_classifications` 102、`us_research_observations` 75858、`us_research_collection_state` 24、`data_fetch_runs` 229、`watchlist_items` 8、`feature_flag_changes` 2、`v3_runs` 7、`v3_candidates` 80、`v3_tool_calls` 7，`v3_verdicts` / `v3_plans` / `v3_trades` / `v3_equity` 为 0。
+- 备份：`.local/v3/backup-before-033.dump`，17,581,746 字节，sha256 `a144d3463e01dba73dfe2b29b405d7e21af73f1819f700382a10a97b663b13a7`，`pg_restore --list` 含 81 张表的数据（其中有 `accounts`、`agent_connections`）；文件权限 600。
+- 执行：`INVESTMENT_ASSISTANT_ALLOW_DROP_V2_TABLES=1 … migrate` 输出 `{"applied": ["033_drop_v2_tables.sql"], "count": 1}`；不带该变量重跑输出 `{"applied": [], "count": 0}`。
+- 核对：033 删除清单中的 61 张表（57 张业务表加 4 张检查点表）用 `to_regclass` 查全部不存在；`public` 下剩 20 张表（19 张保留表加 `schema_migrations`）；19 张保留表的行数与预检逐张一致；`facts show` 照常打印 2026-11-05 的草稿（退出码 0）。
 
 ## 一次性测试库
 
