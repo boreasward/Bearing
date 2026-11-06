@@ -9,7 +9,9 @@
   <Card.Root>
     <Card.Content class="grid gap-3">
       <p>今日简报与对话在 v3 第 3 步实现</p>
-      <Button variant="link" href="#_ui" class="w-fit">组件画廊</Button>
+      {#if import.meta.env.DEV}
+        <Button variant="link" href="#_ui" class="w-fit">组件画廊</Button>
+      {/if}
     </Card.Content>
   </Card.Root>
 </div>
