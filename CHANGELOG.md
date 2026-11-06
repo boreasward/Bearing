@@ -12,8 +12,9 @@ v3 agent-first 重做开工（[设计 spec](docs/specs/2026-11-05-agent-first-re
 - Pi 无人值守可行性：十项检查 10/10 通过（2026-11-05，Pi 1.5.0），方法与结论见 [docs/operations/pi-unattended.md](docs/operations/pi-unattended.md)。
 - 迁移 032（七张 `v3_` 表）+ `facts/repo.py` + `V3Config`（`v3` 配置键）；032 已在真实库执行（备份 `.local/v3/backup-before-032.dump`）。
 - 纯函数事实层：市场环境、形态与行业因子、规则排序、覆盖、持仓视图与草稿渲染（`facts/` 的 factors / ranking / coverage / holdings / market / draft）。
-- 并发采集与事实任务 CLI：`data.registry.run_adapter` 新增 `workers` 参数（缺省 1，与旧行为等价）；`python -m investment_assistant.facts run|show`（退出码 0/1/2）。真实网络实测：八族采集加补采 2 分 20 秒–3 分 04 秒（目标 5 分钟内）；成功路径待数据源有当日日线后重试。
-- MCP 工具面：`toolsurface/` stdio JSON-RPC，brief / chat 两模式 18 个工具，每次调用记 `v3_tool_calls`；真实 Pi 客户端在一次性库冒烟通过。
+- 并发采集与事实任务 CLI：`data.registry.run_adapter` 新增 `workers` 参数（缺省 1，与旧行为等价）；`python -m investment_assistant.facts run|show`（退出码 0/1/2）。真实网络实测：八族采集加补采 2 分 20 秒–3 分 04 秒（目标 5 分钟内）；2026-11-06 真实库成功路径通过（交易日 2026-11-05，名单 20 只，含采集 3 分 20 秒，不采集重算三次一致）。
+- MCP 工具面：`toolsurface/` stdio JSON-RPC，brief / chat 两模式 18 个工具，每次调用记 `v3_tool_calls`；真实 Pi 客户端在一次性库与真实库上冒烟通过。
+- 验收复核修复（`c784360`）：超出仓位上限时股数记 0 而非负数；`record_trade` 重放同一 `request_id` 返回原行；同档触发规则取样本大的一条；`EdgarSource` 在工作池下线程安全（节流、CIK 映射、按线程记账）；一条依赖墙钟日期的测试改为固定时钟。
 - 运维文档：[docs/operations/v3-facts.md](docs/operations/v3-facts.md)（命令、退出码、草稿位置、配置键、并行期共用事实表、迁移 032 与三次试跑的实测记录）。
 
 **与 spec 的三处出入：**
