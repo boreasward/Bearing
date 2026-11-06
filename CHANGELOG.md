@@ -2,6 +2,26 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
+## v3（进行中）
+
+v3 agent-first 重做开工（[设计 spec](docs/specs/2026-11-05-agent-first-rebuild-design.md)、[第一阶段 plan](docs/plans/2026-11-05-v3-facts-and-tools.md)，提交 `9ad88ad..c7104de`）。第 0、1 步已落地，全部完成前不打版本号。
+
+**第 0、1 步交付：**
+
+- 文档归档：v2 的路线、功能与架构文档移入 `docs/archive/v2/`（只读），v3 roadmap 启用；概念卡按出入 #1 推迟归档。
+- Pi 无人值守可行性：十项检查 10/10 通过（2026-11-05，Pi 1.5.0），方法与结论见 [docs/operations/pi-unattended.md](docs/operations/pi-unattended.md)。
+- 迁移 032（七张 `v3_` 表）+ `facts/repo.py` + `V3Config`（`v3` 配置键）；032 已在真实库执行（备份 `.local/v3/backup-before-032.dump`）。
+- 纯函数事实层：市场环境、形态与行业因子、规则排序、覆盖、持仓视图与草稿渲染（`facts/` 的 factors / ranking / coverage / holdings / market / draft）。
+- 并发采集与事实任务 CLI：`data.registry.run_adapter` 新增 `workers` 参数（缺省 1，与旧行为等价）；`python -m investment_assistant.facts run|show`（退出码 0/1/2）。真实网络实测：八族采集加补采 2 分 20 秒–3 分 04 秒（目标 5 分钟内）；成功路径待数据源有当日日线后重试。
+- MCP 工具面：`toolsurface/` stdio JSON-RPC，brief / chat 两模式 18 个工具，每次调用记 `v3_tool_calls`；真实 Pi 客户端在一次性库冒烟通过。
+- 运维文档：[docs/operations/v3-facts.md](docs/operations/v3-facts.md)（命令、退出码、草稿位置、配置键、并行期共用事实表、迁移 032 与三次试跑的实测记录）。
+
+**与 spec 的三处出入：**
+
+1. 概念卡不在第 1 步归档，推迟到 spec 第 5 步：旧系统的知识页与测试仍在加载 129 张卡，归档了旧系统就跑不起来。
+2. v3 每日采集不含 `sec_text` 族（申报原文下载）：本阶段没有任何工具读原文，采了也没人用；申报列表（`sec_filings`）照采。
+3. 对话模式的记成交、记本金、补数据三个工具提前到本阶段实现：属工具面这一层，且验收 9（记录本金后能算出股数）需要记本金的工具。
+
 ## v2.15.0 — 2026-11-03
 
 **已在本机发布，使用验收未全部通过。** v2.12–v2.15 一次发布为 v2.15.0，不打 v2.12.0–v2.14.0 空 tag。范围依据 [冻结 spec](docs/specs/2026-11-01-v2.12-v2.15-five-layers-and-agent-roles-design.md)；工程部分已完成：三套全量、全链路演练（审查修复前后各一次）和一轮最终整体审查的结果见「验证」，与 spec 的差异和限制见下。2026-11-03 经用户授权，对真实库完成备份、迁移 031、roadmap 导入、`web/dist` 重建、服务重启和 spec §16.2 中可自动核对的部分，并在发布提交 `0416b45` 上打 tag `v2.15.0`；推送与替换 `roadmap.md` 未执行。逐项记录见 [验收记录 §1–§4 与 §6](docs/archive/v2/roadmap/v2.12-v2.15-acceptance.md)。

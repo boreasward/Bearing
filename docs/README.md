@@ -32,6 +32,8 @@ v2 的路线、功能与架构文档已移入 [archive/v2/](archive/v2/)，只�
 | [local-service.md](operations/local-service.md) | LaunchAgent、启动链路、重启、日志与路径、认证 |
 | [scheduling-and-notifications.md](operations/scheduling-and-notifications.md) | 调度线程、任务注册表、运行报告、通知配置 |
 | [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–031、真实库备份与执行、一次性测试库 |
+| [pi-unattended.md](operations/pi-unattended.md) | Pi 无人值守运行可行性（v3 第 0 步）：专用配置目录、实测命令行、事件与成败判定、十项检查结果 |
+| [v3-facts.md](operations/v3-facts.md) | v3 事实任务与工具面（v3 第 1 步）：命令与退出码、草稿位置、`v3` 配置键、并行期共用事实表、迁移 032 与真实库试跑记录 |
 | [../scripts/README.md](../scripts/README.md) | 一次性核查脚本：`scripts/siwc_precheck.py`（v2.8 开工前 ChatGPT 核查，由你在运行服务的这台 Mac 上执行，结果追加到 v2.8 spec §17） |
 
 ## 方向与历史
