@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "卖出候选，仅限有计划的持仓：开仓以来第一次最高价触及 T1，建议卖出一半，只触发一次。"
 related: [plan.target1, plan.trailing_stop, rule.plan_stop, rule.position_drawdown]
-sources: [investment_assistant/analysis/rules.py, investment_assistant/execution/exits.py, docs/archive/v2/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么
@@ -26,5 +26,5 @@ sources: [investment_assistant/analysis/rules.py, investment_assistant/execution
 
 ## 注意
 
-- 同一天可能既触及 T1 又触及止损，这时两条卖出候选会同时出现；候选如何合成建议动作见[决策单元](system.decision_unit.md)。
+- 同一天可能既触及 T1 又触及止损，这时两条卖出候选会同时出现；候选如何合成建议动作见决策单元。
 - 一半是建议比例，实际卖多少由你决定；规则**未经验证**（Phase 0 Gate HOLD）。

@@ -5,8 +5,8 @@ group: indicator
 version: 1
 applies_to: [condition-1]
 summary: "rs20 / rs60 = 标的区间收益减 SPY 同期收益（全复权收盘价）；为正表示跑赢大盘，Agent 的 rs_below 条件用它。"
-related: [indicator.screen_rs, indicator.sector_strength, agent.invalidation, agent.review_when]
-sources: [investment_assistant/analysis/agent/tools.py, investment_assistant/execution/conditions.py]
+related: [indicator.screen_rs, indicator.sector_strength]
+sources: [investment_assistant/execution/conditions.py]
 ---
 
 ## 是什么
@@ -22,7 +22,7 @@ sources: [investment_assistant/analysis/agent/tools.py, investment_assistant/exe
 ## 在系统里哪里看到
 
 - Agent 工具 `get_indicators` 返回 `rs20`、`rs60`；「标的」页关键数据。
-- Agent 的失效 / 复查条件 `rs_below`：窗口取 20 或 60，数值由 Agent 给出；当 rsN 小于该数值时条件成立，rsN 不可用则为「无法判定」，见[失效条件](agent.invalidation.md)。
+- Agent 的失效 / 复查条件 `rs_below`：窗口取 20 或 60，数值由 Agent 给出；当 rsN 小于该数值时条件成立，rsN 不可用则为「无法判定」，见失效条件。
 
 ## 注意
 

@@ -5,7 +5,7 @@ group: plan
 version: 1
 applies_to: [plan-1]
 summary: "股数取 min(资金 × risk_pct ÷ 每股风险, 单票上限, 总持仓剩余空间)；缺资金快照时标 no_equity，没有空间则作废为 no_room。"
-related: [plan.stop, plan.ref_price, plan.status, review.position]
+related: [plan.stop, plan.ref_price, plan.status]
 sources: [investment_assistant/execution/plan_levels.py, investment_assistant/config.py, docs/archive/v2/features/daily-plan.md]
 ---
 

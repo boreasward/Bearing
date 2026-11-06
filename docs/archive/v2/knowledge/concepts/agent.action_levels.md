@@ -10,7 +10,7 @@ sources: [investment_assistant/execution/citations.py, investment_assistant/anal
 ---
 
 ## 是什么
-Agent 轨道对每个买入候选独立给出一份建议：动作只有两种，`buy`（建议买）和 `pass`（不建议买）。给 `buy` 时要同时给四个价位：入场下沿 `entry_low`、入场上沿 `entry_high`、止损 `stop`、目标 T1 `target1`。它和规则给出的 [入场区间](plan.entry_zone.md)、[止损](plan.stop.md)、[目标 T1](plan.target1.md) 并排显示，互不覆盖。
+Agent 轨道对每个买入候选独立给出一份建议：动作只有两种，`buy`（建议买）和 `pass`（不建议买）。给 `buy` 时要同时给四个价位：入场下沿 `entry_low`、入场上沿 `entry_high`、止损 `stop`、目标 T1 `target1`。它和规则给出的 [入场区间](../../../../knowledge/concepts/plan.entry_zone.md)、[止损](../../../../knowledge/concepts/plan.stop.md)、[目标 T1](../../../../knowledge/concepts/plan.target1.md) 并排显示，互不覆盖。
 
 本卡也是提议者的说明：`agent-4` 首版先读[公司研究员](agent.company_researcher.md)的事实，再提议与接受反方检查；计划结构仍为 `agent-3`，已有价位、入场类型、最长持有与链口径不因运行版本升级改变。手动研究的 buy/pass/wait 只写档案，不自动成为计划。
 

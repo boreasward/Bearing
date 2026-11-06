@@ -5,7 +5,7 @@ group: plan
 version: 1
 applies_to: [plan-1]
 summary: "参考价上下各 0.5 个 ATR14，价位四舍五入到分；成交价高出上沿会被复盘记为「追高进场」。"
-related: [plan.ref_price, indicator.atr14, review.discipline_chase, review.plan_shadow]
+related: [plan.ref_price, indicator.atr14]
 sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
@@ -22,7 +22,7 @@ sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/feature
 ## 在系统里哪里看到
 
 - 「今日」计划块的「入场区间 x–y」；「标的」页 K 线上的计划价位线。
-- 复盘里：成交价高于入场区间上沿，会被记为[追高进场](review.discipline_chase.md)；影子模拟如何入场见[计划影子](review.plan_shadow.md)。
+- 复盘里：成交价高于入场区间上沿，会被记为追高进场；影子模拟如何入场见计划影子。
 
 ## 注意
 

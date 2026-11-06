@@ -15,7 +15,7 @@ sources: [investment_assistant/data/registry.py, investment_assistant/data/adapt
 
 ## 怎么算 / 从哪来
 
-- 固定顺序：`bars`、`news`、`sec_filings`、`earnings`、`fred`、`universe`、`fundamentals`、`sec_text`、`sector`。ATR 不再占一个族，归[指标注册表](indicator.registry.md)。
+- 固定顺序：`bars`、`news`、`sec_filings`、`earnings`、`fred`、`universe`、`fundamentals`、`sec_text`、`sector`。ATR 不再占一个族，归[指标注册表](../../../../knowledge/concepts/indicator.registry.md)。
 - `run_adapter` 逐目标取数、存储、写 Tally；daily、筛选新成员、手动、研究、补查和 SEC 监控复用它。宿主传入冻结的 features、事务、fetcher 和配置，按 `Adapter.lock` 沿用族锁。
 - `targets(conn, scope, *, explicit, facts, universe_loader)` 统一集合：daily 的池、持仓、模拟持仓/挂单、活跃链由宿主既有算法提供 `TargetFacts`；数据层不另写一套池规则。bars 是宽集合，earnings/sector 去掉 SPY 与行业 ETF；news/sec_filings/fundamentals/sec_text 取池、真实持仓、活跃链、活跃研究请求。FRED 与范围文件是全局目标。
 - manual/research/screen_new_members/data_request/sec_monitor 用显式目标；空列表仍为空，不能扩大成全池。必要事实或范围加载失败要报明原因，不能吞成空成功。

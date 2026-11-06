@@ -29,7 +29,7 @@ version: 4
 
 ## ② 数据采集
 
-**做什么**：按[适配器注册表](concepts/system.adapter_registry.md)的九族顺序打底：[日线](concepts/family.bars.md)、[资讯](concepts/family.news.md)、[SEC列表](concepts/family.sec_filings.md)、[财报日](concepts/family.earnings.md)、[FRED](concepts/family.fred.md)、手工维护的[纳指范围](concepts/family.universe.md)、[公司基本面](concepts/family.fundamentals.md)、[SEC正文](concepts/family.sec_text.md)、[行业归类](concepts/family.sector.md)。日线宽集合含ETF、池、真实/模拟持仓与挂单、活跃链、纳指范围、活跃研究请求；其它族按自身目标规则。研究或手动的显式单标的范围不扩大。ATR 已归[指标注册表](concepts/indicator.registry.md)，现算、不单独采集。
+**做什么**：按[适配器注册表](concepts/system.adapter_registry.md)的九族顺序打底：[日线](concepts/family.bars.md)、[资讯](concepts/family.news.md)、[SEC列表](concepts/family.sec_filings.md)、[财报日](concepts/family.earnings.md)、[FRED](concepts/family.fred.md)、手工维护的[纳指范围](concepts/family.universe.md)、[公司基本面](concepts/family.fundamentals.md)、[SEC正文](concepts/family.sec_text.md)、[行业归类](concepts/family.sector.md)。日线宽集合含ETF、池、真实/模拟持仓与挂单、活跃链、纳指范围、活跃研究请求；其它族按自身目标规则。研究或手动的显式单标的范围不扩大。ATR 已归[指标注册表](../../../knowledge/concepts/indicator.registry.md)，现算、不单独采集。
 
 **读什么、写什么**：取数、存储、覆盖与补查共用适配器；数值变化追加 revision，不覆盖旧行，每族每 scope 记拉取结果。目标事实由宿主既有池/持仓算法传入，数据层不复制上层规则。指标包装保留两套 close/adj_close 均线、SPY/QQQ 相强差异，数值不改。
 
@@ -39,7 +39,7 @@ version: 4
 
 ## ③ 筛选（screen-1）
 
-**做什么**：在纳指 100 范围里按固定阈值挑出值得多看一眼的股票，让它们并入扩展观察池，之后规则照常运行。过滤条件是 20 日平均成交额达到 5000 万美元（见 [20 日平均成交额](concepts/indicator.dollar_volume_20.md)）、避开今天至其后第 5 个交易日内的已知财报（财报日未知的不排除）；触发了买入规则的股票排在前面，形态合格的再按[相对强弱](concepts/indicator.screen_rs.md)补齐，每天新入选不超过 20 只。成员有保留期和上限，细节见[每日筛选](concepts/system.screen.md)；它们属于扩展池，见[观察池分层](concepts/system.pool_tiers.md)。
+**做什么**：在纳指 100 范围里按固定阈值挑出值得多看一眼的股票，让它们并入扩展观察池，之后规则照常运行。过滤条件是 20 日平均成交额达到 5000 万美元（见 [20 日平均成交额](../../../knowledge/concepts/indicator.dollar_volume_20.md)）、避开今天至其后第 5 个交易日内的已知财报（财报日未知的不排除）；触发了买入规则的股票排在前面，形态合格的再按[相对强弱](../../../knowledge/concepts/indicator.screen_rs.md)补齐，每天新入选不超过 20 只。成员有保留期和上限，细节见[每日筛选](concepts/system.screen.md)；它们属于扩展池，见[观察池分层](concepts/system.pool_tiers.md)。
 
 **读什么、写什么**：读已采集的范围成分日线与财报日（这一步自己不再发请求），写筛选运行记录与结果；成员写入观察池分层；当天新入池、采集节点还没覆盖的成员，在这一步补采资讯与 SEC 列表。
 
@@ -49,7 +49,7 @@ version: 4
 
 ## ④ 市场环境（regime-2）
 
-**做什么**：给当天的市场打一个粗略的标签，并看行业强弱和利率背景，帮你判断一份买入计划是顺风还是逆风。四个部分：[广度](concepts/indicator.breadth.md)（范围与手动池里站上 MA50 和 MA200 的占比、新高新低数）；[区制](concepts/indicator.regime.md)（据广度判成进攻、中性、防守，样本不足 20 只时为样本不足）；[行业强弱](concepts/indicator.sector_strength.md)（SMH、XLK、QQQ 相对 SPY 的 20 与 60 日强弱）；利差背景，[HY 信用利差](concepts/indicator.hy_oas.md)与 [2s10s 利差](concepts/indicator.t10y2y.md)。
+**做什么**：给当天的市场打一个粗略的标签，并看行业强弱和利率背景，帮你判断一份买入计划是顺风还是逆风。四个部分：[广度](../../../knowledge/concepts/indicator.breadth.md)（范围与手动池里站上 MA50 和 MA200 的占比、新高新低数）；[区制](../../../knowledge/concepts/indicator.regime.md)（据广度判成进攻、中性、防守，样本不足 20 只时为样本不足）；[行业强弱](../../../knowledge/concepts/indicator.sector_strength.md)（SMH、XLK、QQQ 相对 SPY 的 20 与 60 日强弱）；利差背景，[HY 信用利差](../../../knowledge/concepts/indicator.hy_oas.md)与 [2s10s 利差](../../../knowledge/concepts/indicator.t10y2y.md)。
 
 **读什么、写什么**：读日线和 FRED 序列，写一份当日市场环境快照。
 
@@ -61,16 +61,16 @@ version: 4
 
 **做什么**：规则 v1 在观察池和持仓上逐只评估，阈值事先固定、不用历史数据调参。下面是八条规则，每条的条件原文：
 
-- [趋势回踩修复](concepts/rule.trend_reclaim.md)（买入）：收盘 > MA50 > MA200，且收盘重新站上 MA20，此前至少连续 3 天在 MA20 下方。
-- [放量突破](concepts/rule.volume_breakout.md)（买入）：收盘创前 20 日收盘新高，成交量 ≥ 前 50 日均量 × 1.5，收盘 > MA50。
-- [财报跳空向上](concepts/rule.earnings_gap_up.md)（买入）：8-K Item 2.02 后第一个交易日，开盘较前收盘跳空 ≥ +3%，收盘 ≥ 开盘。
-- [跌破 MA50](concepts/rule.trend_break.md)（卖出）：此前至少连续 10 天收在 MA50 上方，当日跌破。
-- [财报跳空向下](concepts/rule.earnings_gap_down.md)（卖出）：财报后第一个交易日跳空 ≤ −3%，收盘 ≤ 开盘。
-- [持仓回撤](concepts/rule.position_drawdown.md)（卖出）：仅限没有计划的持仓，收盘较成本跌 ≥ 8%，或较持仓以来最高收盘回撤 ≥ 12%。
-- [新财报](concepts/rule.new_filing.md)（观察）：当日出现新的 10-Q / 10-K / 8-K。
-- [异常波动](concepts/rule.abnormal_move.md)（观察）：日收益绝对值 ≥ 近 20 日波动率 × 2.5，且当日无新财报。
+- [趋势回踩修复](../../../knowledge/concepts/rule.trend_reclaim.md)（买入）：收盘 > MA50 > MA200，且收盘重新站上 MA20，此前至少连续 3 天在 MA20 下方。
+- [放量突破](../../../knowledge/concepts/rule.volume_breakout.md)（买入）：收盘创前 20 日收盘新高，成交量 ≥ 前 50 日均量 × 1.5，收盘 > MA50。
+- [财报跳空向上](../../../knowledge/concepts/rule.earnings_gap_up.md)（买入）：8-K Item 2.02 后第一个交易日，开盘较前收盘跳空 ≥ +3%，收盘 ≥ 开盘。
+- [跌破 MA50](../../../knowledge/concepts/rule.trend_break.md)（卖出）：此前至少连续 10 天收在 MA50 上方，当日跌破。
+- [财报跳空向下](../../../knowledge/concepts/rule.earnings_gap_down.md)（卖出）：财报后第一个交易日跳空 ≤ −3%，收盘 ≤ 开盘。
+- [持仓回撤](../../../knowledge/concepts/rule.position_drawdown.md)（卖出）：仅限没有计划的持仓，收盘较成本跌 ≥ 8%，或较持仓以来最高收盘回撤 ≥ 12%。
+- [新财报](../../../knowledge/concepts/rule.new_filing.md)（观察）：当日出现新的 10-Q / 10-K / 8-K。
+- [异常波动](../../../knowledge/concepts/rule.abnormal_move.md)（观察）：日收益绝对值 ≥ 近 20 日波动率 × 2.5，且当日无新财报。
 
-另有两条只对**有计划的持仓**生效的卖出规则，它们同样产生候选：[计划止损](concepts/rule.plan_stop.md)（当日最低价触及当前止损）和[计划目标](concepts/rule.plan_target.md)（开仓以来首次触及 T1，卖出一半，只触发一次）。有计划的持仓用这两条，没有计划的持仓用持仓回撤。
+另有两条只对**有计划的持仓**生效的卖出规则，它们同样产生候选：[计划止损](../../../knowledge/concepts/rule.plan_stop.md)（当日最低价触及当前止损）和[计划目标](../../../knowledge/concepts/rule.plan_target.md)（开仓以来首次触及 T1，卖出一半，只触发一次）。有计划的持仓用这两条，没有计划的持仓用持仓回撤。
 
 财报时点按 SEC 受理时间判断：盘后发布算下一个交易日，盘前算当天，盘中发布不触发跳空规则。同一只股票当天的全部候选被合成一个[决策单元](concepts/system.decision_unit.md)；买入和卖出同日并存标记"冲突"、默认观察，没有持仓的卖出候选标记"回避"，见[冲突与回避](concepts/system.conflict.md)。
 
@@ -84,19 +84,19 @@ version: 4
 
 **做什么**：只为"建议买入、无冲突、未决定"的单元生成规则计划。公式固定，价位四舍五入到 0.01：
 
-- 参考价：信号日 T 的收盘价，见[参考价](concepts/plan.ref_price.md)。
-- ATR：ATR14（Wilder 方法，拆股调整口径；系统只取最近 15 根日线，实际等于最近 14 个真实波幅的简单平均），见 [ATR14](concepts/indicator.atr14.md)。
-- 入场区间：参考价 ± 0.5 ATR，见[入场区间](concepts/plan.entry_zone.md)。
-- 止损：参考价 − 2 ATR，见[止损](concepts/plan.stop.md)。
-- 目标 T1：参考价 + 4 ATR（2R），触及后卖出一半，见[目标 T1](concepts/plan.target1.md)；之后用[移动止损](concepts/plan.trailing_stop.md)。
-- 有效期：T+1 至 T+3 个交易日，见[有效期](concepts/plan.validity.md)。
-- 建议仓位：取 资金 × `risk_pct` ÷ 每股风险、单票上限、总持仓剩余空间三者中最小的；`risk_pct` 默认 1%，单票上限默认 25%，总持仓上限默认 100%（均为配置项）。缺资金快照时只给每股风险并标 `no_equity`，没有剩余空间则计划作废（`no_room`），见[建议仓位](concepts/plan.sizing.md)。
-- 财报：有效期内有财报则计划作废；之后 10 个交易日内有财报，或日期未知、已过，则加提示，见[财报规则](concepts/plan.earnings.md)。
-- 市场环境：冻结进计划的输入；防守区制、快照失败、行业弱势分别加提示，价位不变，见[市场环境提示](concepts/plan.context_flags.md)。
+- 参考价：信号日 T 的收盘价，见[参考价](../../../knowledge/concepts/plan.ref_price.md)。
+- ATR：ATR14（Wilder 方法，拆股调整口径；系统只取最近 15 根日线，实际等于最近 14 个真实波幅的简单平均），见 [ATR14](../../../knowledge/concepts/indicator.atr14.md)。
+- 入场区间：参考价 ± 0.5 ATR，见[入场区间](../../../knowledge/concepts/plan.entry_zone.md)。
+- 止损：参考价 − 2 ATR，见[止损](../../../knowledge/concepts/plan.stop.md)。
+- 目标 T1：参考价 + 4 ATR（2R），触及后卖出一半，见[目标 T1](../../../knowledge/concepts/plan.target1.md)；之后用[移动止损](../../../knowledge/concepts/plan.trailing_stop.md)。
+- 有效期：T+1 至 T+3 个交易日，见[有效期](../../../knowledge/concepts/plan.validity.md)。
+- 建议仓位：取 资金 × `risk_pct` ÷ 每股风险、单票上限、总持仓剩余空间三者中最小的；`risk_pct` 默认 1%，单票上限默认 25%，总持仓上限默认 100%（均为配置项）。缺资金快照时只给每股风险并标 `no_equity`，没有剩余空间则计划作废（`no_room`），见[建议仓位](../../../knowledge/concepts/plan.sizing.md)。
+- 财报：有效期内有财报则计划作废；之后 10 个交易日内有财报，或日期未知、已过，则加提示，见[财报规则](../../../knowledge/concepts/plan.earnings.md)。
+- 市场环境：冻结进计划的输入；防守区制、快照失败、行业弱势分别加提示，价位不变，见[市场环境提示](../../../knowledge/concepts/plan.context_flags.md)。
 
-计划有[状态与作废原因](concepts/plan.status.md)。每份计划的价位都能只用它的输入所指向的已存行重算，批处理会做一次核对，结果是一致、不一致或不完整，见[推导与一致性](concepts/plan.derivation.md)；"推导一致"只说明算术正确。你采纳时也可以提交[自定计划](concepts/plan.own.md)。
+计划有[状态与作废原因](../../../knowledge/concepts/plan.status.md)。每份计划的价位都能只用它的输入所指向的已存行重算，批处理会做一次核对，结果是一致、不一致或不完整，见[推导与一致性](../../../knowledge/concepts/plan.derivation.md)；"推导一致"只说明算术正确。你采纳时也可以提交[自定计划](../../../knowledge/concepts/plan.own.md)。
 
-**v2.9 起这一步生成 `plan-2`**：价位、有效期、仓位、财报规则与上面逐字相同，另写两个执行字段——入场类型恒为区间限价（见[入场类型](concepts/plan.entry_type.md)，开盘高开、低开怎么办见[开盘三种情形](concepts/plan.open_scenarios.md)）和最长持有 10 个交易日（见[最长持有](concepts/plan.max_hold.md)）。同一只股票已经有一条活跃的 Agent 计划链时，这一步照样生成规则基线，但会同时记下"这次触发并入了那条链"，不再为它另开一条链（见[一只股票一条活跃链](concepts/system.active_chain.md)）。旧的 `plan-1` 不重算。
+**v2.9 起这一步生成 `plan-2`**：价位、有效期、仓位、财报规则与上面逐字相同，另写两个执行字段——入场类型恒为区间限价（见[入场类型](../../../knowledge/concepts/plan.entry_type.md)，开盘高开、低开怎么办见[开盘三种情形](../../../knowledge/concepts/plan.open_scenarios.md)）和最长持有 10 个交易日（见[最长持有](../../../knowledge/concepts/plan.max_hold.md)）。同一只股票已经有一条活跃的 Agent 计划链时，这一步照样生成规则基线，但会同时记下"这次触发并入了那条链"，不再为它另开一条链（见[一只股票一条活跃链](concepts/system.active_chain.md)）。旧的 `plan-1` 不重算。
 
 **读什么、写什么**：读日线、财报日、区制和你的资金快照与敞口，写计划。同一单元重跑，结果相同就返回原计划，不同则记冲突、不覆盖。
 
@@ -138,7 +138,7 @@ version: 4
 
 复查模型口径仍为 `agent-review-2`；修订运行使用 agent-4 并原样带入最近研究段，研究员不重跑。review 尾部也由同一 handler 处理补查，与 agent 共用预算；原运行截止时间不被修改。
 
-**v2.9 起的三处变化**：① **一只股票一条活跃链**——入场期、持仓期、退出期的链都算活跃，同一只股票同一时间至多一条；它再次触发买入规则时，不开新链，而是作为[再次触发](concepts/agent.retrigger.md)并入已有的链：入场期的链跳过单阶段复查、直接产出修订版（价位不变也可以只顺延有效期）。② **持仓期的作废是退出指令**——止损触及、[时间止损](concepts/plan.max_hold.md)成立、失效条件成立或 Agent 判作废，都不再让链"结束"，而是进入退出期：不再复查，只每天写持仓状态，直到你把这些买入全部卖出。③ **每个持仓每天一行[持仓状态](concepts/review.holding_status.md)**——不论复查成功、跳过、出错还是 Agent 不可用，也不论有没有对应的链；这是"每天都有一行"的保证。
+**v2.9 起的三处变化**：① **一只股票一条活跃链**——入场期、持仓期、退出期的链都算活跃，同一只股票同一时间至多一条；它再次触发买入规则时，不开新链，而是作为[再次触发](concepts/agent.retrigger.md)并入已有的链：入场期的链跳过单阶段复查、直接产出修订版（价位不变也可以只顺延有效期）。② **持仓期的作废是退出指令**——止损触及、[时间止损](../../../knowledge/concepts/plan.max_hold.md)成立、失效条件成立或 Agent 判作废，都不再让链"结束"，而是进入退出期：不再复查，只每天写持仓状态，直到你把这些买入全部卖出。③ **每个持仓每天一行[持仓状态](concepts/review.holding_status.md)**——不论复查成功、跳过、出错还是 Agent 不可用，也不论有没有对应的链；这是"每天都有一行"的保证。
 
 你贴入的研报、新闻和判断是[用户输入](concepts/agent.user_input.md)：它们只是证据，不是指令，会触发 `user_input` 信号，让当天的复查认真看一次。你也可以在「今日」点"重新复查"，立即对一条链复查一次；除非失效条件已经成立（那仍由系统规则作废），否则一定会调用模型。
 
@@ -206,15 +206,15 @@ version: 4
 
 ## 你做什么：决定与成交
 
-早上打开「今日」，只看计划表（[一只股票一条活跃链](concepts/system.active_chain.md)，每份计划写成[执行指令](concepts/plan.open_scenarios.md)）：入场期、持仓中、已结束三组，每行写明明早开盘落在区间内 / 高开 / 低开各做什么、本计划何时作废。**没有任何按钮**：你自己在券商下单，然后到「账户 → 概览」的真实账户成交表单录入成交，并关联当时照着做的那份计划（默认选中活跃链的最新版，也可以选规则基线、自定价位或「无计划」），见[持仓与成交](concepts/review.position.md)。v2.9 之前的采纳 / 否决 / 降级[决定](concepts/system.decision.md)已退役，旧决定只读保留。
+早上打开「今日」，只看计划表（[一只股票一条活跃链](concepts/system.active_chain.md)，每份计划写成[执行指令](../../../knowledge/concepts/plan.open_scenarios.md)）：入场期、持仓中、已结束三组，每行写明明早开盘落在区间内 / 高开 / 低开各做什么、本计划何时作废。**没有任何按钮**：你自己在券商下单，然后到「账户 → 概览」的真实账户成交表单录入成交，并关联当时照着做的那份计划（默认选中活跃链的最新版，也可以选规则基线、自定价位或「无计划」），见[持仓与成交](concepts/review.position.md)。v2.9 之前的采纳 / 否决 / 降级[决定](concepts/system.decision.md)已退役，旧决定只读保留。
 
-有计划的持仓会按[计划止损](concepts/rule.plan_stop.md)和[计划目标](concepts/rule.plan_target.md)每天判断：触及 T1 之后，止损变为 开仓以来最高收盘 − 3 ATR 与持仓成本中较高者，收盘后更新、次日生效，见[移动止损](concepts/plan.trailing_stop.md)。如果你自己调整价位，会另存一份[自定计划](concepts/plan.own.md)。
+有计划的持仓会按[计划止损](../../../knowledge/concepts/rule.plan_stop.md)和[计划目标](../../../knowledge/concepts/rule.plan_target.md)每天判断：触及 T1 之后，止损变为 开仓以来最高收盘 − 3 ATR 与持仓成本中较高者，收盘后更新、次日生效，见[移动止损](../../../knowledge/concepts/plan.trailing_stop.md)。如果你自己调整价位，会另存一份[自定计划](../../../knowledge/concepts/plan.own.md)。
 
 ## 从计划到成交
 
 系统给的是一份份「可以照着做」的计划；你做没做、照哪一份做，由你的成交说话。
 
-- **关联计划**：录入成交时选当时照着做的那一版；只能关联成交那一刻的链头——补录昨天的成交，关联的仍是当时看到的那一版（比它旧的版本被拒 `plan_stale`，成交之后才生成的版本被拒 `plan_after_fill`），退出期的链不再提供。选「自定」会在同一个事务里写一份[自定计划](concepts/plan.own.md)；不选就是「无计划」。
+- **关联计划**：录入成交时选当时照着做的那一版；只能关联成交那一刻的链头——补录昨天的成交，关联的仍是当时看到的那一版（比它旧的版本被拒 `plan_stale`，成交之后才生成的版本被拒 `plan_after_fill`），退出期的链不再提供。选「自定」会在同一个事务里写一份[自定计划](../../../knowledge/concepts/plan.own.md)；不选就是「无计划」。
 - **执行状态**：由成交推出，不用点按钮——[已采纳 / 有效期外成交 / 等待成交 / 未执行，没有关联计划的买入是计划外](concepts/review.execution_status.md)。链上有任一关联买入就是「已执行」，同时写明照什么执行（Agent 第 n 版、规则基线或自定）。
 - **为什么没有决定按钮**：交易日志本身就是采纳的证据，再点一次按钮只会多出两份可能互相矛盾的记录；否决和降级也没有对应的行为——不买就是未执行。旧决定表保留只读，让旧复盘卡和旧周报照旧可读。
 - **备注**：想给自己留句话，可以给一条链或一份计划写备注（接口支持更正与撤回，页面暂未提供）。备注只给你自己看，不进任何 Agent 提示词、不触发复查；想让 Agent 参考，请用「我的补充」。

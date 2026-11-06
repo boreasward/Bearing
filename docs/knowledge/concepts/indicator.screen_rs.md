@@ -5,7 +5,7 @@ group: indicator
 version: 1
 applies_to: [screen-1]
 summary: "RS = ½(r20 − r20(QQQ)) + ½(r60 − r60(QQQ))；每日筛选用它给触发组、形态组排序，基准是 QQQ。"
-related: [system.screen, indicator.relative_strength, indicator.dollar_volume_20]
+related: [indicator.relative_strength, indicator.dollar_volume_20]
 sources: [investment_assistant/analysis/screen_rules.py, docs/archive/v2/features/pool-and-context.md]
 ---
 

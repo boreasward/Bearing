@@ -5,8 +5,8 @@ group: plan
 version: 1
 applies_to: [entry-1]
 summary: "每个有效日按开盘价分三种情形：开在区间内、高开过上沿、低开过下沿；每种怎么做由入场类型决定，开盘不高于止损或高开的次日开盘类计划作废。"
-related: [plan.entry_type, plan.entry_zone, plan.stop, plan.validity, review.plan_shadow]
-sources: [investment_assistant/execution/entry_rules.py, investment_assistant/execution/simulation.py, docs/archive/v2/features/daily-plan.md]
+related: [plan.entry_type, plan.entry_zone, plan.stop, plan.validity]
+sources: [investment_assistant/execution/entry_rules.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

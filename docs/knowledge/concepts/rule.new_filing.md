@@ -5,7 +5,7 @@ group: rule
 version: 1
 applies_to: [rules-1]
 summary: "观察候选：当日出现对你而言是新的 10-Q / 10-K / 8-K 申报；它不看价格，只提醒你去读。"
-related: [family.sec_filings, rule.earnings_gap_up, rule.abnormal_move, system.decision_unit]
+related: [rule.earnings_gap_up, rule.abnormal_move]
 sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
 ---
 
@@ -21,7 +21,7 @@ sources: [investment_assistant/analysis/rules.py, investment_assistant/derivatio
 
 ## 在系统里哪里看到
 
-- 「今日」决策单元里的「新财报」候选；「标的」页的 SEC 列表可以看到具体文件，见[SEC 申报](family.sec_filings.md)。
+- 「今日」决策单元里的「新财报」候选；「标的」页的 SEC 列表可以看到具体文件，见SEC 申报。
 
 ## 注意
 

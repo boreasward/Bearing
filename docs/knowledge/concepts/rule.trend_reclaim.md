@@ -5,7 +5,7 @@ group: rule
 version: 1
 applies_to: [rules-1]
 summary: "买入候选：处于中长期上升趋势的股票，回踩 MA20 下方至少 3 天后重新站上 MA20。"
-related: [rule.volume_breakout, rule.trend_break, indicator.moving_average, system.decision_unit]
+related: [rule.volume_breakout, rule.trend_break, indicator.moving_average]
 sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
 ---
 
@@ -26,7 +26,7 @@ sources: [investment_assistant/analysis/rules.py, investment_assistant/derivatio
 ## 在系统里哪里看到
 
 - 「今日」决策单元的候选规则；展开「触发依据」逐条核对条件。「连续 3 天在 MA20 下方」这一条没有冻结每日均线，页面如实标「未冻结，无法复核」。
-- 买入候选在无冲突、未决定时，会进一步生成规则计划，见[决策单元](system.decision_unit.md)。
+- 买入候选在无冲突、未决定时，会进一步生成规则计划，见决策单元。
 
 ## 注意
 

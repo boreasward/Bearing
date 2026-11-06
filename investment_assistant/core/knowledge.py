@@ -1,11 +1,9 @@
-"""Versioned concept cards and the principles page (v2.6 spec §4–§5.2, §10–§11).
+"""Versioned concept cards (v2.6 spec §4–§5.2, §10).
 
-Cards live in docs/knowledge/concepts/<id>.md (YAML frontmatter + Markdown), the principles page in
-docs/knowledge/principles.md. `load` reads and validates the whole directory, collecting every problem
-before it raises; rendering happens here too (markdown-it-py, raw HTML off, links rewritten at token level),
-so the API, the Agent tool and the CLI share one implementation. Pure file reads: no database.
-
-This module must not import `workbench.agent` or `service` at module level — agent/tools.py imports it.
+Cards live in docs/knowledge/concepts/<id>.md (YAML frontmatter + Markdown). `load` reads and validates the whole
+directory, collecting every problem before it raises; rendering happens here too (markdown-it-py, raw HTML off,
+links rewritten at token level), so the tool surface and the CLI share one implementation. Pure file reads: no
+database.
 """
 from __future__ import annotations
 
@@ -22,46 +20,29 @@ from typing import Any
 import yaml
 from markdown_it import MarkdownIt
 
-from investment_assistant.core.stages import STAGE_IDS
-
 KNOWLEDGE_VERSION = 'knowledge-1'
 
 # Group ids in display order, with the page titles (spec §4.1).
 GROUPS: tuple[tuple[str, str], ...] = (
-    ('family', '数据族'),
     ('indicator', '指标'),
     ('rule', '规则 v1'),
     ('plan', '规则计划 plan-1'),
-    ('agent', 'Agent 计划'),
-    ('account', '账户与模拟交易'),
-    ('review', '复盘'),
-    ('system', '系统运作'),
 )
 
-# Code version strings a card may declare in `applies_to`: current ones plus the history still present in old
-# rows. A literal on purpose (see the module docstring); tests/test_knowledge.py pins it to the code constants.
+# Code version strings a card may declare in `applies_to`: those the kept cards declare plus the ones the kept code
+# defines or uses. A literal on purpose: this module imports no other layer.
 KNOWN_VERSIONS: frozenset[str] = frozenset({
-    'plan-1', 'agent-1', 'agent-2', 'agent-review-1', 'agent-brief-1', 'condition-1', 'timeline-1',
-    'context-2', 'screen-1', 'regime-2', 'derivation-1', 'plan-shadow-1', 'tracks-1', 'review-6',
-    'monthly-3', 'stages-2', 'backcheck-2', 'rules-1', 'knowledge-1',
-    'stages-1', 'review-5', 'monthly-2', 'regime-1', 'context-1', 'backcheck-1',
-    'stages-3', 'retro-1', 'agent-retro-1', 'agent-discuss-1', 'my-knowledge-1', 'knowledge-perf-1', 'review-7',
-    'stages-4', 'daily-1', 'fetch-1', 'siwc-1',
-    'timeline-2', 'condition-2', 'plan-2', 'plan-shadow-2', 'agent-3', 'agent-review-2', 'agent-retro-2',
-    'entry-1', 'execution-1', 'discipline-1', 'discipline-2', 'tracks-2', 'retro-2', 'review-8', 'monthly-4',
-    'account-1', 'paper-fill-1', 'follow-plans-1', 'agent-portfolio-1', 'stages-5', 'daily-2', 'monthly-5',
-    'agent-4', 'agent-portfolio-2', 'agent-pm-1', 'agent-optimize-1', 'agent-impl-brief-1', 'stages-6', 'daily-3',
-    'portfolio-check-1', 'indicator-1',
+    'plan-1', 'plan-2', 'agent-1', 'agent-2', 'agent-3', 'condition-1', 'condition-2', 'context-2',
+    'screen-1', 'regime-2', 'derivation-1', 'rules-1', 'knowledge-1', 'fetch-1', 'entry-1', 'indicator-1',
 })
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ROOT = REPO_ROOT / 'docs' / 'knowledge'
 
-ID_BODY = r'(?:family|indicator|rule|plan|agent|account|review|system)\.[a-z0-9_]+'
+ID_BODY = r'(?:indicator|rule|plan)\.[a-z0-9_]+'
 ID_RE = re.compile(rf'^{ID_BODY}$')
 REF_RE = re.compile(rf'^(?:concept:)?({ID_BODY})(?:@([1-9][0-9]*))?$')
-CARD_LINK_RE = re.compile(rf'^(?:(concepts/))?({ID_BODY})\.md$')
-STAGE_LINK_RE = re.compile(r'^#stage-([a-z0-9_]+)$')
+CARD_LINK_RE = re.compile(rf'^({ID_BODY})\.md$')
 # For the Agent text: only the inline form `[文字](<id>.md)` (no title, no reference style, no brackets inside the
 # text) is accepted in cards, so this rewrite is exact; code fences and code spans are left alone.
 CODE_OR_CARD_LINK_RE = re.compile(
@@ -73,7 +54,6 @@ FRONTMATTER_RE = re.compile(r'\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)(.*
 
 CARD_REQUIRED = ('id', 'title', 'group', 'version', 'applies_to', 'summary', 'related')
 CARD_OPTIONAL = ('sources',)
-PRINCIPLES_REQUIRED = ('title', 'version')
 TITLE_MAX, SUMMARY_MAX, BODY_MAX = 30, 120, 6000
 
 STALE_NOTE = '该引用指向第 {requested} 版，当前为第 {current} 版；概念卡不保存旧版正文'
@@ -111,25 +91,9 @@ class Concept:
 
 
 @dataclass(frozen=True)
-class Section:
-    heading: str
-    html: str
-    stage: str | None
-    concepts: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class Principles:
-    title: str
-    version: int
-    sections: tuple[Section, ...]
-
-
-@dataclass(frozen=True)
 class Catalog:
     concepts: dict[str, Concept]
     backlinks: dict[str, tuple[str, ...]]
-    principles: Principles | None
     loaded_at: datetime
 
 
@@ -138,7 +102,7 @@ class Catalog:
 
 @dataclass
 class _Parsed:
-    label: str                    # 'concepts/plan.stop.md' / 'principles.md'
+    label: str                    # 'concepts/plan.stop.md'
     stem: str
     meta: dict[str, Any]
     body: str
@@ -196,43 +160,30 @@ def _inline_children(tokens: list):
             yield from token.children
 
 
-def _check_links(tokens: list, label: str, *, principles: bool, concept_ids: set[str], stage_ids: tuple[str, ...],
-                 problems: list[str]) -> list[tuple[str, str, Any]]:
-    """Validate every link/image in `tokens`; return [(kind, target, link_open token)] for the valid ones."""
-    found: list[tuple[str, str, Any]] = []
+def _check_links(tokens: list, label: str, *, concept_ids: set[str], problems: list[str]) -> list[tuple[str, Any]]:
+    """Validate every link/image in `tokens`; return [(target, link_open token)] for the valid ones."""
+    found: list[tuple[str, Any]] = []
     for token in _inline_children(tokens):
         if token.type == 'image':
             problems.append(f'{label}: 不允许图片（{token.attrGet("src")}）')
         elif token.type == 'link_open':
             href = token.attrGet('href') or ''
             card = CARD_LINK_RE.match(href)
-            stage = STAGE_LINK_RE.match(href)
-            if card and (principles or not card.group(1)):
-                if card.group(2) not in concept_ids:
-                    problems.append(f'{label}: 链接指向不存在的概念卡 {card.group(2)}')
+            if card:
+                if card.group(1) not in concept_ids:
+                    problems.append(f'{label}: 链接指向不存在的概念卡 {card.group(1)}')
                 else:
-                    found.append(('concept', card.group(2), token))
-            elif stage and principles:
-                if stage.group(1) not in stage_ids:
-                    problems.append(f'{label}: 未知阶段 #stage-{stage.group(1)}')
-                else:
-                    found.append(('stage', stage.group(1), token))
-            elif stage:
-                problems.append(f'{label}: 卡里不允许阶段链接 {href}（只许原理页）')
+                    found.append((card.group(1), token))
             else:
                 problems.append(f'{label}: 不允许的链接 {href}（只许 <id>.md 形式的概念卡链接）')
     return found
 
 
-def _rewrite(found: list[tuple[str, str, Any]]) -> None:
+def _rewrite(found: list[tuple[str, Any]]) -> None:
     """Rewrite validated links on the tokens themselves (never on the rendered HTML)."""
-    for kind, target, token in found:
-        if kind == 'concept':
-            token.attrSet('href', f'#knowledge/{target}')
-            token.attrSet('data-concept', target)
-        else:
-            token.attrSet('href', '#today')
-            token.attrSet('data-stage', target)
+    for target, token in found:
+        token.attrSet('href', f'#knowledge/{target}')
+        token.attrSet('data-concept', target)
 
 
 def _agent_body(body: str) -> tuple[str, int]:
@@ -321,13 +272,11 @@ def _validate_card(parsed: _Parsed, concept_ids: set[str], repo_root: Path,
     elif len(body) > BODY_MAX:
         problems.append(f'{label}: 正文超过 {BODY_MAX} 字（现 {len(body)} 字）')
 
-    found = _check_links(parsed.tokens, label, principles=False, concept_ids=concept_ids, stage_ids=(),
-                         problems=problems)
+    found = _check_links(parsed.tokens, label, concept_ids=concept_ids, problems=problems)
     body_text, rewritten = _agent_body(body)
-    card_links = [target for kind, target, _ in found if kind == 'concept']
+    card_links = [target for target, _ in found]
     card_tokens = sum(1 for t in _inline_children(parsed.tokens)           # card-shaped links (valid or not)
-                      if t.type == 'link_open' and (m := CARD_LINK_RE.match(t.attrGet('href') or ''))
-                      and not m.group(1))
+                      if t.type == 'link_open' and CARD_LINK_RE.match(t.attrGet('href') or ''))
     if rewritten != card_tokens:
         problems.append(f'{label}: 概念卡链接必须是行内的 [文字](<id>.md)，不能用引用式、带标题、文字里含方括号，或写在缩进代码块里')
     if len(problems) > start:
@@ -340,85 +289,11 @@ def _validate_card(parsed: _Parsed, concept_ids: set[str], repo_root: Path,
     return concept, set(card_links)
 
 
-def _plain(inline) -> str:
-    """Plain text of an inline token (code spans without backticks, soft breaks as spaces)."""
-    parts = []
-    for child in inline.children or []:
-        if child.type in ('text', 'code_inline'):
-            parts.append(child.content)
-        elif child.type in ('softbreak', 'hardbreak'):
-            parts.append(' ')
-    return ''.join(parts).strip()
-
-
-def _split_sections(tokens: list) -> list[tuple[str, Any, list]]:
-    """Split block tokens at top-level `## ` headings; text before the first one gets heading ''.
-
-    Returns [(plain heading, the heading's inline token or None, section body tokens)]."""
-    sections: list[tuple[str, Any, list]] = [('', None, [])]
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if token.type == 'heading_open' and token.tag == 'h2' and token.level == 0 and i + 2 < len(tokens):
-            inline = tokens[i + 1]
-            sections.append((_plain(inline), inline, []))
-            i += 3                                   # heading_open, inline, heading_close
-            continue
-        sections[-1][2].append(token)
-        i += 1
-    return sections
-
-
-def _validate_principles(parsed: _Parsed, concept_ids: set[str], stage_ids: tuple[str, ...],
-                         problems: list[str]) -> Principles | None:
-    label, meta = parsed.label, parsed.meta
-    start = len(problems)
-    missing = _field_set(meta, PRINCIPLES_REQUIRED, (), label, problems)
-    if missing:
-        return None
-    if not isinstance(meta['title'], str) or not meta['title'].strip():
-        problems.append(f'{label}: title 不能为空')
-    if not _is_pos_int(meta['version']):
-        problems.append(f'{label}: version 必须是正整数，现为 {meta["version"]!r}')
-    sections: list[Section] = []
-    seen_stages: dict[str, str] = {}
-    for heading, heading_inline, tokens in _split_sections(parsed.tokens):
-        where = f'{label}（{heading}）' if heading else label
-        if heading_inline is not None and any(c.type in ('link_open', 'image') for c in heading_inline.children or []):
-            problems.append(f'{where}: 标题里不能有链接或图片')
-        found = _check_links(tokens, where, principles=True, concept_ids=concept_ids, stage_ids=stage_ids,
-                             problems=problems)
-        stages_here: list[str] = []
-        for kind, target, _ in found:
-            if kind != 'stage':
-                continue
-            if target in seen_stages:
-                problems.append(f'{where}: #stage-{target} 出现了两次（已在“{seen_stages[target]}”）')
-            else:
-                seen_stages[target] = heading
-                stages_here.append(target)
-        if len(stages_here) > 1:
-            problems.append(f'{where}: 一节里只许链一个阶段，现有 {", ".join(stages_here)}')
-        concepts: list[str] = []
-        for kind, target, _ in found:
-            if kind == 'concept' and target not in concepts:
-                concepts.append(target)
-        _rewrite(found)
-        html = _render(tokens)
-        if not heading and not html.strip():
-            continue                                  # empty intro
-        sections.append(Section(heading=heading, html=html, stage=stages_here[0] if stages_here else None,
-                                concepts=tuple(concepts)))
-    if len(problems) > start:
-        return None
-    return Principles(title=meta['title'], version=meta['version'], sections=tuple(sections))
-
-
 # --------------------------------------------------------------------------------------------- loading
 
 
-def load(root: Path, *, stage_ids: tuple[str, ...] = STAGE_IDS, repo_root: Path = REPO_ROOT) -> Catalog:
-    """Read and validate `root/concepts/*.md` and `root/principles.md`; raise KnowledgeError with every problem."""
+def load(root: Path, *, repo_root: Path = REPO_ROOT) -> Catalog:
+    """Read and validate `root/concepts/*.md`; raise KnowledgeError with every problem."""
     root = Path(root)
     problems: list[str] = []
     cards: list[_Parsed] = []
@@ -431,14 +306,6 @@ def load(root: Path, *, stage_ids: tuple[str, ...] = STAGE_IDS, repo_root: Path 
         if split is not None:
             meta, body = split
             cards.append(_Parsed(label, path.stem, meta, body, _md.parse(body)))
-    principles_parsed = None
-    principles_path = root / 'principles.md'
-    if principles_path.is_file():
-        text = _read(principles_path, 'principles.md', problems)
-        split = _split(text, 'principles.md', problems) if text is not None else None
-        if split is not None:
-            meta, body = split
-            principles_parsed = _Parsed('principles.md', 'principles', meta, body, _md.parse(body))
 
     concept_ids = {path.stem for path in card_files}      # every file counts, even one that failed to parse
     concepts: dict[str, Concept] = {}
@@ -448,8 +315,6 @@ def load(root: Path, *, stage_ids: tuple[str, ...] = STAGE_IDS, repo_root: Path 
         if result is not None:
             concepts[result[0].id] = result[0]
             body_links[result[0].id] = result[1]
-    principles = (_validate_principles(principles_parsed, concept_ids, stage_ids, problems)
-                  if principles_parsed is not None else None)
     if problems:
         raise KnowledgeError(problems)
 
@@ -459,7 +324,7 @@ def load(root: Path, *, stage_ids: tuple[str, ...] = STAGE_IDS, repo_root: Path 
         for target in targets - {concept.id}:
             linked_from.setdefault(target, set()).add(concept.id)
     backlinks = {target: tuple(sorted(sources)) for target, sources in linked_from.items()}
-    return Catalog(concepts=concepts, backlinks=backlinks, principles=principles, loaded_at=datetime.now(UTC))
+    return Catalog(concepts=concepts, backlinks=backlinks, loaded_at=datetime.now(UTC))
 
 
 # Process-wide cache, keyed on the root so a changed DEFAULT_ROOT (tests) reloads. Failures are never cached.
@@ -489,49 +354,11 @@ catalog.cache_clear = reset_cache                     # type: ignore[attr-define
 
 # --------------------------------------------------------------------------------------------- refs
 
-KNOWLEDGE_RESULT_MAX = 10
-INDEX_MAX = 50
 CITATION_FIELDS = ('thesis', 'invalidation', 'changes', 'counter', 'risks', 'review')
-KNOW_REF_RE = re.compile(r'^know:([1-9][0-9]*)(?:@([1-9][0-9]*))?$')
-
-
-def parse_knowledge_ref(text: str) -> tuple[int, int | None]:
-    """``know:<id>[@<version>]`` -> ``(id, version | None)``; anything else raises ``ValueError``.
-    The version-less form is accepted in page addresses only; agent citations must carry one."""
-    match = KNOW_REF_RE.fullmatch(text) if isinstance(text, str) else None
-    if match is None:
-        raise ValueError(f'不是知识引用：{text!r}')
-    return int(match.group(1)), int(match.group(2)) if match.group(2) else None
 
 
 def ref(knowledge_id: int, version: int) -> str:
     return f'know:{knowledge_id}@{version}'
-
-
-def _order(row: dict[str, Any]) -> tuple:
-    return row['created_at'], row.get('id') or 0
-
-
-def status_at(statuses: list[dict[str, Any]], cutoff: datetime | None) -> str:
-    """One item's state at ``cutoff`` (None = now): the last record written at or before it, else ``active``."""
-    seen = [row for row in statuses if cutoff is None or row['created_at'] <= cutoff]
-    return max(seen, key=_order)['status'] if seen else 'active'
-
-
-def visible(versions: list[dict[str, Any]], statuses: list[dict[str, Any]], *,
-            cutoff: datetime | None) -> list[dict[str, Any]]:
-    """The highest version visible at cutoff, excluding items archived then; ordered by item id."""
-    top: dict[Any, dict[str, Any]] = {}
-    for row in versions:
-        if cutoff is not None and row['created_at'] > cutoff:
-            continue
-        current = top.get(row['knowledge_id'])
-        if current is None or row['version'] > current['version']:
-            top[row['knowledge_id']] = row
-    by_item: dict[Any, list[dict[str, Any]]] = {}
-    for row in statuses:
-        by_item.setdefault(row['knowledge_id'], []).append(row)
-    return [top[key] for key in sorted(top) if status_at(by_item.get(key, []), cutoff) != 'archived']
 
 
 def ref_entries(rows: list[dict[str, Any]], versions: list[dict[str, Any]]) -> dict[Any, list[dict[str, Any]]]:
@@ -555,57 +382,6 @@ def ref_entries(rows: list[dict[str, Any]], versions: list[dict[str, Any]]) -> d
 def refs_for_plans(rows: list[dict[str, Any]], versions: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """``plan id -> cited knowledge`` from citation and version facts, without database access."""
     return ref_entries([{**row, 'group': str(row['plan_id'])} for row in rows], versions)
-
-
-def _first_calls(calls: list[dict]) -> dict[str, int]:
-    """``know:`` ref -> seq of the first successful ``get_knowledge`` call that returned it."""
-    first: dict[str, int] = {}
-    for c in calls:
-        if c['tool'] != 'get_knowledge' or 'error' in c['result']:
-            continue
-        data = c['result'].get('data')
-        for entry in (data.get('entries') if isinstance(data, dict) else None) or []:
-            if isinstance(entry, dict) and isinstance(entry.get('ref'), str):
-                first.setdefault(entry['ref'], c['seq'])
-    return first
-
-
-def _field_refs(output: dict | None, counter: dict | None, mode: str) -> list[tuple[str, list]]:
-    """(field, refs) pairs of checked output that may carry a ``know:`` ref (spec §6.2)."""
-    pairs: list[tuple[str, list]] = []
-    if mode == 'review':
-        pairs.append(('review', (output or {}).get('refs') or []))
-        return pairs
-    for field, key in (('thesis', 'thesis'), ('invalidation', 'invalidation'), ('changes', 'changes')):
-        for item in (output or {}).get(key) or []:
-            if isinstance(item, dict):
-                pairs.append((field, item.get('refs') or []))
-    for field, key in (('counter', 'counter'), ('risks', 'risks')):
-        for item in (counter or {}).get(key) or []:
-            if isinstance(item, dict):
-                pairs.append((field, item.get('refs') or []))
-    return pairs
-
-
-def knowledge_citations(*, output: dict | None, counter: dict | None, mode: str, calls: list[dict]) -> list[dict]:
-    """Citations backed by the first successful tool call; one row per knowledge id, version and field."""
-    first = _first_calls(calls)
-    rows: list[dict] = []
-    seen: set[tuple[int, int, str]] = set()
-    for field, item_refs in _field_refs(output, counter, mode):
-        for item_ref in item_refs:
-            if not isinstance(item_ref, str) or item_ref not in first:
-                continue
-            try:
-                knowledge_id, version = parse_knowledge_ref(item_ref)
-            except ValueError:
-                continue
-            if version is None or (knowledge_id, version, field) in seen:
-                continue
-            seen.add((knowledge_id, version, field))
-            rows.append({'knowledge_id': knowledge_id, 'version': version, 'field': field,
-                         'call_seq': first[item_ref]})
-    return rows
 
 
 def parse_ref(text: str) -> tuple[str, int | None]:
@@ -636,41 +412,10 @@ def _ordered(cat: Catalog) -> list[Concept]:
     return sorted(cat.concepts.values(), key=lambda c: (order[c.group], c.id))
 
 
-def _brief(cat: Catalog, ids) -> list[dict[str, str]]:
-    return [{'id': i, 'title': cat.concepts[i].title} for i in ids if i in cat.concepts]
-
-
 def _card_fields(concept: Concept) -> dict[str, Any]:
     return {'id': concept.id, 'ref': concept.ref, 'title': concept.title, 'group': concept.group,
             'version': concept.version, 'applies_to': list(concept.applies_to), 'summary': concept.summary,
             'related': list(concept.related)}
-
-
-def index_view(cat: Catalog) -> dict[str, Any]:
-    concepts = _ordered(cat)
-    return {
-        'knowledge_version': KNOWLEDGE_VERSION,
-        'groups': [{'id': group_id, 'title': title, 'count': sum(1 for c in concepts if c.group == group_id)}
-                   for group_id, title in GROUPS],
-        'concepts': [_card_fields(c) for c in concepts],
-    }
-
-
-def card_view(cat: Catalog, ref: str) -> dict[str, Any]:
-    concept, stale = lookup(cat, ref)
-    return {**_card_fields(concept), 'html': concept.html,
-            'related_cards': _brief(cat, concept.related),
-            'backlinks': _brief(cat, cat.backlinks.get(concept.id, ())),
-            'stale': stale}
-
-
-def principles_view(cat: Catalog) -> dict[str, Any]:
-    if cat.principles is None:
-        raise LookupError('原理页不存在')
-    p = cat.principles
-    return {'title': p.title, 'version': p.version,
-            'sections': [{'heading': s.heading, 'html': s.html, 'stage': s.stage, 'concepts': list(s.concepts)}
-                         for s in p.sections]}
 
 
 def agent_text(cat: Catalog, concept_id: str | None) -> dict[str, Any]:
@@ -693,7 +438,7 @@ def agent_text(cat: Catalog, concept_id: str | None) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog='python -m investment_assistant.core.knowledge',
-                                     description='概念卡与原理页：校验与查看')
+                                     description='概念卡：校验与查看')
     sub = parser.add_subparsers(dest='command', required=True)
     check = sub.add_parser('check', help='校验整个目录')
     check.add_argument('--root', type=Path, default=None)
@@ -709,8 +454,7 @@ def main(argv: list[str] | None = None) -> int:
             print(problem)
         return 1
     if args.command == 'check':
-        sections = len(cat.principles.sections) if cat.principles else 0
-        print(f'概念卡 {len(cat.concepts)} 张、原理页 {sections} 节，通过')
+        print(f'概念卡 {len(cat.concepts)} 张，通过')
         return 0
     try:
         concept, stale = lookup(cat, args.ref)

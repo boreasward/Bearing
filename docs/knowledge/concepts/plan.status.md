@@ -5,7 +5,7 @@ group: plan
 version: 1
 applies_to: [plan-1]
 summary: "计划只有 ok / invalid 两种状态；作废原因（决定性的）与提示（仅提醒的）要分开读。"
-related: [plan.earnings, plan.sizing, plan.context_flags, review.track_status]
+related: [plan.earnings, plan.sizing, plan.context_flags]
 sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
@@ -27,7 +27,7 @@ sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/feature
 ## 在系统里哪里看到
 
 - 计划块上的「已作废」与原因；推导视图的校验段。
-- 作废的计划在复盘的三方对比里记为「计划作废」，见[三方对比状态](review.track_status.md)。
+- 作废的计划在复盘的三方对比里记为「计划作废」，见三方对比状态。
 
 ## 注意
 

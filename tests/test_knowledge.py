@@ -28,13 +28,6 @@ def write_card(root: Path, card_id: str = 'plan.stop', *, filename: str | None =
     return path
 
 
-def write_principles(root: Path, body: str, *, title: str = '系统每天怎么跑', version: int = 1) -> Path:
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / 'principles.md'
-    path.write_text(f'---\ntitle: {title}\nversion: {version}\n---\n\n{body}', encoding='utf-8')
-    return path
-
-
 @pytest.fixture(autouse=True)
 def fresh_cache():
     knowledge.reset_cache()
@@ -61,7 +54,7 @@ def test_load_valid_card(tmp_path):
     assert c.ref == 'concept:plan.stop@1'
     assert re.fullmatch(r'[0-9a-f]{64}', c.content_sha256)
     assert c.content_sha256 == hashlib.sha256(c.body_md.encode('utf-8')).hexdigest()
-    assert cat.principles is None and cat.loaded_at is not None
+    assert cat.loaded_at is not None
 
 
 VALIDATION_CASES = [
@@ -160,15 +153,6 @@ def test_inline_code_lookalike_is_not_a_link(tmp_path):
     assert cat.concepts['plan.c'].body_text == cat.concepts['plan.c'].body_md
 
 
-def test_principles_heading_links_and_plain_text(tmp_path):
-    write_card(tmp_path, 'plan.stop')
-    write_principles(tmp_path, '## 用 `ATR` 的 **粗** 标题\n\n正文\n')
-    assert load(tmp_path).principles.sections[0].heading == '用 ATR 的 粗 标题'
-    write_principles(tmp_path, '## 见 [止损](concepts/plan.stop.md)\n\n## 外 [x](https://x.com)\n')
-    problems = problems_of(tmp_path)
-    assert len(problems) == 2 and all('标题' in p for p in problems)
-
-
 def test_broken_yaml_does_not_cascade_related_errors(tmp_path):
     (tmp_path / 'concepts').mkdir()
     (tmp_path / 'concepts' / 'indicator.atr14.md').write_text('---\nid: [unclosed\n---\n\n正文', encoding='utf-8')
@@ -192,7 +176,7 @@ def test_whitespace_only_title_and_summary_rejected(tmp_path):
     assert any('title' in p for p in problems) and any('summary' in p for p in problems)
 
 
-def test_concepts_prefix_link_only_allowed_in_principles(tmp_path):
+def test_concepts_prefix_link_rejected(tmp_path):
     write_card(tmp_path, 'indicator.atr14', title='ATR14')
     write_card(tmp_path, 'plan.stop', body='见 [x](concepts/indicator.atr14.md)。')
     assert len(problems_of(tmp_path)) == 1
@@ -232,57 +216,6 @@ def test_links_rewritten(tmp_path):
     assert c.body_md.count('](indicator.atr14.md)') == 1   # source untouched
 
 
-PRINCIPLES = """导言一句。
-
-## 系统做什么
-
-出研究候选，你决定。
-
-## ① 数据采集
-
-读数据。[当天这一步](#stage-collect)，见 [止损](concepts/plan.stop.md)。
-
-## ② 其它
-
-没有链接。
-"""
-
-
-def test_principles_sections(tmp_path):
-    write_card(tmp_path, 'plan.stop')
-    write_principles(tmp_path, PRINCIPLES)
-    p = load(tmp_path).principles
-    assert (p.title, p.version) == ('系统每天怎么跑', 1)
-    assert [s.heading for s in p.sections] == ['', '系统做什么', '① 数据采集', '② 其它']
-    intro, _, collect, other = p.sections
-    assert '导言一句' in intro.html and intro.stage is None
-    assert collect.stage == 'collect' and collect.concepts == ('plan.stop',)
-    assert 'href="#today"' in collect.html and 'data-stage="collect"' in collect.html
-    assert '<a href="#knowledge/plan.stop" data-concept="plan.stop">止损</a>' in collect.html
-    assert '<h2>' not in collect.html
-    assert other.stage is None and other.concepts == ()
-
-
-def test_principles_empty_intro_dropped(tmp_path):
-    write_principles(tmp_path, '## 只有一节\n\n正文。\n')
-    assert [s.heading for s in load(tmp_path).principles.sections] == ['只有一节']
-
-
-def test_principles_unknown_and_duplicate_stage(tmp_path):
-    write_principles(tmp_path, '## 一\n[x](#stage-foo)\n\n## 二\n[x](#stage-collect)\n\n## 三\n[x](#stage-collect)\n')
-    problems = problems_of(tmp_path)
-    assert len(problems) == 2
-    assert any('foo' in p for p in problems) and any('collect' in p for p in problems)
-    assert all('principles.md' in p for p in problems)
-
-
-def test_principles_frontmatter_validated(tmp_path):
-    (tmp_path).mkdir(exist_ok=True)
-    (tmp_path / 'principles.md').write_text('---\ntitle: x\nversion: 0\nextra: 1\n---\n\n## 一\n', encoding='utf-8')
-    problems = problems_of(tmp_path)
-    assert len(problems) == 2 and all('principles.md' in p for p in problems)
-
-
 def test_backlinks(tmp_path):
     write_card(tmp_path, 'plan.a', title='A', related=['plan.b', 'plan.c'])
     write_card(tmp_path, 'plan.b', title='B')
@@ -316,7 +249,7 @@ def test_parse_ref_and_stale(tmp_path):
 def test_empty_or_missing_root(tmp_path):
     for root in (tmp_path / 'nope', tmp_path):
         cat = load(root)
-        assert cat.concepts == {} and cat.backlinks == {} and cat.principles is None
+        assert cat.concepts == {} and cat.backlinks == {}
 
 
 def test_catalog_failure_not_cached(tmp_path, monkeypatch):
@@ -349,9 +282,8 @@ def test_knowledge_module_does_not_import_agent_or_service_at_top_level():
 
 
 def test_groups_order():
-    assert [g for g, _ in knowledge.GROUPS] == ['family', 'indicator', 'rule', 'plan', 'agent', 'account', 'review', 'system']
-    assert dict(knowledge.GROUPS)['family'] == '数据族' and dict(knowledge.GROUPS)['system'] == '系统运作'
-    assert dict(knowledge.GROUPS)['account'] == '账户与模拟交易'
+    assert [g for g, _ in knowledge.GROUPS] == ['indicator', 'rule', 'plan']
+    assert dict(knowledge.GROUPS)['indicator'] == '指标' and dict(knowledge.GROUPS)['plan'] == '规则计划 plan-1'
 
 
 def test_agent_text(tmp_path):
@@ -374,40 +306,16 @@ def test_agent_text(tmp_path):
         with pytest.raises(LookupError) as info:
             knowledge.agent_text(cat, bad)
         assert str(info.value) == f'未知概念 {bad}，不给 id 可取全部列表'
-    with pytest.raises(LookupError) as info:                 # card_view / lookup keep the 404 wording
+    with pytest.raises(LookupError) as info:                 # lookup keeps the 404 wording
         knowledge.lookup(cat, 'plan.nope')
     assert str(info.value) == '没有这张概念卡：plan.nope'
-
-
-def test_views(tmp_path):
-    write_card(tmp_path, 'plan.stop', related=['indicator.atr14'])
-    write_card(tmp_path, 'indicator.atr14', title='ATR14')
-    write_principles(tmp_path, '## 一\n[x](#stage-collect)\n')
-    cat = load(tmp_path)
-    index = knowledge.index_view(cat)
-    assert index['knowledge_version'] == 'knowledge-1'
-    assert [(g['id'], g['count']) for g in index['groups']] == [
-        ('family', 0), ('indicator', 1), ('rule', 0), ('plan', 1), ('agent', 0), ('account', 0), ('review', 0), ('system', 0)]
-    assert [c['id'] for c in index['concepts']] == ['indicator.atr14', 'plan.stop']
-    assert set(index['concepts'][1]) == {'id', 'ref', 'title', 'group', 'version', 'applies_to', 'summary', 'related'}
-    card = knowledge.card_view(cat, 'indicator.atr14')
-    assert card['backlinks'] == [{'id': 'plan.stop', 'title': '止损'}] and card['stale'] is None
-    assert knowledge.card_view(cat, 'plan.stop')['related_cards'] == [{'id': 'indicator.atr14', 'title': 'ATR14'}]
-    assert 'html' in card
-    assert knowledge.card_view(cat, 'plan.stop@3')['stale']['requested'] == 3
-    view = knowledge.principles_view(cat)
-    assert view['title'] == '系统每天怎么跑' and view['sections'][0]['stage'] == 'collect'
-    assert set(view['sections'][0]) == {'heading', 'html', 'stage', 'concepts'}
-    with pytest.raises(LookupError):
-        knowledge.principles_view(load(tmp_path / 'empty'))
 
 
 def test_cli_check_and_show(tmp_path, capsys):
     good = tmp_path / 'good'
     write_card(good, 'plan.stop')
-    write_principles(good, '## 一\n\n## 二\n\n## 三\n')
     assert knowledge.main(['check', '--root', str(good)]) == 0
-    assert '概念卡 1 张、原理页 3 节，通过' in capsys.readouterr().out
+    assert '概念卡 1 张，通过' in capsys.readouterr().out
     bad = tmp_path / 'bad'
     write_card(bad, 'plan.stop', version=0)
     write_card(bad, 'plan.other', summary='')

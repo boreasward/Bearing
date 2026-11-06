@@ -45,8 +45,8 @@ Agent 运行的状态有五种：`ok`（通过）、`pass`（不建议买）、`
 | `draft_exists` | 这张卡已有成功的草稿 | 这张复盘卡已经有一份成功的草稿，不用重新起草 |
 | `not_connected` | ChatGPT 未连接 | 还没有连接 ChatGPT，连接已失效需要重新登录（刷新令牌过期、被撤销、重复使用，或账号不一致），或模型服务判定当前凭据 / 授权不可用；整个节点跳过 |
 | `model_unavailable` | 所选模型不可用 | 还没有选模型，或所选模型已不在 ChatGPT 提供的清单里（`model_not_found`）；整个节点跳过，到「设置 → Agent 连接」重新选择 |
-| `invalid_entry_type` | 入场类型不在允许的三种之内 | `agent-3` 的 `entry_type` 不是区间限价 / 突破买入 / 次日开盘之一，见[入场类型](plan.entry_type.md) |
-| `invalid_max_hold` | 最长持有须为 5–20 个交易日 | `agent-3` 的 `max_hold_sessions` 越界或不是整数，见[最长持有](plan.max_hold.md) |
+| `invalid_entry_type` | 入场类型不在允许的三种之内 | `agent-3` 的 `entry_type` 不是区间限价 / 突破买入 / 次日开盘之一，见[入场类型](../../../../knowledge/concepts/plan.entry_type.md) |
+| `invalid_max_hold` | 最长持有须为 5–20 个交易日 | `agent-3` 的 `max_hold_sessions` 越界或不是整数，见[最长持有](../../../../knowledge/concepts/plan.max_hold.md) |
 | `stop_lowered` | 持仓期不能下移止损 | 持仓期的修订把止损定得比上一版低 |
 | `stop_above_close` | 持仓期止损不能高于最新收盘 | 持仓期的修订把止损定在复查日收盘价或以上 |
 | `active_chain` | 已有进行中的计划链，这次触发已并入 | 这只股票已有活跃链，新触发并入它而不是另开（`agent` 阶段的跳过原因，也是手动重新运行的 409），见[再次触发](agent.retrigger.md) |

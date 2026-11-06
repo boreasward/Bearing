@@ -11,7 +11,7 @@ sources: [investment_assistant/data/adapters/fred.py, investment_assistant/analy
 
 ## 是什么
 
-FRED 是美联储圣路易斯分行的公开经济数据库。系统从中取两条和市场风险偏好相关的序列：高收益债信用利差（[HY 信用利差](indicator.hy_oas.md)，序列号 `BAMLH0A0HYM2`）和 10 年期减 2 年期美债利差（[2s10s 利差](indicator.t10y2y.md)，序列号 `T10Y2Y`）。它们是市场环境快照的宏观部分。
+FRED 是美联储圣路易斯分行的公开经济数据库。系统从中取两条和市场风险偏好相关的序列：高收益债信用利差（[HY 信用利差](../../../../knowledge/concepts/indicator.hy_oas.md)，序列号 `BAMLH0A0HYM2`）和 10 年期减 2 年期美债利差（[2s10s 利差](../../../../knowledge/concepts/indicator.t10y2y.md)，序列号 `T10Y2Y`）。它们是市场环境快照的宏观部分。
 
 ## 怎么算 / 从哪来
 
@@ -27,5 +27,5 @@ FRED 是美联储圣路易斯分行的公开经济数据库。系统从中取两
 
 ## 注意
 
-- 利差**只作背景信息**，不参与区制标签的判定（标签只看[广度](indicator.breadth.md)），也不改计划价位。
+- 利差**只作背景信息**，不参与区制标签的判定（标签只看[广度](../../../../knowledge/concepts/indicator.breadth.md)），也不改计划价位。
 - 密钥只从环境变量读取，不会出现在日志和页面上。

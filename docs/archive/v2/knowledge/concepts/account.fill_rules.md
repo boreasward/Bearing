@@ -35,4 +35,4 @@ sources: [investment_assistant/execution/paper/fill.py, investment_assistant/exe
 
 ## 在系统里哪里看到
 
-「账户 → 成交」看入场情形、退出原因、计划版本与 `paper-fill-1`；从订单与决策记录追溯使用的日线。核对价格时同时读[开盘三种情形](plan.open_scenarios.md)与[最长持有](plan.max_hold.md)。
+「账户 → 成交」看入场情形、退出原因、计划版本与 `paper-fill-1`；从订单与决策记录追溯使用的日线。核对价格时同时读[开盘三种情形](../../../../knowledge/concepts/plan.open_scenarios.md)与[最长持有](../../../../knowledge/concepts/plan.max_hold.md)。

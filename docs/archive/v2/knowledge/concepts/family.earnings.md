@@ -11,7 +11,7 @@ sources: [investment_assistant/data/adapters/earnings.py, investment_assistant/d
 
 ## 是什么
 
-财报日回答「下一次财报预计何时发布」，不是已经披露的财务数字。它给[计划财报规则](plan.earnings.md)与每日筛选提供时间边界；实际数字另看[公司基本面](family.fundamentals.md)。
+财报日回答「下一次财报预计何时发布」，不是已经披露的财务数字。它给[计划财报规则](../../../../knowledge/concepts/plan.earnings.md)与每日筛选提供时间边界；实际数字另看[公司基本面](family.fundamentals.md)。
 
 ## 怎么算 / 从哪来
 

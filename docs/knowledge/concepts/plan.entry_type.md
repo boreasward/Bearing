@@ -5,7 +5,7 @@ group: plan
 version: 1
 applies_to: [entry-1, plan-2, agent-3]
 summary: "计划写明怎么挂单：区间限价、突破买入或次日开盘三选一；规则基线恒用区间限价，Agent 只选类型，开盘情形的做法由系统按类型生成。"
-related: [plan.open_scenarios, plan.entry_zone, plan.max_hold, plan.own, agent.action_levels]
+related: [plan.open_scenarios, plan.entry_zone, plan.max_hold, plan.own]
 sources: [investment_assistant/execution/entry_rules.py, investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
@@ -21,12 +21,12 @@ sources: [investment_assistant/execution/entry_rules.py, investment_assistant/ex
 ## 怎么算 / 从哪来
 - **Agent 只选类型，不写情形文字**：开盘高开、低开时怎么办，是系统按类型从固定模板生成的（见[开盘三种情形](plan.open_scenarios.md)），模板和影子模拟用同一张表，所以页面上写"作废"的格子，影子一定记作废。
 - `zone_limit` 与 `breakout_stop` 在日线上的成交规则相同（区别只在你挂的单子类型），所以影子结果一致；`next_open` 只看第一个有效日（计划生效的第一个交易日）。
-- 类型不在这三种之内，这一版 Agent 计划作废，原因 `invalid_entry_type`（见[作废与跳过原因](agent.reject_reasons.md)）。
+- 类型不在这三种之内，这一版 Agent 计划作废，原因 `invalid_entry_type`（见作废与跳过原因）。
 - 旧的 `agent-2` 版本没有这个字段，页面按 `zone_limit` 显示并注明"旧版计划，执行字段按默认值显示"。
 
 ## 在系统里哪里看到
-「今日」计划表的"入场类型与区间"列、计划页的版本链、推送里新计划的第一行；改了类型会作为"相对上版的变化"写出（见[变化说明](agent.changes.md)）。
+「今日」计划表的"入场类型与区间"列、计划页的版本链、推送里新计划的第一行；改了类型会作为"相对上版的变化"写出（见变化说明）。
 
 ## 注意
 - 系统不看盘前和盘中价格：开盘三种情形是收盘后写好的条件指令，不是盘前复核；你仍要自己挂单。
-- 本版不做分批入场和追高比例（追高本来就是[纪律](review.discipline_chase.md)四项之一），也**未经验证**。
+- 本版不做分批入场和追高比例（追高本来就是纪律四项之一），也**未经验证**。

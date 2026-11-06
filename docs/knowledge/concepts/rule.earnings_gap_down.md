@@ -5,7 +5,7 @@ group: rule
 version: 1
 applies_to: [rules-1]
 summary: "卖出候选：8-K Item 2.02 财报发布后的第一个交易日，开盘较前收盘跳空 ≤ −3%，且收盘不高于开盘。"
-related: [rule.earnings_gap_up, indicator.gap, family.sec_filings, system.conflict]
+related: [rule.earnings_gap_up, indicator.gap]
 sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
 ---
 
@@ -25,6 +25,6 @@ sources: [investment_assistant/analysis/rules.py, investment_assistant/derivatio
 
 ## 注意
 
-- 没有持仓的卖出候选标记「回避」；同日同时有买入候选则标「冲突」，见[冲突与回避](system.conflict.md)。
+- 没有持仓的卖出候选标记「回避」；同日同时有买入候选则标「冲突」，见冲突与回避。
 - 受理时间缺失时只记 `earnings_time_unknown`，不猜；价格前置条件同其它规则。
 - 规则**未经验证**（Phase 0 Gate HOLD）。

@@ -5,7 +5,7 @@ group: rule
 version: 1
 applies_to: [rules-1]
 summary: "买入候选：8-K Item 2.02 财报发布后的第一个交易日，开盘较前收盘跳空 ≥ +3%，且收盘不低于开盘。"
-related: [rule.earnings_gap_down, indicator.gap, family.sec_filings, rule.new_filing]
+related: [rule.earnings_gap_down, indicator.gap, rule.new_filing]
 sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
 ---
 
@@ -26,6 +26,6 @@ sources: [investment_assistant/analysis/rules.py, investment_assistant/derivatio
 
 ## 注意
 
-- 受理时间缺失时无法确定是哪一天，只记跳过原因 `earnings_time_unknown`；批处理会用 SEC 列表补全缺失的受理时间，只补空值，不覆盖，见[SEC 申报](family.sec_filings.md)。
+- 受理时间缺失时无法确定是哪一天，只记跳过原因 `earnings_time_unknown`；批处理会用 SEC 列表补全缺失的受理时间，只补空值，不覆盖，见SEC 申报。
 - 同一份财报也会触发[新财报](rule.new_filing.md)观察；价格前置条件同其它规则。
 - 规则**未经验证**（Phase 0 Gate HOLD）：跳空后是否延续没有被检验过。

@@ -17,7 +17,7 @@ Agent 自管账户让 Agent 看本账户的现金、持仓、在挂单、可买�
 
 - **能决定**：从 `buyable` 选择计划，买入正整数股且不超过该计划的 `max_shares`；撤掉本账户仍在挂的买单；为已有持仓下全部或一半的卖单，按次一交易日开盘模拟成交；给没有卖单的每只持仓写继续持有的理由。
 - **必须说明**：每条订单与每只继续持有各有 1–300 字理由，总结为 1–200 字；未买的可买计划无需逐个解释。超出现金、股数或名额的订单被拒绝，宿主不会悄悄缩小股数；被拒的订单不消耗该计划版本，次日可在证据里看到拒绝原因并改正后重下。
-- **不能决定**：不能买计划之外的标的、另定入场价或改冻结计划的止损、T1、最长持有；宿主的止损、T1 卖半和[时间止损](plan.max_hold.md)持续执行，Agent 只能更早卖，见[成交规则](account.fill_rules.md)。
+- **不能决定**：不能买计划之外的标的、另定入场价或改冻结计划的止损、T1、最长持有；宿主的止损、T1 卖半和[时间止损](../../../../knowledge/concepts/plan.max_hold.md)持续执行，Agent 只能更早卖，见[成交规则](account.fill_rules.md)。
 - **能读的工具**：`get_price_bars`、`get_indicators`、`get_market_context`、`get_concept`、`get_knowledge`，新版增加 `get_indicator`；标的查询限本账户持仓与可买计划的并集，不额外放行基准股票。行情事实按本次截止时间取数。
 - **组合拦截**：本账户 blocked 买单取首硬理由拒绝。新增拒绝码为 `sector_cap`、`max_per_sector`、`single_cap`、`total_cap`、`held_ticker`；single_cap 包含单笔风险与单票敞口。deferred 仍可提交、继续过原现金校验；卖单与撤单不受组合 gate 影响。未归类只是提示。
 - **缺行与开关**：`portfolio_manager=false` 时整个 portfolio 节点 `skipped/feature_disabled`，证据段写「本版未检查」，`validate_orders` 收到 `None`，不作组合拦截，Today 为 `not_computed`；原现金、股数等校验仍执行。真正缺组合行时 detail 记 missing，不伪造通过结果。只有 `portfolio_manager=true`、硬结果已成功产出且后续 PM 失败时，才保留硬结果与相应约束、显示 `degraded`。照计划执行账户不读取新 gate，`follow-plans-1` 不变。

@@ -5,8 +5,8 @@ group: plan
 version: 1
 applies_to: [plan-1]
 summary: "参考价加 4 倍 ATR14（相当于 2R）；持仓第一次触及后建议卖出一半，余下改用移动止损。"
-related: [indicator.atr14, plan.stop, plan.trailing_stop, rule.plan_target, review.r_multiple]
-sources: [investment_assistant/execution/plan_levels.py, investment_assistant/execution/exits.py, docs/archive/v2/features/daily-plan.md]
+related: [indicator.atr14, plan.stop, plan.trailing_stop, rule.plan_target]
+sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么
@@ -16,7 +16,7 @@ T1 是计划的第一个获利目标。它的距离是止损距离的两倍，�
 ## 怎么算 / 从哪来
 
 - 目标 T1 = 参考价 + 4 × [ATR14](indicator.atr14.md)，四舍五入到分。
-- 止损距离是 2 个 ATR，所以 T1 恰好是 +2R（见[R](review.r_multiple.md)）。
+- 止损距离是 2 个 ATR，所以 T1 恰好是 +2R（见R）。
 - 持仓期间，某个交易日的最高价 ≥ T1，就是**触及 T1**：[计划目标](rule.plan_target.md)在第一次触及的那天产生「卖出一半」的候选，只触发一次；之后止损改为[移动止损](plan.trailing_stop.md)。
 
 ## 在系统里哪里看到

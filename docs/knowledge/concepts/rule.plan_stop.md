@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "卖出候选，仅限有计划的持仓：信号日最低价触及或跌破当前止损（初始止损，或触及 T1 后的移动止损）。"
 related: [plan.stop, plan.trailing_stop, rule.plan_target, rule.position_drawdown]
-sources: [investment_assistant/analysis/rules.py, investment_assistant/execution/exits.py, docs/archive/v2/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

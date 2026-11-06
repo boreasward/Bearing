@@ -5,7 +5,7 @@ group: indicator
 version: 1
 applies_to: [regime-2, condition-1]
 summary: "按广度把市场分为进攻 / 中性 / 防守 / 样本不足；只给计划加提示，不改价位、仓位和有效性。"
-related: [indicator.breadth, plan.context_flags, agent.invalidation, agent.review_when, family.fred]
+related: [indicator.breadth, plan.context_flags]
 sources: [investment_assistant/analysis/regime.py, investment_assistant/execution/plan_levels.py, docs/archive/v2/features/pool-and-context.md]
 ---
 
@@ -35,5 +35,5 @@ sources: [investment_assistant/analysis/regime.py, investment_assistant/executio
 ## 注意
 
 - 区制**只加提示，不改任何价位、仓位和计划有效性**。
-- 利差（[FRED](family.fred.md)）只作背景展示，不参与标签。
+- 利差（FRED）只作背景展示，不参与标签。
 - 这个标签本身**未经验证**：没有证据表明「防守」时少买会更好。

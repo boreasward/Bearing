@@ -24,7 +24,7 @@ SEC 申报是上市公司提交给美国证监会的正式文件，系统关心�
 ## 在系统里哪里看到
 
 - 「数据」菜单的「SEC 申报」卡与详情：最近拉取、逐只覆盖；浏览区近 180 天，分开显示已入库的 `filings` 和尚未入库的 `sec_8k`，无受理时间的条目标注「申报日未知」。
-- 「标的」页的 SEC 列表；「今日」里触发 [新财报](rule.new_filing.md) 或 [财报跳空向上](rule.earnings_gap_up.md) 的单元。
+- 「标的」页的 SEC 列表；「今日」里触发 [新财报](../../../../knowledge/concepts/rule.new_filing.md) 或 [财报跳空向上](../../../../knowledge/concepts/rule.earnings_gap_up.md) 的单元。
 
 ## 注意
 

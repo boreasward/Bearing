@@ -5,8 +5,8 @@ group: rule
 version: 1
 applies_to: [rules-1]
 summary: "卖出候选，仅限没有计划的持仓：收盘较成本跌 ≥ 8%，或较持仓以来最高收盘回撤 ≥ 12%。"
-related: [rule.plan_stop, plan.stop, review.position, system.decision_unit]
-sources: [investment_assistant/analysis/rules.py, investment_assistant/execution/exits.py, docs/archive/v2/features/daily-plan.md]
+related: [rule.plan_stop, plan.stop]
+sources: [investment_assistant/analysis/rules.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么
@@ -27,5 +27,5 @@ sources: [investment_assistant/analysis/rules.py, investment_assistant/execution
 
 ## 注意
 
-- 持仓成本与开仓日来自你录入的成交，见[持仓与成交](review.position.md)；成交录错会让它判断错。
+- 持仓成本与开仓日来自你录入的成交，见持仓与成交；成交录错会让它判断错。
 - 阈值固定、没有调参；规则**未经验证**（Phase 0 Gate HOLD）。

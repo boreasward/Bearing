@@ -11,7 +11,7 @@ sources: [investment_assistant/data/adapters/sector.py, investment_assistant/dat
 
 ## 是什么
 
-行业组是[组合检查](account.portfolio_check.md)统计集中度的分类依据，不是用行业 ETF 算出的[行业强弱](indicator.sector_strength.md)，两者不互相替代。
+行业组是[组合检查](account.portfolio_check.md)统计集中度的分类依据，不是用行业 ETF 算出的[行业强弱](../../../../knowledge/concepts/indicator.sector_strength.md)，两者不互相替代。
 
 ## 怎么算 / 从哪来
 

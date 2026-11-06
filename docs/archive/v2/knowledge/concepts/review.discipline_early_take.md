@@ -15,7 +15,7 @@ sources: [investment_assistant/review/discipline.py]
 ## 怎么算 / 从哪来
 对每笔买入的每一段平仓，同时满足以下三条才标记 `early_take`：
 
-1. 从买入日到卖出日，价格最高价没有碰到 [T1](plan.target1.md)（买入之前的高点不算）。
+1. 从买入日到卖出日，价格最高价没有碰到 [T1](../../../../knowledge/concepts/plan.target1.md)（买入之前的高点不算）。
 2. 这次卖出不是在执行止损：如果卖出发生在计划止损（`plan_stop`）触发后的一个交易日之内，视为按计划执行，不算。
 3. 卖出之后的 20 个交易日里，有任何一天最高价达到 T1。
 

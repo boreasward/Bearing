@@ -5,8 +5,8 @@ group: plan
 version: 1
 applies_to: [plan-2, agent-3, condition-2]
 summary: "计划写明最长持有的交易日数（规则基线 10 天，Agent 5–20 天）；持有满该天数仍没有一个收盘价到过成本加 1R，就给出次日开盘卖出的退出指令。"
-related: [plan.entry_type, review.holding_status, review.r_multiple, agent.review_when, plan.target1]
-sources: [investment_assistant/execution/conditions.py, investment_assistant/execution/plan_levels.py, investment_assistant/execution/timeline.py, docs/archive/v2/features/daily-plan.md]
+related: [plan.entry_type, plan.target1]
+sources: [investment_assistant/execution/conditions.py, investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么
@@ -14,7 +14,7 @@ sources: [investment_assistant/execution/conditions.py, investment_assistant/exe
 
 ## 怎么算 / 从哪来
 - **持有天数**：当前未平仓位里**最早一笔**买入的纽约交易日到复查日（含两端）的交易日数，成交日算第 1 天。
-- **1R**：R = 成本 − 初始止损；成本是未平批次的加权平均成本，初始止损取**第一笔关联买入所关联版本**的止损（见[R 倍数](review.r_multiple.md)）。R ≤ 0 或取不到初始止损时，是否到过 1R 记"无法判定"。
+- **1R**：R = 成本 − 初始止损；成本是未平批次的加权平均成本，初始止损取**第一笔关联买入所关联版本**的止损（见R 倍数）。R ≤ 0 或取不到初始止损时，是否到过 1R 记"无法判定"。
 - **到过 1R**：自最早一笔买入的交易日起（含）有任一日**收盘价** ≥ 成本 + R。
 - **时间止损成立** = 持有天数 ≥ 最长持有，且没有到过 1R；成立时当天收盘后给出退出指令"次一交易日开盘卖出"，影子按次日开盘价退出。
 - 条件 `held_sessions_reached`（`sessions` 3–30，文案"持有 {sessions} 个交易日仍未到 1R"）把这件事放进条件登记表：持仓期判定 `met` / `not_met` / `unknown`，入场期恒 `not_met`。宿主会把计划的最长持有自动注入为一条失效条件，模型不必也不能在失效条件里重复写它（写进复查条件是允许的）。

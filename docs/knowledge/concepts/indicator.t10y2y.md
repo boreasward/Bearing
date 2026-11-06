@@ -5,7 +5,7 @@ group: indicator
 version: 1
 applies_to: [regime-2]
 summary: "FRED 序列 T10Y2Y，10 年期与 2 年期美债收益率之差；只作背景信息，附 20 个观测前的变化。"
-related: [family.fred, indicator.hy_oas, indicator.regime]
+related: [indicator.hy_oas, indicator.regime]
 sources: [investment_assistant/data/adapters/fred.py, investment_assistant/derivation/indicators/breadth.py]
 ---
 
@@ -15,7 +15,7 @@ sources: [investment_assistant/data/adapters/fred.py, investment_assistant/deriv
 
 ## 怎么算 / 从哪来
 
-- 来自[FRED](family.fred.md)的序列 `T10Y2Y`，每次批处理取最近 120 天。
+- 来自FRED的序列 `T10Y2Y`，每次批处理取最近 120 天。
 - 展示最新值，以及与 20 个观测之前相比的变化；观测不足 21 个时没有变化值。
 - 同一天被修订的值追加记录。
 

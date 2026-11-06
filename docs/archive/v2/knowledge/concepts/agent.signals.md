@@ -15,7 +15,7 @@ sources: [investment_assistant/execution/timeline.py]
 | 信号 | 含义 |
 | --- | --- |
 | `new_8k` | 出现新的 8-K 申报 |
-| `abnormal_move` | 出现[异常波动](rule.abnormal_move.md)候选 |
+| `abnormal_move` | 出现[异常波动](../../../../knowledge/concepts/rule.abnormal_move.md)候选 |
 | `stop_touched` | 日线最低价触及最新版的止损 |
 | `t1_touched` | 日线最高价触及最新版的 T1 |
 | `expiry_near` | 入场期，且次一交易日恰好是最新版的截止日 |

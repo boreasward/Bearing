@@ -5,7 +5,7 @@ group: indicator
 version: 1
 applies_to: [screen-1]
 summary: "最近 20 日 收盘价 × 成交量 的平均值；每日筛选要求不低于 5000 万美元，否则记为流动性不足。"
-related: [system.screen, indicator.screen_rs, family.universe]
+related: [indicator.screen_rs]
 sources: [investment_assistant/analysis/screen_rules.py, docs/archive/v2/features/pool-and-context.md]
 ---
 
@@ -21,7 +21,7 @@ sources: [investment_assistant/analysis/screen_rules.py, docs/archive/v2/feature
 ## 在系统里哪里看到
 
 - 「今日」的筛选卡片计数里的「流动性不足」；筛选结果里每只股票的 `dollar_volume_20`。
-- 过滤顺序见[每日筛选](system.screen.md)。
+- 过滤顺序见每日筛选。
 
 ## 注意
 

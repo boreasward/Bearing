@@ -5,7 +5,7 @@ group: indicator
 version: 2
 applies_to: [indicator-1, plan-2, plan-1, screen-1]
 summary: "最近 14 个真实波幅的平均，衡量一只股票一天通常波动多少；止损、目标、入场区间和移动止损都以它为尺。"
-related: [indicator.registry, family.bars, plan.stop, plan.target1, plan.entry_zone, plan.trailing_stop]
+related: [indicator.registry, plan.stop, plan.target1, plan.entry_zone, plan.trailing_stop]
 sources: [investment_assistant/derivation/indicators/registry.py, investment_assistant/derivation/indicators/_price_math.py, investment_assistant/derivation/indicators/price.py]
 ---
 
@@ -19,7 +19,7 @@ ATR14 是「14 日平均真实波幅」。它告诉你这只股票一天的典�
 
 - 某一天的**真实波幅**（TR）取三者中最大的：当日最高 − 最低、|当日最高 − 前收盘|、|当日最低 − 前收盘|。这样隔夜跳空也算进波动。
 - ATR14 按 Wilder 方法：第一个值是 14 个 TR 的平均，之后用（前值 × 13 + 当日 TR）÷ 14 平滑。系统只取最近 15 根日线（得到 14 个 TR），因此实际等于最近 14 个真实波幅的简单平均。
-- 价格用开高低收（拆股调整、未分红调整），见[日线](family.bars.md)。不足 15 根日线算不出来，显示为空。
+- 价格用开高低收（拆股调整、未分红调整），见日线。不足 15 根日线算不出来，显示为空。
 - 计划里的 ATR 在生成时冻结，保留到小数点后 6 位。
 - 注册项 `atr14` 的 basis=high_low、window=15；`atr_pct` 也是15根，值为 ATR14 / **close**，不是 adj_close。覆盖须区分样本不足与截止日缺日线；不足15根时计划记 `atr_unavailable`。
 

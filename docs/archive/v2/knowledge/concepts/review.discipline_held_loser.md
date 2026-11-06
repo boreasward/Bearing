@@ -13,11 +13,11 @@ sources: [investment_assistant/review/discipline.py, investment_assistant/execut
 计划已经告诉你"到这里就走"，你却没走。死扛亏损衡量的就是：止损被触及之后，你拖着没卖。
 
 ## 怎么算 / 从哪来
-当某个交易日触发了[计划止损](rule.plan_stop.md)（当日最低价触及当前止损）而你仍持有对应批次，系统给一个期限：触发日起的下一个交易日。期限内（含触发日）如果没有任何一笔卖出，就标记 `held_loser`。
+当某个交易日触发了[计划止损](../../../../knowledge/concepts/rule.plan_stop.md)（当日最低价触及当前止损）而你仍持有对应批次，系统给一个期限：触发日起的下一个交易日。期限内（含触发日）如果没有任何一笔卖出，就标记 `held_loser`。
 
 - 买入日之前发生的止损不算；批次在止损触发前就已全部卖出的不算。
 - 期限还没到时显示"未成熟"，不提前标记。
-- 止损价是计划的[止损](plan.stop.md)，触及 T1 后会随[移动止损](plan.trailing_stop.md)上移。
+- 止损价是计划的[止损](../../../../knowledge/concepts/plan.stop.md)，触及 T1 后会随[移动止损](../../../../knowledge/concepts/plan.trailing_stop.md)上移。
 
 ## 在系统里哪里看到
 「复盘」纪律明细的"死扛亏损"计数、未成熟计数与每笔成交的标记；「今日」的持仓行会在触发当天给出卖出候选。

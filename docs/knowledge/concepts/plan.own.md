@@ -5,13 +5,13 @@ group: plan
 version: 1
 applies_to: [plan-1, plan-2]
 summary: "录入成交时你提交自己的四个价位（和可选的最长持有），系统在同一事务里另存一份 own 计划并让成交关联它；仓位按新价位重算，规则计划的作废原因降为提示。"
-related: [plan.entry_zone, plan.stop, plan.sizing, system.decision, review.execution_status]
+related: [plan.entry_zone, plan.stop, plan.sizing]
 sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么
 
-规则计划只是算术结果。如果你对价位有自己的看法，可以在录入成交时选「自定」并提交自己的入场区间、止损和目标，系统把它们另存为一份自定（`own`）计划，这笔成交就关联它（v2.9 之前是采纳决定时提交，见[决定与执行依据](system.decision.md)）。
+规则计划只是算术结果。如果你对价位有自己的看法，可以在录入成交时选「自定」并提交自己的入场区间、止损和目标，系统把它们另存为一份自定（`own`）计划，这笔成交就关联它（v2.9 之前是采纳决定时提交，见决定与执行依据）。
 
 ## 怎么算 / 从哪来
 
@@ -23,7 +23,7 @@ sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/feature
 
 ## 在系统里哪里看到
 
-- 「复盘 → 交易与持仓」录入成交时的「关联计划」下拉里选「自定」（其余是活跃链的最新版、有效期覆盖成交日的规则基线、最近 5 个交易日内的自定计划，或「无计划」），见[执行状态与备注](review.execution_status.md)；之后和规则计划并列出现在计划页与复盘里。
+- 「复盘 → 交易与持仓」录入成交时的「关联计划」下拉里选「自定」（其余是活跃链的最新版、有效期覆盖成交日的规则基线、最近 5 个交易日内的自定计划，或「无计划」），见执行状态与备注；之后和规则计划并列出现在计划页与复盘里。
 
 ## 注意
 

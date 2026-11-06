@@ -18,7 +18,7 @@ sources: [investment_assistant/execution/timeline.py, investment_assistant/execu
 | 数量、成本 | 当时未平批次（只含截止时间之前成交并录入的成交） |
 | 有效止损与模式 | 有链取**链最新版**的止损（持仓期修订上移的止损随之生效），无链取成交关联的计划；T1 之后为移动止损（模式 `trailing`）。1R 的风险取第一笔关联买入所关联版本的止损 |
 | 距止损、距 T1 | (收盘 − 止损) ÷ 收盘，(T1 − 收盘) ÷ 收盘，百分比；已跌破为负，已触及 T1 时距 T1 为空 |
-| 持有天数、剩余 | 见[最长持有](plan.max_hold.md)；已到 1R 或 T1 后剩余为空 |
+| 持有天数、剩余 | 见[最长持有](../../../../knowledge/concepts/plan.max_hold.md)；已到 1R 或 T1 后剩余为空 |
 | 现在几 R | (收盘 − 成本) ÷ R |
 | 指令 | `exit`（次一交易日开盘卖出：当天结论为持仓期作废，或链在退出期）、`sell_half`（到 T1：卖出一半，余下按移动止损）、`hold`（继续持有）、`no_plan`（无计划持仓，回撤规则看护） |
 | 退出原因 | `stop_touched` 止损触及、`time_stop` 时间止损、`invalidation` 失效条件成立、`agent_invalidate` Agent 判作废 |

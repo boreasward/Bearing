@@ -5,7 +5,7 @@ group: rule
 version: 1
 applies_to: [rules-1]
 summary: "卖出候选：此前至少连续 10 天收在 MA50 上方，当日收盘跌破 MA50。"
-related: [rule.trend_reclaim, indicator.moving_average, system.conflict, system.decision_unit]
+related: [rule.trend_reclaim, indicator.moving_average]
 sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
 ---
 
@@ -28,5 +28,5 @@ sources: [investment_assistant/analysis/rules.py, investment_assistant/derivatio
 
 ## 注意
 
-- 规则本身不看你有没有持仓：没有持仓的卖出候选会被标记「回避」，同一天同时有买入候选则标「冲突」、默认观察，见[冲突与回避](system.conflict.md)。
+- 规则本身不看你有没有持仓：没有持仓的卖出候选会被标记「回避」，同一天同时有买入候选则标「冲突」、默认观察，见冲突与回避。
 - 前置条件同其它价格规则；规则**未经验证**（Phase 0 Gate HOLD）。
