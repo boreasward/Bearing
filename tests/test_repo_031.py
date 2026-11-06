@@ -1,4 +1,4 @@
-"""031 repositories: real SQL, caller transactions, cutoff and guarded state transitions."""
+"""The 031 repositories that survive 033: real SQL, cutoff and tie-breaking, and the five-layers table probe."""
 
 import uuid
 from datetime import timedelta

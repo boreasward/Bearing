@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / 'investment_assistant'
 V3_PACKAGES = ('facts', 'toolsurface')
-# The lower layers v3 builds on: the core modules below, data/derivation as whole layers, four analysis modules,
+# The lower layers v3 builds on: the core modules below, the data layer, the derivation indicators, four analysis modules,
 # three execution modules, db and config, and each other (toolsurface may import facts; modules of one package
 # import each other). toolsurface appears in KEPT only so that imports inside the package are allowed (the target
 # must start with investment_assistant.toolsurface.); facts -> toolsurface is forbidden by the check below.

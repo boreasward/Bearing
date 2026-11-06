@@ -1,4 +1,4 @@
-"""Real constraint behavior for the US workbench schema; disposable schema only."""
+"""Real constraint behavior of the kept fact tables (bars, filings, earnings dates, macro, fetch runs); disposable schema only."""
 import investment_assistant.data.repo as data_repo
 from datetime import UTC, date, datetime, timedelta
 

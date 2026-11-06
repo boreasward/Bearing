@@ -133,35 +133,16 @@ def _string_constants(path):
             yield node.value
 
 
-# derivation/chain.py names the stored fields of v2 plan rows in its `missing` labels ('trade_plans:<id>',
-# 'agent_runs.output.levels.entry'); it is pure arithmetic over dicts and never touches a table. Only its strings that
-# carry no SQL keyword are let through; a string with SQL against a dropped table is still reported.
-LABEL_ONLY = {Path('investment_assistant/derivation/chain.py')}
-SQL_KEYWORD = re.compile(r'\b(SELECT|INSERT|UPDATE|DELETE|FROM|JOIN|INTO|WHERE|TABLE|DROP|ALTER)\b')
-
-
-def _references(text, pattern, label_only):
-    match = pattern.search(text)
-    return match is not None and not (label_only and not SQL_KEYWORD.search(text))
-
-
 def test_no_kept_code_references_a_dropped_table():
     pattern = re.compile(r'\b(' + '|'.join(DROPPED + CHECKPOINT_TABLES) + r')\b')
     hits = []
     files = [*sorted((ROOT / 'investment_assistant').rglob('*.py')), *sorted((ROOT / 'scripts').rglob('*.py'))]
     for path in files:
-        label_only = path.relative_to(ROOT) in LABEL_ONLY
         for text in _string_constants(path):
-            if _references(text, pattern, label_only):
-                hits.append(f'{path.relative_to(ROOT)}: {pattern.search(text).group(1)}')
+            match = pattern.search(text)
+            if match:
+                hits.append(f'{path.relative_to(ROOT)}: {match.group(1)}')
     assert not hits, '\n'.join(hits)
-
-
-def test_static_check_still_reports_sql_in_a_label_only_file():
-    pattern = re.compile(r'\b(trade_plans)\b')
-    assert not _references("f'trade_plans:{plan_id}'", pattern, True)
-    assert _references('SELECT * FROM trade_plans WHERE id = %s', pattern, True)
-    assert _references("f'trade_plans:{plan_id}'", pattern, False)
 
 
 def test_migration_has_a_drop_for_every_documented_table():

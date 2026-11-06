@@ -1,7 +1,7 @@
 """Normalization of the stored market snapshots behind the US research views; never sends notifications.
 
-The local-filing refresh that used to live here (``refresh_local_filings``) is gone: the ``sec_text`` adapter does
-that work for the daily batch, the SEC monitor, the backfill and the Data menu (spec D47, R28)."""
+Refreshing local filings is the ``sec_text`` adapter's work (spec D47, R28), run by the ``facts`` collection and the
+manual fetch."""
 from __future__ import annotations
 
 from investment_assistant.data import research_rows

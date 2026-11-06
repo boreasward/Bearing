@@ -33,7 +33,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
 # defines or uses. A literal on purpose: this module imports no other layer.
 KNOWN_VERSIONS: frozenset[str] = frozenset({
     'plan-1', 'plan-2', 'agent-1', 'agent-2', 'agent-3', 'condition-1', 'condition-2', 'context-2',
-    'screen-1', 'regime-2', 'derivation-1', 'rules-1', 'knowledge-1', 'fetch-1', 'entry-1', 'indicator-1',
+    'screen-1', 'regime-2', 'rules-1', 'knowledge-1', 'fetch-1', 'entry-1', 'indicator-1',
 })
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

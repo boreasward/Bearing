@@ -13,7 +13,7 @@ from investment_assistant.api import auth
 
 
 class CompatJSONResponse(JSONResponse):
-    """对齐旧 server 的序列化：ensure_ascii=False, default=str, indent=2。"""
+    """JSON 序列化：ensure_ascii=False, default=str, indent=2。"""
 
     def render(self, content: Any) -> bytes:
         return json.dumps(content, ensure_ascii=False, default=str, indent=2).encode("utf-8")
@@ -45,18 +45,19 @@ def create_app() -> FastAPI:
     async def _http_exception(request: Request, exc: StarletteHTTPException):
         detail = exc.detail if isinstance(exc.detail, str) else "error"
         if exc.status_code == 404 and detail == "Not Found":
-            detail = "not found"  # 旧契约
+            detail = "not found"  # 未知路径统一返回 {"error": "not found"}
         return CompatJSONResponse({"error": detail}, status_code=exc.status_code,
                                   headers=getattr(exc, "headers", None))
 
     @app.exception_handler(ValueError)
     async def _value_error(request: Request, exc: ValueError):
-        return CompatJSONResponse({"error": str(exc)}, status_code=400)  # 旧 router 契约
+        return CompatJSONResponse({"error": str(exc)}, status_code=400)  # ValueError 返回 400
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Request, exc: RequestValidationError):
-        return CompatJSONResponse({"error": f"invalid request: {exc}"}, status_code=400)  # 旧 400 契约（非 422）
+        return CompatJSONResponse({"error": f"invalid request: {exc}"}, status_code=400)  # 校验错误返回 400，不是 FastAPI 默认的 422
 
+    # 两个兜底路由必须最后注册：新的 /api/... 路由要在它们之前 include_router，否则会被拦成 404。
     @app.get("/{full_path:path}", include_in_schema=False)
     def _static(full_path: str):
         from investment_assistant.api import static_files

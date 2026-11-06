@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 
 from investment_assistant.analysis import regime
+from investment_assistant.core import texts
 from investment_assistant.derivation.indicators import breadth
 
 SESSION = date(2026, 10, 21)
@@ -16,7 +17,7 @@ def test_constants():
     assert regime.REGIME_VERSION == 'regime-2'
     assert regime.MIN_ELIGIBLE_200 == 20
     assert breadth.RS_WINDOWS == (20, 60)
-    assert regime.LABEL_TEXT == {'risk_on': '进攻', 'neutral': '中性', 'risk_off': '防守', 'insufficient': '样本不足'}
+    assert texts.REGIME_LABEL_TEXT == {'risk_on': '进攻', 'neutral': '中性', 'risk_off': '防守', 'insufficient': '样本不足'}
 
 
 def test_breadth_eligibility_by_history():

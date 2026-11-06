@@ -17,7 +17,6 @@ from investment_assistant.derivation.indicators.screen_metrics import (
     _ret, _ma, _dollar_volume_20, screen_rs, atr_pct as _atr_pct,
 )
 from investment_assistant.analysis import rules
-from investment_assistant.execution import plan_levels as plans
 
 MIN_DOLLAR_VOLUME = Decimal('50000000')  # 20 日平均成交额下限（美元）
 ATR_PCT_MIN = Decimal('0.02')

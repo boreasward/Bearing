@@ -21,6 +21,7 @@
 
 - `/` 返回 `web/dist/index.html`（占位页）；`/assets/…` 返回构建产物里的文件。
 - 其余路径，以及 `POST` / `PUT` / `PATCH` / `DELETE`，一律 404 `{"error": "not found"}`。
+- 这两类兜底（`GET` 的静态托管与其他方法的 404）是 `create_app()` 里最后注册的两个路由；新的 `/api/...` 路由必须在它们之前 `include_router`，否则会被拦成 404。
 - 没有 `web/dist` 时 `/` 返回 503 `{"error": "frontend_not_built", …}`。
 - 组件画廊（`#_ui`）只在开发模式（`cd web && npm run dev`）可用，构建产物不含它。
 

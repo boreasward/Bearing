@@ -2,7 +2,7 @@
 
 ``list`` prints the registry (no database). ``compute`` reads the stored bars as known now and evaluates one
 indicator through ``registry.compute`` -- the same function the Agent tool and the daily rules use. Read-only. The
-breadth indicator needs the pool's sample, which only the workflow host supplies, so the CLI refuses it
+breadth indicator needs the pool's sample, which this CLI does not have, so it refuses it
 (``indicator_requires_universe``), and the sector indicator is defined for the sector ETFs only."""
 from __future__ import annotations
 

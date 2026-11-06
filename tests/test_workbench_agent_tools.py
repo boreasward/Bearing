@@ -1,4 +1,4 @@
-"""Agent tool layer: recording, bounds, indicator math and cutoff visibility. No network."""
+"""The price indicator set (``price.indicators``): short-history nulls and values. No network."""
 from datetime import date
 
 import pytest

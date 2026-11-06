@@ -45,7 +45,7 @@ def _tx():
         with connection() as conn:
             missing = missing_tables(conn, WORKBENCH_TABLES)
             if missing:
-                raise Unavailable('工作台数据表未就绪（需执行迁移 016–020）：' + ', '.join(missing))
+                raise Unavailable('工作台数据表未就绪（需执行迁移 002、011、016、017、018）：' + ', '.join(missing))
             try:
                 yield conn
                 conn.commit()
@@ -58,7 +58,7 @@ def _tx():
 
 @contextmanager
 def read_only_tx():
-    """Read-only transaction for the GET use cases (data menu spec §8, derivation spec §9 只读性).
+    """Read-only transaction for read paths.
 
     SET TRANSACTION READ ONLY comes first, so the database itself refuses any
     write; commit on the way out simply ends the read-only transaction."""
@@ -69,7 +69,7 @@ def read_only_tx():
             conn.execute('SET TRANSACTION READ ONLY')
             missing = missing_tables(conn, WORKBENCH_TABLES)
             if missing:
-                raise Unavailable('工作台数据表未就绪（需执行迁移 016–020）：' + ', '.join(missing))
+                raise Unavailable('工作台数据表未就绪（需执行迁移 002、011、016、017、018）：' + ', '.join(missing))
             try:
                 yield conn
                 conn.commit()

@@ -6,7 +6,7 @@ version: 1
 applies_to: [rules-1]
 summary: "买入候选：8-K Item 2.02 财报发布后的第一个交易日，开盘较前收盘跳空 ≥ +3%，且收盘不低于开盘。"
 related: [rule.earnings_gap_down, indicator.gap, rule.new_filing]
-sources: [investment_assistant/analysis/rules.py, investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
+sources: [investment_assistant/analysis/rules.py, docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

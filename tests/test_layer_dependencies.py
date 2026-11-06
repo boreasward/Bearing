@@ -54,10 +54,15 @@ def test_no_upward_imports():
     assert not violations, '\n'.join(sorted(set(violations)))
 
 
-def test_workbench_package_gone():
-    for package in ('workbench', 'filings', 'us_research'):
-        assert not (ROOT / package).exists()
-    assert not (ROOT / 'tasks' / 'runner.py').exists()
+REMOVED = ('workbench', 'filings', 'us_research',
+           'workflow', 'views', 'services', 'tasks', 'review', 'optimize',
+           'analysis/agent', 'core/llm', 'execution/paper', 'api/routes',
+           'hermes', 'market', 'research', 'strategies', 'tickers')
+
+
+def test_removed_v2_packages_stay_gone():
+    for package in REMOVED:
+        assert not (ROOT / package).exists(), package
 
 
 def test_no_module_cycles():

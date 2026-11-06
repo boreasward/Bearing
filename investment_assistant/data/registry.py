@@ -156,9 +156,9 @@ def _list_rows() -> list[list[str]]:
 
 
 def _fetch(family_id: str, ticker: str | None) -> int:
-    """One manual fetch through ``run_adapter`` (the Data menu's path, ``manual_family`` row). The data layer cannot
-    resolve a per-ticker family's whole target set (watchlist, positions, chains live in the workflow layer), so a
-    per-ticker family needs ``--ticker``; the menu or the daily batch fetches the whole family."""
+    """One manual fetch through ``run_adapter`` (``manual_family`` row). The data layer cannot resolve a per-ticker
+    family's whole target set (watchlist and positions are read by ``facts``), so a per-ticker family needs
+    ``--ticker``."""
     from investment_assistant.config import load_config
     from investment_assistant.core import features as core_features
     from investment_assistant.core import tx as core_tx
@@ -168,7 +168,7 @@ def _fetch(family_id: str, ticker: str | None) -> int:
 
     adapter = get(family_id)
     if ticker is None and adapter.per_ticker:
-        print(f'{family_id} 是逐只拉取的族：请加 --ticker（整族请用数据菜单或日批）', file=sys.stderr)
+        print(f'{family_id} 是逐只拉取的族：这里不解析整套目标，请加 --ticker', file=sys.stderr)
         return 2
     if ticker is not None:
         if not adapter.per_ticker:

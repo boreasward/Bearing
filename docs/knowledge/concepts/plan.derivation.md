@@ -3,10 +3,10 @@ id: plan.derivation
 title: 推导与一致性
 group: plan
 version: 1
-applies_to: [derivation-1]
+applies_to: []
 summary: "只用计划 inputs 指向的已存行重算每一个价位和数字；结论分一致 / 不一致 / 不完整，「一致」只说明算术正确。"
 related: [plan.ref_price, plan.sizing, indicator.atr14]
-sources: [investment_assistant/derivation/chain.py, docs/archive/v2/features/daily-plan.md]
+sources: [docs/archive/v2/features/daily-plan.md]
 ---
 
 ## 是什么

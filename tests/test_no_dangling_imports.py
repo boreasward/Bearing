@@ -12,10 +12,7 @@ DOTTED = re.compile(r'investment_assistant(?:\.[A-Za-z_][A-Za-z0-9_]*)+')
 
 # (file, dotted string without the leading `investment_assistant.`) pairs that are deliberately not resolvable.
 # The prefix is left off so that this file does not itself contain the dangling string.
-ABSENT_BY_DESIGN = {
-    # negative assertion: the guard asserts that importing the derivation chain does not load this module
-    ('tests/test_workbench_derivation_cli.py', 'derivation.views'),
-}
+ABSENT_BY_DESIGN: set[tuple[str, str]] = set()
 
 
 def _python_files():

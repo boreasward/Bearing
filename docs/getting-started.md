@@ -8,7 +8,7 @@
 
 - macOS（本机服务用 LaunchAgent）
 - Python 3.11+（`.venv` 现用 3.11）
-- Node.js（构建 `web/` 前端；Node 26 跑测试时需 `NODE_OPTIONS=--no-experimental-webstorage`）
+- Node.js（构建 `web/` 前端并跑前端测试；Node 26 下不需要额外环境变量，只会打印 localStorage 的实验性警告）
 - PostgreSQL（本机用 Homebrew `postgresql@17`）
 - SEC EDGAR 用户标识（`名字 邮箱`）
 
@@ -47,6 +47,30 @@ cd web && npm install && npm run build && cd ..
 - `filings`：`forms`（默认 10-Q、10-K）、`output_dir`；`sec_monitor`、`notify`：库里保留的 SEC 监控与 Discord 发送通道读取，目前没有入口调用。
 
 采集范围是 `config/universes/nasdaq100.json`（相对运行目录，请在仓库根目录运行命令）；关注列表读数据库表 `watchlist_items`。
+
+### 关注列表
+
+`facts` 每次运行读 `watchlist_items`（读 `ticker`、`status`、`tags` 三列）：`status = 'active'` 且代码是合法美股的行组成「股票池」。股票池的作用有两处：
+
+- 采集：每日八族里，除指数成分与宏观两族（目标固定）外，其余六族的采集目标都包含股票池与持仓；日线、财报日、行业归类三族另外并入 `nasdaq100.json` 的全部成分与基准、行业 ETF。
+- 规则：算名单的股票范围是 `nasdaq100.json` 的成分与股票池的并集。
+
+标签是可选的：`core` 把一只票放进核心池（最多 15 只），`sector:<ETF>`（`SMH`、`XLK`、`QQQ` 之一，至多一个）标注行业 ETF；股票池总数不超过 100。关注列表里没有 `active` 的美股，或标签、数量超限时，`facts` 当作没有股票池继续运行，不报错。
+
+**目前没有任何命令或工具能增删关注列表（`toolsurface` 的工具也不写它），只能直接用 SQL。** 表的必填列只有 `ticker`（唯一），`status` 默认 `active`，`tags` 默认空：
+
+```sql
+-- 加入关注
+INSERT INTO watchlist_items (ticker) VALUES ('AAPL');
+
+-- 归档（status 取 active / paused / archived；非 active 的行不进股票池）；表上没有触发器，updated_at 要自己写
+UPDATE watchlist_items SET status = 'archived', updated_at = now() WHERE ticker = 'AAPL';
+
+-- 彻底删除
+DELETE FROM watchlist_items WHERE ticker = 'AAPL';
+```
+
+v2 的写入实现（`upsert_watchlist_item`、`delete_watchlist_item`）在提交 `d082400` 的 `investment_assistant/db.py` 里，v3 第 2、3 步需要时可以从那里取回。
 
 ## 建库
 
@@ -95,7 +119,7 @@ INVESTMENT_ASSISTANT_TEST_DATABASE_URL=postgresql://test@127.0.0.1:55433/workben
   env -u INVESTMENT_ASSISTANT_DATABASE_URL .venv/bin/python -m pytest -q
 
 # 3. 前端
-cd web && NODE_OPTIONS=--no-experimental-webstorage npm test && npm run build
+cd web && npm test && npm run build
 ```
 
 `INVESTMENT_ASSISTANT_TEST_DATABASE_URL` **必须指向一次性库，永远不要指向真实库**；搭建方法见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md#一次性测试库)。

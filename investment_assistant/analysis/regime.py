@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import date
 
-from investment_assistant.core.texts import REGIME_LABEL_TEXT as LABEL_TEXT
 from investment_assistant.core.versions import REGIME_VERSION as REGIME_VERSION
 from investment_assistant.derivation.indicators.breadth import breadth, sector_strength, macro_view
 

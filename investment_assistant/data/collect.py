@@ -1,8 +1,7 @@
-"""The fetch-run bookkeeping the batch, the screen backfill and the manual fetch feed (v2.3 §6): the per-family
-``Tally``, the append-only ``data_fetch_runs`` write and the per-family advisory locks.
+"""The fetch-run bookkeeping the ``facts`` collection (daily pass and backfill) and the manual fetch feed: the
+per-family ``Tally``, the append-only ``data_fetch_runs`` write and the per-family advisory locks.
 
-Every fetch itself is a ``registry.run_adapter`` call (spec D15, R23): the per-family collector functions that lived here
-(``bars_one`` / ``news_one`` / ``sec_listing`` / ``fred_series``) have no caller any more and are gone."""
+Every fetch itself is a ``registry.run_adapter`` call (spec D15, R23)."""
 from __future__ import annotations
 from investment_assistant.data.tally import Tally as Tally, TARGETS_MAX as TARGETS_MAX
 import investment_assistant.data.repo as data_repo
