@@ -3,7 +3,7 @@
   import StatusPill from './StatusPill.svelte'
 
   // A number with its unit: tabular digits, unit right after (`12 股`, `-3.2%`). `percent` takes a fraction
-  // (0.032 -> 3.2%, like fmtPct). null / undefined / NaN is 没算, never blank or a dash. `updown`: positive text-up, negative text-down.
+  // (0.032 -> 3.2%). null / undefined / NaN is 没算, never blank or a dash. `updown`: positive text-up, negative text-down.
   let { value, raw, unit, digits = 2, signed = false, percent = false, tone = 'none' }: {
     value: number | null | undefined; raw?: string | null; unit?: string; digits?: number; signed?: boolean; percent?: boolean; tone?: 'updown' | 'none'
   } = $props()

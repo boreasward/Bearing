@@ -4,7 +4,7 @@
   // The standard one-line price levels, as PlanHistoryTable / PlanTimeline / RuleBaseline print them today:
   // `入场 95.10–97.30 · 止损 91.40 · T1 104.70`, plus ` · 建议 120 股` when shares are known (PlanRowDetail).
   // A level that was not computed says 没算; all four missing is one not-computed badge.
-  // `lead` is the word before the entry range (default 入场; PlanTable passes the entry type text, e.g. 区间限价);
+  // `lead` is the word before the entry range (default 入场; e.g. 区间限价);
   // `sharesLabel` the word before the shares (default 建议; an empty string prints just `120 股`).
   let { low, high, stop, target1, shares = null, lead = '入场', sharesLabel = '建议' }: {
     low: number | null; high: number | null; stop: number | null; target1: number | null; shares?: number | null

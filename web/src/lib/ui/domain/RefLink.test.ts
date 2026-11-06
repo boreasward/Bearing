@@ -1,14 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
 import RefLink from './RefLink.svelte'
-import * as api from '$lib/api'
-import { resetConceptIndex } from '$lib/knowledge'
 
-beforeEach(() => {
-  resetConceptIndex()
-  vi.spyOn(api, 'getConcepts').mockRejectedValue(new Error('offline'))
-})
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => cleanup())
 
 describe('RefLink', () => {
   it('fact: with a handler is a button that calls back with the key', async () => {
@@ -41,14 +35,13 @@ describe('RefLink', () => {
     expect(screen.getByText('call:2')).toBeInTheDocument()
   })
 
-  it('know: links to the version page', () => {
+  it('only fact: and call: are actions; know: and concept: refs render as plain text', () => {
     render(RefLink, { ref: 'know:3@1' })
-    expect(screen.getByRole('link', { name: 'know:3@1' })).toHaveAttribute('href', '#knowledge/mine/3@1')
-  })
-
-  it('concept: opens the card in place', async () => {
     render(RefLink, { ref: 'concept:plan.stop@1' })
-    expect(await screen.findByRole('button', { name: '概念：plan.stop' })).toBeInTheDocument()
+    expect(screen.getByText('know:3@1')).toBeInTheDocument()
+    expect(screen.getByText('concept:plan.stop@1')).toBeInTheDocument()
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(screen.queryByRole('button')).toBeNull()
   })
 
   it('user: is plain text', () => {

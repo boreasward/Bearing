@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LABELS, TONES, statusOf, type StatusDomain } from './status'
 import statusSource from './status.ts?raw'
-import { NODE_STATUS_TEXT, RETRO_PUSH_TEXT, RETRO_STATUS_TEXT, RUN_STATUS_TEXT } from '$lib/runs'
-import { CHAIN_STATE_TEXT } from '$lib/timeline'
-import { CARD_STATUS_TEXT, KNOWLEDGE_STATUS_TEXT } from '$lib/growth'
-import { EXECUTION_TEXT, INSTRUCTION_TEXT } from '$lib/workbench'
-import { CONSISTENCY_TEXT } from '$lib/derivation'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -47,38 +42,31 @@ describe('status vocabulary', () => {
     expect(LABELS.agent.pass).toBe('不建议买入')
   })
 
-  it('labels reuse the existing constants', () => {
-    // node is a copy plus missing / not_recorded (below), like execution
-    expect(LABELS.run).toBe(RUN_STATUS_TEXT)
-    expect(LABELS.retro).toBe(RETRO_STATUS_TEXT)
-    expect(LABELS.push).toBe(RETRO_PUSH_TEXT)
-    expect(LABELS.chain).toBe(CHAIN_STATE_TEXT)
-    expect(LABELS.card).toBe(CARD_STATUS_TEXT)
-    expect(LABELS.knowledge).toBe(KNOWLEDGE_STATUS_TEXT)
-    expect(LABELS.instruction).toBe(INSTRUCTION_TEXT)
-    expect(LABELS.consistency).toBe(CONSISTENCY_TEXT)
-  })
-
-  it('execution reuses the EXECUTION_TEXT entries and adds the one it lacks', () => {
-    // EXECUTION_TEXT has no `unplanned` (the weekly by_execution key), so the domain is a copy plus that key.
-    for (const [key, text] of Object.entries(EXECUTION_TEXT)) expect(LABELS.execution[key]).toBe(text)
+  it('execution carries its adopted sentence with placeholders and the unplanned key', () => {
+    expect(LABELS.execution.adopted).toBe('已采纳（{date} 成交 {quantity} 股）')
     expect(LABELS.execution.unplanned).toBe('计划外成交')
   })
 
-  it('node reuses every NODE_STATUS_TEXT entry and adds the run overview wording the backend sends', () => {
-    // NODE_STATUS_TEXT (runs.ts) has no missing / not_recorded; they come from run_overview.py STATUS_TEXT, verbatim.
-    for (const [key, text] of Object.entries(NODE_STATUS_TEXT)) expect(LABELS.node[key]).toBe(text)
+  it('node carries the run overview stage wording', () => {
     expect(LABELS.node.missing).toBe('缺证据')
     expect(LABELS.node.not_recorded).toBe('未记录')
     expect(TONES.node.missing).toBe('warn')
     expect(TONES.node.not_recorded).toBe('neutral')
   })
 
-  it('exit is the most salient instruction (danger); the consistency domain follows CONSISTENCY_TEXT', () => {
+  it('instruction: exit is danger and sell_half warns', () => {
     expect(TONES.instruction.exit).toBe('danger')
     expect(TONES.instruction.sell_half).toBe('warn')
+  })
+
+  it('consistency tones: consistent success, mismatch danger, incomplete warn', () => {
     expect(TONES.consistency).toEqual({ consistent: 'success', mismatch: 'danger', incomplete: 'warn' })
-    expect(Object.keys(CONSISTENCY_TEXT).sort()).toEqual(Object.keys(TONES.consistency).sort())
+  })
+
+  it('LABELS and TONES list exactly the same keys in every domain', () => {
+    for (const domain of domains) {
+      expect(Object.keys(LABELS[domain]).sort(), domain).toEqual(Object.keys(TONES[domain]).sort())
+    }
   })
 
   it('unknown key throws in dev', () => {

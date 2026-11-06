@@ -26,8 +26,8 @@ describe('Collapsible', () => {
     expect(await contentOf()).not.toHaveAttribute('hidden')
   })
 
-  // SideNav (tools group, mounted open by an effect) showed `hidden` on an open CollapsibleContent in jsdom and did not
-  // reduce to a smaller case here; forceMount with an {#if open} around it is the pattern the pages use (design-system.md 6.1).
+  // An open CollapsibleContent mounted by an effect showed `hidden` in jsdom and did not reduce to a smaller case here;
+  // forceMount with an {#if open} around it is the pattern to use (design-system.md 6.1).
   it('forceMount never hides the content; the {#if} around it is the switch', async () => {
     render(Fixture, { open: true, gated: true, force: true })
     expect(await contentOf()).not.toHaveAttribute('hidden')

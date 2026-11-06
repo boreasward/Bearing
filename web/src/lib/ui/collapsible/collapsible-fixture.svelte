@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Test fixture. `gated`: the content sits in an {#if open} (what SideNav / PlanTable did), so it mounts in the
+  // Test fixture. `gated`: the content sits in an {#if open} (a pattern the pages used), so it mounts in the
   // same update that opens the root.
   import { Collapsible, CollapsibleContent } from './index'
   let { open = true, gated = false, force = false }: { open?: boolean; gated?: boolean; force?: boolean } = $props()

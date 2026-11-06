@@ -13,9 +13,4 @@ describe('CalcVersion', () => {
     expect(code.className).toContain('font-mono')
     expect(screen.queryByRole('link')).toBeNull()
   })
-
-  it('links to the concept card', () => {
-    render(CalcVersion, { version: 'review-8', concept: 'retro.calc' })
-    expect(screen.getByRole('link', { name: 'review-8' })).toHaveAttribute('href', '#knowledge/retro.calc')
-  })
 })

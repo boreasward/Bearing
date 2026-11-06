@@ -1,15 +1,9 @@
-import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/svelte'
 import UiGallery from './UiGallery.svelte'
-import * as api from '$lib/api'
-import { resetConceptIndex } from '$lib/knowledge'
 import { TONES } from '$lib/ui/domain/status'
 
-beforeEach(() => {
-  resetConceptIndex()
-  vi.spyOn(api, 'getConcepts').mockRejectedValue(new Error('offline'))
-})
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => cleanup())
 
 const SECTIONS = [
   '令牌', '按钮', '徽标', '表格', '确认对话框', '抽屉', '页内页签', '路由页签', '表单', '提示与浮层', '折叠', '提示条', '骨架', '分隔与卡片', '轻提示',

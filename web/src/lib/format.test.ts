@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
-import { fmtBeijing, weekdayText } from './format'
+import { fmtBeijing } from './format'
 
 beforeAll(() => {
   // 尽量把测试环境固定在非北京时区，验证 fmtBeijing 不跟浏览器时区走
@@ -16,17 +16,5 @@ describe('fmtBeijing', () => {
   it('returns the raw value when it cannot be parsed', () => {
     expect(fmtBeijing('not-a-date')).toBe('not-a-date')
     expect(fmtBeijing('')).toBe('—')
-  })
-})
-
-describe('weekdayText', () => {
-  it('maps the common masks', () => {
-    expect(weekdayText('1-5')).toBe('周一至周五')
-    expect(weekdayText('1-7')).toBe('每天')
-    expect(weekdayText('2-6')).toBe('周二至周六')
-  })
-
-  it('expands other masks one day at a time', () => {
-    expect(weekdayText('1,3,5')).toBe('周一、周三、周五')
   })
 })

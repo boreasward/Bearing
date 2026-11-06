@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/svelte'
 import StatusPill from './StatusPill.svelte'
-import { EXECUTION_TEXT } from '$lib/workbench'
+import { LABELS } from './status'
 
 afterEach(() => cleanup())
 
@@ -43,7 +43,7 @@ describe('StatusPill', () => {
   it('text override keeps tone', () => {
     const { container } = render(StatusPill, {
       domain: 'execution', value: 'adopted',
-      text: EXECUTION_TEXT.adopted.replace('{date}', '10-22').replace('{quantity}', '20'),
+      text: LABELS.execution.adopted.replace('{date}', '10-22').replace('{quantity}', '20'),
     })
     expect(screen.getByText('已采纳（10-22 成交 20 股）')).toBeInTheDocument()
     expect(container.querySelector('[data-slot="badge"]')).toHaveAttribute('data-tone', 'success')

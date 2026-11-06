@@ -477,7 +477,6 @@
         <SampleSize n={3} />
         <SampleSize n={null} />
         <CalcVersion version="review-8" />
-        <CalcVersion version="review-8" concept="retro.calc" />
       </div>
       <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
         <MetricValue value={12} unit="股" digits={0} />
@@ -494,8 +493,6 @@
       <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
         <RefLink ref="fact:plans" onFact={(key) => (refCalled = `fact:${key}`)} />
         <RefLink ref="call:2" onCall={() => (refExpanded = !refExpanded)} expanded={refExpanded} />
-        <RefLink ref="know:3@1" />
-        <RefLink ref="concept:plan.stop@1" />
         <RefLink ref="user:12" />
         <span class="text-xs text-muted-foreground">{refCalled}{refExpanded ? ' call:2 已展开' : ''}</span>
       </div>

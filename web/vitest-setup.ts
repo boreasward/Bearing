@@ -19,3 +19,11 @@ if (!Element.prototype.hasPointerCapture) {
 if (!Element.prototype.releasePointerCapture) {
   Element.prototype.releasePointerCapture = function releasePointerCapture() {}
 }
+
+// Node >= 25 ships an experimental Web Storage global that is `undefined` unless --localstorage-file is given, and it
+// shadows jsdom's. Fall back to the jsdom window's storage (same on any Node version).
+for (const name of ['localStorage', 'sessionStorage'] as const) {
+  if (typeof (globalThis as { [k: string]: unknown })[name] !== 'undefined') continue
+  const storage = (globalThis as unknown as { jsdom?: { window: Window } }).jsdom?.window[name]
+  if (storage) Object.defineProperty(globalThis, name, { value: storage, configurable: true, writable: true })
+}
