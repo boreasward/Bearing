@@ -1,8 +1,6 @@
-"""The transaction base of every layer: the only place `connection` is defined (spec §4.2, D8).
+"""The transaction base of every layer: the only place `connection` is defined.
 
-Cut verbatim from ``workbench/service.py:79-128`` (+ ``_jsonable`` / ``_read_only``) in
-Task 0; service re-exports until Task 1. ``tests/test_core_tx_single_definition.py``
-guards the single definition."""
+``tests/test_core_tx_single_definition.py`` guards the single definition."""
 from __future__ import annotations
 
 import os
@@ -21,10 +19,6 @@ class Unavailable(RuntimeError):
     """Database or schema not ready (HTTP 503). Never shown as an empty result."""
 
 
-class Gone(RuntimeError):
-    """The endpoint was retired (HTTP 410): ``decisions_retired`` since v2.9 (spec §6.4, D24)."""
-
-
 @dataclass
 class Deps:
     bar_fetcher: Callable | None = None
@@ -32,10 +26,6 @@ class Deps:
     filing_source: Any = None           # object with discover(tickers, start_iso, end_iso)
     earnings_fetcher: Callable | None = None
     macro_fetcher: Callable | None = None
-    clock: Callable[[], float] | None = None
-    agent_model: Any = None                 # scripted model in tests; built from settings when None
-    agent_checkpointer: Callable[[], Any] | None = None
-    agent_settings: Any = None              # AgentSettings; settings_from_env() when None
     universe: Any = None                    # screening universe; universe.load() when both are None
     universe_loader: Callable[[], Any] | None = None
 
@@ -91,7 +81,7 @@ def read_only_tx():
 
 
 def _jsonable(value: Any) -> Any:
-    """Dates to ISO text, recursively: the review parts report their period as a ``date``."""
+    """Dates to ISO text, Decimals and UUIDs to strings, recursively."""
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -101,9 +91,3 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (Decimal, uuid.UUID)):
         return str(value)
     return value
-
-
-def _read_only(fn):
-    """Run fn(conn) inside a pass-through transaction; agent tool reads only."""
-    with _tx() as conn:
-        return fn(conn)

@@ -8,27 +8,10 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 from psycopg.rows import dict_row
-from investment_assistant.core import knowledge, schema
 from investment_assistant.core.dbutil import _one, _all, _plan_json
-from investment_assistant.core.versions import REGIME_VERSION
 from investment_assistant.data.identity import stock_id
 from investment_assistant.data.sec.extraction import analyze_files
 
-
-def plan_knowledge_refs(conn, plan_ids) -> dict[str, list[dict]]:
-    """Read-only citation facts for plan readers; grouping and reference formatting live in core."""
-    ids = [str(p) for p in plan_ids if p is not None]
-    if not ids or not schema.growth_ready(conn):
-        return {}
-    rows = conn.execute('SELECT plan_id, knowledge_id, version, field FROM knowledge_citations '
-                        'WHERE plan_id = ANY(%s) ORDER BY id', (ids,)).fetchall()
-    if not rows:
-        return {}
-    citations: list[dict[str, Any]] = [dict(zip(('plan_id', 'knowledge_id', 'version', 'field'), row))
-                                        for row in rows]
-    versions: list[dict[str, Any]] = [dict(zip(('knowledge_id', 'version', 'title'), row)) for row in conn.execute(
-        'SELECT knowledge_id, version, title FROM knowledge_versions').fetchall()]
-    return knowledge.refs_for_plans(citations, versions)
 
 # Acquisition metadata is not an economic revision. Keep the original pointer/hash
 # together on consecutive repeats, even when another fact changes the response.
@@ -318,23 +301,6 @@ def earnings_row_by_id(conn, earnings_id) -> dict[str, Any] | None:
     return _one(conn, f'SELECT {_EARNINGS_COLUMNS} FROM earnings_dates WHERE id = %s', (earnings_id,))
 
 
-_CANDIDATE_COLUMNS = 'id, ticker, signal_date, action, rule_id, rule_version, inputs, run_id, created_at'
-
-
-def unit_candidates(conn, ticker: str, signal_date: date) -> list[dict[str, Any]]:
-    return _all(conn, f'SELECT {_CANDIDATE_COLUMNS} FROM signal_candidates WHERE ticker = %s AND signal_date = %s '
-                      'ORDER BY created_at, rule_id', (ticker.upper(), signal_date))
-
-
-def read_candidates(conn, ticker: str, *, since: date) -> list[dict[str, Any]]:
-    return _all(conn, f'SELECT {_CANDIDATE_COLUMNS} FROM signal_candidates WHERE ticker = %s AND signal_date >= %s '
-                      'ORDER BY signal_date DESC, created_at, rule_id', (ticker.upper(), since))
-
-
-def candidates_by_ids(conn, ids) -> list[dict[str, Any]]:
-    return _all(conn, f'SELECT {_CANDIDATE_COLUMNS} FROM signal_candidates WHERE id = ANY(%s)', (list(ids),))
-
-
 def read_filings(conn, ticker: str, *, since: date, cutoff_at: datetime) -> list[dict[str, Any]]:
     """Filings indexed by ``cutoff_at`` (created_at is when this system first stored them)."""
     return _all(conn, 'SELECT id, ticker, form, filing_date, accession_number, primary_document, accepted_at, items '
@@ -371,48 +337,7 @@ def read_macro(conn, series_id: str, *, end_date: date, cutoff_at: datetime, lim
     return [{'obs_date': r[0], 'value': r[1]} for r in reversed(rows)]
 
 
-_REGIME_COLUMNS = 'id, session, calc_version, label, breadth, sectors, macro, inputs, created_at'
-
-
-def regime_for(conn, session: date, *, cutoff_at: datetime) -> dict[str, Any] | None:
-    """The regime-1 snapshot of that session, as visible by the cutoff."""
-    return _one(conn, f'SELECT {_REGIME_COLUMNS} FROM market_regimes '
-                      'WHERE session = %s AND calc_version = %s AND created_at <= %s',
-                (session, REGIME_VERSION, cutoff_at))
-
-
-def pool_entry_at(conn, ticker: str, day: date, *, cutoff_at: datetime) -> dict[str, Any] | None:
-    """The tier in force on `day` as known by `cutoff_at`; removed rows count too."""
-    row = conn.execute('SELECT tier, sector_etf, source FROM pool_tiers '
-                       'WHERE ticker = %s AND effective_session <= %s AND recorded_at <= %s '
-                       'ORDER BY effective_session DESC, recorded_at DESC, id DESC LIMIT 1',
-                       (ticker, day, cutoff_at)).fetchone()
-    if row is None:
-        return None
-    return {'tier': row[0], 'sector_etf': row[1], 'source': row[2]}
-
-
-# ---------------------------------------------------------------- daily screen (v2.2 §10)
-
-def latest_screen_pick(conn, ticker: str, session: date, *,
-                       cutoff_at: datetime | None = None) -> dict[str, Any] | None:
-    """The ticker's newest selected row at or before `session`.
-
-    `cutoff_at` is None inside the batch: the rule-plan stage must read the run the
-    screen stage just wrote in this same pass, whose created_at is the database
-    clock and would postdate the batch's own cutoff. Outside readers pass it."""
-    sql = ('SELECT r.screen_run_id, r.screen_group, r.rs, r.rank FROM screen_results r '
-           'JOIN screen_runs s ON s.id = r.screen_run_id '
-           'WHERE r.ticker = %s AND r.selected AND s.session <= %s')
-    params: list[Any] = [ticker.upper(), session]
-    if cutoff_at is not None:
-        sql += ' AND r.created_at <= %s'
-        params.append(cutoff_at)
-    row = conn.execute(sql + ' ORDER BY r.created_at DESC, r.id DESC LIMIT 1', params).fetchone()
-    if row is None:
-        return None
-    return {'screen_run_id': row[0], 'group': row[1], 'rs': row[2], 'rank': row[3]}
-
+# ---------------------------------------------------------------- fetch records
 
 _FETCH_RUN_COLUMNS = ('id, family, job, trigger, run_id, scope, ticker, session, status, target_count, '
                       'ok_count, failures, detail, started_at, finished_at, created_at')
@@ -479,15 +404,6 @@ def fill_filing_acceptance(conn, metas: list[dict[str, Any]]) -> int:
             'OR (items IS NULL AND %s::text[] IS NOT NULL))',
             (accepted, meta.get('items'), accession, accepted, meta.get('items'))).rowcount
     return filled
-
-
-_AGENT_RUN_COLUMNS = ('id, ticker, signal_date, pool, attempt, mode, agent_version, provider, model, cutoff_at, '
-                      'status, reason, detail, output, counter, plan_id, input_tokens, output_tokens, '
-                      'started_at, finished_at, created_at')
-
-
-def agent_run_by_id(conn, run_id) -> dict[str, Any] | None:
-    return _one(conn, f'SELECT {_AGENT_RUN_COLUMNS} FROM agent_runs WHERE id = %s', (run_id,))
 
 
 def latest_bar_dates(conn, tickers, *, cutoff_at: datetime) -> dict[str, date]:
@@ -581,129 +497,6 @@ def macro_revision_counts(conn, series_id: str, *, cutoff_at: datetime) -> dict[
     return {row[0]: row[1] for row in rows}
 
 
-_KNOWLEDGE_VERSION_COLUMNS = ('id, knowledge_id, version, supersedes_id, request_id, request_hash, draft_id, title, '
-                              'body, scope, counter_examples, concepts, tickers, schema_version, created_at')
-_KNOWLEDGE_STATUS_COLUMNS = 'id, knowledge_id, status, reason, request_id, request_hash, created_at'
-
-
-def knowledge_rows(conn, *, cutoff: datetime | None, ticker: str | None = None, concept: str | None = None,
-                   knowledge_id: int | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Version rows and status rows written at or before ``cutoff`` (None = no limit), the input of
-    ``core.knowledge.visible``.
-
-    The filters pick whole items: an item qualifies when its highest version written by the cutoff has the
-    ``ticker``, a ``concepts`` entry of that concept id (``concept:<id>@<n>``, matched on the whole id) and/or
-    the ``knowledge_id``; all of a qualifying item's versions and status records up to the cutoff come back, so
-    the caller's ``visible`` still sees the full history. Nothing written after the cutoff is returned."""
-    clauses, params = [], []
-    if knowledge_id is not None:
-        clauses.append('t.knowledge_id = %s')
-        params.append(knowledge_id)
-    if ticker is not None:
-        clauses.append('%s = ANY(t.tickers)')
-        params.append(ticker.upper())
-    if concept is not None:
-        clauses.append('EXISTS (SELECT 1 FROM unnest(t.concepts) AS c WHERE starts_with(c, %s))')
-        params.append(f'concept:{concept}@')
-    where = f" WHERE {' AND '.join(clauses)}" if clauses else ''
-    versions = _all(
-        conn,
-        f'WITH seen AS (SELECT {_KNOWLEDGE_VERSION_COLUMNS} FROM knowledge_versions '
-        'WHERE (%s::timestamptz IS NULL OR created_at <= %s)), '
-        'top AS (SELECT DISTINCT ON (knowledge_id) * FROM seen ORDER BY knowledge_id, version DESC) '
-        f'SELECT s.* FROM seen s WHERE s.knowledge_id IN (SELECT t.knowledge_id FROM top t{where}) '
-        'ORDER BY s.knowledge_id, s.version', [cutoff, cutoff, *params])
-    if not versions:
-        return [], []
-    statuses = _all(conn, f'SELECT {_KNOWLEDGE_STATUS_COLUMNS} FROM knowledge_status WHERE knowledge_id = ANY(%s) '
-                          'AND (%s::timestamptz IS NULL OR created_at <= %s) ORDER BY created_at, id',
-                    (sorted({v['knowledge_id'] for v in versions}), cutoff, cutoff))
-    return versions, statuses
-
-
-def insert_data_requests(conn, rows) -> list[int]:
-    """Persist buffered tool requests after their agent run, in the caller's transaction."""
-    ids = []
-    for row in rows:
-        if row.get('status', 'queued') != 'queued':
-            raise ValueError('data_request_initial_status')
-        saved = _one(conn, 'INSERT INTO data_requests '
-            '(run_id, agent_run_id, family, ticker, requested_at) VALUES (%s, %s, %s, %s, %s) RETURNING id',
-            (row.get('run_id'), row.get('agent_run_id'), row['family'], row['ticker'].upper(),
-             row['requested_at']))
-        assert saved is not None
-        ids.append(saved['id'])
-    return ids
-
-
-def settle_data_request(conn, id, *, status, fetch_run_id, rows, reason, rerun_run_id) -> bool:
-    """Only queued→terminal once. Use attach_data_request_rerun after a later rerun."""
-    if status not in {'fetched', 'failed', 'deferred'}:
-        raise ValueError('data_request_terminal_status')
-    if rows is not None and (type(rows) is not int or rows < 0):
-        raise ValueError('data_request_rows')
-    if rerun_run_id is not None and (status != 'fetched' or not rows):
-        raise ValueError('data_request_rerun_without_rows')
-    return conn.execute('UPDATE data_requests SET status = %s, fetch_run_id = %s, rows = %s, '
-        'reason = %s, rerun_run_id = %s, updated_at = clock_timestamp() '
-        "WHERE status = 'queued' AND id = %s",
-        (status, fetch_run_id, rows, reason, rerun_run_id, id)).rowcount == 1
-
-
-def attach_data_request_rerun(conn, id, rerun_run_id) -> bool:
-    """Fill only the rerun pointer; settlement status/count/reason/time stay frozen (D40)."""
-    if rerun_run_id is None:
-        raise ValueError('data_request_rerun_required')
-    return conn.execute('UPDATE data_requests SET rerun_run_id = %s '
-        "WHERE status = 'fetched' AND id = %s AND rows > 0 AND rerun_run_id IS NULL",
-        (rerun_run_id, id)).rowcount == 1
-
-
-def queued_data_requests(conn, run_id) -> list[dict]:
-    return _all(conn, "SELECT * FROM data_requests WHERE status = 'queued' AND run_id IS NOT DISTINCT FROM %s "
-                'ORDER BY requested_at, id', (run_id,))
-
-
-def queued_data_requests_at(conn, run_id, requested_at) -> list[dict]:
-    """Queued rows of ``run_id`` (NULL pairs with NULL) that were made at exactly ``requested_at`` -- what one manual
-    call (one cutoff) queued."""
-    return _all(conn, "SELECT * FROM data_requests WHERE status = 'queued' AND run_id IS NOT DISTINCT FROM %s "
-                'AND requested_at = %s ORDER BY requested_at, id', (run_id, requested_at))
-
-
-def orphaned_data_requests(conn, *, run_id, before, research_prefix: str) -> list[dict]:
-    """Queued rows no handler is left to settle: made before ``before`` by another run (or a manual flow, ``run_id`` NULL).
-    A dossier's own rows (``research_prefix``) belong to a possibly still running research, so only the ones a day older
-    than ``before`` count."""
-    return _all(conn, "SELECT * FROM data_requests WHERE status = 'queued' AND requested_at < %s "
-                'AND run_id IS DISTINCT FROM %s '
-                "AND (run_id IS NULL OR run_id NOT LIKE %s OR requested_at < %s - interval '1 day') "
-                'ORDER BY requested_at, id', (before, run_id, research_prefix + '%', before))
-
-
-def stale_queued_data_requests(conn, *, before, since=None, until=None) -> list[dict]:
-    """Requests still ``queued`` that were made before ``before`` (the workflow check's one-day rule); ``since`` /
-    ``until`` bound ``requested_at`` to one session's window when given."""
-    return _all(conn, "SELECT id, run_id, agent_run_id, family, ticker, requested_at FROM data_requests "
-                "WHERE status = 'queued' AND requested_at < %s "
-                'AND (%s::timestamptz IS NULL OR requested_at >= %s) AND (%s::timestamptz IS NULL OR requested_at < %s) '
-                'ORDER BY requested_at, id', (before, since, since, until, until))
-
-
-def unit_data_request_rerun_today(conn, ticker: str, signal_date: date, *, ny_day: date) -> bool:
-    """D40: whether this unit already consumed its one data-request rerun on ``ny_day``.
-
-    The day is read from ``requested_at`` (the queueing run's cutoff — deterministic and
-    cutoff-bound), not ``updated_at`` (database clock); a request may hang on any of the
-    unit's runs (a revision queued it, an earlier propose settled it)."""
-    return conn.execute("SELECT EXISTS (SELECT 1 FROM data_requests dr "
-        'JOIN agent_runs ar ON ar.id = dr.agent_run_id '
-        'WHERE ar.ticker = %s AND ar.signal_date = %s '
-        'AND dr.rerun_run_id IS NOT NULL '
-        "AND (dr.requested_at AT TIME ZONE 'America/New_York')::date = %s)",
-        (ticker.upper(), signal_date, ny_day)).fetchone()[0]
-
-
 def insert_sector_classification(conn, row) -> int:
     """Append an answer; the adapter decides whether it differs from the prior answer."""
     saved = _one(conn, 'INSERT INTO sector_classifications '
@@ -736,21 +529,6 @@ def ratio_from_primary(conn, ticker, price_date) -> Decimal:
                'ORDER BY price_date DESC, revision DESC, fetched_at DESC, id DESC LIMIT 1',
                (ticker.upper(), price_date))
     return Decimal(row['ratio']) if row else Decimal(1)
-
-
-def collection_request_tickers(conn) -> list[str]:
-    """Read queue facts only; concluded/closed requests no longer demand daily collection."""
-    return [r['ticker'] for r in _all(conn,
-        "SELECT DISTINCT ticker FROM research_requests WHERE status IN ('queued','running','waiting_data') "
-        'ORDER BY ticker', ())]
-
-
-def pending_paper_tickers(conn) -> list[str]:
-    """Pending buy intents of active simulated accounts; position math stays in the host."""
-    return [r['ticker'] for r in _all(conn,
-        'SELECT DISTINCT o.ticker FROM paper_orders o JOIN accounts a ON a.id = o.account_id '
-        "WHERE a.kind = 'paper' AND a.status = 'active' AND o.status = 'pending' AND o.action = 'buy' "
-        'ORDER BY o.ticker', ())]
 
 
 def store_observation_rows(conn, sid, dataset, rows, *, now):
@@ -839,7 +617,7 @@ def latest_text_filing_dates(conn, targets, *, cutoff_at):
     return {identities[r['security_id']]: r['latest'] for r in rows}
 
 
-# ---------------------------------------------------------------- Data-menu raw browse of the v2.12 families (spec §5.6)
+# ---------------------------------------------------------------- history reads of the data families
 
 def read_earnings_history(conn, ticker: str, *, cutoff_at: datetime, limit: int = 20) -> list[dict[str, Any]]:
     """The earnings answers known by ``cutoff_at``, newest first (every answer is a row: unknown, none, known)."""

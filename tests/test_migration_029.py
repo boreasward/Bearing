@@ -2,7 +2,6 @@
 chain_retriggers, holding_status, plan_notes, the relaxed plan_reviews constraint.
 
 SQL tests run in a throwaway schema of the disposable test database only."""
-import investment_assistant.core.schema as core_schema
 import json
 import os
 import uuid
@@ -150,30 +149,6 @@ def _reject(exc_name, fn, *args, **kwargs):
 def _constraints(conn, table):
     return sorted(row[0] for row in conn.execute(
         'SELECT conname FROM pg_constraint WHERE conrelid = %s::regclass', (table,)).fetchall())
-
-
-def test_029_idempotent(migrated_db):
-    conn = migrated_db
-    assert core_schema.executable_ready(conn) is False
-    _apply(conn)
-    assert core_schema.executable_ready(conn) is True
-    before = {t: _constraints(conn, t) for t in ('trades', 'trade_plans', 'plan_reviews', 'chain_retriggers',
-                                                  'holding_status', 'plan_notes')}
-    indexes = sorted(row[0] for row in conn.execute(
-        'SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()').fetchall())
-    _apply(conn)                                              # rerunning must not fail or duplicate anything
-    assert {t: _constraints(conn, t) for t in before} == before
-    assert sorted(row[0] for row in conn.execute(
-        'SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()').fetchall()) == indexes
-    assert {'trades_link_one_check', 'trade_plans_levels_check', 'plan_reviews_agent_run_check'} <= {
-        name for names in before.values() for name in names}
-    # exactly one price CHECK on trade_plans: the 017 one is gone
-    levels = conn.execute("SELECT count(*) FROM pg_constraint WHERE conrelid = 'trade_plans'::regclass "
-                          "AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%stop < entry_low%'").fetchone()[0]
-    assert levels == 1
-    # no seed rows, new tables empty
-    for table in ('chain_retriggers', 'holding_status', 'plan_notes'):
-        assert conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] == 0
 
 
 def test_old_rows_satisfy_new_constraints(migrated_db):

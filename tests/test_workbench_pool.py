@@ -1,5 +1,4 @@
-"""Pool tier parsing, limits and change computation (pure functions)."""
-
+"""Pool tier parsing and limits (pure functions)."""
 
 import pytest
 
@@ -98,58 +97,3 @@ def test_all_core_normalizes_and_validates():
 def test_tickers_core_first_then_alphabetical():
     p = pool.from_watchlist(_rows(['NVDA'], tags=['core']) + _rows(['MU', 'AMD']))
     assert p.tickers == ('NVDA', 'AMD', 'MU')
-
-
-def test_with_screen_marks_sources():
-    base = pool.from_watchlist(_rows(['AAPL'], tags=['core']) + _rows(['MU']))
-    merged = pool.with_screen(base, ('C', 'MU'))
-    assert merged.extended == ('MU', 'C')
-    assert merged.source('C') == 'screen'
-    assert merged.source('MU') == 'watchlist'  # 已在手动名单里的不翻来源
-    assert merged.source('AAPL') == 'watchlist'
-    assert merged.tickers == ('AAPL', 'MU', 'C')
-
-
-def test_with_screen_never_exceeds_max_pool():
-    crowd = _rows([f'X{i:02d}' for i in range(95)])
-    base = pool.from_watchlist(crowd)
-    with pytest.raises(ValueError):
-        pool.with_screen(base, tuple(f'S{i}' for i in range(6)))
-
-
-def test_tier_changes_source_flip_and_back():
-    core_row = {'ticker': 'AAPL', 'tier': 'core', 'sector_etf': None, 'source': 'watchlist'}
-    latest = {'AAPL': core_row, 'C': {'tier': 'extended', 'sector_etf': None, 'source': 'watchlist'}}
-    p_screen = pool.with_screen(pool.from_watchlist(_rows(['AAPL'], tags=['core'])), ('C',))
-    assert pool.tier_changes(p_screen, latest) == [
-        {'ticker': 'C', 'tier': 'extended', 'sector_etf': None, 'source': 'screen'}]
-    latest_screen = {'AAPL': core_row, 'C': {'tier': 'extended', 'sector_etf': None, 'source': 'screen'}}
-    assert pool.tier_changes(p_screen, latest_screen) == []  # 不变 → 0 行
-    p_manual = pool.from_watchlist(_rows(['AAPL'], tags=['core']) + _rows(['C']))
-    assert pool.tier_changes(p_manual, latest_screen) == [
-        {'ticker': 'C', 'tier': 'extended', 'sector_etf': None, 'source': 'watchlist'}]
-
-
-def test_tier_changes_only_on_change():
-    p = pool.from_watchlist(_rows(['AAPL'], tags=['core']) + _rows(['MU']))
-    latest = {'AAPL': {'tier': 'core', 'sector_etf': None}, 'MU': {'tier': 'extended', 'sector_etf': None}}
-    assert pool.tier_changes(p, latest) == []
-    latest['MU'] = {'tier': 'core', 'sector_etf': None}
-    assert pool.tier_changes(p, latest) == [
-        {'ticker': 'MU', 'tier': 'extended', 'sector_etf': None, 'source': 'watchlist'}]
-
-
-def test_sector_change_is_a_change():
-    p = pool.from_watchlist(_rows(['NVDA'], tags=['sector:SMH']))
-    assert pool.tier_changes(p, {'NVDA': {'tier': 'extended', 'sector_etf': None}}) == [
-        {'ticker': 'NVDA', 'tier': 'extended', 'sector_etf': 'SMH', 'source': 'watchlist'}]
-    assert pool.tier_changes(p, {'NVDA': {'tier': 'extended', 'sector_etf': 'SMH'}}) == []
-
-
-def test_removed_written_once():
-    p = pool.from_watchlist(_rows(['AAPL']))
-    latest = {'AAPL': {'tier': 'extended', 'sector_etf': None},
-              'GONE': {'tier': 'removed', 'sector_etf': None},
-              'ALSO': {'tier': 'core', 'sector_etf': 'SMH'}}
-    assert pool.tier_changes(p, latest) == [
-        {'ticker': 'ALSO', 'tier': 'removed', 'sector_etf': None, 'source': 'watchlist'}]

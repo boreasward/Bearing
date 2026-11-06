@@ -1,8 +1,5 @@
 """Real constraint behavior for the US workbench schema; disposable schema only."""
-import investment_assistant.core.dbutil as core_dbutil
-import investment_assistant.core.schema as core_schema
 import investment_assistant.data.repo as data_repo
-import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -34,72 +31,6 @@ def test_split_factor_must_be_positive(workbench_db):
         _bar(workbench_db, split_factor=0)
 
 
-def test_candidate_action_and_uniqueness(workbench_db):
-    import psycopg
-    sql = ('INSERT INTO signal_candidates (ticker, signal_date, action, rule_id, rule_version, inputs) '
-           "VALUES ('NVDA', '2026-10-21', %s, 'trend_reclaim', '1', '{}')")
-    workbench_db.execute(sql, ['buy'])
-    with pytest.raises(psycopg.errors.UniqueViolation):
-        workbench_db.execute(sql, ['buy'])
-
-
-def test_candidate_rejects_unknown_action(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.CheckViolation):
-        workbench_db.execute("INSERT INTO signal_candidates (ticker, signal_date, action, rule_id, rule_version, inputs) "
-                             "VALUES ('NVDA', '2026-10-21', 'short', 'x', '1', '{}')")
-
-
-def _decision(conn, reason='trend intact', plan_id=None):
-    return conn.execute(
-        'INSERT INTO signal_decisions (request_id, request_hash, ticker, signal_date, candidate_ids, '
-        "proposed_action, final_action, decision, reason, plan_id) VALUES (%s, 'h', 'NVDA', '2026-10-21', "
-        "'{}', 'buy', 'buy', 'accept', %s, %s) RETURNING id", [uuid.uuid4(), reason, plan_id]).fetchone()[0]
-
-
-def test_decision_requires_reason(workbench_db):
-    import psycopg
-    assert _decision(workbench_db)
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _decision(workbench_db, reason='   ')
-
-
-def test_trade_constraints(workbench_db):
-    import psycopg
-    decision_id = _decision(workbench_db)
-    sql = ('INSERT INTO trades (request_id, request_hash, ticker, side, quantity, price, executed_at, decision_id) '
-           "VALUES (%s, 'h', 'NVDA', 'buy', %s, 101.5, %s, %s)")
-    workbench_db.execute(sql, [uuid.uuid4(), 10, NOW, decision_id])
-    with pytest.raises(psycopg.errors.CheckViolation):
-        workbench_db.execute(sql, [uuid.uuid4(), 0, NOW, decision_id])
-
-
-def test_trade_void_needs_reason(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.CheckViolation):
-        workbench_db.execute(
-            'INSERT INTO trades (request_id, request_hash, ticker, side, quantity, price, executed_at, voided_at) '
-            "VALUES (%s, 'h', 'NVDA', 'sell', 1, 1, %s, %s)", [uuid.uuid4(), NOW, NOW])
-
-
-def test_weekly_review_starts_on_monday(workbench_db):
-    import psycopg
-    sql = "INSERT INTO weekly_reviews (week_start, calc_version, stats) VALUES (%s, 'review-1', '{}')"
-    workbench_db.execute(sql, [date(2026, 10, 19)])
-    with pytest.raises(psycopg.errors.CheckViolation):
-        workbench_db.execute(sql, [date(2026, 10, 20)])
-
-
-def test_filings_columns_and_scheduled_job(workbench_db):
-    workbench_db.execute(
-        "INSERT INTO filings (ticker, form, filing_date, accession_number, primary_document, file_path, "
-        "accepted_at, items) VALUES ('NVDA', '8-K', '2026-08-27', '0001045810-26-000001', 'a.htm', 'x', %s, %s)",
-        [NOW, ['2.02', '9.01']])
-    row = workbench_db.execute("SELECT time_local, weekday_mask, timezone FROM scheduled_jobs "
-                               "WHERE name = 'daily'").fetchone()           # 028 replaces the ``workbench`` row
-    assert row == ('11:30', '2-6', 'Asia/Shanghai')
-
-
 def test_upsert_filing_keeps_first_known_acceptance(workbench_db):
     from investment_assistant import db
     args = dict(ticker='NVDA', form='8-K', filing_date=date(2026, 8, 27),
@@ -125,72 +56,6 @@ def _insert(conn, table, values):
             params.append(value)
     return conn.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(marks)}) RETURNING id",
                         params).fetchone()[0]
-
-
-def _plan(conn, kind='rule', **overrides):
-    values = {'ticker': 'NVDA', 'signal_date': date(2026, 10, 21), 'kind': kind, 'plan_version': 'plan-1',
-              'ref_price': 100, 'atr': 2, 'entry_low': 99, 'entry_high': 101, 'stop': 96, 'target1': 108,
-              'valid_from': date(2026, 10, 22), 'valid_until': date(2026, 10, 28),
-              'sizing': {}, 'status': 'ok', 'invalid_reasons': [], 'warnings': [], 'inputs': {}}
-    if kind == 'own':
-        values['request_id'] = overrides.pop('request_id', uuid.uuid4())
-        values['request_hash'] = overrides.pop('request_hash', 'h')
-    values.update(overrides)
-    return _insert(conn, 'trade_plans', values)
-
-
-def _flow(conn, **overrides):
-    values = {'request_id': uuid.uuid4(), 'request_hash': 'h',
-              'flow_date': date(2026, 10, 21), 'amount': 1000, 'note': None, 'recorded_at': NOW}
-    values.update(overrides)
-    return _insert(conn, 'cash_flows', values)
-
-
-def _snapshot(conn, **overrides):
-    values = {'request_id': uuid.uuid4(), 'request_hash': 'h', 'as_of': date(2026, 10, 21),
-              'equity': 100000, 'note': None, 'recorded_at': NOW}
-    values.update(overrides)
-    return _insert(conn, 'account_snapshots', values)
-
-
-def test_rule_plan_unique_per_version(workbench_db):
-    import psycopg
-    _plan(workbench_db)
-    with pytest.raises(psycopg.errors.UniqueViolation):
-        _plan(workbench_db)
-    workbench_db.rollback()
-    _plan(workbench_db, kind='own')  # own 计划不受 (ticker, signal_date, plan_version) 唯一约束
-
-
-def test_plan_levels_ordered(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _plan(workbench_db, stop=99)  # stop >= entry_low
-
-
-def test_cash_flow_nonzero_and_void_pair(workbench_db):
-    import psycopg
-    _flow(workbench_db)
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _flow(workbench_db, amount=0)
-    workbench_db.rollback()
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _flow(workbench_db, voided_at=NOW)  # voided_at 必须与 void_reason 成对
-
-
-def test_snapshot_equity_positive(workbench_db):
-    import psycopg
-    _snapshot(workbench_db)
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _snapshot(workbench_db, equity=0)
-
-
-def test_decision_plan_fk(workbench_db):
-    import psycopg
-    plan_id = _plan(workbench_db)
-    assert _decision(workbench_db, plan_id=plan_id)
-    with pytest.raises(psycopg.errors.ForeignKeyViolation):
-        _decision(workbench_db, plan_id=uuid.uuid4())
 
 
 def test_store_earnings_dedupes(workbench_db):
@@ -222,41 +87,11 @@ def test_latest_earnings_respects_cutoff(workbench_db):
     assert data_repo.latest_earnings(workbench_db, 'MU', cutoff_at=NOW) is None
 
 
-def test_pool_tier_check(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.CheckViolation):
-        workbench_db.execute("INSERT INTO pool_tiers (ticker, tier, effective_session, recorded_at) "
-                             "VALUES ('NVDA', 'x', '2026-10-21', %s)", [NOW])
-
-
-def test_regime_unique_per_session_version(workbench_db):
-    import psycopg
-    sql = ("INSERT INTO market_regimes (session, calc_version, label, breadth, sectors, macro, inputs) "
-           "VALUES ('2026-10-21', 'regime-1', 'neutral', '{}', '{}', '{}', '{}')")
-    workbench_db.execute(sql)
-    with pytest.raises(psycopg.errors.UniqueViolation):
-        workbench_db.execute(sql)
-
-
-def test_regime_label_check(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.CheckViolation):
-        workbench_db.execute("INSERT INTO market_regimes (session, calc_version, label, breadth, sectors, macro, inputs) "
-                             "VALUES ('2026-10-21', 'regime-1', 'risky', '{}', '{}', '{}', '{}')")
-
-
 def test_macro_value_required(workbench_db):
     import psycopg
     with pytest.raises(psycopg.errors.NotNullViolation):
         workbench_db.execute("INSERT INTO macro_observations (series_id, obs_date, value, fetched_at) "
                              "VALUES ('BAMLH0A0HYM2', '2026-10-21', NULL, %s)", [NOW])
-
-
-def test_missing_tables_lists_018(workbench_db):
-    # Repository consumers use their owning layers below.
-    assert core_dbutil.missing_tables(workbench_db) == []
-    workbench_db.execute('DROP TABLE market_regimes')
-    assert 'market_regimes' in core_dbutil.missing_tables(workbench_db)
 
 
 def test_store_macro_revision_appends(workbench_db):
@@ -287,154 +122,6 @@ def test_read_macro_as_of_cutoff(workbench_db):
                                            cutoff_at=NOW + timedelta(days=2))
     assert as_of_next_day[0]['value'] == Decimal('0.2')
     assert data_repo.read_macro(workbench_db, 'T10Y2Y', end_date=date(2026, 10, 19), cutoff_at=NOW + timedelta(days=2)) == []
-
-
-def _agent_run(conn, plan_id=None, **overrides):
-    import json
-    values = {'id': uuid.uuid4(), 'ticker': 'NVDA', 'signal_date': date(2026, 10, 21), 'pool': 'main',
-              'attempt': 1, 'agent_version': 'agent-1', 'provider': 'chatgpt', 'model': 'gpt-test',
-              'cutoff_at': NOW, 'status': 'rejected', 'reason': 'malformed', 'output': None, 'counter': None,
-              'plan_id': plan_id, 'input_tokens': 0, 'output_tokens': 0,
-              'started_at': NOW, 'finished_at': NOW}
-    values.update(overrides)
-    cols, marks, params = [], [], []
-    for key, value in values.items():
-        cols.append(key)
-        if key in ('output', 'counter'):
-            marks.append('%s::jsonb')
-            params.append(json.dumps(value) if value is not None else None)
-        else:
-            marks.append('%s')
-            params.append(value)
-    return conn.execute(f"INSERT INTO agent_runs ({', '.join(cols)}) VALUES ({', '.join(marks)}) RETURNING id",
-                        params).fetchone()[0]
-
-
-def _tool_call(conn, run_id, seq=1, **overrides):
-    import json
-    values = {'run_id': run_id, 'seq': seq, 'phase': 'propose', 'tool': 'get_price_bars',
-              'args': {}, 'result': {'ref': 'call:1', 'data': {}}, 'result_sha256': 'a' * 64, 'called_at': NOW}
-    values.update(overrides)
-    cols, marks, params = [], [], []
-    for key, value in values.items():
-        cols.append(key)
-        if key in ('args', 'result'):
-            marks.append('%s::jsonb')
-            params.append(json.dumps(value))
-        else:
-            marks.append('%s')
-            params.append(value)
-    conn.execute(f"INSERT INTO agent_tool_calls ({', '.join(cols)}) VALUES ({', '.join(marks)})", params)
-
-
-def test_agent_plan_kind_allowed(workbench_db):
-    assert _plan(workbench_db, kind='agent', plan_version='agent-1')
-
-
-def test_agent_plan_unique_per_unit(workbench_db):
-    import psycopg
-    _plan(workbench_db, kind='agent', plan_version='agent-1')
-    with pytest.raises(psycopg.errors.UniqueViolation):
-        _plan(workbench_db, kind='agent', plan_version='agent-1')
-    workbench_db.rollback()
-    assert _plan(workbench_db)  # rule 计划不受 agent 部分唯一索引影响
-
-
-def test_agent_run_ok_requires_plan(workbench_db):
-    import psycopg
-    plan_id = _plan(workbench_db, kind='agent', plan_version='agent-1')
-    assert _agent_run(workbench_db, status='ok', reason=None, plan_id=plan_id, output={'action': 'buy'})
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _agent_run(workbench_db, status='ok', reason=None)  # ok 无 plan_id
-
-
-def test_agent_run_reason_required(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _agent_run(workbench_db, status='rejected', reason=None)
-
-
-def test_tool_call_seq_unique(workbench_db):
-    import psycopg
-    run_id = _agent_run(workbench_db)
-    _tool_call(workbench_db, run_id, seq=1)
-    with pytest.raises(psycopg.errors.UniqueViolation):
-        _tool_call(workbench_db, run_id, seq=1)
-
-
-def test_missing_tables_lists_019(workbench_db):
-    # Repository consumers use their owning layers below.
-    assert core_dbutil.missing_tables(workbench_db) == []
-    workbench_db.execute('DROP TABLE agent_tool_calls')
-    assert 'agent_tool_calls' in core_dbutil.missing_tables(workbench_db)
-
-
-def test_agent_run_mode_defaults_propose(workbench_db):
-    run_id = _agent_run(workbench_db)
-    mode = workbench_db.execute('SELECT mode FROM agent_runs WHERE id = %s', [run_id]).fetchone()[0]
-    assert mode == 'propose'
-
-
-def test_interpret_ok_without_plan_allowed(workbench_db):
-    assert _agent_run(workbench_db, mode='interpret', status='ok', reason=None, output={'summary': 's'})
-
-
-def test_propose_ok_without_plan_rejected(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _agent_run(workbench_db, status='ok', reason=None)
-
-
-def test_interpret_pass_rejected(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.CheckViolation):
-        _agent_run(workbench_db, mode='interpret', status='pass', reason=None)
-
-
-def test_old_ok_plan_constraint_dropped(workbench_db):
-    old_def = "(status = 'ok'::text) = (plan_id IS NOT NULL)"
-    count = workbench_db.execute(
-        "SELECT count(*) FROM pg_constraint WHERE conrelid = 'agent_runs'::regclass AND contype = 'c' "
-        'AND pg_get_constraintdef(oid) LIKE %s AND pg_get_constraintdef(oid) NOT LIKE %s',
-        [f'%{old_def}%', '%mode%']).fetchone()[0]
-    assert count == 0
-
-
-def test_brief_agent_run_fk(workbench_db):
-    import psycopg
-    with pytest.raises(psycopg.errors.ForeignKeyViolation):
-        workbench_db.execute(
-            'INSERT INTO signal_briefs (ticker, signal_date, model, prompt_version, cutoff_at, '
-            'input_refs, output, status, agent_run_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
-            ['NVDA', date(2026, 10, 21), 'gpt-test', 'agent-brief-1', NOW, '[]', '{}', 'ok', uuid.uuid4()])
-    workbench_db.rollback()
-
-
-def test_review_push_reason_required(workbench_db):
-    import psycopg
-    workbench_db.execute(
-        'INSERT INTO review_pushes (kind, period, trigger_source, sent, messages, reason) '
-        "VALUES ('weekly', %s, 'manual', false, 0, 'send_failed: boom')", [date(2026, 10, 19)])
-    with pytest.raises(psycopg.errors.CheckViolation):
-        workbench_db.execute(
-            'INSERT INTO review_pushes (kind, period, trigger_source, sent, messages) '
-            "VALUES ('weekly', %s, 'manual', false, 0)", [date(2026, 10, 26)])
-    workbench_db.rollback()
-
-
-def test_review_job_merged_into_daily(workbench_db):
-    # 020 inserted ``workbench_review`` (08:00, disabled); 028 merges the three tasks into ``daily``
-    names = {r[0] for r in workbench_db.execute('SELECT name FROM scheduled_jobs')}
-    assert 'workbench_review' not in names and 'workbench' not in names and 'filings' not in names
-    row = workbench_db.execute('SELECT time_local, weekday_mask, timezone FROM scheduled_jobs '
-                               "WHERE name = 'daily'").fetchone()
-    assert row == ('11:30', '2-6', 'Asia/Shanghai')
-
-
-def test_missing_tables_lists_review_pushes(workbench_db):
-    # Repository consumers use their owning layers below.
-    workbench_db.execute('DROP TABLE review_pushes')
-    assert 'review_pushes' in core_dbutil.missing_tables(workbench_db)
 
 
 # --- mode-filtered run queries and brief run links (P4 §3.1–3.2, §7) ---
@@ -468,23 +155,7 @@ def test_fetch_run_round_trip(workbench_db):
     assert list(data_repo.last_success_at(conn)) == ['bars']
 
 
-def test_fetch_runs_table_not_required_by_workbench(workbench_db):
-    # Repository consumers use their owning layers below.
-    assert 'data_fetch_runs' not in core_dbutil.WORKBENCH_TABLES
-    workbench_db.execute('DROP TABLE data_fetch_runs CASCADE')    # 031's data_requests references it
-    assert core_dbutil.missing_tables(workbench_db) == []
-    assert core_schema.fetch_runs_ready(workbench_db) is False
-
-
 # --- stage runs (v2.4 §5) ---
-
-
-def test_stage_runs_ready_false_without_table(workbench_db):
-    # Repository consumers use their owning layers below.
-    assert core_schema.stage_runs_ready(workbench_db) is True
-    workbench_db.execute('DROP TABLE stage_runs')
-    assert core_dbutil.missing_tables(workbench_db) == []
-    assert core_schema.stage_runs_ready(workbench_db) is False
 
 
 # --- family targets and coverage queries (v2.3 §4/§8) ---

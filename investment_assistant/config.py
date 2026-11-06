@@ -6,84 +6,38 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from .runtime_paths import DEFAULT_CONFIG_PATH, DEFAULT_DRAFT_DIR, DEFAULT_FILINGS_DIR, DEFAULT_VAULT_RO
+from .runtime_paths import DEFAULT_CONFIG_PATH, DEFAULT_FILINGS_DIR
 
 
 @dataclass(frozen=True)
 class FilingsConfig:
     forms: list[str] = field(default_factory=lambda: ["10-Q", "10-K"])
-    lookback_years: int = 3
     output_dir: Path = DEFAULT_FILINGS_DIR
 
 
 @dataclass(frozen=True)
 class SecMonitorConfig:
-    """Opt-in migration of the OpenClaw SEC monitor; secrets stay in the environment."""
+    """Paths of the OpenClaw SEC monitor migration (``data/sec/monitor``)."""
 
-    enabled: bool = False
-    start_date: str = ""
     watchlist_path: str = ""
     legacy_log_path: str = ""
     state_dir: str = ""
-    discord_channel_id: str = ""
 
 
 @dataclass(frozen=True)
 class NotifyConfig:
-    """Notification channel toggles for the scheduled tasks."""
+    """Discord webhook overrides read by ``DiscordClient.from_config``; unset channels fall back to the environment."""
 
-    channel: str = "discord"  # "discord" | "email"（全局单选）
-    discord_enabled: bool = True
     webhooks: dict[str, str] = field(default_factory=dict)
-    email: dict[str, Any] = field(default_factory=lambda: {
-        "from_addr": "", "to_addr": "", "host": "smtp.gmail.com", "port": 465,
-    })
-    task_channels: dict[str, str] = field(
-        default_factory=lambda: {"filings": "earnings", "workbench": "signals",
-                                 "workbench_review": "signals"}
-    )
-    task_enabled: dict[str, bool] = field(
-        default_factory=lambda: {"filings": True, "workbench": True, "workbench_review": True}
-    )
-
-
-@dataclass(frozen=True)
-class MacroConfig:
-    """FRED macro-indicator collection (Phase 2)."""
-
-    fred_series: list[str] = field(
-        default_factory=lambda: ["DGS10", "DGS2", "FEDFUNDS", "CPIAUCSL", "UNRATE", "BAMLH0A0HYM2"]
-    )
-    lookback_days: int = 400
 
 
 @dataclass(frozen=True)
 class WorkbenchConfig:
-    """P1 trade plan account parameters (design §4.3, §8.2)."""
+    """Position-sizing parameters of a trade plan (``execution/plan_levels``)."""
 
     risk_pct: float = 0.01
     single_cap: float = 0.25
     total_cap: float = 1.0
-    public_url: str = "http://localhost:8787"
-    return_tiers: tuple[float, float, float] = (0.20, 0.10, 0.0)
-
-
-@dataclass(frozen=True)
-class FundamentalsConfig:
-    """SEC XBRL companyconcept ingestion (Phase 2)."""
-
-    concepts: list[str] = field(
-        default_factory=lambda: ["Revenues", "NetIncomeLoss", "EarningsPerShareDiluted"]
-    )
-    units: str = "USD"
-
-
-@dataclass(frozen=True)
-class PriceConfig:
-    """OHLCV collection. Timeouts and retries live in ``data/fetch_policy`` (fetch-1), not here."""
-
-    primary: str = "yfinance"
-    history_days: int = 400
 
 
 @dataclass(frozen=True)
@@ -106,19 +60,11 @@ class V3Config:
 
 @dataclass(frozen=True)
 class AssistantConfig:
-    watchlist: list[str] = field(default_factory=lambda: ["CRDO", "MU", "RKLB", "NVDA"])
     filings: FilingsConfig = field(default_factory=FilingsConfig)
     sec_monitor: SecMonitorConfig = field(default_factory=SecMonitorConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
-    macro: MacroConfig = field(default_factory=MacroConfig)
     workbench: WorkbenchConfig = field(default_factory=WorkbenchConfig)
-    fundamentals: FundamentalsConfig = field(default_factory=FundamentalsConfig)
-    prices: PriceConfig = field(default_factory=PriceConfig)
     v3: V3Config = field(default_factory=V3Config)
-    vault_ro: Path = DEFAULT_VAULT_RO
-    draft_dir: Path = DEFAULT_DRAFT_DIR
-    brief_time_local: str = "08:30"
-    max_daily_focus_items: int = 3
 
 
 def load_config(path: str | Path | None = None) -> AssistantConfig:
@@ -140,31 +86,18 @@ def _resolve_config_path(path: str | Path | None) -> Path | None:
 
 
 def _config_from_dict(data: dict[str, Any]) -> AssistantConfig:
+    """Known sections override the defaults; any other key (including the sections of the removed v2 system) is ignored."""
     cfg = AssistantConfig()
-    if "watchlist" in data:
-        cfg = replace(cfg, watchlist=_normalize_tickers(data["watchlist"]))
     if "filings" in data:
         cfg = replace(cfg, filings=_filings_from_dict(data["filings"], cfg.filings))
     if "sec_monitor" in data and isinstance(data["sec_monitor"], dict):
         cfg = replace(cfg, sec_monitor=_dataclass_from_dict(data["sec_monitor"], cfg.sec_monitor))
-    if "vault_ro" in data:
-        cfg = replace(cfg, vault_ro=Path(data["vault_ro"]))
-    if "draft_dir" in data:
-        cfg = replace(cfg, draft_dir=Path(data["draft_dir"]))
-    if "brief_time_local" in data:
-        cfg = replace(cfg, brief_time_local=str(data["brief_time_local"]))
-    if "max_daily_focus_items" in data:
-        cfg = replace(cfg, max_daily_focus_items=int(data["max_daily_focus_items"]))
     if "notify" in data and isinstance(data["notify"], dict):
         cfg = replace(cfg, notify=_dataclass_from_dict(data["notify"], cfg.notify))
-    if "macro" in data and isinstance(data["macro"], dict):
-        cfg = replace(cfg, macro=_dataclass_from_dict(data["macro"], cfg.macro))
     if "workbench" in data:
         cfg = replace(cfg, workbench=_validate_workbench(_dataclass_from_dict(data["workbench"], cfg.workbench)))
     if "v3" in data and isinstance(data["v3"], dict):
         cfg = replace(cfg, v3=_validate_v3(_dataclass_from_dict(data["v3"], cfg.v3)))
-    if "prices" in data and isinstance(data["prices"], dict):
-        cfg = replace(cfg, prices=_dataclass_from_dict(data["prices"], cfg.prices))
     return cfg
 
 
@@ -195,25 +128,20 @@ def _filings_from_dict(data: dict[str, Any], base: FilingsConfig) -> FilingsConf
     values: dict[str, Any] = {}
     if "forms" in data:
         values["forms"] = _normalize_forms(data["forms"])
-    if "lookback_years" in data:
-        values["lookback_years"] = int(data["lookback_years"])
     if "output_dir" in data:
         values["output_dir"] = Path(data["output_dir"])
     return replace(base, **values)
 
 
 def _validate_workbench(cfg: WorkbenchConfig) -> WorkbenchConfig:
-    """JSON lists stay lists through _dataclass_from_dict; normalize and range-check here."""
-    tiers = tuple(float(t) for t in cfg.return_tiers)
+    """Range-check the sizing parameters."""
     if not 0 < cfg.risk_pct <= 0.05:
         raise ValueError("workbench.risk_pct must be in (0, 0.05]")
     if not 0 < cfg.single_cap <= 1:
         raise ValueError("workbench.single_cap must be in (0, 1]")
     if not 0 < cfg.total_cap <= 1:
         raise ValueError("workbench.total_cap must be in (0, 1]")
-    if len(tiers) != 3 or not all(a > b for a, b in zip(tiers, tiers[1:])):
-        raise ValueError("workbench.return_tiers must be three strictly descending thresholds")
-    return replace(cfg, return_tiers=tiers)
+    return cfg
 
 
 def _validate_v3(cfg: V3Config) -> V3Config:
@@ -243,15 +171,6 @@ def briefs_dir(cfg: AssistantConfig) -> Path:
     if base:
         return Path(base) / "briefs"
     return Path(".local/v3/briefs")
-
-
-def _normalize_tickers(raw: Any) -> list[str]:
-    if not isinstance(raw, list):
-        raise ValueError("watchlist must be a list of ticker symbols")
-    tickers = [str(item).strip().upper() for item in raw if str(item).strip()]
-    if not tickers:
-        raise ValueError("watchlist must not be empty")
-    return tickers
 
 
 def _normalize_forms(raw: Any) -> list[str]:

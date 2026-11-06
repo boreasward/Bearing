@@ -1,5 +1,4 @@
 """Only the explicitly permitted disposable PostgreSQL schema is used."""
-import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TypedDict
@@ -28,26 +27,6 @@ def test_ratio_primary_only_latest_visible_date_and_default(db):
     assert repo.ratio_from_primary(db, 'nvda', DAY) == Decimal('.98')
     assert repo.ratio_from_primary(db, 'EMPTY', DAY) == Decimal(1)
     assert repo.ratio_from_primary(db, 'NVDA', old - timedelta(days=1)) == Decimal(1)
-
-
-def test_request_targets_and_pending_paper_facts(db):
-    for ticker, status in [('QUEUED', 'queued'), ('RUNNING', 'running'), ('WAITING', 'waiting_data'),
-                           ('CLOSED', 'closed'), ('DONE', 'concluded')]:
-        db.execute('INSERT INTO research_requests (id, request_id, ticker, question, horizon_days, status, source, created_at) '
-                   'VALUES (%s,%s,%s,%s,30,%s,%s,%s)', (uuid.uuid4(), uuid.uuid4(), ticker, 'why', status, 'manual', NOW))
-    assert repo.collection_request_tickers(db) == ['QUEUED', 'RUNNING', 'WAITING']
-    paper = uuid.uuid4()
-    db.execute("INSERT INTO accounts (id,name,kind,strategy,status,opening_cash,opened_on) "
-               "VALUES (%s,'fixture','paper','follow_plans','active',100000,%s)", (paper, DAY))
-    for ticker, status in [('BUY', 'pending'), ('GONE', 'cancelled')]:
-        plan = uuid.uuid4()
-        db.execute('INSERT INTO trade_plans (id,ticker,signal_date,kind,plan_version,ref_price,atr,'
-                   'entry_low,entry_high,stop,target1,valid_from,valid_until,sizing,inputs,status) '
-                   "VALUES (%s,%s,%s,'rule','plan-1',100,2,99,101,95,110,%s,%s,'{}','{}','ok')",
-                   (plan, ticker, DAY, DAY, DAY + timedelta(days=10)))
-        db.execute('INSERT INTO paper_orders (id,account_id,action,ticker,shares,placed_on,placed_by,status,plan_id,chain_signal_date) '
-                   "VALUES (%s,%s,'buy',%s,1,%s,'host',%s,%s,%s)", (uuid.uuid4(), paper, ticker, DAY, status, plan, DAY))
-    assert repo.pending_paper_tickers(db) == ['BUY']
 
 
 def test_observation_counts_changes_and_cutoff(db):

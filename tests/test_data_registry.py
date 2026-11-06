@@ -133,19 +133,17 @@ def test_tally_keeps_legacy_status_redaction_and_new_fields(monkeypatch):
     assert 'abc123' not in str(row)
 
 
-def test_target_daily_family_differences_and_facts_are_not_recomputed(monkeypatch):
-    monkeypatch.setattr(repo, 'collection_request_tickers', lambda conn: ['RESEARCH'])
-    monkeypatch.setattr(repo, 'pending_paper_tickers', lambda conn: ['ORDER'])
+def test_target_daily_family_differences_and_facts_are_not_recomputed():
     facts = TargetFacts(pool=('POOL',), holdings=('HELD',), paper_holdings=('PAPER',),
                         active_chains=('CHAIN',))
     load = lambda: SimpleNamespace(tickers=('MEMBER', 'POOL'))
     assert registry.get('bars').targets(None, 'daily', facts=facts, universe_loader=load) == [
-        'SPY', 'SMH', 'XLK', 'QQQ', 'CHAIN', 'HELD', 'MEMBER', 'ORDER', 'PAPER', 'POOL', 'RESEARCH']
+        'SPY', 'SMH', 'XLK', 'QQQ', 'CHAIN', 'HELD', 'MEMBER', 'PAPER', 'POOL']
     for family in ('earnings', 'sector'):
         assert registry.get(family).targets(None, 'daily', facts=facts, universe_loader=load) == [
-            'CHAIN', 'HELD', 'MEMBER', 'ORDER', 'PAPER', 'POOL', 'RESEARCH']
+            'CHAIN', 'HELD', 'MEMBER', 'PAPER', 'POOL']
     for family in ('news', 'sec_filings', 'fundamentals', 'sec_text'):
-        assert registry.get(family).targets(None, 'daily', facts=facts, universe_loader=load) == ['CHAIN', 'HELD', 'POOL', 'RESEARCH']
+        assert registry.get(family).targets(None, 'daily', facts=facts, universe_loader=load) == ['CHAIN', 'HELD', 'POOL']
 
 
 @pytest.mark.parametrize('scope', ['manual', 'research', 'screen_new_members', 'data_request', 'sec_monitor'])
@@ -259,16 +257,6 @@ def test_sec_company_ticker_failure_records_every_target(tmp_path, monkeypatch):
                 deps=AdapterDeps(transaction=memory_tx, filing_source=source, sleep=lambda _: None))
     assert [i['target'] for i in detail(tally)] == ['AAPL', 'NVDA']
     assert all(not i['ok'] for i in detail(tally))
-
-
-def test_target_schema_capabilities_are_explicit_not_missing_table_fallback(monkeypatch):
-    def unsupported(conn):
-        pytest.fail('host marked the schema capability unavailable')
-    monkeypatch.setattr(repo, 'collection_request_tickers', unsupported)
-    monkeypatch.setattr(repo, 'pending_paper_tickers', unsupported)
-    facts = TargetFacts(pool=('MU',), research_requests_ready=False, paper_accounts_ready=False)
-    assert registry.get('bars').targets(None, 'daily', facts=facts,
-        universe_loader=lambda: SimpleNamespace(tickers=('AAPL',))) == ['SPY', 'SMH', 'XLK', 'QQQ', 'AAPL', 'MU']
 
 
 def test_source_receives_immutable_run_cutoff():

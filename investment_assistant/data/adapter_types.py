@@ -67,8 +67,6 @@ class TargetFacts:
     paper_holdings: tuple[str, ...] = ()
     active_chains: tuple[str, ...] = ()
     sector_etfs: tuple[str, ...] = SECTOR_ETFS
-    paper_accounts_ready: bool = True
-    research_requests_ready: bool = True  # host capability: false only for pre-031 compatibility
 
 
 @dataclass

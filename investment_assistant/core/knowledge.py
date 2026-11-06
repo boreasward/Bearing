@@ -354,36 +354,6 @@ catalog.cache_clear = reset_cache                     # type: ignore[attr-define
 
 # --------------------------------------------------------------------------------------------- refs
 
-CITATION_FIELDS = ('thesis', 'invalidation', 'changes', 'counter', 'risks', 'review')
-
-
-def ref(knowledge_id: int, version: int) -> str:
-    return f'know:{knowledge_id}@{version}'
-
-
-def ref_entries(rows: list[dict[str, Any]], versions: list[dict[str, Any]]) -> dict[Any, list[dict[str, Any]]]:
-    """Group citation facts with their cited title and latest version; callers supply the stored facts."""
-    top: dict[int, int] = {}
-    title: dict[tuple[int, int], str] = {}
-    for v in versions:
-        top[v['knowledge_id']] = max(top.get(v['knowledge_id'], 0), v['version'])
-        title[(v['knowledge_id'], v['version'])] = v['title']
-    grouped: dict[Any, dict[tuple[int, int], list[str]]] = {}
-    for row in rows:
-        fields = grouped.setdefault(row['group'], {}).setdefault((row['knowledge_id'], row['version']), [])
-        if row['field'] not in fields:
-            fields.append(row['field'])
-    return {group: [{'ref': ref(kid, version), 'title': title.get((kid, version), ''),
-                     'fields': [f for f in CITATION_FIELDS if f in fields], 'current_version': top.get(kid, version)}
-                    for (kid, version), fields in sorted(cited.items())]
-            for group, cited in grouped.items()}
-
-
-def refs_for_plans(rows: list[dict[str, Any]], versions: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """``plan id -> cited knowledge`` from citation and version facts, without database access."""
-    return ref_entries([{**row, 'group': str(row['plan_id'])} for row in rows], versions)
-
-
 def parse_ref(text: str) -> tuple[str, int | None]:
     """'concept:plan.stop@2' -> ('plan.stop', 2); 'plan.stop' -> ('plan.stop', None); ValueError otherwise."""
     match = REF_RE.match(text or '')

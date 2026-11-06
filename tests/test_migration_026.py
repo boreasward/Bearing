@@ -1,4 +1,3 @@
-import investment_assistant.core.dbutil as core_dbutil
 import investment_assistant.core.schema as core_schema
 import json
 import os
@@ -284,20 +283,4 @@ def test_migration_026_is_rerunnable(migrated_db):
 def test_new_tables_not_in_workbench_tables():
     # Repository consumers use their owning layers below.
     for table in ('agent_plan_versions', 'plan_reviews', 'user_inputs'):
-        assert table not in core_dbutil.WORKBENCH_TABLES
-
-
-def test_timeline_ready_false_without_tables(migrated_db):
-    # Repository consumers use their owning layers below.
-    conn = migrated_db
-    assert core_schema.timeline_ready(conn) is False
-    assert conn.execute('SELECT 1').fetchone() == (1,)      # the caller's transaction is still usable
-    _apply(conn)
-    assert core_schema.timeline_ready(conn) is True
-    conn.execute('ALTER TABLE signal_decisions DROP COLUMN agent_plan_id')
-    assert core_schema.timeline_ready(conn) is False
-    conn.rollback()
-    conn.execute('DROP TABLE user_inputs')
-    assert core_schema.timeline_ready(conn) is False
-    conn.rollback()
-    assert core_schema.timeline_ready(conn) is True
+        assert table not in core_schema.WORKBENCH_TABLES

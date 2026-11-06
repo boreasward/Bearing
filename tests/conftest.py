@@ -27,7 +27,8 @@ WORKBENCH_MIGRATIONS = ('002_watchlist_items.sql', '006_job_reports.sql', '007_s
                         '018_pool_and_market_context.sql', '019_agent_track.sql', '020_review_expansion.sql',
                         '023_screen_and_beijing_jobs.sql', '024_data_fetch_runs.sql', '025_stage_runs.sql',
                         '026_plan_timeline.sql', '027_growth_loop.sql', '028_daily_workflow.sql',
-                        '029_executable_plans.sql', '030_accounts.sql', '031_five_layers.sql')
+                        '029_executable_plans.sql', '030_accounts.sql', '031_five_layers.sql',
+                        '032_v3_agent_first.sql', '033_drop_v2_tables.sql')
 
 
 def _workbench_schema(migrations):
@@ -57,17 +58,14 @@ def _workbench_schema(migrations):
 
 @pytest.fixture
 def workbench_db():
-    """The full workbench schema, migrations 002–031."""
+    """The schema through migration 033: the fact tables and the v3_ tables, the v2 tables dropped."""
     yield from _workbench_schema(WORKBENCH_MIGRATIONS)
-
-
-V3_MIGRATIONS = (*WORKBENCH_MIGRATIONS, '032_v3_agent_first.sql')
 
 
 @pytest.fixture
 def v3_db():
-    """The workbench schema plus migration 032 (the seven v3_ tables)."""
-    yield from _workbench_schema(V3_MIGRATIONS)
+    """The same schema as ``workbench_db``, for the v3 tests (the seven v3_ tables included)."""
+    yield from _workbench_schema(WORKBENCH_MIGRATIONS)
 
 
 @pytest.fixture

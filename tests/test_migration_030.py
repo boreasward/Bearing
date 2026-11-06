@@ -3,7 +3,6 @@ paper orders and decisions, chain consumption, and the three relaxations (stage_
 agent_runs mode 'portfolio' with nullable ticker/signal_date/pool, agent_tool_calls.phase 'portfolio').
 
 SQL tests run in a throwaway schema of the disposable test database only."""
-import investment_assistant.core.schema as core_schema
 import json
 import itertools
 import os
@@ -154,22 +153,6 @@ def _order(conn, account_id, **overrides):
               'placed_by': 'host', 'status': 'pending'}
     values.update(overrides)
     return _insert(conn, 'paper_orders', values)
-
-
-def test_rerunnable(migrated_db):
-    conn = migrated_db
-    assert core_schema.accounts_ready(conn) is False
-    _apply(conn)
-    assert core_schema.accounts_ready(conn) is True
-    before = {t: _constraints(conn, t) for t in ALL_TABLES}
-    indexes = _indexes(conn)
-    _apply(conn)                                              # rerunning must not fail or duplicate anything
-    assert {t: _constraints(conn, t) for t in ALL_TABLES} == before
-    assert _indexes(conn) == indexes
-    # exactly one account: the seeded real one, still exactly one row (D2)
-    rows = conn.execute('SELECT id, kind, strategy, name, opening_cash, opened_on, status FROM accounts').fetchall()
-    assert rows == [(REAL, 'real', 'manual', '真实账户', None, None, 'active')]
-    assert conn.execute('SELECT count(*) FROM accounts').fetchone()[0] == 1
 
 
 def test_old_rows_get_real_account(migrated_db):

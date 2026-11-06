@@ -1,31 +1,14 @@
 {
-  "watchlist": [
-    "CRDO",
-    "MU",
-    "RKLB",
-    "NVDA"
-  ],
   "filings": {
     "forms": [
       "10-Q",
       "10-K"
     ],
-    "lookback_years": 3,
     "output_dir": "/srv/investment-assistant/filings"
   },
   "workbench": {
     "risk_pct": 0.01,
     "single_cap": 0.25,
-    "total_cap": 1.0,
-    "public_url": "http://localhost:8787",
-    "return_tiers": [
-      0.2,
-      0.1,
-      0.0
-    ]
-  },
-  "vault_ro": "/srv/vault-ro",
-  "draft_dir": "/srv/vault-staging/06-收集箱/AI草稿",
-  "brief_time_local": "08:30",
-  "max_daily_focus_items": 3
+    "total_cap": 1.0
+  }
 }

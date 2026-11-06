@@ -123,3 +123,47 @@ def test_no_run_for_session(v3_tx):
     assert call(env, 'get_market', {})['error'].startswith('no_run')
     assert call(env, 'get_candidates', {})['error'].startswith('no_run')
     assert call(env, 'get_coverage', {})['error'].startswith('no_run')
+
+
+# --- get_concept reads the real concept-card catalog in docs/knowledge; it never touches the environment ---
+
+class _NoEnv:
+    def __getattr__(self, name):
+        raise AssertionError(f'get_concept must not use env.{name}')
+
+
+def test_get_concept_without_id_lists_the_40_kept_cards():
+    from investment_assistant.toolsurface.reads import get_concept
+
+    out = get_concept(_NoEnv())
+    assert out['knowledge_version'] == 'knowledge-1' and out['point_in_time'] is False
+    ids = [item['id'] for item in out['concepts']]
+    assert len(ids) == 40 and len(set(ids)) == 40
+    assert {item['group'] for item in out['concepts']} == {'indicator', 'rule', 'plan'}
+    assert 'plan.stop' in ids and set(out['concepts'][0]) == {'id', 'title', 'group'}
+
+
+def test_get_concept_returns_the_card_body():
+    from investment_assistant.toolsurface.reads import get_concept
+
+    out = get_concept(_NoEnv(), concept_id='plan.stop')
+    assert out['id'] == 'plan.stop' and out['group'] == 'plan' and out['concept_ref'] == 'concept:plan.stop@1'
+    assert out['title'] and out['summary'] and out['body'].strip()
+    assert len(out['content_sha256']) == 64
+    assert out['knowledge_version'] == 'knowledge-1' and out['point_in_time'] is False and out['note']
+
+
+def test_get_concept_treats_an_archived_card_like_an_unknown_one():
+    from pathlib import Path
+
+    from investment_assistant.toolsurface.reads import get_concept
+
+    archived = sorted(Path('docs/archive/v2/knowledge/concepts').glob('system.*.md'))
+    assert archived, 'the archive keeps the v2 system cards'
+    archived_id = archived[0].stem
+    with pytest.raises(LookupError) as unknown:
+        get_concept(_NoEnv(), concept_id='no.such.card')
+    with pytest.raises(LookupError) as gone:
+        get_concept(_NoEnv(), concept_id=archived_id)
+    assert str(gone.value) == str(unknown.value).replace('no.such.card', archived_id)
+    assert '未知概念' in str(gone.value)

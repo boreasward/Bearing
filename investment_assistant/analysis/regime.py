@@ -1,4 +1,4 @@
-"""Regime-2 advisory label and frozen snapshot (pending the analysis-layer move)."""
+"""Regime-2 advisory label and frozen snapshot."""
 from __future__ import annotations
 
 from datetime import date

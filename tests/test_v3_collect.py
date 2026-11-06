@@ -29,7 +29,6 @@ def test_target_facts(v3_tx):
     facts = facts_collect.target_facts(v3_tx, cfg)
     assert facts.pool == ('AAPL', 'MSFT') and facts.holdings == ('NVDA',)
     assert facts.paper_holdings == () and facts.active_chains == ()
-    assert facts.paper_accounts_ready is False and facts.research_requests_ready is False
     assert facts.sector_etfs == cfg.v3.sector_etfs
     v3_tx.execute('DELETE FROM watchlist_items')
     assert facts_collect.target_facts(v3_tx, cfg).pool == ()      # 空关注列表不抛异常

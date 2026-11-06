@@ -24,8 +24,6 @@ ATR_PCT_MIN = Decimal('0.02')
 ATR_PCT_MAX = Decimal('0.06')
 EARNINGS_EXCLUDE_SESSIONS = 5  # 财报排除窗口（交易日，含当天）
 MAX_NEW = 20                   # 每天新入选上限
-MAX_MEMBERS = 40               # 筛选成员上限（还要减手动观察池）
-RETENTION_SESSIONS = 10        # 入选保留期（交易日，含入选当天）
 TRIGGER_RULES = ('trend_reclaim', 'volume_breakout')
 BENCHMARK = 'QQQ'
 

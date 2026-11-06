@@ -1,14 +1,14 @@
-"""v3 packages import only the kept lower layers (plan Global Constraints); facts never imports toolsurface."""
+"""v3 packages import only the kept lower layers; facts never imports toolsurface."""
 import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / 'investment_assistant'
 V3_PACKAGES = ('facts', 'toolsurface')
-# plan「新代码的 import 边界」：core 六个保留模块、data/derivation 整包、四个 analysis 模块、
-# 三个 execution 模块、db、config，以及彼此（toolsurface 可 import facts；包内互引）。
-# toolsurface 在 KEPT 里只放开包内互引（目标必须以 investment_assistant.toolsurface. 开头）；
-# facts → toolsurface 仍然由下面那行单独禁止。
+# The lower layers v3 builds on: the core modules below, data/derivation as whole layers, four analysis modules,
+# three execution modules, db and config, and each other (toolsurface may import facts; modules of one package
+# import each other). toolsurface appears in KEPT only so that imports inside the package are allowed (the target
+# must start with investment_assistant.toolsurface.); facts -> toolsurface is forbidden by the check below.
 KEPT = ('investment_assistant.core.tx', 'investment_assistant.core.dbutil',
         'investment_assistant.core.constants', 'investment_assistant.core.redact',
         'investment_assistant.core.texts', 'investment_assistant.core.knowledge',

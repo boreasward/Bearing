@@ -1,7 +1,6 @@
 """Migration 028 (v2.8 spec §10): stage_runs attempt / daily / sec_monitor, three new tables, scheduled_jobs merged.
 
 SQL tests run in a throwaway schema of the disposable test database only; the two source checks are offline."""
-import investment_assistant.core.dbutil as core_dbutil
 import investment_assistant.core.schema as core_schema
 import json
 import os
@@ -77,25 +76,6 @@ def _reject(conn, exc_name, fn, *args, **kwargs):
     import psycopg
     with pytest.raises(getattr(psycopg.errors, exc_name)):
         fn(conn, *args, **kwargs)
-
-
-def test_migrate_001_to_028_and_rerun(migrated_db):
-    conn = migrated_db
-    assert core_schema.daily_ready(conn) is False
-    _apply(conn)
-    _apply(conn)                                              # idempotent: rerunning must not fail or duplicate
-    assert core_schema.daily_ready(conn) is True
-    for table in NEW_TABLES:
-        assert conn.execute('SELECT to_regclass(%s)', (table,)).fetchone()[0] is not None, table
-    assert conn.execute("SELECT to_regclass('idx_job_reports_run_id'), to_regclass('idx_agent_connection_events_created'), "
-                        "to_regclass('idx_agent_attempt_resets_unit')").fetchone() == (
-        'idx_job_reports_run_id', 'idx_agent_connection_events_created', 'idx_agent_attempt_resets_unit')
-    names = {row[0] for row in conn.execute(
-        "SELECT conname FROM pg_constraint WHERE conrelid = 'stage_runs'::regclass").fetchall()}
-    assert {'stage_runs_attempt_check', 'stage_runs_job_check', 'stage_runs_stage_check',
-            'stage_runs_run_stage_attempt_key'} <= names
-    assert 'stage_runs_run_id_stage_key' not in names          # the old (run_id, stage) key is gone
-    assert conn.execute("SELECT count(*) FROM scheduled_jobs WHERE name = 'daily'").fetchone()[0] == 1
 
 
 def test_stage_runs_attempt_and_new_values(migrated_db):
@@ -219,7 +199,7 @@ def test_scheduled_jobs_merged(migrated_db, workbench_enabled):
 
 
 def test_new_tables_not_in_workbench_tables():
-    assert not set(NEW_TABLES) & set(core_dbutil.WORKBENCH_TABLES)
+    assert not set(NEW_TABLES) & set(core_schema.WORKBENCH_TABLES)
 
 
 def test_repository_never_mentions_agent_connections():

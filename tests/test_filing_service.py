@@ -24,7 +24,7 @@ class FakeDownloader:
 
 def test_download_configured_filings_uses_runtime_output_dir(tmp_path, monkeypatch):
     monkeypatch.delenv("INVESTMENT_ASSISTANT_DATABASE_URL", raising=False)
-    cfg = FilingsConfig(forms=["10-Q", "10-K"], lookback_years=1, output_dir=tmp_path / "filings")
+    cfg = FilingsConfig(forms=["10-Q", "10-K"], output_dir=tmp_path / "filings")
     downloader = FakeDownloader()
 
     result = download_configured_filings(["NVDA"], cfg, downloader=downloader)
@@ -38,7 +38,7 @@ def test_download_configured_filings_uses_runtime_output_dir(tmp_path, monkeypat
 
 def test_download_defaults_to_t_minus_1(tmp_path, monkeypatch):
     monkeypatch.delenv("INVESTMENT_ASSISTANT_DATABASE_URL", raising=False)
-    cfg = FilingsConfig(forms=["10-Q"], lookback_years=1, output_dir=tmp_path / "filings")
+    cfg = FilingsConfig(forms=["10-Q"], output_dir=tmp_path / "filings")
     downloader = FakeDownloader()
 
     download_configured_filings(["NVDA"], cfg, downloader=downloader)
@@ -50,7 +50,7 @@ def test_download_defaults_to_t_minus_1(tmp_path, monkeypatch):
 
 def test_download_passes_explicit_date_range(tmp_path, monkeypatch):
     monkeypatch.delenv("INVESTMENT_ASSISTANT_DATABASE_URL", raising=False)
-    cfg = FilingsConfig(forms=["10-Q"], lookback_years=1, output_dir=tmp_path / "filings")
+    cfg = FilingsConfig(forms=["10-Q"], output_dir=tmp_path / "filings")
     downloader = FakeDownloader()
 
     download_configured_filings(
@@ -63,7 +63,7 @@ def test_download_passes_explicit_date_range(tmp_path, monkeypatch):
 
 
 def test_download_persists_filing_index(tmp_path, monkeypatch):
-    cfg = FilingsConfig(forms=["10-Q"], lookback_years=1, output_dir=tmp_path / "filings")
+    cfg = FilingsConfig(forms=["10-Q"], output_dir=tmp_path / "filings")
     persisted = []
     monkeypatch.setattr(service, "_persist_filing_index", lambda metas: persisted.extend(metas))
 
@@ -72,7 +72,7 @@ def test_download_persists_filing_index(tmp_path, monkeypatch):
 
 
 def test_persist_failure_does_not_break_download(tmp_path, monkeypatch):
-    cfg = FilingsConfig(forms=["10-Q"], lookback_years=1, output_dir=tmp_path / "filings")
+    cfg = FilingsConfig(forms=["10-Q"], output_dir=tmp_path / "filings")
 
     def boom(metas):
         raise RuntimeError("db down")

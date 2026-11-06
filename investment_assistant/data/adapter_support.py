@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from investment_assistant.core.constants import BENCHMARK, SEC_EVIDENCE_DIR
-from investment_assistant.data import repo
 from investment_assistant.data.adapter_types import DEFAULT_FALLBACK_KINDS, Adapter, AdapterDeps, ToolSpec
 from investment_assistant.data.fetch_policy import Fetched, FetchError, FetchPolicy, classify_exception
 from investment_assistant.data.market_constants import MACRO_SERIES
@@ -32,13 +31,9 @@ def targets(conn, scope, *, family, explicit=None, facts=None, universe_loader=N
     if facts is None:
         raise ValueError('daily requires frozen TargetFacts from host pool/position/chain algorithms')
     selected = set(facts.pool) | set(facts.holdings) | set(facts.active_chains)
-    if facts.research_requests_ready:
-        selected.update(repo.collection_request_tickers(conn))
     if family not in {'bars', 'earnings', 'sector'}:
         return sorted(selected)
     selected.update(facts.paper_holdings)
-    if facts.paper_accounts_ready:
-        selected.update(repo.pending_paper_tickers(conn))
     if universe_loader is None:
         raise ValueError('daily wide-family targets require universe_loader')
     selected.update(universe_loader().tickers)
@@ -78,8 +73,8 @@ def sec_source(deps):
 
 def adapter_deps_from_service(deps, *, transaction, config=None, sleep=None) -> AdapterDeps:
     """The one host→data projection of a ``core.tx.Deps``: fetchers, the config-derived
-    SEC text root and effective config keys (the manual fetch and the agent data-request
-    handler share it; the host keeps owning the transaction callable)."""
+    SEC text root and effective config keys (the manual fetch and the v3 collection
+    share it; the host keeps owning the transaction callable)."""
     from investment_assistant.config import load_config
 
     config = config if config is not None else load_config()

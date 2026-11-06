@@ -1,4 +1,4 @@
-import investment_assistant.core.dbutil as core_dbutil
+import investment_assistant.core.schema as core_schema
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -93,4 +93,4 @@ def test_migration_025_is_rerunnable(migrated_db):
 
 def test_stage_runs_not_in_workbench_tables():
     # Repository consumers use their owning layers below.
-    assert 'stage_runs' not in core_dbutil.WORKBENCH_TABLES
+    assert 'stage_runs' not in core_schema.WORKBENCH_TABLES

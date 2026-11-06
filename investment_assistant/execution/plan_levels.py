@@ -7,8 +7,7 @@ plan at generation. Changing a constant means a new PLAN_VERSION.
 
 `plan-2` (v2.9 spec §5.4) is `plan-1` word for word (levels, validity, sizing, earnings rules) plus the two
 execution fields `entry_type = 'zone_limit'` and `max_hold_sessions = 10` and `inputs.entry_rules_version`.
-The builders take `version=`: the default stays `plan-1`, so a caller that has not been rewired (Task 3 / 4)
-still writes exactly the old rows; passing `PLAN_V2` yields the new shape.
+The builders take `version=`: the default is `plan-1`; passing `PLAN_V2` yields the new shape.
 """
 from __future__ import annotations
 
@@ -24,10 +23,10 @@ from investment_assistant.core.versions import (AGENT_VERSION as AGENT_VERSION, 
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.execution.entry_rules import DEFAULT_ENTRY_TYPE, ENTRY_RULES_VERSION
 
-PLAN_VERSION = PLAN_V2               # v2.9: `stage_rules` writes plan-2 rule baselines, `derivation` checks them
+PLAN_VERSION = PLAN_V2               # the plan version `derivation` checks rule baselines against
 RULE_MAX_HOLD_SESSIONS = 10          # plan-2 rule baseline: exit when still below +1R after this many sessions
 MAX_HOLD_DEFAULT = 10                # what a plan without the field (agent-2, plan-1) is read as
-MAX_HOLD_RANGE = (3, 30)             # trade_plans.max_hold_sessions CHECK
+MAX_HOLD_RANGE = (3, 30)             # the allowed max_hold_sessions
 CONTEXT_VERSION = 'context-2'
 ENTRY_ATR = Decimal('0.5')
 STOP_ATR = Decimal('2')

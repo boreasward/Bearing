@@ -6,7 +6,7 @@ version: 1
 applies_to: [condition-1]
 summary: "rs20 / rs60 = 标的区间收益减 SPY 同期收益（全复权收盘价）；为正表示跑赢大盘，Agent 的 rs_below 条件用它。"
 related: [indicator.screen_rs, indicator.sector_strength]
-sources: [investment_assistant/execution/conditions.py]
+sources: []
 ---
 
 ## 是什么

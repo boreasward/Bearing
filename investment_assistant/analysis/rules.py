@@ -89,10 +89,6 @@ def precondition(bars: list[dict[str, Any]], signal_date: date) -> str | None:
     return None
 
 
-# 兼容别名：v2.1 及更早的调用方仍用 _precondition
-_precondition = precondition
-
-
 class _Series:
     def __init__(self, bars: list[dict[str, Any]]):
         self.bars = bars

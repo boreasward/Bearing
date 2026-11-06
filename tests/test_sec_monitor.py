@@ -15,8 +15,8 @@ def cfg(tmp_path):
     legacy.write_text("")
     return AssistantConfig(
         filings=FilingsConfig(output_dir=tmp_path / "filings"),
-        sec_monitor=SecMonitorConfig(enabled=True, start_date="2026-10-01", watchlist_path=str(watchlist),
-            legacy_log_path=str(legacy), state_dir=str(tmp_path / "state"), discord_channel_id="123"),
+        sec_monitor=SecMonitorConfig(watchlist_path=str(watchlist),
+            legacy_log_path=str(legacy), state_dir=str(tmp_path / "state")),
     )
 
 

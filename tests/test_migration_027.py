@@ -1,5 +1,5 @@
 """Migration 027 (v2.7 spec §11): eleven append-only tables and three relaxed constraints. Throwaway schema only."""
-import investment_assistant.core.dbutil as core_dbutil
+import investment_assistant.core.schema as core_schema
 import json
 import os
 import uuid
@@ -392,4 +392,4 @@ def test_citation_fk_to_version(migrated_db):
 
 
 def test_new_tables_not_in_workbench_tables():
-    assert not set(NEW_TABLES) & set(core_dbutil.WORKBENCH_TABLES)
+    assert not set(NEW_TABLES) & set(core_schema.WORKBENCH_TABLES)

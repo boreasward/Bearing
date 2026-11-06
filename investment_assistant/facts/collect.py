@@ -48,8 +48,7 @@ def target_facts(conn, cfg: AssistantConfig) -> TargetFacts:
         if position is not None:
             holdings.append(ticker)
     return TargetFacts(pool=tuple(pool), holdings=tuple(holdings), paper_holdings=(), active_chains=(),
-                       sector_etfs=tuple(cfg.v3.sector_etfs), paper_accounts_ready=False,
-                       research_requests_ready=False)
+                       sector_etfs=tuple(cfg.v3.sector_etfs))
 
 
 def _workers(family_id: str, cfg: AssistantConfig) -> int:

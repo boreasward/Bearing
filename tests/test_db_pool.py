@@ -26,7 +26,7 @@ def _install_fake_pool(monkeypatch):
 def test_connect_returns_pool_connection_context(monkeypatch):
     created = _install_fake_pool(monkeypatch)
     db = importlib.reload(importlib.import_module("investment_assistant.db"))
-    db._reset_pools()  # clear cache to avoid cross-test pollution
+    db.close_pools()  # clear cache to avoid cross-test pollution
     ctx = db.connect("postgres://u/db1")
     assert ctx is not None
     assert len(created) == 1
@@ -35,7 +35,7 @@ def test_connect_returns_pool_connection_context(monkeypatch):
 def test_pool_is_cached_per_url(monkeypatch):
     created = _install_fake_pool(monkeypatch)
     db = importlib.reload(importlib.import_module("investment_assistant.db"))
-    db._reset_pools()
+    db.close_pools()
     db.connect("postgres://u/db1")
     db.connect("postgres://u/db1")  # same url, reuse
     db.connect("postgres://u/db2")  # different url, new pool

@@ -1,8 +1,3 @@
-"""Shared foundation of the five-layer layout (spec §4.1, v2.12–v2.15).
-
-Task 0 sinks the pieces every layer needs — transactions (``tx``), schema readiness
-(``schema``), convention version strings (``versions``), budget and environment
-constants (``constants``), front/back-aligned Chinese texts (``texts``), idempotency
-(``idempotency``), secret redaction (``redact``), the stage registry definition
-(``stages``) and the run locks (``locks``).
-``workbench`` modules re-export from here until Task 1 removes them."""
+"""Shared foundation of the layers: transactions (``tx``), schema readiness (``schema``), environment constants
+(``constants``), Chinese texts (``texts``), secret redaction (``redact``), the data-family lock key (``locks``),
+feature flags (``features``), the HTTP wrapper (``http``) and SQL row helpers (``dbutil``)."""

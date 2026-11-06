@@ -1,16 +1,11 @@
-"""Workbench schema readiness: the missing-table probe and the migration gates (spec §4.2).
+"""Schema readiness: the missing-table probe behind ``core.tx`` and the migration 031 gate of the manual fetch.
 
-``core.tx``'s transactions depend on ``missing_tables`` and the ``*_ready`` gates (spec
-§24 correction); cut verbatim from ``workbench/repository.py`` in Task 0, which
-re-exports them until Task 1. Every check is a pure existence probe on the connection:
-no row is ever written and a missing table never raises."""
+Every check is a pure existence probe on the connection: no row is ever written and a missing table never
+raises."""
 from __future__ import annotations
 
-WORKBENCH_TABLES = ('price_bars', 'news_items', 'news_item_tickers', 'signal_candidates', 'signal_briefs',
-                    'signal_decisions', 'trades', 'weekly_reviews', 'filings', 'trade_plans', 'earnings_dates',
-                    'account_snapshots', 'cash_flows', 'monthly_reviews', 'watchlist_items', 'pool_tiers',
-                    'macro_observations', 'market_regimes', 'rule_backchecks', 'agent_runs', 'agent_tool_calls',
-                    'review_pushes', 'screen_runs', 'screen_results')
+WORKBENCH_TABLES = ('price_bars', 'news_items', 'news_item_tickers', 'filings', 'earnings_dates',
+                    'watchlist_items', 'macro_observations')
 
 
 def missing_tables(conn, tables) -> list[str]:
@@ -24,93 +19,10 @@ def missing_tables(conn, tables) -> list[str]:
     return missing
 
 
-def accounts_ready(conn) -> bool:
-    """True when migration 030 has run: the six new tables and `trades.account_id` all exist (spec §7).
-    A pure existence check; never raises on a missing table."""
-    tables = conn.execute(
-        "SELECT to_regclass('accounts'), to_regclass('account_param_changes'), to_regclass('account_equity_days'), "
-        "to_regclass('paper_orders'), to_regclass('paper_decisions'), to_regclass('paper_chain_done')").fetchone()
-    if any(item is None for item in tables):
-        return False
-    has_account = conn.execute("SELECT 1 FROM pg_attribute WHERE attrelid = 'trades'::regclass "
-                               "AND attname = 'account_id' AND NOT attisdropped").fetchone()
-    return bool(has_account)
-
-
-def executable_ready(conn) -> bool:
-    """True when migration 029 has run: the three new tables, `trades.plan_id` and the two execution columns of
-    `trade_plans` all exist (spec §8). A pure existence check; never raises on a missing table."""
-    tables = conn.execute("SELECT to_regclass('chain_retriggers'), to_regclass('holding_status'), "
-                          "to_regclass('plan_notes'), to_regclass('trades'), to_regclass('trade_plans')").fetchone()
-    if any(item is None for item in tables):
-        return False
-    wanted = {('trades', 'plan_id'), ('trade_plans', 'entry_type'), ('trade_plans', 'max_hold_sessions')}
-    found = conn.execute(
-        'SELECT attrelid::regclass::text, attname FROM pg_attribute '
-        "WHERE attrelid IN (to_regclass('trades'), to_regclass('trade_plans')) "
-        "AND attname IN ('plan_id', 'entry_type', 'max_hold_sessions') AND NOT attisdropped").fetchall()
-    return wanted <= {(table.rsplit('.', 1)[-1], name) for table, name in found}
-
-
-def daily_ready(conn) -> bool:
-    """True when migration 028 has run: `stage_runs.attempt`, the attempt-reset table and the `daily` job row.
-
-    028 creates the credential tables in the same transaction, so the attempt-reset table stands in for them (this
-    module never touches the connection tables, spec §10.2). A pure existence check (no row is written); `daily` refuses to run without it (D36)."""
-    present = conn.execute("SELECT to_regclass('stage_runs'), to_regclass('agent_attempt_resets'), "
-                           "to_regclass('scheduled_jobs')").fetchone()
-    if any(item is None for item in present):
-        return False
-    has_attempt = conn.execute("SELECT 1 FROM pg_attribute WHERE attrelid = 'stage_runs'::regclass "
-                               "AND attname = 'attempt' AND NOT attisdropped").fetchone()
-    has_job = conn.execute("SELECT 1 FROM scheduled_jobs WHERE name = 'daily'").fetchone()
-    return bool(has_attempt and has_job)
-
-
-FIVE_LAYER_TABLES = ('feature_flag_changes', 'data_requests', 'sector_classifications', 'research_requests',
-                     'research_versions', 'portfolio_checks', 'roadmap_goals', 'roadmap_versions',
-                     'roadmap_decisions', 'roadmap_evidence', 'roadmap_proposals', 'roadmap_briefs')
+FIVE_LAYER_TABLES = ('feature_flag_changes', 'sector_classifications')
 
 
 def five_layers_ready(conn) -> bool:
-    """031's twelve tables and the portfolio stage CHECK, on this connection's search_path."""
+    """The tables of migration 031 that survive migration 033, on this connection's search_path."""
     checks = ' AND '.join(f"to_regclass('{table}') IS NOT NULL" for table in FIVE_LAYER_TABLES)
-    return bool(conn.execute(f'SELECT {checks} AND EXISTS ('
-        'SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass(\'stage_runs\') '
-        "AND conname = 'stage_runs_stage_check' AND contype = 'c' AND convalidated "
-        'AND pg_get_constraintdef(oid) ~ %s)',
-        (r"^CHECK \(\(stage = ANY \(ARRAY\[.*'portfolio'::text.*\]\)\)\)$",)).fetchone()[0])
-
-
-def fetch_runs_ready(conn) -> bool:
-    """True when migration 024 has run; the workbench itself does not require this table."""
-    return conn.execute("SELECT to_regclass('data_fetch_runs')").fetchone()[0] is not None
-
-
-def stage_runs_ready(conn) -> bool:
-    """True when migration 025 has run; the workbench itself does not require this table."""
-    return conn.execute("SELECT to_regclass('stage_runs')").fetchone()[0] is not None
-
-
-def timeline_ready(conn) -> bool:
-    """True when migration 026 has run: the three tables and signal_decisions.agent_plan_id exist.
-
-    Resolved through the search_path like every other query here, and never raises on a missing
-    table, so the caller's transaction stays usable."""
-    row = conn.execute(
-        "SELECT to_regclass('agent_plan_versions') IS NOT NULL AND to_regclass('plan_reviews') IS NOT NULL "
-        "AND to_regclass('user_inputs') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_attribute "
-        "WHERE attrelid = to_regclass('signal_decisions') AND attname = 'agent_plan_id' AND NOT attisdropped)"
-    ).fetchone()
-    return bool(row[0])
-
-
-GROWTH_TABLES = ('review_cards', 'review_card_drafts', 'discussions', 'knowledge_items', 'discussion_turns',
-                 'knowledge_drafts', 'knowledge_versions', 'knowledge_status', 'knowledge_draft_verdicts',
-                 'review_card_verdicts', 'knowledge_citations')
-
-def growth_ready(conn) -> bool:
-    """True when migration 027 has run: all eleven tables exist. One ``to_regclass`` query, resolved through
-    the search_path, that never raises on a missing table."""
-    checks = ' AND '.join(f"to_regclass('{table}') IS NOT NULL" for table in GROWTH_TABLES)
     return bool(conn.execute(f'SELECT {checks}').fetchone()[0])
