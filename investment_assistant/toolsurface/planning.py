@@ -42,6 +42,13 @@ def _exposure(conn, env: ToolEnv, ticker: str) -> tuple[Decimal, Decimal]:
     return ticker_value, total_value
 
 
+def _sized(sizing: dict) -> dict:
+    """``plan_levels.size`` 在持仓已超上限时算出负股数；v3 的约定是没有余量即 0 股（status 仍为 no_room）。"""
+    if sizing.get('shares') is not None and sizing['shares'] < 0:
+        return {**sizing, 'shares': 0}
+    return sizing
+
+
 def _bars_atr(conn, env: ToolEnv, ticker: str) -> tuple[list[dict], Decimal]:
     bars = session_bars(conn, env, ticker)
     if not bars:
@@ -71,7 +78,7 @@ def compute_plan_levels(env: ToolEnv, *, ticker: str) -> dict:
                                            valid_from=valid_from, valid_until=valid_until)
         return {'ticker': ticker, 'session': env.session, 'ref_price': str(ref_price), 'atr': str(atr),
                 'levels': {key: str(value) for key, value in levels.items()},
-                'valid_from': valid_from, 'valid_until': valid_until, 'sizing': sizing,
+                'valid_from': valid_from, 'valid_until': valid_until, 'sizing': _sized(sizing),
                 'earnings': {'invalid': invalid, 'warnings': warnings},
                 'entry_types': list(ENTRY_TYPES), 'max_hold_range': list(MAX_HOLD_RANGE)}
     return env.read(_read)
@@ -159,6 +166,7 @@ def save_plan(env: ToolEnv, *, ticker: str, thesis: str, invalidation: str,
                                     stop=chosen['stop'], entry_high=chosen['entry_high'],
                                     ticker_value=ticker_value, total_value=total_value,
                                     params=env.cfg.workbench)
+        sizing = _sized(sizing)
         plan_warnings = [*warnings, *size_invalid]
         if sizing['status'] == 'no_equity':
             plan_warnings.append(NO_EQUITY_TEXT)

@@ -109,6 +109,9 @@ def record_trade(env: ToolEnv, *, ticker: str, side: str, quantity, price, execu
         return {'write': False, 'preview': preview}
 
     def _work(conn):
+        replayed = facts_repo.trade_by_request(conn, request_id)
+        if replayed is not None:          # 同一 request_id 重发：返回原行，不再拿它和自己一起试算持仓
+            return replayed
         if linked_plan is not None:
             found = conn.execute('SELECT id FROM v3_plans WHERE id = %s', (linked_plan,)).fetchone()
             if found is None:

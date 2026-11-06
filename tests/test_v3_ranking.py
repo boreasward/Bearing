@@ -61,6 +61,12 @@ def test_two_trigger_rules_use_the_better_tier_and_unknown_industry():
     assert out2[0]['industry'] is None and out2[0]['industry_tier'] == 'insufficient'
     assert '未归类 样本不足' in out2[0]['reason'] and out2[0]['detail']['industry'] is None
 
+    same_tier = {'volume_breakout': stat('favorable', 11, 8, 0.02),
+                 'trend_reclaim': stat('favorable', 30, 20, 0.015)}
+    out_same = ranking.rank_candidates(both, setup=same_tier, industry=INDUSTRY, groups={'X': '医药化工'})
+    assert out_same[0]['detail']['setup'] == same_tier['trend_reclaim']      # 同档取样本大的一条
+    assert '（30 次 20 涨，+1.5%）' in out_same[0]['reason']
+
     no_data = {'volume_breakout': stat('insufficient', 0, 0, None)}
     out3 = ranking.rank_candidates(
         [row('W', group='trigger', trigger_rules=['volume_breakout'], rs=0.10)],

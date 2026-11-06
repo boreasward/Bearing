@@ -19,7 +19,7 @@ def _best_setup(trigger_rules: list[str], setup: dict[str, dict]) -> dict | None
     stats = [setup[rule] for rule in trigger_rules if rule in setup]
     if not stats:
         return None
-    return max(stats, key=lambda stat: (-TIER_ORDER[stat['tier']], -stat['n']))
+    return max(stats, key=lambda stat: (-TIER_ORDER[stat['tier']], stat['n']))
 
 
 def _setup_text(stat: dict | None) -> str:

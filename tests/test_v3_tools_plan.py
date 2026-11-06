@@ -132,6 +132,13 @@ def test_plan_without_equity_and_without_room(v3_tx):
                                     'price': D(100), 'executed_at': datetime(2026, 11, 3, 15, tzinfo=UTC)})
     third = call(env, 'save_plan', {'ticker': t, **TEXTS})['data']
     assert third['shares'] == 0 and 'no_room' in third['warnings']
+    # 持仓再涨到超过本金（110000 > 100000）：仍是 0 股，不是负数
+    facts_repo.insert_trade(v3_tx, {'request_id': 'tr-2', 'ticker': TOP5[1], 'side': 'buy', 'quantity': 100,
+                                    'price': D(100), 'executed_at': datetime(2026, 11, 3, 16, tzinfo=UTC)})
+    over = call(env, 'save_plan', {'ticker': t, **TEXTS})['data']
+    assert over['shares'] == 0 and over['sizing']['status'] == 'no_room' and 'no_room' in over['warnings']
+    levels = call(env, 'compute_plan_levels', {'ticker': t})['data']
+    assert levels['sizing']['shares'] == 0 and levels['sizing']['status'] == 'no_room'
 
 
 def test_verdict_rules(v3_tx):

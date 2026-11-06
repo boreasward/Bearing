@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,6 +119,18 @@ class EdgarSource:
         self.after_cutoff_dropped = 0
         self._cik_by_ticker: dict[str, int] | None = None
         self._cik_error: FetchError | None = None
+        # A worker pool (``run_adapter(workers>1)``) shares one source across threads: the throttle and the
+        # one-time CIK map are guarded, and each thread books its own HTTP outcomes (``thread_outcomes``).
+        self._throttle_lock = threading.Lock()
+        self._cik_lock = threading.Lock()
+        self._local = threading.local()
+
+    def thread_outcomes(self) -> list:
+        """This thread's HTTP outcomes; ``fetch_outcomes`` interleaves every thread's requests."""
+        outcomes = getattr(self._local, "outcomes", None)
+        if outcomes is None:
+            outcomes = self._local.outcomes = []
+        return outcomes
 
     def get(self, url: str) -> bytes:
         ua = os.environ.get("SEC_USER_AGENT", "")
@@ -129,8 +142,10 @@ class EdgarSource:
 
         def attempt() -> bytes:
             # SEC asks for at most ~5 requests a second: the throttle sits before every attempt, retries included.
-            time.sleep(max(0.0, 0.21 - (time.monotonic() - self.last_request)))
-            self.last_request = time.monotonic()
+            with self._throttle_lock:     # reserve the next slot first, so concurrent threads queue up
+                wait = max(0.0, 0.21 - (time.monotonic() - self.last_request))
+                self.last_request = time.monotonic() + wait
+            time.sleep(wait)
             try:
                 resp = self.session.get(url, headers={"User-Agent": ua},
                                         timeout=(self.policy.connect_s, self.policy.total_s), allow_redirects=False)
@@ -165,8 +180,11 @@ class EdgarSource:
             outcome = fetch_policy.fetch(target_label(url), attempt, policy=self.policy, sleep=self._sleep)
         except FetchError as exc:
             self.fetch_outcomes.append(exc)
+            self.thread_outcomes().append(exc)
             raise
-        self.fetch_outcomes.append(fetch_policy.Fetched(None, outcome.attempts, outcome.elapsed_ms))
+        booked = fetch_policy.Fetched(None, outcome.attempts, outcome.elapsed_ms)
+        self.fetch_outcomes.append(booked)
+        self.thread_outcomes().append(booked)
         content = outcome.value
         digest = hashlib.sha256(content).hexdigest()
         dest = self.evidence_dir / (digest + ".response")
@@ -200,6 +218,12 @@ class EdgarSource:
     def _company_tickers(self) -> dict[str, int]:
         """``company_tickers.json`` is fetched once per source; a failure is remembered and re-raised for every
         later ticker (otherwise each of them would burn its own retries on the same dead request)."""
+        if self._cik_by_ticker is not None:
+            return self._cik_by_ticker
+        with self._cik_lock:              # one fetch even when several worker threads ask at once
+            return self._load_company_tickers()
+
+    def _load_company_tickers(self) -> dict[str, int]:
         if self._cik_by_ticker is not None:
             return self._cik_by_ticker
         if self._cik_error is not None:

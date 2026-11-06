@@ -93,13 +93,19 @@ def adapter_deps_from_service(deps, *, transaction, config=None, sleep=None) -> 
                        sleep=sleep if sleep is not None else time.sleep)
 
 
+def _http_outcomes(source) -> list:
+    """The calling thread's HTTP outcomes when the source keeps them per thread, else the shared list."""
+    per_thread = getattr(source, 'thread_outcomes', None)
+    return per_thread() if callable(per_thread) else getattr(source, 'fetch_outcomes', ())
+
+
 def sec_outcome(source, fn):
     """Preserve actual per-request attempts, including successful retries before parsing/storage."""
-    start = len(getattr(source, 'fetch_outcomes', ()))
+    start = len(_http_outcomes(source))
     try:
         value = fn()
     except Exception as exc:
-        outcomes = getattr(source, 'fetch_outcomes', ())[start:]
+        outcomes = _http_outcomes(source)[start:]
         attempts = [a for result in outcomes for a in result.attempts]
         if isinstance(exc, FetchError):
             if outcomes and outcomes[-1] is not exc:
@@ -113,7 +119,7 @@ def sec_outcome(source, fn):
             kind = 'parse'
         raise FetchError(str(exc), kind=kind, status=status, attempts=attempts,
                          total_ms=sum(o.elapsed_ms for o in outcomes)) from None
-    outcomes = getattr(source, 'fetch_outcomes', ())[start:]
+    outcomes = _http_outcomes(source)[start:]
     # Offline/injected sources without HTTP bookkeeping are accounted by the outer single attempt.
     if not outcomes:
         return value

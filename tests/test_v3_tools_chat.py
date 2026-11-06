@@ -54,6 +54,13 @@ def test_record_equity_and_trade_need_confirmation(chat_env, v3_tx):
                                            'executed_at': '2026-11-05T15:00:00+00:00', 'request_id': 't2',
                                            'confirmed': True})['error'].startswith('position_invalid')
     assert v3_tx.execute('SELECT count(*) FROM v3_trades').fetchone()[0] == 1
+    # 全部卖出后原样重发：返回原行，不报 position_invalid，表里不多行
+    sell = {'ticker': 'AAPL', 'side': 'sell', 'quantity': 10, 'price': 105,
+            'executed_at': '2026-11-05T15:00:00+00:00', 'request_id': 's1', 'confirmed': True}
+    sold = call(chat_env, 'record_trade', sell)['data']
+    again = call(chat_env, 'record_trade', sell)
+    assert 'error' not in again and again['data']['id'] == sold['id']
+    assert v3_tx.execute('SELECT count(*) FROM v3_trades').fetchone()[0] == 2
     # equity <= 0、quantity <= 0、side 不是 buy / sell -> 'invalid_argument'
     assert call(chat_env, 'record_equity', {'equity': 0, 'request_id': 'e2', 'confirmed': True})['error'] \
         .startswith('invalid_argument')

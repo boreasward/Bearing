@@ -134,6 +134,11 @@ def insert_trade(conn, row: dict) -> dict:
     return saved
 
 
+def trade_by_request(conn, request_id: str) -> dict | None:
+    """The trade already recorded under ``request_id``, if any (replays are answered before any re-check)."""
+    return _one(conn, f'SELECT {_TRADE_COLUMNS} FROM v3_trades WHERE request_id = %s', (request_id,))
+
+
 def list_trades(conn, ticker: str | None = None) -> list[dict]:
     """Trades oldest first, optionally one ticker's only."""
     where, params = (' WHERE ticker = %s', [ticker]) if ticker is not None else ('', [])

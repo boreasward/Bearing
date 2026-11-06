@@ -6,6 +6,7 @@ from pathlib import Path
 
 from investment_assistant.config import AssistantConfig, V3Config
 from investment_assistant.core import tx as core_tx
+from investment_assistant.data import collect as data_collect
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.__main__ import main
@@ -101,6 +102,7 @@ def test_cli_exit_codes(v3_tx, tmp_path, capsys, monkeypatch):
     cfg_path = tmp_path / 'config.json'
     cfg_path.write_text(json.dumps({'v3': {'briefs_dir': str(tmp_path)}}), encoding='utf-8')
     monkeypatch.setenv('INVESTMENT_ASSISTANT_CONFIG', str(cfg_path))
+    monkeypatch.setattr(data_collect, 'wall_clock', lambda: NOW)   # 命令行用墙钟：钉在种子数据的交易日
     seed_bars(v3_tx, market_ticklers(cfg_with_briefs(tmp_path)), breakout=BREAKOUTS)
     v3_tx.commit()
     assert main(['run', '--no-collect']) == 0
