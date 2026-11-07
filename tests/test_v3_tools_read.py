@@ -213,8 +213,12 @@ def test_env_origin_defaults_to_mode_and_latest_session_reads_ok_runs(v3_tx):
     """Task 4/5 依赖的 ToolEnv 接口：origin 缺省等于 mode；latest_session 只认 ok 运行。"""
     env = make_env(session=SESSION, mode="brief", agent_session="t-env", cfg=AssistantConfig(), now=NOW)
     assert env.origin == "brief"  # 页面表单显式传 "web"
-    assert make_env(session=SESSION, mode="chat", agent_session="t-env2", cfg=AssistantConfig(),
-                    now=NOW, origin="web").origin == "web"
+    assert (
+        make_env(
+            session=SESSION, mode="chat", agent_session="t-env2", cfg=AssistantConfig(), now=NOW, origin="web"
+        ).origin
+        == "web"
+    )
 
     def _peek(conn):
         return env.latest_session(conn)
