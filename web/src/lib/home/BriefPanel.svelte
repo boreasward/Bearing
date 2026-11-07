@@ -49,7 +49,9 @@
   })
 
   function switchTo(session: string) {
-    if (session && session !== selected) loadBrief(session)
+    // bits-ui writes `selected` (the bindable) before calling onValueChange, so compare against
+    // the actually-loaded brief, never against `selected`
+    if (session && session !== current?.session) loadBrief(session)
   }
 </script>
 

@@ -4,7 +4,7 @@
   import DataBlock from '$lib/ui/domain/DataBlock.svelte'
   import { get } from '$lib/api'
   import PlanCard from './PlanCard.svelte'
-  import type { PlanCardData } from './types'
+  import { errorText, type PlanCardData } from './types'
 
   // 计划与持仓（spec §12）：三组——持仓、待入场、已结束（缺省折叠）。每组一个接口调用；
   // `version` 变化（页面里任何一处写入完成）时整块重取。
@@ -22,10 +22,10 @@
   async function loadGroup(group: 'holdings' | 'pending' | 'ended') {
     groups[group] = { ...empty }
     try {
-      const data = await get<{ plans: PlanCardData[] }>(`/api/plans?group=${group}&limit=20`)
+      const data = await get<{ plans: PlanCardData[] }>(`/api/plans?group=${group}&limit=20`, { errorDetails: true })
       groups[group] = { state: 'ready', plans: data.plans, error: '' }
     } catch (cause) {
-      groups[group] = { state: 'error', plans: [], error: cause instanceof Error ? cause.message : String(cause) }
+      groups[group] = { state: 'error', plans: [], error: errorText(cause) }
     }
   }
 

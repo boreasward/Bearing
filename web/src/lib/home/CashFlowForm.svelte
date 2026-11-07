@@ -31,12 +31,14 @@
   let preview = $state('')
   let writing = $state(false)
 
-  const ready = $derived(draft.amount !== '' && Number(draft.amount) !== 0)
+  // 金额可空拦截：非数字（NaN）或 0 不提交——后端只做同一套校验，前端不送必拒的体
+  const amountNumber = $derived(Number(draft.amount))
+  const ready = $derived(draft.amount.trim() !== '' && Number.isFinite(amountNumber) && amountNumber !== 0)
 
   function body(confirmed: boolean) {
     return {
       kind: draft.kind,
-      amount: Number(draft.amount),
+      amount: amountNumber,
       ...(draft.effectiveAt.trim() === '' ? {} : { effective_at: draft.effectiveAt.trim() }),
       note: draft.note.trim(),
       request_id: requestId,

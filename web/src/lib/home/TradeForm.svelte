@@ -51,13 +51,17 @@
   let preview = $state('')
   let writing = $state(false)
 
+  // 手续费可空（默认 0）；填了就必须是数字且不为负——NaN / 负数不进请求体，提交按钮先拦下
+  const feeNumber = $derived((draft.fee.trim() === '' ? 0 : Number(draft.fee)))
   const ready = $derived(
     draft.ticker.trim() !== '' &&
       draft.quantity !== '' &&
       Number(draft.quantity) > 0 &&
       draft.price !== '' &&
       Number(draft.price) > 0 &&
-      draft.executedAt.trim() !== '',
+      draft.executedAt.trim() !== '' &&
+      Number.isFinite(feeNumber) &&
+      feeNumber >= 0,
   )
 
   function body(confirmed: boolean) {
@@ -67,7 +71,7 @@
       quantity: Number(draft.quantity),
       price: Number(draft.price),
       executed_at: draft.executedAt.trim(),
-      fee: draft.fee.trim() === '' ? 0 : Number(draft.fee),
+      fee: feeNumber,
       note: draft.note.trim(),
       ...(planId == null ? {} : { plan_id: planId }),
       request_id: requestId,

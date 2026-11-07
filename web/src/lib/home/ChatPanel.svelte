@@ -70,7 +70,7 @@
     turnNotice = ''
     turnError = ''
     try {
-      const data = await get<{ chat: ChatRow; messages: ChatMessage[] }>(`/api/chats/${id}`)
+      const data = await get<{ chat: ChatRow; messages: ChatMessage[] }>(`/api/chats/${id}`, { errorDetails: true })
       if (chatId !== id) return
       chat = data.chat
       messages = data.messages
@@ -133,6 +133,9 @@
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null
         turnNotice = busyText(data?.error ?? `HTTP ${response.status}`)
+        // the server never saw this question: roll the optimistic user message back and keep the draft
+        messages = messages.slice(0, -1)
+        input = text
         turn = null
         return
       }
@@ -165,7 +168,10 @@
         aborting.signal,
       )
     } catch (cause) {
-      if ((cause as Error)?.name !== 'AbortError') turnError = errorText(cause)
+      if ((cause as Error)?.name !== 'AbortError') {
+        turnError = errorText(cause)
+        turn = turn && { ...turn, finished: 'error' }
+      }
     } finally {
       running = false
       aborting = null

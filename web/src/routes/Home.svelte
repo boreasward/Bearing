@@ -26,7 +26,7 @@
   async function loadToday() {
     todayError = ''
     try {
-      today = await get<Today>('/api/today')
+      today = await get<Today>('/api/today', { errorDetails: true })
     } catch (cause) {
       todayError = errorText(cause)
     }
@@ -45,7 +45,8 @@
   <PageHeader title="投资助手" level={1}>
     {#snippet meta()}
       {#if today}
-        <span>数据截至 {fmtBeijing(today.cutoff_at)}</span>
+        <!-- 副标按接口契约：「数据截至 {session}」；没有运行记录（session 为空）时退到采集时刻 -->
+        <span>数据截至 {today.session ?? fmtBeijing(today.cutoff_at)}</span>
         <span class="flex items-center gap-1">总资产 <MetricValue value={null} raw={today.account.equity} /></span>
       {:else if todayError}
         <span>{todayError}</span>
@@ -63,11 +64,13 @@
   </PageHeader>
 
   <div class="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-    <div class="order-1"><TodayActions actions={today?.actions ?? []} onChanged={reload} /></div>
-    <div class="order-2"><AccountStrip account={today?.account ?? null} onChanged={reload} /></div>
-    <div class="order-3"><PlanCards version={plansVersion} onChanged={reload} /></div>
-    <div class="order-4"><BriefPanel /></div>
-    <div class="order-5"><ChatPanel version={chatsVersion} /></div>
+    {#if (today?.actions?.length ?? 0) > 0}
+      <div class="order-1 lg:col-start-1"><TodayActions actions={today?.actions ?? []} onChanged={reload} /></div>
+    {/if}
+    <div class="order-2 lg:col-start-2"><AccountStrip account={today?.account ?? null} onChanged={reload} /></div>
+    <div class="order-3 lg:col-start-2"><PlanCards version={plansVersion} onChanged={reload} /></div>
+    <div class="order-4 lg:col-start-1"><BriefPanel /></div>
+    <div class="order-5 lg:col-start-1"><ChatPanel version={chatsVersion} /></div>
   </div>
 </div>
 

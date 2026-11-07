@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import Home from './Home.svelte'
 
 afterEach(() => {
@@ -111,16 +111,18 @@ describe('Home', () => {
     await screen.findByRole('heading', { name: '对话' })
     const grid = document.querySelector('[class*="lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"]')
     expect(grid).not.toBeNull()
-    const block = (order: string) => {
+    // each block carries its narrow-screen order AND its wide-screen column (lg:col-start-*)
+    const block = (order: string, col: 1 | 2) => {
       const wrap = grid!.querySelector(`:scope > [class*="${order}"]`)
       expect(wrap, order).not.toBeNull()
+      expect(wrap!.className, order).toContain(`lg:col-start-${col}`)
       return wrap!
     }
-    expect(block('order-1')).toHaveTextContent('今日操作')
-    expect(block('order-2')).toHaveTextContent('总资产')
-    expect(block('order-3')).toHaveTextContent('计划与持仓')
-    expect(block('order-4')).toHaveTextContent('今日简报')
-    expect(block('order-5')).toHaveTextContent('对话')
+    expect(block('order-1', 1)).toHaveTextContent('今日操作')
+    expect(block('order-2', 2)).toHaveTextContent('总资产')
+    expect(block('order-3', 2)).toHaveTextContent('计划与持仓')
+    expect(block('order-4', 1)).toHaveTextContent('今日简报')
+    expect(block('order-5', 1)).toHaveTextContent('对话')
     // the order values themselves say 1 < 3 < 4 < 5: 今日操作 before 计划与持仓 before 简报 before 对话
     const order = (c: string) => Number(/order-(\d)/.exec(c)![1])
     const classes = [...grid!.children].map((el) => el.className)
@@ -142,7 +144,7 @@ describe('Home', () => {
     expect(await screen.findByText('今天还没有简报')).toBeInTheDocument()
   })
 
-  it('offers the brief history and the chat history to switch between', async () => {
+  it('offers the brief history and the chat history to switch between, and switching briefs loads the picked one', async () => {
     stubHomeApi()
     render(Home)
     const briefSelect = await screen.findByRole('combobox', { name: '选择简报' })
@@ -150,6 +152,15 @@ describe('Home', () => {
     const chatSelect = await screen.findByRole('combobox', { name: '选择对话' })
     await waitFor(() => expect(chatSelect.textContent).toContain('关于止损的追问'))
     expect(screen.getByLabelText('提问')).toBeInTheDocument()
+
+    // a real switch: pick 2026-11-05 and expect that brief's content (regression: the
+    // old guard compared against `selected`, which bits-ui had already updated — dead code;
+    // bits-ui select items select on pointerup, not click)
+    await fireEvent.click(briefSelect)
+    const option = await screen.findByRole('option', { name: /2026-11-05/ })
+    await fireEvent.pointerUp(option)
+    expect(await screen.findByText('没有变化')).toBeInTheDocument()
+    await waitFor(() => expect(briefSelect.textContent).toContain('2026-11-05'))
   })
 
   it('links to the component gallery in dev', async () => {

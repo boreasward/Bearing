@@ -10,7 +10,7 @@
 </script>
 
 {#snippet runs(runs: Run[])}
-  {#each runs as run (run.text)}{#if run.bold}<strong>{run.text}</strong>{:else}{run.text}{/if}{/each}
+  {#each runs as run, i (i)}{#if run.bold}<strong>{run.text}</strong>{:else}{run.text}{/if}{/each}
 {/snippet}
 
 <div class="grid gap-2 text-sm">
@@ -23,7 +23,7 @@
       <p class="whitespace-pre-line">{@render runs(block.runs)}</p>
     {:else if block.type === 'list'}
       <ul class="grid list-disc gap-1 pl-5">
-        {#each block.items as item (item.map((run) => run.text).join())}
+        {#each block.items as item, i (i)}
           <li>{@render runs(item)}</li>
         {/each}
       </ul>
@@ -31,13 +31,13 @@
       <Table.Root>
         <Table.Header>
           <Table.Row>
-            {#each block.header as cell (cell)}<Table.Head>{cell}</Table.Head>{/each}
+            {#each block.header as cell, i (i)}<Table.Head>{cell}</Table.Head>{/each}
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {#each block.rows as row (row.join())}
+          {#each block.rows as row, i (i)}
             <Table.Row>
-              {#each row as cell (cell)}<Table.Cell>{cell}</Table.Cell>{/each}
+              {#each row as cell, j (j)}<Table.Cell>{cell}</Table.Cell>{/each}
             </Table.Row>
           {/each}
         </Table.Body>
