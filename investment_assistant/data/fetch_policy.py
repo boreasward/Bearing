@@ -42,3 +42,15 @@ def shared_yf_session():
             yf.config.debug.hide_exceptions = False
             _SHARED_YF.append(yf_session())
         return _SHARED_YF[0]
+
+
+def drop_yf_response_cache() -> None:
+    """Empty yfinance's response cache (``YfData.cache_get``, an lru_cache of 64 responses).
+
+    ``history()`` of a past range is fetched through that cache, and every cached curl_cffi response keeps the curl
+    handle of the thread that fetched it; ``hard_deadline`` runs each call on a fresh thread, so the cache pinned up to
+    64 handles (a socket plus a pipe pair each) — about 200 descriptors, which ran a launchd job (soft limit 256) out of
+    files. Each ticker is fetched once per run, so the cache saves nothing here."""
+    from yfinance.data import YfData
+
+    YfData().cache_get.cache_clear()

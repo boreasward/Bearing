@@ -20,8 +20,12 @@ def _yfinance_fetcher(ticker: str) -> list:
 
     # Shared session + timeout + thread backstop (fetch-1 spec §6.2 row 2).
     def call() -> list:
-        return yf.Search(ticker, news_count=NEWS_COUNT, max_results=0, enable_fuzzy_query=False,
-                         session=fetch_policy.shared_yf_session(), timeout=fetch_policy.TOTAL_TIMEOUT_S).news
+        try:
+            return yf.Search(ticker, news_count=NEWS_COUNT, max_results=0, enable_fuzzy_query=False,
+                             session=fetch_policy.shared_yf_session(), timeout=fetch_policy.TOTAL_TIMEOUT_S).news
+        finally:
+            # Search also goes through yfinance's response cache (see drop_yf_response_cache).
+            fetch_policy.drop_yf_response_cache()
 
     return fetch_policy.hard_deadline(call, seconds=fetch_policy.YF_HARD_DEADLINE_S)
 

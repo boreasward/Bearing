@@ -150,6 +150,38 @@ def test_rows1_to_3_yfinance_fetchers_use_own_session_and_35s_deadline(monkeypat
     assert fake.sessions[-1] is fake.sessions[0]
 
 
+
+def test_bars_and_news_fetchers_drop_yfinance_cached_responses(monkeypatch):
+    """history() of a past range goes through yfinance's ``cache_get`` (an lru_cache of 64 responses); each
+    curl_cffi response keeps the curl handle of the ``hard_deadline`` thread that fetched it, so the cache pinned
+    up to 64 handles (a socket plus a pipe pair each) and ran a launchd job (256 files) out of descriptors."""
+    import yfinance
+    from yfinance.data import YfData
+
+    monkeypatch.setattr(YfData, 'get', lambda self, url, params=None, timeout=30: object())
+
+    class Ticker:
+        def __init__(self, symbol, session=None):
+            self.symbol = symbol
+
+        def history(self, **kwargs):
+            YfData().cache_get(url=f'https://example.invalid/chart/{self.symbol}')
+            return frame()
+
+    class Search:
+        def __init__(self, query, **kwargs):
+            YfData().cache_get(url=f'https://example.invalid/search/{query}')
+            self.news = []
+
+    monkeypatch.setattr(yfinance, 'Ticker', Ticker)
+    monkeypatch.setattr(yfinance, 'Search', Search)
+    for symbol in ('AAA', 'BBB', 'CCC'):
+        bars._yfinance_fetcher(symbol, date(2026, 10, 1), date(2026, 10, 29))
+    assert YfData().cache_get.cache_info().currsize == 0
+    for symbol in ('AAA', 'BBB'):
+        news._yfinance_fetcher(symbol)  # yfinance's Search goes through the same cache
+    assert YfData().cache_get.cache_info().currsize == 0
+
 # ---------------------------------------------------------------- row 2: news
 
 def test_row2_news_5xx_is_retried(sleeps):

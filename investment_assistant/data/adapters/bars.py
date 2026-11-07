@@ -46,6 +46,9 @@ def _yfinance_fetcher(ticker: str, start: date, end: date) -> pd.DataFrame:
             # Yahoo answered and had nothing for this ticker / range (the shared session shows yfinance's
             # exceptions, so a transport failure never lands here): the caller's final ``empty``.
             return pd.DataFrame()
+        finally:
+            # Cached responses would pin this thread's curl handle (see drop_yf_response_cache).
+            fetch_policy.drop_yf_response_cache()
 
     return fetch_policy.hard_deadline(call, seconds=fetch_policy.YF_HARD_DEADLINE_S)
 
