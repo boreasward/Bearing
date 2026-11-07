@@ -46,8 +46,7 @@ def create_app() -> FastAPI:
         detail = exc.detail if isinstance(exc.detail, str) else "error"
         if exc.status_code == 404 and detail == "Not Found":
             detail = "not found"  # 未知路径统一返回 {"error": "not found"}
-        return CompatJSONResponse({"error": detail}, status_code=exc.status_code,
-                                  headers=getattr(exc, "headers", None))
+        return CompatJSONResponse({"error": detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
 
     @app.exception_handler(ValueError)
     async def _value_error(request: Request, exc: ValueError):
@@ -55,7 +54,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Request, exc: RequestValidationError):
-        return CompatJSONResponse({"error": f"invalid request: {exc}"}, status_code=400)  # 校验错误返回 400，不是 FastAPI 默认的 422
+        return CompatJSONResponse(
+            {"error": f"invalid request: {exc}"}, status_code=400
+        )  # 校验错误返回 400，不是 FastAPI 默认的 422
 
     # v3.1 页面接口：所有 /api/... 路由必须在下面两个兜底路由之前 include，否则会被拦成 404。
     from investment_assistant.api import routes as page_routes

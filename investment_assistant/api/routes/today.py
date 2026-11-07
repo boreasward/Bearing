@@ -19,7 +19,9 @@ def _account_row(conn, *, session: date | None, cutoff_at: datetime) -> dict:
     """账户条的六个字段（接口契约表）：金额 Decimal，序列化成字符串。没有运行记录时
     session 为 None——read_bars 的 end_date 与 NULL 比较恒为假，等于没有收盘价。"""
     ledger = account_view(
-        conn, session=session, cutoff_at=cutoff_at  # type: ignore[arg-type]  # None 即“不取日线”
+        conn,
+        session=session,
+        cutoff_at=cutoff_at,  # type: ignore[arg-type]  # None 即“不取日线”
     )["ledger"]
     unrealized = sum(
         (row["unrealized_pnl"] for row in ledger["positions"] if row["unrealized_pnl"] is not None), Decimal(0)

@@ -40,9 +40,9 @@ def _sse_events(resp):
     kind, data = None, []
     for line in resp.iter_lines():
         if line.startswith("event: "):
-            kind = line[len("event: "):]
+            kind = line[len("event: ") :]
         elif line.startswith("data: "):
-            data.append(line[len("data: "):])
+            data.append(line[len("data: ") :])
         elif line == "" and kind is not None:
             yield kind, json.loads("\n".join(data))
             kind, data = None, []
@@ -122,7 +122,7 @@ def test_cancel_ends_stream_and_next_turn_works(page):
     assert next(stream).startswith("event: text")  # 首帧文字
     cancelled = client.post(f"/api/chats/{chat_id}/cancel")
     assert cancelled.status_code == 200 and cancelled.json() == {"cancelled": True}
-    rest = [frame.split("\n")[0][len("event: "):] for frame in stream]
+    rest = [frame.split("\n")[0][len("event: ") :] for frame in stream]
     assert rest and rest[-1] == "cancelled"  # 流以 cancelled 收尾，无后续帧
     _fake(chats_routes, lambda prompt: [RuntimeEvent("done")])
     with client.stream("POST", f"/api/chats/{chat_id}/messages", json={"text": "再问"}) as resp:

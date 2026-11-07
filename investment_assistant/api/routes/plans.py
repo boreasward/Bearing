@@ -146,9 +146,7 @@ def stop_order(plan_id: int, body: dict = BODY):
 
 @router.post("/{plan_id}/raise-stop")
 def raise_stop(plan_id: int, body: dict = BODY):
-    return deps.ok_or_error(
-        lambda: deps.forward(plan_tools.raise_stop, deps.web_env(), {**body, "plan_id": plan_id})
-    )
+    return deps.ok_or_error(lambda: deps.forward(plan_tools.raise_stop, deps.web_env(), {**body, "plan_id": plan_id}))
 
 
 @router.post("/{plan_id}/cancel")

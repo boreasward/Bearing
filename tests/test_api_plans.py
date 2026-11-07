@@ -217,9 +217,13 @@ def test_plan_detail_card_and_events(client, v3_tx):
 def test_stop_order_previews_then_takes_effect(client, v3_tx):
     with core_tx._tx() as conn:
         open_plan = seed(conn)
-    preview = client.post(f"/api/plans/{open_plan['id']}/stop-order", json={"price": 96, "request_id": "s-1", "confirmed": False})
+    preview = client.post(
+        f"/api/plans/{open_plan['id']}/stop-order", json={"price": 96, "request_id": "s-1", "confirmed": False}
+    )
     assert preview.status_code == 200 and preview.json()["write"] is False and "preview" in preview.json()
-    confirmed = client.post(f"/api/plans/{open_plan['id']}/stop-order", json={"price": 96, "request_id": "s-1", "confirmed": True})
+    confirmed = client.post(
+        f"/api/plans/{open_plan['id']}/stop-order", json={"price": 96, "request_id": "s-1", "confirmed": True}
+    )
     assert confirmed.status_code == 200
     assert confirmed.json()["plan"]["confirmed_stop_order"] == "96.000000"
     holdings = client.get("/api/plans?group=holdings").json()["plans"]
@@ -232,7 +236,9 @@ def test_stop_order_previews_then_takes_effect(client, v3_tx):
 def test_stop_order_price_mismatch_is_400(client, v3_tx):
     with core_tx._tx() as conn:
         open_plan = seed(conn)
-    resp = client.post(f"/api/plans/{open_plan['id']}/stop-order", json={"price": 90, "request_id": "s-2", "confirmed": True})
+    resp = client.post(
+        f"/api/plans/{open_plan['id']}/stop-order", json={"price": 90, "request_id": "s-2", "confirmed": True}
+    )
     assert resp.status_code == 400 and resp.json()["error"] == "stop_mismatch"
     unknown = client.post("/api/plans/999999/stop-order", json={"price": 90, "request_id": "s-3", "confirmed": True})
     assert unknown.status_code == 404 and unknown.json()["error"] == "unknown_plan"
@@ -241,9 +247,13 @@ def test_stop_order_price_mismatch_is_400(client, v3_tx):
 def test_raise_stop_only_goes_up(client, v3_tx):
     with core_tx._tx() as conn:
         open_plan = seed(conn)
-    ok = client.post(f"/api/plans/{open_plan['id']}/raise-stop", json={"stop": 98, "request_id": "r-1", "confirmed": True})
+    ok = client.post(
+        f"/api/plans/{open_plan['id']}/raise-stop", json={"stop": 98, "request_id": "r-1", "confirmed": True}
+    )
     assert ok.status_code == 200 and D(ok.json()["plan"]["stop"]) == D(98)
-    lower = client.post(f"/api/plans/{open_plan['id']}/raise-stop", json={"stop": 97, "request_id": "r-2", "confirmed": True})
+    lower = client.post(
+        f"/api/plans/{open_plan['id']}/raise-stop", json={"stop": 97, "request_id": "r-2", "confirmed": True}
+    )
     assert lower.status_code == 400 and lower.json()["error"] == "stop_not_higher"
 
 
@@ -253,7 +263,9 @@ def test_cancel_pending_plan(client, v3_tx):
     msft = next(row for row in plan_repo.plans_by_status(v3_tx, ("pending",)) if row["ticker"] == "MSFT")
     preview = client.post(f"/api/plans/{msft['id']}/cancel", json={"request_id": "c-1", "confirmed": False})
     assert preview.json()["write"] is False and "preview" in preview.json()
-    done = client.post(f"/api/plans/{msft['id']}/cancel", json={"request_id": "c-1", "confirmed": True, "reason": "改变主意"})
+    done = client.post(
+        f"/api/plans/{msft['id']}/cancel", json={"request_id": "c-1", "confirmed": True, "reason": "改变主意"}
+    )
     assert done.status_code == 200 and done.json()["plan"]["status"] == "cancelled"
     not_pending = client.post(f"/api/plans/{msft['id']}/cancel", json={"request_id": "c-2", "confirmed": True})
     assert not_pending.status_code == 400 and not_pending.json()["error"] == "not_pending"

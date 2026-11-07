@@ -100,7 +100,9 @@ def test_value_error_returns_400_and_validation_error_returns_400():
         return {"count": count}
 
     catch_all = [r for r in app.router.routes if getattr(r, "path", "") == "/{full_path:path}"]
-    app.router.routes[:] = [r for r in app.router.routes if r not in catch_all] + catch_all  # handlers before the catch-all
+    app.router.routes[:] = [
+        r for r in app.router.routes if r not in catch_all
+    ] + catch_all  # handlers before the catch-all
     client = TestClient(app, raise_server_exceptions=False)
     resp = client.get("/boom")
     assert resp.status_code == 400
