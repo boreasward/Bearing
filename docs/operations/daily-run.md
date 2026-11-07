@@ -48,7 +48,7 @@
 
 ## LaunchAgent 的安装
 
-模板在 `scripts/launchd/local.investment-assistant.daily.plist.example`，安装三步（本 plan 只列步骤，安装需用户授权）：
+模板在 `scripts/launchd/local.investment-assistant.daily.plist.example`，安装三步（本机已于 2026-11-07 经用户授权安装）：
 
 ```bash
 # 1. 复制模板
@@ -62,8 +62,9 @@ cp scripts/launchd/local.investment-assistant.daily.plist.example \
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assistant.daily.plist
 ```
 
-卸载：`launchctl bootout gui/$(id -u)/local.investment-assistant.daily`。模板里设了 `INVESTMENT_ASSISTANT_RUNTIME_BASE`（简报与草稿目录的上级）
-和 `PI_CODING_AGENT_DIR`（专用 Pi 目录）；日志在 `~/Library/Application Support/investment-assistant/logs/daily.stdout.log` 与 `daily.stderr.log`。
+卸载：`launchctl bootout gui/$(id -u)/local.investment-assistant.daily`。模板里设了 `INVESTMENT_ASSISTANT_RUNTIME_BASE`（简报与草稿目录的上级，`~/Library/Application Support/investment-assistant`）
+和 `PI_CODING_AGENT_DIR`（专用 Pi 目录）。launchd 的 `EnvironmentVariables` 优先于 `.env`，所以这个值**必须与页面服务 `.env` 里的取值相同**：
+两边共用其下的 `pi.lock` 做单进程互斥，不同就会各拿一把锁、简报会话与页面对话可能同时起 Pi 进程，简报文件也会分散在两个目录。日志在 `~/Library/Application Support/investment-assistant/logs/daily.stdout.log` 与 `daily.stderr.log`。
 页面服务的重新加载见 [local-service.md](local-service.md)。
 
 ## 同一交易日重跑与漏跑补查

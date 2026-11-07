@@ -4,7 +4,8 @@
 
 ## 当前状态
 
-**服务现在没有在运行。** 2026-11-06 移除 v2 之前，已执行 `launchctl bootout gui/$(id -u)/local.investment-assistant` 停掉旧服务（它设了 `KeepAlive`，不停会在删了一半的代码上继续跑定时任务）。plist 文件没有动，也没有重新加载：**本版（v3.1）上线时重新 `bootstrap`**——按 spec §15 的步骤装每日任务并重新加载页面服务，届时这个页面接口才会真正对外。
+**服务在运行（v3.1 已上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。
+每日任务另有一个 LaunchAgent `local.investment-assistant.daily`（同日安装，见 [daily-run.md](daily-run.md)）；两者的 `INVESTMENT_ASSISTANT_RUNTIME_BASE` 都是 `~/Library/Application Support/investment-assistant`，共用其下的 `pi.lock`。
 
 ## 启动链路
 

@@ -14,7 +14,7 @@
 6. **页面与对话**：外壳上一个页面四块（今日操作、今日简报、计划与持仓、对话）加账户条与设置面板；`/api/...` 接口与 SSE 流式对话；运行时、提供方、模型存库里（无内置默认，保存前检查可用性），同一时刻只允许一个运行时进程。
 7. **适配周级波段**：计划有效期 5 个交易日（`v3.valid_sessions`，延续重起算），最长持有缺省 20 个交易日（`v3.max_hold_default`，从起算日算，到期为卖出指令）。
 
-- **迁移 034**：`v3_plans` 计划线改造与八张新表（变化记录、持仓复查、出入金、作废、简报、对话、消息、设置），可重跑；价位约束放宽为「全空或全有 + 入场低 ≤ 入场高 < 目标」，不再要求止损低于入场（实施期间 ruling R5：补录计划的止损以补录时最新收盘为基准）。真实库待用户授权执行（步骤见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md)）。
+- **迁移 034**：`v3_plans` 计划线改造与八张新表（变化记录、持仓复查、出入金、作废、简报、对话、消息、设置），可重跑；价位约束放宽为「全空或全有 + 入场低 ≤ 入场高 < 目标」，不再要求止损低于入场（实施期间 ruling R5：补录计划的止损以补录时最新收盘为基准）。2026-11-07 已在真实库执行（记录见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md)）。
 - **工具面 31 个**（21 个两种模式 + 10 个仅对话）：新增账户 / 待办 / 延续 / 修订 / 持仓复查 / 一句话总结 / 出入金 / 确认止损单 / 调高止损 / 取消计划 / 作废 / 关注列表增删；`record_equity` 语义改为对账，`record_trade` 按计划线推进（清单见 [docs/operations/v3-facts.md](docs/operations/v3-facts.md)）。
 - **新命令**：`daily run`（五件事，支持 `--no-collect` 与单次临时指定运行时）与 `daily settings show|options|set`。
 - 验收对照（A1–A22 与沿用条款各由哪个测试证明）见 [docs/operations/daily-run.md](docs/operations/daily-run.md) 末尾。

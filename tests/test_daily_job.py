@@ -290,3 +290,6 @@ def test_plist_template_placeholders():
     assert template.count("<key>Weekday</key>") == 5  # 周二至周六
     assert "__HOME__/.pi-ia" in template and "INVESTMENT_ASSISTANT_RUNTIME_BASE" in template
     assert "daily.stdout.log" in template and "daily.stderr.log" in template
+    # 与页面服务（.env、local-service.md）同一个运行目录：两边共用 pi.lock，简报落在同一个 briefs/
+    assert "__HOME__/Library/Application Support/investment-assistant</string>" in template
+    assert ".local/v3" not in template

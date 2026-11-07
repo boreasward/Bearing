@@ -38,7 +38,7 @@
 | 031 | v2.12–v2.15 五层与 Agent 角色：新建十二张表 `feature_flag_changes`、`data_requests`、`sector_classifications`、`research_requests`、`research_versions`、`portfolio_checks`、`roadmap_goals`、`roadmap_versions`、`roadmap_decisions`、`roadmap_evidence`、`roadmap_proposals`、`roadmap_briefs`。放宽 `stage_runs.stage`（13 阶段）、`data_fetch_runs.family`（9 族）/ `trigger`（5 来源）、`agent_runs.mode` / 研究 pass / 空 ticker 与 `agent_tool_calls.phase` CHECK；增加 `price_bars.source`（yfinance/stooq）、`earnings_dates.source`（yfinance/nasdaq）CHECK，`news_items_source_check` 不变。不改旧行、不加种子、可重跑。`core.schema.five_layers_ready` 检查十二表与允许 portfolio 的具名阶段 CHECK；未就绪时 daily 的 run / resume / ensure_ready 拒绝并记 `job_reports: error / migration_031_missing`。执行顺序：**备份 → 031 → roadmap import → 重启**；真实库各步需单独授权，导入须等整版代码就绪，见下文 | 主线 |
 | 032 | v3：七张 `v3_` 表（`v3_runs`、`v3_candidates`、`v3_verdicts`、`v3_plans`、`v3_trades`、`v3_equity`、`v3_tool_calls`），只建表，不动任何旧表；2026-11-06 已在真实库执行，记录见 [v3-facts.md](v3-facts.md#迁移-032-的执行记录2026-11-06真实库) | v3 |
 | 033 | 删除 v2 的业务表：57 张表（账户、成交、计划、Agent 运行与连接、复盘、成长闭环、五层、调度与运行报告、通知设置等）加 LangGraph 的四张检查点表（有就删）；保留 11 张事实表、`feature_flag_changes` 与七张 `v3_` 表。一个事务、全部 `IF EXISTS`、不用 `CASCADE`、可重跑。先在一次性库验证，2026-11-06 经用户授权在真实库执行，步骤与记录见下文 | 删 v2 |
-| 034 | v3.1（spec §13）：`v3_plans` 改造为计划线——新增 `status` / `kind` / `initial_stop` / `atr` / `trailing`（PostgreSQL 保留字，建列时带双引号） / `confirmed_stop_order` / `start_session` / `reviewed_through` / `stop_hit_session` / `target_hit_session` / `sell_instruction` / `ended_session` / `end_reason` / `outcome`，四个价位列转可空，032 时代的行（无 `initial_stop`、未复查过的 `pending`）一律记 `expired` / `migrated_034`；`(session, ticker)` 唯一换成按状态的部分唯一索引 `uq_v3_plans_one_active_per_ticker`（一只股票最多一份有效计划），旧价位约束换成新具名约束 `v3_plans_levels_check`：价位全空或全有，全有时要求 `entry_low <= entry_high` 且 `entry_high < target1`，**不要求止损低于入场**（实施期间 ruling R5 放宽：补录计划的止损以补录时最新收盘为基准，可能高于入场区间；起算日收盘判定的持仓止损同理）；`v3_runs` 加 `dropped`；新建 `v3_plan_events`（变化记录，宿主同计划同交易日同类型唯一）、`v3_holding_reviews`、`v3_cash_flows`、`v3_voids`、`v3_briefs`、`v3_chats`、`v3_chat_messages`、`v3_settings` 八张表（只追加表见 `tests/test_no_update_on_append_only_tables.py`）。可重跑（`IF EXISTS` / `IF NOT EXISTS`，约束先 `DROP ... IF EXISTS` 再建）；不改证据行、不加种子行。**注意（Task 1 审查发现 M4）：手工重跑 034 会把 034 之后无价位（补录缺日线）的 pending 计划误标 expired——`migrate` 不会自动重跑，手工重跑前先核对。****真实库尚未执行**：033 已于 2026-11-06 执行，034 待用户单独授权（v3.1 spec §15），步骤见下文 | v3 |
+| 034 | v3.1（spec §13）：`v3_plans` 改造为计划线——新增 `status` / `kind` / `initial_stop` / `atr` / `trailing`（PostgreSQL 保留字，建列时带双引号） / `confirmed_stop_order` / `start_session` / `reviewed_through` / `stop_hit_session` / `target_hit_session` / `sell_instruction` / `ended_session` / `end_reason` / `outcome`，四个价位列转可空，032 时代的行（无 `initial_stop`、未复查过的 `pending`）一律记 `expired` / `migrated_034`；`(session, ticker)` 唯一换成按状态的部分唯一索引 `uq_v3_plans_one_active_per_ticker`（一只股票最多一份有效计划），旧价位约束换成新具名约束 `v3_plans_levels_check`：价位全空或全有，全有时要求 `entry_low <= entry_high` 且 `entry_high < target1`，**不要求止损低于入场**（实施期间 ruling R5 放宽：补录计划的止损以补录时最新收盘为基准，可能高于入场区间；起算日收盘判定的持仓止损同理）；`v3_runs` 加 `dropped`；新建 `v3_plan_events`（变化记录，宿主同计划同交易日同类型唯一）、`v3_holding_reviews`、`v3_cash_flows`、`v3_voids`、`v3_briefs`、`v3_chats`、`v3_chat_messages`、`v3_settings` 八张表（只追加表见 `tests/test_no_update_on_append_only_tables.py`）。可重跑（`IF EXISTS` / `IF NOT EXISTS`，约束先 `DROP ... IF EXISTS` 再建）；不改证据行、不加种子行。**注意（Task 1 审查发现 M4）：手工重跑 034 会把 034 之后无价位（补录缺日线）的 pending 计划误标 expired——`migrate` 不会自动重跑，手工重跑前先核对。**033 已于 2026-11-06、034 已于 2026-11-07 经用户授权在真实库执行，步骤与记录见下文 | v3 |
 
 016–031 建出的业务表，除 033 的保留清单外都由 033 删除；033 已于 2026-11-06 在真实库执行，这些表已不在库里。
 
@@ -324,7 +324,7 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
 
 回滚：`pg_restore --clean --if-exists -d "$INVESTMENT_ASSISTANT_DATABASE_URL" .local/v3/backup-before-033.dump`（会丢掉备份之后的所有写入，包括之后的 `facts run` 记录）。执行后把结果（备份大小与 sha256、`applied` 输出、核对结论）补记到本节。
 
-### 034 的真实库执行（待用户授权）
+### 034 的真实库执行（用户 2026-11-07 授权；当日已执行）
 
 033 已执行，追踪表与物理 schema 一致，`migrate` 入口可用；034 只新建对象与放宽约束，不动任何旧行。步骤（每一步都需用户单独授权，v3.1 spec §15 第 2 步）：
 
@@ -347,6 +347,13 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
 4. **核对**：八张新表各 0 行；`v3_plans` 有 034 的新列与 `uq_v3_plans_one_active_per_ticker`；`v3_runs` 有 `dropped`；旧表行数与预检一致；`.venv/bin/python -m investment_assistant.facts show` 照常。
 
 回滚：`pg_restore --clean --if-exists -d "$INVESTMENT_ASSISTANT_DATABASE_URL" .local/v3/backup-before-034.dump`。执行后把结果补记到本节。**不要手工重跑 034**（见迁移清单 034 行的 M4 注意）。
+
+**034 执行记录（2026-11-07，真实库，PostgreSQL 17.10）：**
+
+- 预检：没有正在运行的 `facts run` / `daily run`，库上没有其他活跃连接；`schema_migrations` 33 行、最新一条为 `033_drop_v2_tables.sql`。行数：`price_bars` 37410、`news_items` 4124、`news_item_tickers` 4737、`filings` 72、`earnings_dates` 191、`macro_observations` 188、`sector_classifications` 102、`us_research_observations` 75858、`us_research_collection_state` 24、`data_fetch_runs` 229、`watchlist_items` 8、`feature_flag_changes` 2、`v3_runs` 7、`v3_candidates` 80、`v3_tool_calls` 7，`v3_plans` / `v3_verdicts` / `v3_trades` / `v3_equity` 为 0。
+- 备份：`.local/v3/backup-before-034.dump`，11,723,164 字节，sha256 `85d1b4fe81aa46df7a119520c17b655c3f0117b8149e92cf7886afcba9f1106a`，`pg_restore --list` 含 20 张表的数据；文件权限 600。
+- 执行：`migrate` 输出 `{"applied": ["034_v3_1_plan_line.sql"], "count": 1}`。
+- 核对：八张新表（`v3_plan_events`、`v3_holding_reviews`、`v3_cash_flows`、`v3_voids`、`v3_briefs`、`v3_chats`、`v3_chat_messages`、`v3_settings`）各 0 行；`v3_plans` 的 14 个新列、`uq_v3_plans_one_active_per_ticker`、`v3_plans_levels_check` 都在；`v3_runs` 有 `dropped`；旧表行数与预检逐张一致，`schema_migrations` 为 34 行；`facts show` 退出码 0。
 
 **执行记录（2026-11-06，真实库，PostgreSQL 17.10）：**
 
