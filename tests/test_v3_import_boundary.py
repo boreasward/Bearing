@@ -16,7 +16,8 @@ KEPT = ('investment_assistant.core.tx', 'investment_assistant.core.dbutil',
         'investment_assistant.analysis.rules', 'investment_assistant.analysis.screen_rules',
         'investment_assistant.analysis.regime', 'investment_assistant.analysis.pool',
         'investment_assistant.execution.plan_levels', 'investment_assistant.execution.entry_rules',
-        'investment_assistant.execution.positions',
+        'investment_assistant.execution.positions', 'investment_assistant.execution.plan_line',
+        'investment_assistant.execution.account',
         'investment_assistant.db', 'investment_assistant.config', 'investment_assistant.facts',
         'investment_assistant.toolsurface')
 

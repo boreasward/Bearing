@@ -72,3 +72,32 @@ def test_discord_channels():
     from investment_assistant.notify.discord import DiscordChannel
 
     assert [c.value for c in DiscordChannel] == ["earnings", "signals"]
+
+
+def test_chunk_splits_by_lines_and_chars():
+    from investment_assistant.notify.discord import chunk
+
+    # 3 行各 1000 字：两行拼一起就超限，只能一行一块 → 3 块
+    three_lines = '\n'.join('x' * 1000 for _ in range(3))
+    assert [len(part) for part in chunk(three_lines)] == [1000, 1000, 1000]
+    # 单行 4000 字：按字符切 → 1900 + 1900 + 200
+    one_long_line = 'y' * 4000
+    assert [len(part) for part in chunk(one_long_line)] == [1900, 1900, 200]
+    # 短文本不切；行边界保留
+    assert chunk('a\nb\nc') == ['a\nb\nc']
+    assert chunk('') == []
+
+
+def test_send_text_posts_each_chunk():
+    client = DiscordClient(
+        earnings_url="https://discord.com/api/webhooks/test/earnings",
+        signals_url="https://discord.com/api/webhooks/test/signals",
+    )
+    text = '\n'.join('z' * 1000 for _ in range(3))
+    with patched_post() as mock_post:
+        mock_post.return_value = MagicMock(status_code=204)
+        client.send_text(DiscordChannel.SIGNALS, text)
+        assert mock_post.call_count == 3
+        payloads = [call.kwargs["json"] for call in mock_post.call_args_list]
+        assert all(set(p) == {"content"} for p in payloads)
+        assert ''.join(p["content"].replace('\n', '') for p in payloads) == 'z' * 3000

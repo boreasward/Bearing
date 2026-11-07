@@ -39,6 +39,11 @@ class DiscordClient:
 
         fetch_policy.fetch(f"discord:{channel.value}", attempt, policy=self._policy, sleep=self._sleep)
 
+    def send_text(self, channel: DiscordChannel, text: str) -> None:
+        """Post a long text in chunks of at most `limit` characters, one message each."""
+        for part in chunk(text):
+            self.send(channel, {"content": part})
+
     @classmethod
     def from_env(cls) -> "DiscordClient":
         from dotenv import load_dotenv
@@ -62,6 +67,32 @@ class DiscordClient:
             earnings_url=url("earnings", "DISCORD_WEBHOOK_EARNINGS"),
             signals_url=url("signals", "DISCORD_WEBHOOK_SIGNALS"),
         )
+
+
+def chunk(text: str, *, limit: int = 1900) -> list[str]:
+    """Split `text` into Discord-sized blocks without breaking lines when possible;
+    a single line longer than `limit` is split by characters (v3 设计验收 7)."""
+    blocks: list[str] = []
+    current: list[str] = []
+    length = 0
+
+    def flush() -> None:
+        nonlocal current, length
+        if current:
+            blocks.append("\n".join(current))
+            current, length = [], 0
+
+    for line in text.split("\n"):
+        while len(line) > limit:
+            flush()
+            blocks.append(line[:limit])
+            line = line[limit:]
+        if current and length + 1 + len(line) > limit:
+            flush()
+        length += len(line) + (1 if current else 0)
+        current.append(line)
+    flush()
+    return [block for block in blocks if block != ""]
 
 
 def render_discord(notification: Notification) -> dict:

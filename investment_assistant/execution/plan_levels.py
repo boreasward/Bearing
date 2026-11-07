@@ -48,9 +48,10 @@ def levels_ordered(levels: dict[str, Decimal]) -> bool:
     return levels['stop'] < levels['entry_low'] <= levels['entry_high'] < levels['target1']
 
 
-def validity(signal_date: date) -> tuple[date, date]:
-    """The plan may fill from T+1 through T+3, trading days only."""
-    return add_trading_days(signal_date, 1), add_trading_days(signal_date, VALID_SESSIONS)
+def validity(signal_date: date, sessions: int = VALID_SESSIONS) -> tuple[date, date]:
+    """The plan may fill from T+1 through T+`sessions`, trading days only. The default stays
+    T+3 (VALID_SESSIONS); v3.1 callers pass cfg.v3.valid_sessions explicitly."""
+    return add_trading_days(signal_date, 1), add_trading_days(signal_date, sessions)
 
 
 def earnings_flags(row: dict[str, Any] | None, *, signal_date: date, valid_from: date,

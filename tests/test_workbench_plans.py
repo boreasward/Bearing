@@ -54,6 +54,13 @@ def test_validity_skips_holidays():
     assert (valid_from, valid_until) == (date(2026, 11, 27), date(2026, 12, 1))
 
 
+def test_validity_sessions_parameter():
+    # v3.1 调用方传配置（cfg.v3.valid_sessions）；缺省仍是 T+3（VALID_SESSIONS = 3）
+    valid_from, valid_until = plans.validity(date(2026, 11, 25), sessions=5)
+    assert (valid_from, valid_until) == (date(2026, 11, 27), date(2026, 12, 3))
+    assert plans.VALID_SESSIONS == 3
+
+
 def _earnings(d, *, known=True):
     return {'id': uuid.uuid4(), 'status': 'known' if known else 'unknown', 'earnings_date': d}
 
