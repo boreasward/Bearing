@@ -1,10 +1,10 @@
 # 本机服务
 
-本机服务是 v3 保留下来的**外壳**：一个只托管前端构建产物的 HTTP 服务。首页是占位页（「今日简报与对话在 v3 第 3 步实现」），没有调度线程，没有业务接口，不读写数据库。v2 的调度、任务、通知、Agent 连接都随旧系统移除（见 [roadmap](../roadmap.md) 第 5 步；原来的运维说明在 [archive/v2/operations/](../archive/v2/operations/scheduling-and-notifications.md)）。每日的采集与名单由命令行的 `facts run` 完成，见 [v3-facts.md](v3-facts.md)。
+本机服务是 v3 保留下来的外壳：托管前端构建产物，并承载 v3.1 的页面接口（`/api/...`，见下）。没有调度线程：每日的采集与名单由命令行的 `facts run` 完成（见 [v3-facts.md](v3-facts.md)），定时简报由独立的 LaunchAgent 跑（运维文档随收尾任务补上）。v2 的调度、任务、通知、Agent 连接都随旧系统移除（见 [roadmap](../roadmap.md) 第 5 步；原来的运维说明在 [archive/v2/operations/](../archive/v2/operations/scheduling-and-notifications.md)）。
 
 ## 当前状态
 
-**服务现在没有在运行。** 2026-11-06 移除 v2 之前，已执行 `launchctl bootout gui/$(id -u)/local.investment-assistant` 停掉旧服务（它设了 `KeepAlive`，不停会在删了一半的代码上继续跑定时任务）。plist 文件没有动，也没有重新加载：**下次登录时 launchd 会重新加载它并启动外壳**，这是无害的，外壳只显示占位页。
+**服务现在没有在运行。** 2026-11-06 移除 v2 之前，已执行 `launchctl bootout gui/$(id -u)/local.investment-assistant` 停掉旧服务（它设了 `KeepAlive`，不停会在删了一半的代码上继续跑定时任务）。plist 文件没有动，也没有重新加载：**本版（v3.1）上线时重新 `bootstrap`**——按 spec §15 的步骤装每日任务并重新加载页面服务，届时这个页面接口才会真正对外。
 
 ## 启动链路
 
@@ -17,11 +17,18 @@
             └─ investment_assistant.api.server（uvicorn，端口 HERMES_DASHBOARD_PORT，默认 8787）
 ```
 
-服务只处理这些请求：
+服务处理这些请求：
 
+- **页面接口（v3.1，`investment_assistant/api/routes/`）**，全部 JSON（金额与价位为字符串，日期 `YYYY-MM-DD`），错误一律 `{"error": "<code>[: 说明]"}`，校验错误 400，没有运行记录 404 `no_run`，运行时忙 409：
+  - `GET /api/today`：今日操作与账户条。
+  - `GET /api/briefs`、`GET /api/briefs/latest`、`GET /api/briefs/{session}`：简报列表与单份简报。
+  - `GET /api/plans`、`GET /api/plans/{id}`：计划三组卡片与单份计划（含变化记录）；`POST /api/plans/{id}/stop-order`、`/raise-stop`、`/cancel`：计划写入口。
+  - `POST /api/trades`、`/api/cash-flows`、`/api/reconcile`、`/api/voids`、`GET /api/account`：账本（写入口先复述，`confirmed` 为真才写）。
+  - `GET /api/chats`、`POST /api/chats`、`GET /api/chats/{id}`：对话列表、新建、详情；`POST /api/chats/{id}/messages`：一轮提问，响应是 `text/event-stream`（SSE），每个事件一帧 `event: <kind>\ndata: <json>\n\n`，末帧必为 `done`/`error`/`cancelled`；`POST /api/chats/{id}/cancel`：取消当轮。对话轮次与每日简报共用一个运行时锁，简报运行期间提问得到 409 `brief_running`。
+  - `GET /api/settings`、`GET /api/settings/options`、`PUT /api/settings`：运行时与模型设置。
 - `/` 返回 `web/dist/index.html`（占位页）；`/assets/…` 返回构建产物里的文件。
-- 其余路径，以及 `POST` / `PUT` / `PATCH` / `DELETE`，一律 404 `{"error": "not found"}`。
-- 这两类兜底（`GET` 的静态托管与其他方法的 404）是 `create_app()` 里最后注册的两个路由；新的 `/api/...` 路由必须在它们之前 `include_router`，否则会被拦成 404。
+- 其余路径，以及未登记的方法，一律 404 `{"error": "not found"}`。
+- 这两类兜底（`GET` 的静态托管与其他方法的 404）是 `create_app()` 里最后注册的两个路由；新的 `/api/...` 路由必须在它们之前 `include_router`，否则会被拦成 404（有测试守着这个顺序）。
 - 没有 `web/dist` 时 `/` 返回 503 `{"error": "frontend_not_built", …}`。
 - 组件画廊（`#_ui`）只在开发模式（`cd web && npm run dev`）可用，构建产物不含它。
 

@@ -70,7 +70,6 @@ REMOVED = (
     "analysis/agent",
     "core/llm",
     "execution/paper",
-    "api/routes",
     "hermes",
     "market",
     "research",

@@ -57,6 +57,19 @@ def create_app() -> FastAPI:
     async def _validation_error(request: Request, exc: RequestValidationError):
         return CompatJSONResponse({"error": f"invalid request: {exc}"}, status_code=400)  # 校验错误返回 400，不是 FastAPI 默认的 422
 
+    # v3.1 页面接口：所有 /api/... 路由必须在下面两个兜底路由之前 include，否则会被拦成 404。
+    from investment_assistant.api import routes as page_routes
+
+    for page_router in (
+        page_routes.today.router,
+        page_routes.briefs.router,
+        page_routes.plans.router,
+        page_routes.ledger.router,
+        page_routes.chats.router,
+        page_routes.settings.router,
+    ):
+        app.include_router(page_router)
+
     # 两个兜底路由必须最后注册：新的 /api/... 路由要在它们之前 include_router，否则会被拦成 404。
     @app.get("/{full_path:path}", include_in_schema=False)
     def _static(full_path: str):

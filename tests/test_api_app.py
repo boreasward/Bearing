@@ -13,6 +13,47 @@ def test_unknown_api_path_returns_legacy_404_shape(client):
     assert resp.json() == {"error": "not found"}
 
 
+def test_api_routers_mount_before_the_fallback_routes(client):
+    """所有 /api/... 路由必须在 create_app 的两个兜底路由之前（否则被拦成 404）。
+    FastAPI 0.141 起 include_router 是惰性的 IncludedRouter 标记，标记的先后即注册的先后。"""
+    routes = client.app.router.routes
+    fallbacks = [i for i, route in enumerate(routes) if getattr(route, "path", "") == "/{full_path:path}"]
+    assert len(fallbacks) == 2, "create_app 必须保留 GET 与其他方法两个兜底"
+    included = [i for i, route in enumerate(routes) if hasattr(route, "original_router")]
+    assert included, "页面接口的 router 必须在 app.routes 里"
+    assert all(i < fallbacks[0] for i in included)
+    for i in included:  # 每个 include 进来的页面 router 只含 /api/... 路径
+        assert all(getattr(sub, "path", "").startswith("/api/") for sub in routes[i].original_router.routes)
+
+
+def test_page_api_paths_exist(client):
+    """契约表的 20 条路径全部注册（openapi 是公开面；不含两个兑底）。"""
+    schema = client.app.openapi()
+    expected = {
+        "/api/today",
+        "/api/briefs",
+        "/api/briefs/latest",
+        "/api/briefs/{session}",
+        "/api/plans",
+        "/api/plans/{plan_id}",
+        "/api/plans/{plan_id}/stop-order",
+        "/api/plans/{plan_id}/raise-stop",
+        "/api/plans/{plan_id}/cancel",
+        "/api/trades",
+        "/api/cash-flows",
+        "/api/reconcile",
+        "/api/voids",
+        "/api/account",
+        "/api/chats",
+        "/api/chats/{chat_id}",
+        "/api/chats/{chat_id}/messages",
+        "/api/chats/{chat_id}/cancel",
+        "/api/settings",
+        "/api/settings/options",
+    }
+    assert expected <= set(schema["paths"])
+
+
 def test_non_get_unknown_path_returns_404(client):
     for method in ("post", "put", "patch", "delete"):
         resp = getattr(client, method)("/api/does-not-exist-xyz")
