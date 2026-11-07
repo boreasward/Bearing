@@ -25,6 +25,11 @@ from investment_assistant.runtime.base import (
 # 提示词末尾的固定说明（spec §9.3：范围由待办决定，不由 agent 决定）
 TASK_HEADER = "交易日 {session}；先调 `get_agenda`，按它逐项完成；每项完成后再调一次确认"
 BUDGET_EXHAUSTED = "预算耗尽"
+# 尝试之间的指数退避（修复轮 Minor 3）：0.5s 起、每次翻倍、封顶 30s。真实的尝试本身耗时
+# 分钟级，退避几乎不可感；它只约束「每次尝试立即报 error」的运行时不在预算里热转几千次
+# （20 分钟预算下最多十几次尝试）。选退避而不是尝试次数上限：上限会误伤慢节奏的正常重试。
+BACKOFF_START_SECONDS = 0.5
+BACKOFF_CAP_SECONDS = 30.0
 
 
 def _prompt(session: date) -> str:
@@ -118,6 +123,9 @@ def run_brief_session(
             error = "cancelled"
         if crashed:
             break  # 运行时本身起不来：同预算里重试无意义，记下原因收工
+        # 议程未完成即再试一次：先退避，避免即时失败热转（修复轮 Minor 3）
+        backoff = min(BACKOFF_START_SECONDS * 2 ** (attempts - 1), BACKOFF_CAP_SECONDS)
+        time.sleep(min(backoff, max(0.0, budget_seconds - (time.monotonic() - started))))
     return {
         "attempts": attempts,
         "complete": result_agenda.get("complete", False),

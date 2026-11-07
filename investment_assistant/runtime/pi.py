@@ -30,6 +30,7 @@ ERROR_MESSAGE_FIELD = "errorMessage"  # 同一条消息上的失败原因
 USAGE_TOKENS_FIELD = "totalTokens"  # Pi 的 usage 键 -> 本层的 total
 
 POLL_SECONDS = 0.1  # 读流空转时的轮询间隔：超时与取消的判定粒度
+REAP_WAIT_SECONDS = 5  # 杀进程后/流关闭后等它退出的上界
 
 DEFAULT_PI_BIN = "~/.local/bin/pi"
 DEFAULT_PI_DIR = "~/.pi-ia"
@@ -117,43 +118,72 @@ class PiRuntime:
         stop_reason: str | None = None
         error_message: str | None = None
         deadline = time.monotonic() + timeout_seconds
-        while True:
-            if cancel.is_set():
-                yield from self._end(proc, RuntimeEvent("cancelled"))
+        reaped = False
+
+        def reap() -> None:
+            """保证进程被收尸：还在跑就杀，然后有界等待；幂等（正常路径已退出的不再杀）。"""
+            nonlocal reaped
+            if reaped:
                 return
+            reaped = True
+            if proc.poll() is None:
+                proc.kill()
             try:
-                raw = lines.get(timeout=POLL_SECONDS)
-            except queue.Empty:
+                proc.wait(timeout=REAP_WAIT_SECONDS)
+            except subprocess.TimeoutExpired:  # pragma: no cover - kill 后仍不退出的兜底
+                pass
+
+        try:
+            while True:
                 if cancel.is_set():
-                    yield from self._end(proc, RuntimeEvent("cancelled"))
+                    reap()
+                    yield RuntimeEvent("cancelled")
                     return
-                if time.monotonic() >= deadline:
-                    yield from self._end(proc, RuntimeEvent("error", text="timeout"))
+                try:
+                    raw = lines.get(timeout=POLL_SECONDS)
+                except queue.Empty:
+                    if cancel.is_set():
+                        reap()
+                        yield RuntimeEvent("cancelled")
+                        return
+                    if time.monotonic() >= deadline:
+                        reap()
+                        yield RuntimeEvent("error", text="timeout")
+                        return
+                    continue
+                if raw is None:  # 流关闭：进程应随即退出，等不到就杀掉——wait 必须有界（修复轮 Minor 2）
+                    try:
+                        proc.wait(timeout=REAP_WAIT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        reap()
+                        yield RuntimeEvent("error", text="timeout")
+                        return
+                    break
+                update = self._parse(raw)
+                if update is None:
+                    continue
+                kind, event, extra = update
+                if kind == "text" or kind == "tool":
+                    yield event
+                elif kind == "usage":
+                    usage_total["input"] += event.usage["input"]
+                    usage_total["output"] += event.usage["output"]
+                    usage_total["total"] += event.usage["total"]
+                    yield event
+                    stop_reason = extra.get("stopReason")
+                    error_message = extra.get(ERROR_MESSAGE_FIELD)
+                if cancel.is_set():
+                    reap()
+                    yield RuntimeEvent("cancelled")
                     return
-                continue
-            if raw is None:  # 流关闭：进程结束
-                break
-            update = self._parse(raw)
-            if update is None:
-                continue
-            kind, event, extra = update
-            if kind == "text" or kind == "tool":
-                yield event
-            elif kind == "usage":
-                usage_total["input"] += event.usage["input"]
-                usage_total["output"] += event.usage["output"]
-                usage_total["total"] += event.usage["total"]
-                yield event
-                stop_reason = extra.get("stopReason")
-                error_message = extra.get(ERROR_MESSAGE_FIELD)
-            if cancel.is_set():
-                yield from self._end(proc, RuntimeEvent("cancelled"))
-                return
-        proc.wait()
-        if stop_reason == STOP_REASON_ERROR:
-            yield RuntimeEvent("error", text=error_message or "error")
-        else:
-            yield RuntimeEvent("done", usage=dict(usage_total))
+            if stop_reason == STOP_REASON_ERROR:
+                yield RuntimeEvent("error", text=error_message or "error")
+            else:
+                yield RuntimeEvent("done", usage=dict(usage_total))
+        finally:
+            # 消费方提前关闭生成器（GeneratorExit，如页面 SSE 断开）时杀掉进程防遗弃：
+            # 锁随上层 with 释放，进程不随它活着（修复轮 Important 1）。正常结束已退出则幂等空转。
+            reap()
 
     def _pump(self, proc, lines: queue.Queue) -> None:
         """Move stdout lines into the queue; None marks end-of-stream. A stalled process just
@@ -195,12 +225,3 @@ class PiRuntime:
             }
             return "usage", RuntimeEvent("usage", usage=usage), message
         return None
-
-    @staticmethod
-    def _end(proc, terminal: RuntimeEvent) -> Iterator[RuntimeEvent]:
-        proc.kill()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:  # pragma: no cover - kill 后进程不退出的兜底
-            pass
-        yield terminal

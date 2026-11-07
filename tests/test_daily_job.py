@@ -260,10 +260,10 @@ def test_runtime_error_final_brief_keeps_host_parts(v3_tx, tmp_path):
         attempt["n"] += 1
         if attempt["n"] == 1:
             return [RuntimeEvent("text", text="开始"), RuntimeEvent("error", text="模型返回错误")]
-        return [RuntimeEvent("text", text=f"第{i}段") for i in range(40)]  # 第二次挂起直到预算耗尽
+        return [RuntimeEvent("text", text=f"第{i}段") for i in range(80)]  # 第二次挂起直到预算耗尽
 
     runtime = FakeRuntime(script, delay=0.05)
-    result = run_daily_with(cfg, client, runtime=runtime, budget_seconds=1)
+    result = run_daily_with(cfg, client, runtime=runtime, budget_seconds=3)
     assert result["status"] == "final" and result["complete"] is False and result["attempts"] == 2
     with open(result["brief_path"], encoding="utf-8") as fh:
         final_md = fh.read()

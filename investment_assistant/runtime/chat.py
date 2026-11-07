@@ -94,43 +94,48 @@ def turn(
     tool_refs: list[str] = []
     usage = {"input": 0, "output": 0, "total": 0}
     terminal = RuntimeEvent("error", text="runtime_ended_without_terminal")
-    with lock.acquire("chat", cfg=cfg):
-        for event in runtime.run(
-            prompt=prompt,
-            workdir=workdir,
-            session_id=f"chat-{chat_id}",  # 同一对话续接同一 Pi 会话（spec §9.1）
-            timeout_seconds=cfg.v3.chat_turn_seconds,
-            cancel=cancel_event,
-            spec=spec,
-            env_extra={},
-        ):
-            if event.kind == "text":
-                parts.append(event.text)
-            elif event.kind == "tool_end" and event.ref:
-                tool_refs.append(event.ref)
-            elif event.kind == "usage" and event.usage:
-                for key in usage:
-                    usage[key] += int(event.usage.get(key, 0) or 0)
-            if event.kind in TERMINAL_KINDS:
-                terminal = event
-            yield event
-    status, error = _status_of(terminal)
-    with core_tx._tx() as conn:
-        plan_repo.insert_message(
-            conn,
-            {
-                "chat_id": chat_id,
-                "seq": plan_repo.next_message_seq(conn, chat_id),
-                "role": "assistant",
-                "content": "".join(parts),
-                "session": session,
-                "agent_session": agent_session,
-                "status": status,
-                "error": error,
-                "usage": usage,
-                "tool_refs": tool_refs,
-            },
-        )
+    try:
+        with lock.acquire("chat", cfg=cfg):
+            for event in runtime.run(
+                prompt=prompt,
+                workdir=workdir,
+                session_id=f"chat-{chat_id}",  # 同一对话续接同一 Pi 会话（spec §9.1）
+                timeout_seconds=cfg.v3.chat_turn_seconds,
+                cancel=cancel_event,
+                spec=spec,
+                env_extra={},
+            ):
+                if event.kind == "text":
+                    parts.append(event.text)
+                elif event.kind == "tool_end" and event.ref:
+                    tool_refs.append(event.ref)
+                elif event.kind == "usage" and event.usage:
+                    for key in usage:
+                        usage[key] += int(event.usage.get(key, 0) or 0)
+                if event.kind in TERMINAL_KINDS:
+                    terminal = event
+                yield event
+        status, error = _status_of(terminal)
+        with core_tx._tx() as conn:
+            plan_repo.insert_message(
+                conn,
+                {
+                    "chat_id": chat_id,
+                    "seq": plan_repo.next_message_seq(conn, chat_id),
+                    "role": "assistant",
+                    "content": "".join(parts),
+                    "session": session,
+                    "agent_session": agent_session,
+                    "status": status,
+                    "error": error,
+                    "usage": usage,
+                    "tool_refs": tool_refs,
+                },
+            )
+    finally:
+        # 轮次结束即移除该对话的取消事件（含消费方提前关流）：长驻页面服务不因每个对话漏
+        # 一个 Event（修复轮 Minor 4）；之后的 cancel 会重建一个，由下一轮清零。
+        _cancels.pop(chat_id, None)
 
 
 def _status_of(terminal: RuntimeEvent) -> tuple[str, str | None]:

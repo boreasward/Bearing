@@ -62,13 +62,18 @@ def check(spec: RuntimeSpec, *, pi_dir: Path, run=subprocess.run) -> list[str]:
     if spec.runtime == "pi":
         opts = options(pi_dir)
         if spec.provider not in opts["providers"]:
-            done = run(
-                [str(pi_binary()), "auth", "check", "--provider", spec.provider, "--json"],
-                capture_output=True,
-                text=True,
-            )
-            if not _auth_ready(done):
-                problems.append(f"提供方 {spec.provider} 未登录也未定义（pi auth check 不是 ready）")
+            try:
+                done = run(
+                    [str(pi_binary()), "auth", "check", "--provider", spec.provider, "--json"],
+                    capture_output=True,
+                    text=True,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                # pi 本身起不来也是「不可用」的一种：以原因字符串返回，保持 ValueError 契约（修复轮 Minor 5）
+                problems.append(f"无法运行 pi auth check（{exc}）")
+            else:
+                if not _auth_ready(done):
+                    problems.append(f"提供方 {spec.provider} 未登录也未定义（pi auth check 不是 ready）")
     return problems
 
 

@@ -28,25 +28,34 @@ class _Stdout:
 class FakePopen:
     _lines: list  # install_popen 用子类注入每次回放的行
     _stall: bool = False
+    _hang_after_eof: bool = False  # stdout 关了但进程不退（修复轮 Minor 2）
 
     def __init__(self, args, *, cwd=None, env=None, stdin=None, stdout=None, stderr=None, **kwargs):
         self.args, self.cwd, self.env, self.stdin = args, cwd, env, stdin
         self.killed = False
+        self.returncode = None  # 仿真 subprocess.Popen：退出码一旦置位，kill 不再动手
         self._dead = threading.Event()
         self.stdout = _Stdout(self._lines, self._dead, stall=self._stall)
 
+    def poll(self):
+        return self.returncode
+
     def kill(self):
-        self.killed = True
-        self._dead.set()
+        if self.returncode is None:
+            self.killed = True
+            self._dead.set()
 
     def wait(self, timeout=None):
-        return 0
+        if self._hang_after_eof:
+            raise subprocess.TimeoutExpired(self.args, timeout or 0.0)
+        self.returncode = 0
+        return self.returncode
 
 
-def install_popen(monkeypatch, fixture: str, *, stall: bool = False) -> list:
+def install_popen(monkeypatch, fixture: str, *, stall: bool = False, hang_after_eof: bool = False) -> list:
     lines = (FIXTURES / fixture).read_text(encoding="utf-8").splitlines(keepends=True)
     instances = []
-    cls = type("FakePopen", (FakePopen,), {"_lines": lines, "_stall": stall})
+    cls = type("FakePopen", (FakePopen,), {"_lines": lines, "_stall": stall, "_hang_after_eof": hang_after_eof})
 
     def popen(*args, **kwargs):
         instance = cls(*args, **kwargs)
@@ -90,6 +99,7 @@ def test_ok_stream_texts_tools_usage_and_done(monkeypatch):
     assert events[-1].usage == {"input": 50, "output": 25, "total": 75}  # done 带累加用量
     proc = instances[0]
     assert proc.stdin == subprocess.DEVNULL and proc.cwd == "/tmp/ia-work"
+    assert not proc.killed and proc.returncode == 0  # 正常结束不杀进程
 
 
 def test_command_line_and_session_arguments(monkeypatch):
@@ -182,3 +192,29 @@ def test_pi_event_field_names_match_the_recorded_fixtures():
     err = [json.loads(line) for line in (FIXTURES / "error.jsonl").read_text(encoding="utf-8").splitlines()]
     failed = next(e["message"] for e in err if e["type"] == "message_end" and e["message"]["role"] == "assistant")
     assert failed["stopReason"] == "error" and failed["errorMessage"] == "model request failed: 500"
+
+
+def test_early_close_kills_the_process(monkeypatch):
+    """修复轮 Important 1：消费方提前关流（SSE 断开的形状）——生成器被 close() 时必须杀掉
+    Pi 进程，不能把无人值守的进程遗弃在锁外继续烧 token。"""
+    instances = install_popen(monkeypatch, "partial.jsonl", stall=True)
+    stream = PiRuntime().run(
+        prompt="做简报",
+        workdir=Path("/tmp/ia-work"),
+        session_id=None,
+        timeout_seconds=30,
+        cancel=threading.Event(),
+        spec=SPEC,
+        env_extra={},
+    )
+    assert next(stream).kind == "text"  # 拿到一条增量就断开
+    stream.close()  # type: ignore[attr-type]  # 协议签名是 Iterator；实现都是生成器，可 close
+    assert instances[0].killed and instances[0].returncode is not None  # 杀掉并收割
+
+
+def test_stream_eof_but_process_hangs_times_out(monkeypatch):
+    """修复轮 Minor 2：stdout 关了但进程不退——EOF 后的等待有界，等不到就杀，报 timeout。"""
+    instances = install_popen(monkeypatch, "ok.jsonl", hang_after_eof=True)
+    events = run(PiRuntime(), timeout_seconds=5)
+    assert [e.kind for e in events][-1] == "error" and events[-1].text == "timeout"
+    assert instances[0].killed

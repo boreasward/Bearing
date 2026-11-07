@@ -118,3 +118,14 @@ def test_build_returns_the_implementation():
     assert settings.build(RuntimeSpec("pi", "p", "m")).name == "pi"
     with pytest.raises(ValueError):
         settings.build(RuntimeSpec("nope", "p", "m"))
+
+
+def test_check_reports_a_broken_pi_binary():
+    """修复轮 Minor 5：pi 二进制不存在时 check 返回原因字符串，不往外抛 FileNotFoundError
+    （save 仍以 ValueError 报告，CLI 退出码 2）。"""
+
+    def boom(*args, **kwargs):
+        raise FileNotFoundError("[Errno 2] No such file or directory: /no/such/pi")
+
+    problems = settings.check(RuntimeSpec("pi", "prov-x", "model-x"), pi_dir=Path("/nope"), run=boom)
+    assert len(problems) == 1 and "pi auth check" in problems[0] and "/no/such/pi" in problems[0]

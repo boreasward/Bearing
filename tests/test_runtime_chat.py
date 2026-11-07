@@ -212,3 +212,22 @@ def test_turn_records_usage_and_tool_refs(v3_tx, tmp_path):
     assistant = rows[-1]
     assert assistant["usage"] == {"input": 7, "output": 3, "total": 10}
     assert assistant["tool_refs"] == ["call:1"]
+
+
+def test_cancel_event_is_cleaned_up_after_the_turn(v3_tx, tmp_path):
+    """修复轮 Minor 4：轮次结束（含被取消的轮次）即从模块级取消表里移除该对话的 Event，
+    长驻页面服务不因每个对话漏一个。"""
+    import investment_assistant.core.tx as core_tx
+
+    cfg = cfg_at(tmp_path)
+    with core_tx._tx() as conn:
+        seed_ok_run(conn)
+        chat_id = start_chat(conn)
+    list(chat.turn(chat_id=chat_id, text="问", cfg=cfg, runtime=FakeRuntime([]), now=NOW))
+    assert chat_id not in chat._cancels
+    stream = chat.turn(chat_id=chat_id, text="再问", cfg=cfg, runtime=FakeRuntime(
+        [RuntimeEvent("text", text="一段"), RuntimeEvent("text", text="二段")]), now=NOW)
+    next(stream)
+    chat.cancel(chat_id)
+    list(stream)
+    assert chat_id not in chat._cancels

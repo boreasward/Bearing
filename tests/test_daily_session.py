@@ -240,3 +240,16 @@ def test_pi_unavailable_records_reason_without_raising(v3_tx, tmp_path):
     result = run_brief_session(session=SESSION, cfg=cfg, runtime=runtime, spec=SPEC, now=NOW, budget_seconds=5)
     assert result["attempts"] == 1 and result["complete"] is False
     assert "no-such-pi" in result["error"]
+
+
+def test_instant_error_retries_back_off_instead_of_spinning(v3_tx, tmp_path):
+    """修复轮 Minor 3：每次尝试立即报 error 的运行时不能在预算里热转几千次——尝试之间有
+    指数退避（0.5s 起、翻倍、封顶 30s），预算 3 秒内只容得下个位数尝试。"""
+    from investment_assistant.daily.session import run_brief_session
+
+    cfg = cfg_at(tmp_path)
+    runtime = FakeRuntime([RuntimeEvent("error", text="立即失败")])
+    result = run_brief_session(session=SESSION, cfg=cfg, runtime=runtime, spec=SPEC, now=NOW, budget_seconds=3)
+    assert result["complete"] is False and result["error"] == "立即失败"
+    assert 1 <= result["attempts"] <= 5  # 无退避时这个数字会是数百
+    assert result["elapsed_seconds"] >= 1.4  # 至少睡过 0.5s + 1.0s 两档退避
