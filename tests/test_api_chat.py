@@ -194,7 +194,7 @@ def test_busy_inside_the_worker_is_a_coded_error_frame(page, monkeypatch):
             )
             frames = list(stream)
         assert len(frames) == 1 and frames[0].startswith("event: error")
-        payload = json.loads(frames[0].split("\n")[1][len("data: "):])
+        payload = json.loads(frames[0].split("\n")[1][len("data: ") :])
         assert payload["kind"] == "error" and payload["text"] == code
 
 
