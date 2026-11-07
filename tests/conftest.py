@@ -16,6 +16,15 @@ def isolate_unit_tests_from_local_database(monkeypatch):
     monkeypatch.delenv("FRED_API_KEY", raising=False)
 
 
+# 离线套件里的假服务都绑在回环地址上；macOS 系统代理的例外名单可能不含 127.0.0.1，
+# 会让本应打到假服务的请求被代理拦截（ProxyError）。测试进程永远不应经代理访问回环地址。
+for _name in ("no_proxy", "NO_PROXY"):
+    _current = os.environ.get(_name, "")
+    _hosts = {host.strip() for host in _current.split(",") if host.strip()}
+    if not {"127.0.0.1", "localhost"} <= _hosts:
+        os.environ[_name] = ",".join(sorted({*_hosts, "127.0.0.1", "localhost"}))
+
+
 @pytest.fixture()
 def client():
     return TestClient(create_app())

@@ -206,6 +206,8 @@ def test_no_kept_code_references_a_dropped_table():
     files = [*sorted((ROOT / "investment_assistant").rglob("*.py")), *sorted((ROOT / "scripts").rglob("*.py"))]
     for path in files:
         for text in _string_constants(path):
+            if text.startswith("/"):
+                continue  # FastAPI 路由路径（如 v3.1 的 /api/trades），不是表引用
             match = pattern.search(text)
             if match:
                 hits.append(f"{path.relative_to(ROOT)}: {match.group(1)}")
