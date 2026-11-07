@@ -74,9 +74,7 @@ def review_plans(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConf
     for plan in plan_repo.plans_by_status(conn, ("pending", "open")):
         conn.execute("SAVEPOINT v3_review_one_plan")
         try:
-            _review_one(
-                conn, plan, session=session, cutoff_at=cutoff_at, cfg=cfg, changes=changes, unchecked=unchecked
-            )
+            _review_one(conn, plan, session=session, cutoff_at=cutoff_at, cfg=cfg, changes=changes, unchecked=unchecked)
         except Exception as exc:  # noqa: BLE001 - 记录原因后续着复查其余计划；连接级故障在 ROLLBACK 时自然上抛
             conn.execute("ROLLBACK TO SAVEPOINT v3_review_one_plan")
             changes[:] = [row for row in changes if row["plan_id"] != plan["id"]]

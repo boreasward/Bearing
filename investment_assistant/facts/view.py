@@ -16,8 +16,8 @@ from zoneinfo import ZoneInfo
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import trading_days_between
-from investment_assistant.execution.plan_line import held_sessions, next_action
 from investment_assistant.execution.plan_levels import _cent
+from investment_assistant.execution.plan_line import held_sessions, next_action
 from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo

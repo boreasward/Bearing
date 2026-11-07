@@ -320,12 +320,17 @@ def test_stop_hit_persists_until_sold(v3_tx):
 
 def test_split_folds_trailing_window_no_false_stop_hit(v3_tx):
     """拆股后移动止损的窗口按当日口径折算：止损不会跳到现价上方，次日不产生假 stop_hit。"""
-    data_repo.store_bars(v3_tx, "AAA", [
-        dict(bars(1, end=D0)[0], open=100.0, high=101.0, low=99.0, close=100.0),
-        dict(bars(1, end=D1)[0], open=110.0, high=111.0, low=109.0, close=110.0),
-        dict(bars(1, end=D2)[0], open=58.0, high=59.0, low=57.0, close=58.0, split_factor=2.0),
-        dict(bars(1, end=SESSION)[0], open=59.0, high=60.0, low=56.0, close=59.0),
-    ], now=NOW)
+    data_repo.store_bars(
+        v3_tx,
+        "AAA",
+        [
+            dict(bars(1, end=D0)[0], open=100.0, high=101.0, low=99.0, close=100.0),
+            dict(bars(1, end=D1)[0], open=110.0, high=111.0, low=109.0, close=110.0),
+            dict(bars(1, end=D2)[0], open=58.0, high=59.0, low=57.0, close=58.0, split_factor=2.0),
+            dict(bars(1, end=SESSION)[0], open=59.0, high=60.0, low=56.0, close=59.0),
+        ],
+        now=NOW,
+    )
     plan = plan_repo.insert_plan(v3_tx, plan_row("AAA", status="open", start_session=D0, shares=100))
     buy(v3_tx, "AAA", "a-buy")
     v3_tx.commit()
@@ -333,40 +338,75 @@ def test_split_folds_trailing_window_no_false_stop_hit(v3_tx):
     review(v3_tx)
 
     saved = saved_plan(v3_tx, plan["id"])
-    raises = [(row["session"], D(str(row["after"]["stop"])))
-              for row in plan_repo.events(v3_tx, plan["id"]) if row["event"] == "stop_raised"]
+    raises = [
+        (row["session"], D(str(row["after"]["stop"])))
+        for row in plan_repo.events(v3_tx, plan["id"])
+        if row["event"] == "stop_raised"
+    ]
     assert raises == [(D1, D(104)), (D2, D(55)), (SESSION, D(56))]  # D1：110−3×2；D2/D4：折算后高点 58/59 − 3×1
-    assert saved["stop"] == D(56)                       # 全程低于当日现价（58/59）
+    assert saved["stop"] == D(56)  # 全程低于当日现价（58/59）
     assert events_of(v3_tx, plan["id"], "stop_hit") == []  # 未折算的高点 110 会把止损抬到 107 → 假触及
 
 
 def test_split_adjusts_initial_stop_for_r_multiple(v3_tx):
     """拆股同步调整 initial_stop（R6）：平仓结果的 r 倍数与拆股前等价（买 100@50、止损 46、
     2 拆 1、卖 200@29 ≈ 拆股前买 100@50 卖 100@58 的 2.0 倍）。"""
-    data_repo.store_bars(v3_tx, "AAA", bars(3, end=D2, close=50.0)
-                         + bars(1, end=SESSION, close=25.0, high=26.0, low=24.0, split=2.0), now=NOW)
+    data_repo.store_bars(
+        v3_tx,
+        "AAA",
+        bars(3, end=D2, close=50.0) + bars(1, end=SESSION, close=25.0, high=26.0, low=24.0, split=2.0),
+        now=NOW,
+    )
     plan = plan_repo.insert_plan(
-        v3_tx, plan_row("AAA", status="open", start_session=D0, entry_low=D(49), entry_high=D(51),
-                        stop=D(46), initial_stop=D(46), target1=D(60), shares=100))
-    facts_repo.insert_trade(v3_tx, {"request_id": "r-buy", "ticker": "AAA", "side": "buy",
-                                    "quantity": 100, "price": D(50),
-                                    "executed_at": datetime(2026, 10, 30, 15, tzinfo=UTC)})
+        v3_tx,
+        plan_row(
+            "AAA",
+            status="open",
+            start_session=D0,
+            entry_low=D(49),
+            entry_high=D(51),
+            stop=D(46),
+            initial_stop=D(46),
+            target1=D(60),
+            shares=100,
+        ),
+    )
+    facts_repo.insert_trade(
+        v3_tx,
+        {
+            "request_id": "r-buy",
+            "ticker": "AAA",
+            "side": "buy",
+            "quantity": 100,
+            "price": D(50),
+            "executed_at": datetime(2026, 10, 30, 15, tzinfo=UTC),
+        },
+    )
     v3_tx.commit()
 
     review(v3_tx)
 
     saved = saved_plan(v3_tx, plan["id"])
-    assert saved["initial_stop"] == D(23) and saved["stop"] == D(23)   # 46 / 2
-    facts_repo.insert_trade(v3_tx, {"request_id": "r-sell", "ticker": "AAA", "side": "sell",
-                                    "quantity": 200, "price": D(29),
-                                    "executed_at": datetime(2026, 11, 4, 15, tzinfo=UTC)})
+    assert saved["initial_stop"] == D(23) and saved["stop"] == D(23)  # 46 / 2
+    facts_repo.insert_trade(
+        v3_tx,
+        {
+            "request_id": "r-sell",
+            "ticker": "AAA",
+            "side": "sell",
+            "quantity": 200,
+            "price": D(29),
+            "executed_at": datetime(2026, 11, 4, 15, tzinfo=UTC),
+        },
+    )
     v3_tx.commit()
     trades = facts_repo.list_trades(v3_tx, "AAA")
     built = build(trades, splits=data_repo.split_events(v3_tx, "AAA", cutoff_at=NOW))
-    outcome = close_outcome(plan=saved_plan(v3_tx, plan["id"]), closed_lots=built["closed"],
-                            trades=trades, sessions_since_stop_hit=None)
-    assert D(str(outcome["realized_pnl"])) == D(800)     # 200 × (29 − 25)
-    assert outcome["r_multiple"] == D("2.00")            # (800/200) / (25 − 23)
+    outcome = close_outcome(
+        plan=saved_plan(v3_tx, plan["id"]), closed_lots=built["closed"], trades=trades, sessions_since_stop_hit=None
+    )
+    assert D(str(outcome["realized_pnl"])) == D(800)  # 200 × (29 − 25)
+    assert outcome["r_multiple"] == D("2.00")  # (800/200) / (25 − 23)
 
 
 def test_one_plans_failure_does_not_crash_the_run(v3_tx, monkeypatch):
@@ -392,8 +432,8 @@ def test_one_plans_failure_does_not_crash_the_run(v3_tx, monkeypatch):
     assert [entry["ticker"] for entry in result["errors"]] == ["BBB"]
     assert result["errors"][0]["plan_id"] == poisoned["id"]
     assert "毒数据" in result["errors"][0]["error"]
-    assert active(v3_tx, "AAA")["reviewed_through"] == SESSION          # 好计划照常复查
-    untouched = plan_repo.plan(v3_tx, poisoned["id"])                   # 坏计划的写回全部回滚
+    assert active(v3_tx, "AAA")["reviewed_through"] == SESSION  # 好计划照常复查
+    untouched = plan_repo.plan(v3_tx, poisoned["id"])  # 坏计划的写回全部回滚
     assert untouched is not None and untouched["reviewed_through"] is None
     assert result["unchecked"] == [] and result["changes"] == []
     # 事务仍可用：失败之后别的写入照常提交
