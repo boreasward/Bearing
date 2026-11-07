@@ -247,3 +247,41 @@ def test_draft_sends_unconcluded_top_n_into_confirmation():
         final=True,
     )
     assert "进入二次确认" not in final  # 最终简报不写这句
+
+
+def test_price_text_trims_storage_zeros_without_rounding():
+    from investment_assistant.core.texts import price_text
+
+    assert price_text(D("164.130000")) == "164.13"
+    assert price_text(D("40.500000")) == "40.50"
+    assert price_text(D("34.457")) == "34.457"  # 不四舍五入
+    assert price_text(D("100.000000")) == "100"
+    assert price_text(None) == "—"
+
+
+def test_pending_line_formats_prices_and_unsized_shares():
+    """2026-11-07 上线冒烟：待入场行出现「164.130000」与「None 股」；股数没算时用固定文案。"""
+    plan = {
+        "ticker": "GILD",
+        "day": 1,
+        "entry_low": D("164.130000"),
+        "entry_high": D("169.650000"),
+        "stop": D("155.850000"),
+        "target1": D("188.980000"),
+        "shares": None,
+        "valid_until": date(2026, 11, 13),
+    }
+    text = render_brief(view(pending_plans=[plan]), final=True)
+    line = next(row for row in text.splitlines() if row.startswith("- GILD"))
+    assert line == (
+        "- GILD（第 1 天）：入场 164.13–169.65，止损 155.85，目标 188.98，未提供账户资金，未算股数，有效至 2026-11-13"
+    )
+    assert "None" not in text
+
+
+def test_regime_line_does_not_repeat_the_same_word():
+    market = {"breadth": {}, "spy_ret20": None, "etf_table": []}
+    neutral = render_brief(view(market={**market, "label": "neutral", "regime_tier": "neutral"}), final=True)
+    assert "- 区制：中性\n" in neutral and "中性（中性）" not in neutral
+    risk_on = render_brief(view(market={**market, "label": "risk_on", "regime_tier": "favorable"}), final=True)
+    assert "- 区制：进攻（有利）" in risk_on

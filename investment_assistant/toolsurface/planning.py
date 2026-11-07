@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from investment_assistant.core.texts import NO_EQUITY_TEXT
 from investment_assistant.data import repo as data_repo
 from investment_assistant.derivation.indicators import price as price_indicators
 from investment_assistant.execution.entry_rules import ENTRY_TYPES
@@ -31,7 +32,6 @@ from investment_assistant.toolsurface.validation import (
 )
 
 VERDICTS = ("confirm", "veto", "unknown")
-NO_EQUITY_TEXT = "未提供账户资金，未算股数"
 
 
 def _equity_snapshot(conn, env: ToolEnv) -> dict | None:

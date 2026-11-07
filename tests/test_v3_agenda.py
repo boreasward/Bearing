@@ -10,6 +10,7 @@ from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
 
 SESSION = date(2026, 11, 4)  # 周三
+PREV = date(2026, 11, 3)  # 周二：再次上榜的计划是之前的交易日保存的
 NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)
 CFG = AssistantConfig()
 TOP5 = ["AAPL", "MSFT", "NVDA", "MU", "AVGO"]
@@ -49,9 +50,9 @@ def _candidate(ticker, rank, *, streak=None):
     }
 
 
-def _plan(ticker, *, status="pending"):
+def _plan(ticker, *, status="pending", session=PREV):
     return {
-        "session": SESSION,
+        "session": session,
         "ticker": ticker,
         "origin": "brief",
         "entry_type": "zone_limit",
@@ -63,7 +64,7 @@ def _plan(ticker, *, status="pending"):
         "atr": D(2),
         "levels_source": "host",
         "max_hold_sessions": 20,
-        "valid_from": SESSION,
+        "valid_from": session,
         "valid_until": date(2026, 11, 10),
         "shares": None,
         "sizing": {},
@@ -242,3 +243,31 @@ def test_relisted_done_via_unknown_verdict(v3_tx):
     result = agenda(v3_tx)
 
     assert result["relisted"] == [{"plan_id": pending["id"], "ticker": "AAPL", "rank": 1, "done": True}]
+
+
+def test_plan_saved_today_is_not_relisted(v3_tx):
+    """当天刚保存的计划不算「再次上榜」：它的待办是当天的确认，已经做完；否则 agent 会被逼着
+    在同一交易日对它「延续」一次（2026-11-07 上线冒烟里三份计划都多了一行空的 continued）。"""
+    seed(v3_tx)
+    today = plan_repo.insert_plan(v3_tx, _plan("AAPL", session=SESSION))
+    earlier = plan_repo.insert_plan(v3_tx, _plan("MSFT"))
+    for ticker in ("AAPL", "MSFT"):
+        facts_repo.upsert_verdict(
+            v3_tx,
+            {
+                "session": SESSION,
+                "ticker": ticker,
+                "verdict": "confirm",
+                "reasons": "理由",
+                "counter": "",
+                "refs": [],
+                "origin": "brief",
+                "agent_session": "agenda-test",
+            },
+        )
+    v3_tx.commit()
+
+    result = agenda(v3_tx)
+
+    assert [item["plan_id"] for item in result["relisted"]] == [earlier["id"]]
+    assert today["id"] not in [item["plan_id"] for item in result["relisted"]]

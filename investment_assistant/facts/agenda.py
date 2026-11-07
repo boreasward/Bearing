@@ -32,7 +32,8 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
     relisted = []
     for plan in pending:
         rank = rank_by_ticker.get(plan["ticker"])
-        if rank is None:
+        if rank is None or plan["session"] == session:
+            # 当天刚保存的计划不是「再次上榜」：它的待办是当天的确认，已经做完
             continue
         verdict = verdicts.get(plan["ticker"])
         done = plan["id"] in concluded_today or (verdict is not None and verdict["verdict"] == "unknown")

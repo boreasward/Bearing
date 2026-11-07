@@ -256,7 +256,7 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
         pending_plans.append(
             {
                 "ticker": plan["ticker"],
-                "day": len(trading_days_between(plan["session"], session)) + 1,
+                "day": len(trading_days_between(plan["session"], session)),  # 两端都算：保存当天是第 1 天
                 "entry_low": plan["entry_low"],
                 "entry_high": plan["entry_high"],
                 "stop": plan["stop"],

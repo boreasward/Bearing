@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from investment_assistant.core.texts import price_text
+
 from investment_assistant.data.calendar import trading_days_between
 from investment_assistant.execution.plan_levels import _cent, earnings_flags
 
@@ -35,7 +37,7 @@ def pending_check(*, plan: dict, bar: dict | None, earnings: dict | None, sessio
     """
     stop = plan["stop"]
     if bar is not None and stop is not None and bar["close"] < stop:
-        return {"event": "invalidated", "reason": f"收盘 {bar['close']} 跌破止损 {stop}，未买入"}
+        return {"event": "invalidated", "reason": f"收盘 {price_text(bar['close'])} 跌破止损 {price_text(stop)}，未买入"}
     invalid, _ = earnings_flags(
         earnings, signal_date=session, valid_from=plan["valid_from"], valid_until=plan["valid_until"]
     )
@@ -76,9 +78,9 @@ def holding_check(
     start_session = plan["start_session"]
     if stop is not None:
         if session == start_session:  # 起算日只看收盘（最低价可能在买入之前）
-            hit, how = bar["close"] < stop, f"收盘 {bar['close']} 跌破止损 {stop}"
+            hit, how = bar["close"] < stop, f"收盘 {price_text(bar['close'])} 跌破止损 {price_text(stop)}"
         else:
-            hit, how = bar["low"] <= stop, f"最低 {bar['low']} 触及止损 {stop}"
+            hit, how = bar["low"] <= stop, f"最低 {price_text(bar['low'])} 触及止损 {price_text(stop)}"
         if hit:
             events.append({"event": "stop_hit", "reason": how, "before": {}, "after": {}})
         if (
@@ -109,7 +111,7 @@ def holding_check(
                 events.append(
                     {
                         "event": "stop_raised",
-                        "reason": f"移动止损 {stop} → {new_stop}",
+                        "reason": f"移动止损 {price_text(stop)} → {price_text(new_stop)}",
                         "before": {"stop": stop},
                         "after": {"stop": new_stop},
                     }
@@ -171,7 +173,7 @@ def next_action(*, plan: dict, position: dict | None, unchecked: bool) -> dict:
     if stop is not None and confirmed < stop:
         return {
             "kind": "stop_order",
-            "text": f"止损单需上调至 {stop}（当前挂单 {confirmed}）",
+            "text": f"止损单需上调至 {price_text(stop)}（当前挂单 {price_text(confirmed)}）",
             "stop": stop,
             "reason": None,
         }

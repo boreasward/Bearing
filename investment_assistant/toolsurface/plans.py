@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from investment_assistant.core.texts import price_text
 from investment_assistant.data import repo as data_repo
 from investment_assistant.derivation.indicators import price as price_indicators
 from investment_assistant.execution.plan_levels import (
@@ -80,6 +81,9 @@ def continue_plan(env: ToolEnv, *, plan_id, refs: list | None = None) -> dict:
         plan = _plan_or_error(conn, plan_id)
         if plan["status"] != "pending":
             raise ValueError("not_pending")
+        if plan["session"] == env.session:
+            # 延续是「之后的交易日再次上榜」（spec §6.4）；当天刚保存的计划没有可延续的
+            raise ValueError("saved_this_session: 计划今天刚保存，延续只在之后的交易日")
         checked = _known_refs(conn, env, refs, required=True)
         _require_today_confirm(conn, env, plan["ticker"])
         valid_from, valid_until = validity(env.session, env.cfg.v3.valid_sessions)
@@ -110,7 +114,8 @@ def continue_plan(env: ToolEnv, *, plan_id, refs: list | None = None) -> dict:
             warnings=warnings,
         )
         after = {"valid_from": valid_from, "valid_until": valid_until, "shares": sizing["shares"]}
-        reason = f"再次上榜，有效期延至 {valid_until:%Y-%m-%d}，股数重算为 {sizing['shares']}"
+        shares_text = NO_EQUITY_TEXT if sizing["shares"] is None else f"股数重算为 {sizing['shares']}"
+        reason = f"再次上榜，有效期延至 {valid_until:%Y-%m-%d}，{shares_text}"
         plan_repo.insert_event(
             conn,
             {
@@ -345,7 +350,7 @@ def raise_stop(env: ToolEnv, *, plan_id, stop, request_id, confirmed) -> dict:
                 "plan_id": plan_id,
                 "session": env.session,
                 "event": "stop_raised",
-                "reason": f"用户上调止损 {before['stop']} → {amount}",
+                "reason": f"用户上调止损 {price_text(before['stop'])} → {price_text(amount)}",
                 "before": before,
                 "after": {"stop": amount},
                 "source": "user",

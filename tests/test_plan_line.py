@@ -458,3 +458,10 @@ def test_free_slots_and_deviations():
     assert len(price_out) == 1 and "33.00" in price_out[0]
     both = plan_line.deviations(plan=plan, price=D("33.00"), quantity=D(150))
     assert len(both) == 2 and "150" in both[1]
+
+
+def test_stop_order_raise_text_trims_storage_zeros():
+    position = {"quantity": D(10), "avg_cost": D(95), "opened_at": None}
+    plan = {**_open_plan(), "stop": D("100.500000"), "confirmed_stop_order": D("95.000000")}
+    action = plan_line.next_action(plan=plan, position=position, unchecked=False)
+    assert action["text"] == "止损单需上调至 100.50（当前挂单 95）"

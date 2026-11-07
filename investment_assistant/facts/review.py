@@ -13,6 +13,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from investment_assistant.config import AssistantConfig
+from investment_assistant.core.texts import price_text
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import add_trading_days, trading_days_between
 from investment_assistant.derivation.indicators import price as price_indicators
@@ -234,7 +235,7 @@ def _fill_adopted_levels(conn, plan: dict, day: date, bars: list[dict], changes:
         return plan  # 历史不够：下一天再试
     close = Decimal(str(history[-1]["close"]))
     levels = rule_levels(close, atr)
-    reason = f"补录价位：最新收盘 {close}，止损 {levels['stop']}（2 倍 ATR {atr}）"
+    reason = f"补录价位：最新收盘 {price_text(close)}，止损 {price_text(levels['stop'])}（2 倍 ATR {price_text(atr)}）"
     after = {**levels, "atr": atr}
     saved = _emit(conn, plan["id"], day, "stop_set", reason, before={}, after=after)
     plan = plan_repo.update_plan(

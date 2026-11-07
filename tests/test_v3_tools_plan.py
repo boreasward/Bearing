@@ -206,6 +206,8 @@ def test_plan_without_equity_and_without_room(v3_tx):
     confirm(env, t)
     saved = call(env, "save_plan", {"ticker": t, **TEXTS})["data"]
     assert saved["shares"] is None and "未提供账户资金，未算股数" in saved["warnings"]
+    # 下面用 continue_plan 重算股数：把它当作前一个交易日保存的计划（延续只在之后的交易日发生）
+    v3_tx.execute("UPDATE v3_plans SET session = %s WHERE id = %s", (date(2026, 11, 3), saved["id"]))
     facts_repo.insert_equity(v3_tx, {"request_id": "eq-1", "as_of": SESSION, "equity": D(100000), "note": ""})
     v3_tx.commit()
     again = call(env, "continue_plan", {"plan_id": saved["id"], "refs": ["call:3"]})["data"]
@@ -405,7 +407,7 @@ def test_revise_plan_only_pending_and_records_changed_keys(v3_tx):
 def test_continue_plan_requires_pending_and_today_confirm(v3_tx):
     _seed(v3_tx)
     env = _env(v3_tx, agent="t-cont")
-    plan = _plan(v3_tx, TOP5[0])
+    plan = _plan(v3_tx, TOP5[0], session=date(2026, 11, 3))
     v3_tx.commit()
     ref = call(env, "get_market", {})["ref"]
     assert call(env, "continue_plan", {"plan_id": plan["id"], "refs": [ref]})["error"].startswith("no_confirm_verdict")
@@ -480,3 +482,16 @@ def test_save_summary_writes_the_days_brief_row(v3_tx):
     row = call(env, "save_summary", {"text": "名单无变化，持仓照旧。"})["data"]
     assert row["summary"] == "名单无变化，持仓照旧。" and row["status"] == "draft"
     assert call(env, "save_summary", {"text": "第二次的一句话。"})["data"]["summary"] == "第二次的一句话。"
+
+
+def test_continue_plan_rejects_a_plan_saved_the_same_session(v3_tx):
+    """延续只发生在之后的交易日（spec §6.4 再次上榜）；同一交易日刚保存的计划拒绝，不写事件。"""
+    _seed(v3_tx)
+    env = _env(v3_tx, agent="t-same")
+    t = TOP5[0]
+    confirm(env, t)
+    saved = call(env, "save_plan", {"ticker": t, **TEXTS, "refs": ["call:2"]})["data"]
+    assert call(env, "continue_plan", {"plan_id": saved["id"], "refs": ["call:2"]})["error"].startswith(
+        "saved_this_session"
+    )
+    assert _events(v3_tx, saved["id"]) == ["created"]

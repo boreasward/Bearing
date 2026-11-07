@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from investment_assistant.core.texts import REGIME_LABEL_TEXT
+from investment_assistant.core.texts import NO_EQUITY_TEXT, REGIME_LABEL_TEXT, price_text
 from investment_assistant.facts.coverage import coverage_lines
 from investment_assistant.facts.ranking import TIER_TEXT
 
@@ -64,7 +64,9 @@ def _etf_table_rows(table: list[dict]) -> list[str]:
 def _market_lines(market: dict) -> list[str]:
     label = market.get("label") or "未知"
     tier = market.get("regime_tier") or "insufficient"
-    lines = [f"- 区制：{REGIME_LABEL_TEXT.get(label, label)}（{TIER_TEXT.get(tier, tier)}）"]
+    label_text, tier_text = REGIME_LABEL_TEXT.get(label, label), TIER_TEXT.get(tier, tier)
+    # 中性区制的档位也是「中性」：同一个词不写两遍
+    lines = [f"- 区制：{label_text}" if label_text == tier_text else f"- 区制：{label_text}（{tier_text}）"]
     breadth = market.get("breadth") or {}
     lines.append(
         f"- 广度：站上 50 日线 {_share(breadth, 'pct_50', 'above_50', 'eligible_50')}；"
@@ -108,7 +110,7 @@ def _holding_lines(holdings: list[dict], *, final: bool) -> list[str]:
         if action.get("text"):
             parts.append(action["text"])
         if row.get("stop") is not None:
-            parts.append(f"止损 {row['stop']}")
+            parts.append(f"止损 {price_text(row['stop'])}")
         pnl, pct = row.get("unrealized_pnl"), row.get("pnl_pct")
         if pnl is not None:
             parts.append(f"浮动盈亏 {pnl}（{pct:+.1%}）" if pct is not None else f"浮动盈亏 {pnl}")
@@ -123,9 +125,13 @@ def _holding_lines(holdings: list[dict], *, final: bool) -> list[str]:
             verdict = REVIEW_VERDICT_TEXT.get(review.get("verdict"), review.get("verdict"))
             parts.append(f"复查：{verdict}——{review['reasons']}" if review.get("reasons") else f"复查：{verdict}")
         if not parts and row.get("quantity") is not None:
-            parts.append(f"{row['quantity']} 股，均价 {row['avg_cost']}")
+            parts.append(f"{row['quantity']} 股，均价 {price_text(row['avg_cost'])}")
         lines.append(f"- {row['ticker']}：" + "，".join(parts) + "。")
     return lines
+
+
+def _shares_text(shares) -> str:
+    return NO_EQUITY_TEXT if shares is None else f"{shares} 股"
 
 
 def _pending_plan_lines(plans: list[dict]) -> list[str]:
@@ -133,8 +139,8 @@ def _pending_plan_lines(plans: list[dict]) -> list[str]:
         return ["今天没有待入场计划。"]
     return [
         f"- {row['ticker']}（第 {row.get('day', 1)} 天）："
-        f"入场 {row['entry_low']}–{row['entry_high']}，止损 {row['stop']}，"
-        f"目标 {row['target1']}，{row['shares']} 股，有效至 {row['valid_until']:%Y-%m-%d}"
+        f"入场 {price_text(row['entry_low'])}–{price_text(row['entry_high'])}，止损 {price_text(row['stop'])}，"
+        f"目标 {price_text(row['target1'])}，{_shares_text(row['shares'])}，有效至 {row['valid_until']:%Y-%m-%d}"
         + ("，缺日线，未复查" if row.get("missing_bar") else "")
         for row in plans
     ]

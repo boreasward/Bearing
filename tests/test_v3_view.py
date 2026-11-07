@@ -306,3 +306,16 @@ def test_pending_missing_bar_flagged_in_section_5(v3_tx):
     assert lines["AAPL"].endswith("，缺日线，未复查")
     assert lines["BBB"].endswith("，缺日线，未复查")
     assert "缺日线，未复查" not in lines["MSFT"]
+
+
+def test_pending_plan_day_counts_the_saving_session_as_day_one(v3_tx):
+    """2026-11-07 上线冒烟：当天保存的计划显示成「第 2 天」。保存当天是第 1 天，下一个交易日第 2 天。"""
+    data_repo.store_bars(v3_tx, "AAPL", bars(), now=NOW)
+    data_repo.store_bars(v3_tx, "MSFT", bars(), now=NOW)
+    plan_repo.insert_plan(v3_tx, plan("AAPL", status="pending", start_session=None))
+    plan_repo.insert_plan(v3_tx, plan("MSFT", status="pending", start_session=None, session=PREV))
+    v3_tx.commit()
+
+    view = brief_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run_view([]))
+
+    assert {row["ticker"]: row["day"] for row in view["pending_plans"]} == {"AAPL": 1, "MSFT": 2}
