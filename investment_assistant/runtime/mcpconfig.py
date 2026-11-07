@@ -17,8 +17,13 @@ def write(
     agent_session: str,
     env_file: Path | None = None,
 ) -> Path:
-    """Write ``<workdir>/.pi/mcp.json`` declaring the ``ia`` server (direct exposure, repo cwd);
-    ``--env-file`` only when the caller pinned an env file."""
+    """Write ``<workdir>/.pi/mcp.json`` declaring the ``ia`` server (direct exposure, repo cwd).
+
+    Pi starts the server with its allow-listed environment (pi-unattended.md), which drops the
+    database URL; so the server always gets ``--env-file``: the caller's pinned file, else the
+    repo's ``.env`` when it exists (the page chat pins none)."""
+    if env_file is None and (Path(repo_root) / ".env").is_file():
+        env_file = Path(repo_root) / ".env"
     args = [
         "-m",
         "investment_assistant.toolsurface",
