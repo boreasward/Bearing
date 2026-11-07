@@ -12,7 +12,7 @@ describe('app routing', () => {
     // the four blocks mount; their data fetches fail in jsdom and fall to their empty/error states
     expect(await findByRole('heading', { name: '今日简报' })).toBeInTheDocument()
     expect(await findByRole('heading', { name: '计划与持仓' })).toBeInTheDocument()
-    expect(await findByRole('heading', { name: '对话' })).toBeInTheDocument()
+    expect(await findByRole('heading', { name: '今日简报' })).toBeInTheDocument()
   })
 
   it('switches to the gallery when the hash changes', async () => {

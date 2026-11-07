@@ -41,10 +41,12 @@ const STOP_ORDER: TodayAction = {
 }
 
 describe('TodayActions', () => {
-  it('renders nothing at all for an empty action list', () => {
-    const { container } = render(TodayActions, { actions: [] })
-    expect(container.textContent?.trim()).toBe('')
-    expect(container.querySelector('*')).toBeNull()
+  it('shows a compact empty card when there is nothing to do', () => {
+    // 用户 2026-11-07：没有操作时整块消失会让左栏顶部空出一大块；改为一张小的空卡片
+    render(TodayActions, { actions: [] })
+    expect(screen.getByRole('heading', { name: '今日操作' })).toBeInTheDocument()
+    expect(screen.getByText('今天没有需要操作的事项')).toBeInTheDocument()
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0)
   })
 
   it('sorts stop_hit_unresolved first and shows the fixed texts', () => {

@@ -14,14 +14,27 @@
   import SettingsSheet from '$lib/home/SettingsSheet.svelte'
   import { errorText, type Today } from '$lib/home/types'
 
-  // 唯一的页面（spec §12）：抬头（数据截至、总资产、设置入口）+ 四块内容。
-  // 宽屏两栏：左栏今日操作、简报、对话；右栏账户条、计划与持仓。窄屏顺序用 order-*：
-  // 今日操作 → 账户条 → 计划与持仓 → 简报 → 对话（账户条随计划组走）。
+  // 唯一的页面（spec §12）：抬头（数据截至、总资产、设置入口）+ 内容块 + 助手面板。
+  // 宽屏两栏，每栏各自纵向堆叠（不共用行高）：左栏今日操作、简报；右栏账户条、计划与持仓。
+  // 窄屏两栏的外壳用 contents 摊平成单栏，顺序靠 order-*：今日操作 → 账户条 → 计划与持仓 → 简报。
+  // 对话在右下角悬浮按钮打开的助手面板里（用户 2026-11-07）：非模态，关闭只隐藏不卸载，一轮回答不会断。
   let today = $state<Today | null>(null)
   let todayError = $state('')
   let plansVersion = $state(0)
   let chatsVersion = $state(0)
   let settingsOpen = $state(false)
+  let assistantOpen = $state(false)
+  let assistantOpener: HTMLElement | null = null
+
+  function openAssistant() {
+    assistantOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    assistantOpen = true
+  }
+
+  function closeAssistant() {
+    assistantOpen = false
+    assistantOpener?.focus()  // 焦点还给打开前的元素（design-system §键盘）
+  }
 
   async function loadToday() {
     todayError = ''
@@ -63,15 +76,38 @@
     {/snippet}
   </PageHeader>
 
-  <div class="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-    {#if (today?.actions?.length ?? 0) > 0}
-      <div class="order-1 lg:col-start-1"><TodayActions actions={today?.actions ?? []} onChanged={reload} /></div>
-    {/if}
-    <div class="order-2 lg:col-start-2"><AccountStrip account={today?.account ?? null} onChanged={reload} /></div>
-    <div class="order-3 lg:col-start-2"><PlanCards version={plansVersion} onChanged={reload} /></div>
-    <div class="order-4 lg:col-start-1"><BriefPanel /></div>
-    <div class="order-5 lg:col-start-1"><ChatPanel version={chatsVersion} /></div>
+  <div class="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
+    <div data-column="main" class="contents lg:flex lg:flex-col lg:gap-4">
+      <div class="order-1"><TodayActions actions={today?.actions ?? []} onChanged={reload} /></div>
+      <div class="order-4"><BriefPanel /></div>
+    </div>
+    <div data-column="side" class="contents lg:flex lg:flex-col lg:gap-4">
+      <div class="order-2"><AccountStrip account={today?.account ?? null} onChanged={reload} /></div>
+      <div class="order-3"><PlanCards version={plansVersion} onChanged={reload} /></div>
+    </div>
   </div>
 </div>
+
+<svelte:window onkeydown={(event) => { if (assistantOpen && event.key === 'Escape') closeAssistant() }} />
+
+{#if !assistantOpen}
+  <Button variant="primary" class="fixed right-6 bottom-6 z-30 shadow-2" aria-label="打开助手" onclick={openAssistant}>
+    <Icon name="message-square" />
+    <span>助手</span>
+  </Button>
+{/if}
+
+<aside
+  aria-label="助手"
+  hidden={!assistantOpen}
+  class="bg-popover text-popover-foreground shadow-2 fixed inset-y-0 right-0 z-40 w-full overflow-y-auto border-l border-border p-4 sm:max-w-[28rem]"
+>
+  <div class="mb-2 flex justify-end">
+    <Button variant="ghost" size="icon" aria-label="关闭助手" onclick={closeAssistant}>
+      <Icon name="x" />
+    </Button>
+  </div>
+  <ChatPanel version={chatsVersion} />
+</aside>
 
 <SettingsSheet bind:open={settingsOpen} onSaved={() => (chatsVersion += 1)} />

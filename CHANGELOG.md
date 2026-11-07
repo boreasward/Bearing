@@ -19,6 +19,14 @@
 - **新命令**：`daily run`（五件事，支持 `--no-collect` 与单次临时指定运行时）与 `daily settings show|options|set`。
 - 验收对照（A1–A22 与沿用条款各由哪个测试证明）见 [docs/operations/daily-run.md](docs/operations/daily-run.md) 末尾。
 
+### 上线当天的修正（2026-11-07）
+
+- 每日任务 LaunchAgent：运行目录与页面服务一致（共用 `pi.lock`），补 `WorkingDirectory`。
+- 采集：yfinance 的响应缓存钉住 curl 句柄，launchd 下（256 个文件描述符）日线采集耗尽描述符；每次取完日线 / 资讯清空缓存。
+- 页面对话的工具全部返回 `unavailable`：Pi 的环境白名单滤掉了数据库连接串；MCP 配置缺省带仓库 `.env`。
+- 简报：价格去掉存储尾零、股数未算写「未提供账户资金，未算股数」、区制同词不重复、待入场计划保存当天算第 1 天；当天保存的计划不再列为「再次上榜」，`continue_plan` 拒绝同一交易日的计划（`saved_this_session`）。
+- 页面：两栏各自堆叠（简报不再被挤到计划卡片下方）；今日操作没有内容时显示小卡片；「持仓」组加「补录持仓」；空组显示原因；对话移到右下角「助手」悬浮按钮打开的侧边面板。
+
 ## v3（进行中）
 
 - 迁移 033（删 v2 的表）已于 2026-11-06 经用户授权在真实库执行：先 `pg_dump` 全库备份到 `.local/v3/backup-before-033.dump`，61 张表删除，19 张保留表行数不变，`facts show` 照常；`migrate` 不再被删表保护拒绝，之后的新迁移可以正常应用到真实库。记录见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md)。

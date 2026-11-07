@@ -103,6 +103,11 @@
       {/each}
     </ul>
   </Section>
+{:else}
+  <!-- 没有操作时也留一张小卡片（用户 2026-11-07），左栏顶部不再空出一块 -->
+  <Section title="今日操作" level={2}>
+    <p class="rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground">今天没有需要操作的事项</p>
+  </Section>
 {/if}
 
 <ConfirmDialog

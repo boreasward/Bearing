@@ -69,11 +69,15 @@ const CHAT_DETAIL = {
   messages: [],
 }
 
-function stubHomeApi(overrides: { latestBrief?: () => Response } = {}) {
+async function openAssistant() {
+  await fireEvent.click(await screen.findByRole('button', { name: '打开助手' }))
+}
+
+function stubHomeApi(overrides: { latestBrief?: () => Response; today?: () => Response } = {}) {
   const router = vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), 'http://local')
     const path = url.pathname
-    if (path === '/api/today') return json(TODAY)
+    if (path === '/api/today') return overrides.today ? overrides.today() : json(TODAY)
     if (path === '/api/briefs') return json({ briefs: [{ session: '2026-11-06', status: 'draft', pushed: false }, { session: '2026-11-05', status: 'final', pushed: true }] })
     if (path === '/api/briefs/latest') return overrides.latestBrief ? overrides.latestBrief() : json(BRIEF)
     if (path === '/api/briefs/2026-11-06') return json(BRIEF)
@@ -95,40 +99,65 @@ describe('Home', () => {
     stubHomeApi()
     render(Home)
     expect(await screen.findByRole('heading', { name: '今日操作' })).toBeInTheDocument()
-    expect(screen.getByText('止损已触及，未见卖出记录')).toBeInTheDocument()
+    expect(await screen.findByText('止损已触及，未见卖出记录')).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: '计划与持仓' })).toBeInTheDocument()
     expect(screen.getByText('AAPL')).toBeInTheDocument()
     expect(screen.getByText('最新收盘高于入场区间')).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: '今日简报' })).toBeInTheDocument()
     expect(screen.getByText('MU：继续持有')).toBeInTheDocument()
+    await openAssistant()
     expect(await screen.findByRole('heading', { name: '对话' })).toBeInTheDocument()
   })
 
-  it('is a wide two-column grid and orders the blocks 今日操作 → 计划与持仓 → 简报 → 对话 on narrow screens', async () => {
+  it('stacks each wide-screen column on its own, so the brief sits right under 今日操作 instead of below the plans', async () => {
+    // 用户 2026-11-07：单一网格让两栏的行高绑在一起，简报被挤到计划卡片之后、左栏空出一大块。
+    // 现在每栏一个纵向堆叠（窄屏用 contents 摊平回单栏，靠 order 排序）。
     stubHomeApi()
     render(Home)
     await screen.findByRole('heading', { name: '今日操作' })
-    await screen.findByRole('heading', { name: '对话' })
+    await screen.findByRole('heading', { name: '今日简报' })
     const grid = document.querySelector('[class*="lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]"]')
     expect(grid).not.toBeNull()
-    // each block carries its narrow-screen order AND its wide-screen column (lg:col-start-*)
-    const block = (order: string, col: 1 | 2) => {
-      const wrap = grid!.querySelector(`:scope > [class*="${order}"]`)
-      expect(wrap, order).not.toBeNull()
-      expect(wrap!.className, order).toContain(`lg:col-start-${col}`)
-      return wrap!
+    const main = grid!.querySelector(':scope > [data-column="main"]')!
+    const side = grid!.querySelector(':scope > [data-column="side"]')!
+    for (const column of [main, side]) {
+      expect(column.className).toContain('contents')
+      expect(column.className).toContain('lg:flex')
     }
-    expect(block('order-1', 1)).toHaveTextContent('今日操作')
-    expect(block('order-2', 2)).toHaveTextContent('总资产')
-    expect(block('order-3', 2)).toHaveTextContent('计划与持仓')
-    expect(block('order-4', 1)).toHaveTextContent('今日简报')
-    expect(block('order-5', 1)).toHaveTextContent('对话')
-    // the order values themselves say 1 < 3 < 4 < 5: 今日操作 before 计划与持仓 before 简报 before 对话
-    const order = (c: string) => Number(/order-(\d)/.exec(c)![1])
-    const classes = [...grid!.children].map((el) => el.className)
-    expect(order(classes[0])).toBeLessThan(order(classes[2]))
-    expect(order(classes[2])).toBeLessThan(order(classes[3]))
-    expect(order(classes[3])).toBeLessThan(order(classes[4]))
+    const blocks = (column: Element) => [...column.children].map((el) => ({ order: /order-(\d)/.exec(el.className)?.[1], text: el.textContent ?? '' }))
+    const left = blocks(main)
+    expect(left.map((b) => b.order)).toEqual(['1', '4'])
+    expect(left[0].text).toContain('今日操作')
+    expect(left[1].text).toContain('今日简报')
+    const right = blocks(side)
+    expect(right.map((b) => b.order)).toEqual(['2', '3'])
+    expect(right[0].text).toContain('总资产')
+    expect(right[1].text).toContain('计划与持仓')
+    expect(grid!.textContent).not.toContain('选择对话') // 对话不在页面栏里，在助手面板里
+  })
+
+  it('keeps 今日操作 as a small empty card when there is nothing to do', async () => {
+    stubHomeApi({ today: () => json({ ...TODAY, actions: [] }) })
+    render(Home)
+    expect(await screen.findByRole('heading', { name: '今日操作' })).toBeInTheDocument()
+    expect(screen.getByText('今天没有需要操作的事项')).toBeInTheDocument()
+  })
+
+  it('opens the assistant from a floating button and keeps it mounted while closed', async () => {
+    stubHomeApi()
+    render(Home)
+    await screen.findByRole('button', { name: '打开助手' })
+    // 隐藏状态下 Testing Library 算不出可访问名，直接按 aria-label 取
+    const panel = document.querySelector('aside[aria-label="助手"]')!
+    expect(panel).not.toBeNull()
+    expect(panel).toHaveAttribute('hidden')
+    await openAssistant()
+    expect(panel).not.toHaveAttribute('hidden')
+    expect(await screen.findByRole('heading', { name: '对话' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: '关闭助手' }))
+    expect(panel).toHaveAttribute('hidden')
+    // 关闭只是隐藏：正在流式输出的一轮不会因为关面板而丢
+    expect(panel.querySelector('textarea')).not.toBeNull()
   })
 
   it('shows 二次确认未完成 when the latest brief is unfinished', async () => {
@@ -149,6 +178,7 @@ describe('Home', () => {
     render(Home)
     const briefSelect = await screen.findByRole('combobox', { name: '选择简报' })
     await waitFor(() => expect(briefSelect.textContent).toContain('2026-11-06'))
+    await openAssistant()
     const chatSelect = await screen.findByRole('combobox', { name: '选择对话' })
     await waitFor(() => expect(chatSelect.textContent).toContain('关于止损的追问'))
     expect(screen.getByLabelText('提问')).toBeInTheDocument()
@@ -174,7 +204,7 @@ describe('Home', () => {
     stubHomeApi()
     vi.stubEnv('DEV', false)
     render(Home)
-    await screen.findByRole('heading', { name: '对话' })
+    await screen.findByRole('heading', { name: '今日简报' })
     expect(screen.queryByRole('link')).toBeNull()
   })
 })

@@ -3,14 +3,16 @@
   import Section from '$lib/ui/domain/Section.svelte'
   import DataBlock from '$lib/ui/domain/DataBlock.svelte'
   import { get } from '$lib/api'
+  import { Button } from '$lib/ui/button/index'
   import PlanCard from './PlanCard.svelte'
+  import TradeForm from './TradeForm.svelte'
   import { errorText, type PlanCardData } from './types'
 
   // 计划与持仓（spec §12）：三组——持仓、待入场、已结束（缺省折叠）。每组一个接口调用；
   // `version` 变化（页面里任何一处写入完成）时整块重取。
   let { version = 0, onChanged }: { version?: number; onChanged?: () => void } = $props()
 
-  type GroupState = { state: 'loading' | 'ready' | 'error'; plans: PlanCardData[]; error: string }
+  type GroupState = { state: 'loading' | 'empty' | 'ready' | 'error'; plans: PlanCardData[]; error: string }
   const empty: GroupState = { state: 'loading', plans: [], error: '' }
   let groups = $state<Record<'holdings' | 'pending' | 'ended', GroupState>>({
     holdings: { ...empty },
@@ -18,12 +20,14 @@
     ended: { ...empty },
   })
   let endedOpen = $state(false)
+  // 补录持仓：已有的持仓没有计划，复用记成交表单、不带 plan_id，宿主据此补录一份计划（spec §6.6）
+  let adoptOpen = $state(false)
 
   async function loadGroup(group: 'holdings' | 'pending' | 'ended') {
     groups[group] = { ...empty }
     try {
       const data = await get<{ plans: PlanCardData[] }>(`/api/plans?group=${group}&limit=20`, { errorDetails: true })
-      groups[group] = { state: 'ready', plans: data.plans, error: '' }
+      groups[group] = { state: data.plans.length ? 'ready' : 'empty', plans: data.plans, error: '' }
     } catch (cause) {
       groups[group] = { state: 'error', plans: [], error: errorText(cause) }
     }
@@ -43,7 +47,12 @@
   <div class="grid gap-4">
     {#snippet group(title: string, group: 'holdings' | 'pending' | 'ended', emptyText: string)}
       <section class="grid gap-2" aria-label={title}>
-        <h3 class="text-base font-medium">{title}</h3>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-base font-medium">{title}</h3>
+          {#if group === 'holdings'}
+            <Button size="sm" variant="outline" onclick={() => (adoptOpen = true)}>补录持仓</Button>
+          {/if}
+        </div>
         <DataBlock state={groups[group].state} message={groups[group].state === 'error' ? groups[group].error : emptyText} skeleton="row">
           {#if groups[group].plans.length}
             <div class="grid gap-3">
@@ -77,3 +86,5 @@
     </Collapsible.Root>
   </div>
 </Section>
+
+<TradeForm bind:open={adoptOpen} onDone={onChanged} />
