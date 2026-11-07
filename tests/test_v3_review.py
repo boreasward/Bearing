@@ -7,6 +7,8 @@ from decimal import Decimal as D
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import add_trading_days
+from investment_assistant.execution.plan_line import close_outcome
+from investment_assistant.execution.positions import build
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts import review as facts_review
@@ -204,11 +206,14 @@ def test_catch_up_finds_stop_hit_on_missed_session(v3_tx):
 
 
 def test_missing_bar_marks_holding_unchecked(v3_tx):
-    """Review Focus 1 / A7：缺日线的持仓只标「无法检查止损」，其他持仓照常检查。"""
+    """Review Focus 1 / A7：缺日线的持仓只标「无法检查止损」，其他持仓照常检查；
+    待入场计划同样不推进复查，日线补上后还能查收盘跌破止损。"""
     data_repo.store_bars(v3_tx, "AAA", bars(20), now=NOW)
     data_repo.store_bars(v3_tx, "BBB", bars(20, end=D2), now=NOW)  # BBB 没有 SESSION 的日线
+    data_repo.store_bars(v3_tx, "CCC", bars(20, end=D2), now=NOW)  # CCC（待入场）同样缺 SESSION 日线
     plan_repo.insert_plan(v3_tx, plan_row("AAA", status="open", start_session=D0))
     plan_repo.insert_plan(v3_tx, plan_row("BBB", status="open", start_session=D0))
+    ccc = plan_repo.insert_plan(v3_tx, plan_row("CCC"))  # pending：valid_from=D1
     buy(v3_tx, "AAA", "a-buy")
     buy(v3_tx, "BBB", "b-buy")
     v3_tx.commit()
@@ -218,6 +223,13 @@ def test_missing_bar_marks_holding_unchecked(v3_tx):
     assert result["unchecked"] == ["BBB"]
     assert active(v3_tx, "AAA")["reviewed_through"] == SESSION
     assert active(v3_tx, "BBB")["reviewed_through"] == D2  # 缺日线那天不推进
+    assert active(v3_tx, "CCC")["reviewed_through"] == D2  # 待入场同样不推进（spec §6.3）
+    # 日线补上后重跑：CCC 的复查继续，不会永久漏掉收盘跌破止损
+    data_repo.store_bars(v3_tx, "CCC", bars(1, end=SESSION, close=90.0, low=89.0), now=NOW)
+    v3_tx.commit()
+    review(v3_tx)
+    ended = plan_repo.plan(v3_tx, ccc["id"])
+    assert ended is not None and ended["status"] == "invalidated"
     actions = today_actions(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG)
     assert [(row["ticker"], row["kind"]) for row in actions] == [("BBB", "unchecked"), ("AAA", "stop_order")]
     assert actions[0]["text"] == "缺日线，无法检查止损"
@@ -304,3 +316,88 @@ def test_stop_hit_persists_until_sold(v3_tx):
     actions = today_actions(v3_tx, session=D2, cutoff_at=NOW, cfg=CFG)
     assert actions and actions[0]["kind"] == "stop_hit_unresolved"
     assert actions[0]["text"] == "止损已触及，未见卖出记录"
+
+
+def test_split_folds_trailing_window_no_false_stop_hit(v3_tx):
+    """拆股后移动止损的窗口按当日口径折算：止损不会跳到现价上方，次日不产生假 stop_hit。"""
+    data_repo.store_bars(v3_tx, "AAA", [
+        dict(bars(1, end=D0)[0], open=100.0, high=101.0, low=99.0, close=100.0),
+        dict(bars(1, end=D1)[0], open=110.0, high=111.0, low=109.0, close=110.0),
+        dict(bars(1, end=D2)[0], open=58.0, high=59.0, low=57.0, close=58.0, split_factor=2.0),
+        dict(bars(1, end=SESSION)[0], open=59.0, high=60.0, low=56.0, close=59.0),
+    ], now=NOW)
+    plan = plan_repo.insert_plan(v3_tx, plan_row("AAA", status="open", start_session=D0, shares=100))
+    buy(v3_tx, "AAA", "a-buy")
+    v3_tx.commit()
+
+    review(v3_tx)
+
+    saved = saved_plan(v3_tx, plan["id"])
+    raises = [(row["session"], D(str(row["after"]["stop"])))
+              for row in plan_repo.events(v3_tx, plan["id"]) if row["event"] == "stop_raised"]
+    assert raises == [(D1, D(104)), (D2, D(55)), (SESSION, D(56))]  # D1：110−3×2；D2/D4：折算后高点 58/59 − 3×1
+    assert saved["stop"] == D(56)                       # 全程低于当日现价（58/59）
+    assert events_of(v3_tx, plan["id"], "stop_hit") == []  # 未折算的高点 110 会把止损抬到 107 → 假触及
+
+
+def test_split_adjusts_initial_stop_for_r_multiple(v3_tx):
+    """拆股同步调整 initial_stop（R6）：平仓结果的 r 倍数与拆股前等价（买 100@50、止损 46、
+    2 拆 1、卖 200@29 ≈ 拆股前买 100@50 卖 100@58 的 2.0 倍）。"""
+    data_repo.store_bars(v3_tx, "AAA", bars(3, end=D2, close=50.0)
+                         + bars(1, end=SESSION, close=25.0, high=26.0, low=24.0, split=2.0), now=NOW)
+    plan = plan_repo.insert_plan(
+        v3_tx, plan_row("AAA", status="open", start_session=D0, entry_low=D(49), entry_high=D(51),
+                        stop=D(46), initial_stop=D(46), target1=D(60), shares=100))
+    facts_repo.insert_trade(v3_tx, {"request_id": "r-buy", "ticker": "AAA", "side": "buy",
+                                    "quantity": 100, "price": D(50),
+                                    "executed_at": datetime(2026, 10, 30, 15, tzinfo=UTC)})
+    v3_tx.commit()
+
+    review(v3_tx)
+
+    saved = saved_plan(v3_tx, plan["id"])
+    assert saved["initial_stop"] == D(23) and saved["stop"] == D(23)   # 46 / 2
+    facts_repo.insert_trade(v3_tx, {"request_id": "r-sell", "ticker": "AAA", "side": "sell",
+                                    "quantity": 200, "price": D(29),
+                                    "executed_at": datetime(2026, 11, 4, 15, tzinfo=UTC)})
+    v3_tx.commit()
+    trades = facts_repo.list_trades(v3_tx, "AAA")
+    built = build(trades, splits=data_repo.split_events(v3_tx, "AAA", cutoff_at=NOW))
+    outcome = close_outcome(plan=saved_plan(v3_tx, plan["id"]), closed_lots=built["closed"],
+                            trades=trades, sessions_since_stop_hit=None)
+    assert D(str(outcome["realized_pnl"])) == D(800)     # 200 × (29 − 25)
+    assert outcome["r_multiple"] == D("2.00")            # (800/200) / (25 − 23)
+
+
+def test_one_plans_failure_does_not_crash_the_run(v3_tx, monkeypatch):
+    """一份计划的毒数据只回滚它自己（SAVEPOINT）：其余计划照常复查，运行不中断。"""
+    data_repo.store_bars(v3_tx, "AAA", bars(20), now=NOW)
+    data_repo.store_bars(v3_tx, "BBB", bars(20), now=NOW)
+    plan_repo.insert_plan(v3_tx, plan_row("AAA", status="open", start_session=D0))
+    poisoned = plan_repo.insert_plan(v3_tx, plan_row("BBB", status="open", start_session=D0))
+    buy(v3_tx, "AAA", "a-buy")
+    buy(v3_tx, "BBB", "b-buy")
+    v3_tx.commit()
+    original = facts_review._review_one
+
+    def poison(conn, plan, **kwargs):
+        if plan["ticker"] == "BBB":
+            raise RuntimeError("毒数据：无法核算")
+        original(conn, plan, **kwargs)
+
+    monkeypatch.setattr(facts_review, "_review_one", poison)
+
+    result = review(v3_tx)
+
+    assert [entry["ticker"] for entry in result["errors"]] == ["BBB"]
+    assert result["errors"][0]["plan_id"] == poisoned["id"]
+    assert "毒数据" in result["errors"][0]["error"]
+    assert active(v3_tx, "AAA")["reviewed_through"] == SESSION          # 好计划照常复查
+    untouched = plan_repo.plan(v3_tx, poisoned["id"])                   # 坏计划的写回全部回滚
+    assert untouched is not None and untouched["reviewed_through"] is None
+    assert result["unchecked"] == [] and result["changes"] == []
+    # 事务仍可用：失败之后别的写入照常提交
+    plan_repo.update_plan(v3_tx, poisoned["id"], reviewed_through=SESSION)
+    v3_tx.commit()
+    after = plan_repo.plan(v3_tx, poisoned["id"])
+    assert after is not None and after["reviewed_through"] == SESSION

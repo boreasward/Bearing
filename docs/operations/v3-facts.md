@@ -15,7 +15,8 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
   （写进运行记录与 `data_fetch_runs`，缺省 `manual_batch`）。
 - `show` 可加 `--session YYYY-MM-DD`；不给日期则取最新一条运行。
 - `run` 的 stdout 是一行 JSON（`run_id`、`session`、`status`、`error`、`candidates` 条数、
-  `draft_path`、`review`——当天的计划复查结果，`{'changes': […事件…], 'unchecked': [缺日线的持仓]}`）。
+  `draft_path`、`review`——当天的计划复查结果，`{'changes': […事件…], 'unchecked': [缺日线的持仓],
+  'errors': [复查失败的计划及原因]}`；一份计划的复查失败只回滚它自己，不中断运行）。
 
 退出码（两个子命令同一套）：
 

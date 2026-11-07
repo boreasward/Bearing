@@ -91,6 +91,7 @@ def insert_plan(conn, row: dict) -> dict:
 UPDATABLE = (
     "status",
     "stop",
+    "initial_stop",  # 拆股调整要同步改（spec §7.1）；否则 close_outcome 的 r 倍数永久用错基准
     "entry_low",
     "entry_high",
     "target1",

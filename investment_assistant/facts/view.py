@@ -17,6 +17,7 @@ from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import trading_days_between
 from investment_assistant.execution.plan_line import held_sessions, next_action
+from investment_assistant.execution.plan_levels import _cent
 from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
@@ -57,7 +58,12 @@ def today_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantCon
         if plan["stop"] is None:
             action = {"kind": "unchecked", "text": NO_STOP_TEXT, "stop": None, "reason": None}
         else:
-            action = next_action(plan=plan, position=position, unchecked=unchecked)
+            # 给用户看的止损价取到分：库里 NUMERIC(18,6) 的 98.000000 应显示为 98.00
+            shown = dict(plan)
+            shown["stop"] = _cent(plan["stop"])
+            if shown.get("confirmed_stop_order") is not None:
+                shown["confirmed_stop_order"] = _cent(shown["confirmed_stop_order"])
+            action = next_action(plan=shown, position=position, unchecked=unchecked)
         if action["kind"] == "hold":
             continue
         actions.append(

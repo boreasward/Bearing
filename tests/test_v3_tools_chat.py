@@ -359,6 +359,19 @@ def test_void_buy_cancels_plan_and_restores_cash(chat_env, v3_tx):
     assert _events(v3_tx, plan["id"]) == ["bought", "cancelled"]
     restored = call(chat_env, "get_account", {})["data"]
     assert D(str(restored["ledger"]["cash"])) == D(10000)
+    # 同一 request_id 重发：幂等返回原作废行，不再重复处理；换一个 request_id 才报 already_voided
+    replay = call(
+        chat_env,
+        "void_record",
+        {"kind": "trade", "target_id": done["trade"]["id"], "request_id": "v-2", "confirmed": True},
+    )["data"]
+    assert replay["replay"] is True and replay["void"]["id"] == voided["void"]["id"]
+    assert v3_tx.execute("SELECT count(*) FROM v3_voids").fetchone()[0] == 1
+    assert call(
+        chat_env,
+        "void_record",
+        {"kind": "trade", "target_id": done["trade"]["id"], "request_id": "v-9", "confirmed": True},
+    )["error"].startswith("already_voided")
 
 
 def test_record_cash_flow_kinds_and_opening_once(chat_env, v3_tx):
@@ -426,9 +439,18 @@ def test_watchlist_add_and_remove(chat_env, v3_tx):
     )["data"]
     assert added["item"]["ticker"] == "NFLX" and added["item"]["status"] == "active"
     assert v3_tx.execute("SELECT count(*) FROM watchlist_items WHERE ticker = 'NFLX'").fetchone()[0] == 1
+    # 重放同一次添加：幂等，返回同样的成功形状，仍只有一行
+    again = call(
+        chat_env, "watchlist_add", {"ticker": "NFLX", "request_id": "w-1b", "confirmed": True, "thesis": "观察流媒体"}
+    )["data"]
+    assert again["item"]["ticker"] == "NFLX" and again["item"]["status"] == "active"
+    assert v3_tx.execute("SELECT count(*) FROM watchlist_items").fetchone()[0] == 1
     removed = call(chat_env, "watchlist_remove", {"ticker": "nflx", "request_id": "w-2", "confirmed": True})["data"]
     assert removed["ticker"] == "NFLX" and removed["deleted"] is True
     assert v3_tx.execute("SELECT count(*) FROM watchlist_items").fetchone()[0] == 0
+    # 再删一次：不再报错，如实返回 deleted: False
+    twice = call(chat_env, "watchlist_remove", {"ticker": "NFLX", "request_id": "w-3", "confirmed": True})["data"]
+    assert twice["ticker"] == "NFLX" and twice["deleted"] is False
 
 
 def test_ensure_data_calls_collect_extra(chat_env, monkeypatch):

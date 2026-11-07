@@ -372,6 +372,9 @@ def test_get_plans_filters_and_carries_events(env, v3_tx):
 
     by_id = call(env, "get_plans", {"plan_id": closed["id"]})["data"]["plans"]
     assert [row["ticker"] for row in by_id] == ["ORCL"]
+    # 状态只能是七个计划状态之一
+    assert call(env, "get_plans", {"status": "weird"})["error"].startswith("invalid_status")
+    assert call(env, "get_plans", {"status": "paused"})["error"].startswith("invalid_status")
 
 
 def _plan_row(ticker, *, status="pending"):

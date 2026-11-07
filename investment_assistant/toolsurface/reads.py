@@ -9,6 +9,7 @@ from investment_assistant.core.constants import BENCHMARK
 from investment_assistant.core.knowledge import agent_text, catalog
 from investment_assistant.data import repo as data_repo
 from investment_assistant.derivation.indicators import price as price_indicators
+from investment_assistant.execution.plan_line import ACTIVE, ENDED
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.account import account_view
@@ -243,6 +244,9 @@ def get_plans(
     ticker = normalize_ticker(ticker) if ticker is not None else None
     if status is not None and not isinstance(status, str):
         raise ValueError("invalid_argument: status 必须是字符串")
+    if status is not None and status not in (*ACTIVE, *ENDED):
+        allowed = "、".join((*ACTIVE, *ENDED))
+        raise ValueError(f"invalid_status: 需为 {allowed} 之一")
     if plan_id is not None and (not isinstance(plan_id, int) or isinstance(plan_id, bool)):
         raise ValueError("invalid_argument: plan_id 必须是整数")
 

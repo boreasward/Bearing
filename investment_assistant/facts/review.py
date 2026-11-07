@@ -65,12 +65,26 @@ def _updatable(fields: dict) -> dict:
 
 
 def review_plans(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig) -> dict:
-    """One pass over every active plan; returns ``{'changes': [events], 'unchecked': [tickers]}``."""
+    """One pass over every active plan; returns ``{'changes': [events], 'unchecked': [tickers],
+    'errors': [{'plan_id', 'ticker', 'error'}]}``. 一份计划一个事务（SAVEPOINT）：单份计划的
+    毒数据只回滚它自己，不拖垮其余计划与整次运行（spec §5 步骤 3）。"""
     changes: list[dict] = []
     unchecked: list[str] = []
+    errors: list[dict] = []
     for plan in plan_repo.plans_by_status(conn, ("pending", "open")):
-        _review_one(conn, plan, session=session, cutoff_at=cutoff_at, cfg=cfg, changes=changes, unchecked=unchecked)
-    return {"changes": changes, "unchecked": unchecked}
+        conn.execute("SAVEPOINT v3_review_one_plan")
+        try:
+            _review_one(
+                conn, plan, session=session, cutoff_at=cutoff_at, cfg=cfg, changes=changes, unchecked=unchecked
+            )
+        except Exception as exc:  # noqa: BLE001 - 记录原因后续着复查其余计划；连接级故障在 ROLLBACK 时自然上抛
+            conn.execute("ROLLBACK TO SAVEPOINT v3_review_one_plan")
+            changes[:] = [row for row in changes if row["plan_id"] != plan["id"]]
+            unchecked[:] = [ticker for ticker in unchecked if ticker != plan["ticker"]]
+            errors.append({"plan_id": plan["id"], "ticker": plan["ticker"], "error": str(exc)[:200]})
+        else:
+            conn.execute("RELEASE SAVEPOINT v3_review_one_plan")
+    return {"changes": changes, "unchecked": unchecked, "errors": errors}
 
 
 def _review_one(
@@ -113,28 +127,63 @@ def _review_one(
                 if saved is not None:
                     changes.append(saved)
                 return  # 终态：本计划到此为止
-            plan = plan_repo.update_plan(conn, plan["id"], reviewed_through=day)
+            if bar is not None:  # 缺日线不推进：日线补上后「收盘跌破止损」还能查（spec §6.3）
+                plan = plan_repo.update_plan(conn, plan["id"], reviewed_through=day)
             continue
         if bar is None:  # 缺日线：其他检查不做，不推进复查
             if day == session:
                 unchecked.append(ticker)
             continue
         plan = _holding_day(
-            conn, plan, day=day, bar=bar, bars=bars, avg_cost=avg_cost, trail_atr=trail_atr, changes=changes
+            conn,
+            plan,
+            day=day,
+            bar=bar,
+            bars=bars,
+            splits=splits,
+            avg_cost=avg_cost,
+            trail_atr=trail_atr,
+            changes=changes,
         )
     while pending_splits and pending_splits[0][0] <= session:  # 最后一根日线之后、session 之内的拆股
         split_day, factor = pending_splits.pop(0)
         plan = _apply_split(conn, plan, split_day, factor, changes)
 
 
+def _folded_highest_close(bars: list[dict], splits: list, start: date, day: date) -> Decimal | None:
+    """起算日到当日的最高收盘，全部折到当日口径：某根日线之后发生过的拆股，其收盘按累计
+    比例除回去（spec §7.1 的 highest_close 与当日 stop/ATR 同基）。选择折算而不是在拆股日
+    重置窗口——历史高点仍是有效高点；不折算则混用未复权收盘，移动止损会跳到现价上方，
+    次日产生假 stop_hit。"""
+    closes = []
+    for row in bars:
+        bar_day = row["price_date"]
+        if not (start <= bar_day <= day):
+            continue
+        factor = Decimal(1)
+        for split_day, split_factor in splits:
+            if bar_day < split_day <= day:
+                factor *= split_factor
+        closes.append(Decimal(str(row["close"])) / factor)
+    return max(closes) if closes else None
+
+
 def _holding_day(
-    conn, plan: dict, *, day: date, bar: dict, bars: list[dict], avg_cost: Decimal, trail_atr: Decimal, changes: list
+    conn,
+    plan: dict,
+    *,
+    day: date,
+    bar: dict,
+    bars: list[dict],
+    splits: list,
+    avg_cost: Decimal,
+    trail_atr: Decimal,
+    changes: list,
 ) -> dict:
     start = plan["start_session"]
     highest_close = None
     if start is not None:
-        closes = [Decimal(str(row["close"])) for row in bars if start <= row["price_date"] <= day]
-        highest_close = max(closes) if closes else None
+        highest_close = _folded_highest_close(bars, splits, start, day)
     result = plan_line.holding_check(
         plan=plan,
         bar=bar,

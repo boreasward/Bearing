@@ -188,7 +188,6 @@ def upsert_watchlist_item(
         row = cur.fetchone()
     if row is None:
         raise WatchlistConflict("关注记录已修改或删除，请重新读取后再编辑")
-    conn.commit()
     return dict(zip(["ticker", "status", "thesis", "tags", "created_at", "updated_at"], row))
 
 
@@ -197,7 +196,6 @@ def delete_watchlist_item(conn, ticker: str) -> dict[str, Any]:
     with conn.cursor() as cur:
         cur.execute("DELETE FROM watchlist_items WHERE ticker = %(ticker)s RETURNING ticker", {"ticker": normalized})
         row = cur.fetchone()
-    conn.commit()
     return {"ticker": normalized, "deleted": row is not None}
 
 

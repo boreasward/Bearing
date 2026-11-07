@@ -153,7 +153,7 @@ def _error_run(
         "status": "error",
         "error": error,
         "candidates": 0,
-        "review": {"changes": [], "unchecked": []},
+        "review": {"changes": [], "unchecked": [], "errors": []},
         "draft_path": str(path),
     }
 

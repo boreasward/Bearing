@@ -122,8 +122,15 @@ def void_record(env: ToolEnv, *, kind, target_id, request_id, confirmed, reason:
         return {"write": False, "preview": preview}
 
     def _work(conn):
+        replayed = next((void for void in plan_repo.voids(conn) if void["request_id"] == request_id), None)
+        if replayed is not None:  # 同一 request_id 重发：返回原行，不再重复处理
+            plan = None
+            if kind == "trade":
+                target = facts_repo.trade(conn, replayed["target_id"])
+                plan = plan_repo.active_plan(conn, target["ticker"]) if target is not None else None
+            return {"void": replayed, "plan": plan, "replay": True}
         if any(void["kind"] == kind and void["target_id"] == target_id for void in plan_repo.voids(conn)):
-            raise ValueError("already_voided: 这条记录已作废")
+            raise ValueError("already_voided: 这条记录已被另一个请求作废")
         if kind == "trade":
             return _void_trade(conn, env, target_id, request_id, reason_value)
         if plan_repo.cash_flow(conn, target_id) is None:

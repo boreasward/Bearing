@@ -63,8 +63,8 @@ def test_compute_is_deterministic_and_persisted(v3_tx, tmp_path):
     r2 = run_facts(now=NOW, collect=False, cfg=cfg)
     assert r1["status"] == r2["status"] == "ok" and r1["candidates"] == r2["candidates"] >= 2
     assert r1["run_id"] != r2["run_id"] and r1["session"] == r2["session"] == SESSION.isoformat()
-    assert r1["review"] == {"changes": [], "unchecked": []}  # 无计划可复查
-    assert r2["review"] == {"changes": [], "unchecked": []}
+    assert r1["review"] == {"changes": [], "unchecked": [], "errors": []}  # 无计划可复查
+    assert r2["review"] == {"changes": [], "unchecked": [], "errors": []}
     key = lambda rows: {(row["ticker"], row["rank"], row["reason"]) for row in rows}
     assert key(facts_repo.candidates(v3_tx, r1["run_id"])) == key(facts_repo.candidates(v3_tx, r2["run_id"]))
     run_row = facts_repo.latest_run(v3_tx, SESSION)
