@@ -38,6 +38,7 @@
 | 031 | v2.12–v2.15 五层与 Agent 角色：新建十二张表 `feature_flag_changes`、`data_requests`、`sector_classifications`、`research_requests`、`research_versions`、`portfolio_checks`、`roadmap_goals`、`roadmap_versions`、`roadmap_decisions`、`roadmap_evidence`、`roadmap_proposals`、`roadmap_briefs`。放宽 `stage_runs.stage`（13 阶段）、`data_fetch_runs.family`（9 族）/ `trigger`（5 来源）、`agent_runs.mode` / 研究 pass / 空 ticker 与 `agent_tool_calls.phase` CHECK；增加 `price_bars.source`（yfinance/stooq）、`earnings_dates.source`（yfinance/nasdaq）CHECK，`news_items_source_check` 不变。不改旧行、不加种子、可重跑。`core.schema.five_layers_ready` 检查十二表与允许 portfolio 的具名阶段 CHECK；未就绪时 daily 的 run / resume / ensure_ready 拒绝并记 `job_reports: error / migration_031_missing`。执行顺序：**备份 → 031 → roadmap import → 重启**；真实库各步需单独授权，导入须等整版代码就绪，见下文 | 主线 |
 | 032 | v3：七张 `v3_` 表（`v3_runs`、`v3_candidates`、`v3_verdicts`、`v3_plans`、`v3_trades`、`v3_equity`、`v3_tool_calls`），只建表，不动任何旧表；2026-11-06 已在真实库执行，记录见 [v3-facts.md](v3-facts.md#迁移-032-的执行记录2026-11-06真实库) | v3 |
 | 033 | 删除 v2 的业务表：57 张表（账户、成交、计划、Agent 运行与连接、复盘、成长闭环、五层、调度与运行报告、通知设置等）加 LangGraph 的四张检查点表（有就删）；保留 11 张事实表、`feature_flag_changes` 与七张 `v3_` 表。一个事务、全部 `IF EXISTS`、不用 `CASCADE`、可重跑。先在一次性库验证，2026-11-06 经用户授权在真实库执行，步骤与记录见下文 | 删 v2 |
+| 034 | v3.1（spec §13）：`v3_plans` 改造为计划线——新增 `status` / `kind` / `initial_stop` / `atr` / `trailing`（PostgreSQL 保留字，建列时带双引号） / `confirmed_stop_order` / `start_session` / `reviewed_through` / `stop_hit_session` / `target_hit_session` / `sell_instruction` / `ended_session` / `end_reason` / `outcome`，四个价位列转可空，`(session, ticker)` 唯一与旧价位约束换成按状态的部分唯一索引 `uq_v3_plans_one_active_per_ticker`（一只股票最多一份有效计划）与新具名约束，032 时代的行一律记 `expired` / `migrated_034`；`v3_runs` 加 `dropped`；新建 `v3_plan_events`（变化记录，宿主同计划同交易日同类型唯一）、`v3_holding_reviews`、`v3_cash_flows`、`v3_voids`、`v3_briefs`、`v3_chats`、`v3_chat_messages`、`v3_settings` 八张表（后四类中的只追加表见 `tests/test_no_update_on_append_only_tables.py`）。可重跑（`IF EXISTS` / `IF NOT EXISTS`，约束先 `DROP ... IF EXISTS` 再建）；不改证据行、不加种子行。**真实库尚未执行**：033 已于 2026-11-06 执行，034 待用户单独授权（v3.1 spec §15），步骤与 033 同（备份 → 单事务执行 → 核对） | v3 |
 
 016–031 建出的业务表，除 033 的保留清单外都由 033 删除；033 已于 2026-11-06 在真实库执行，这些表已不在库里。
 
@@ -49,7 +50,7 @@ LangGraph 的检查点表不是迁移建的（v2 时由 `analysis.agent setup` �
 INVESTMENT_ASSISTANT_DATABASE_URL=... .venv/bin/python -m investment_assistant.migrate
 ```
 
-`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事。新库从 001 一路执行到 033，最终只剩保留的表。`migrate` 不读 `.env`，连接串要在进程环境里给。
+`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事。新库从 001 一路执行到 034，最终只剩保留的表。`migrate` 不读 `.env`，连接串要在进程环境里给。
 
 ## 真实库：备份后单事务执行
 
@@ -332,7 +333,7 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
 
 ## 一次性测试库
 
-数据库测试只在设置了 `INVESTMENT_ASSISTANT_TEST_DATABASE_URL` 时运行，每个测试在独立 schema 中建表、结束后删除。永远不要把它指向真实库。夹具（`tests/conftest.py`）把迁移应用到 033 为止，所以保留的数据库测试都在已删掉 v2 表的 schema 上跑。
+数据库测试只在设置了 `INVESTMENT_ASSISTANT_TEST_DATABASE_URL` 时运行，每个测试在独立 schema 中建表、结束后删除。永远不要把它指向真实库。夹具（`tests/conftest.py`）把迁移应用到 034 为止，所以保留的数据库测试都在已删掉 v2 表、含 v3.1 计划线表的 schema 上跑。
 
 ```bash
 initdb -D <临时目录>/pg/data -U test -A trust --no-locale -E UTF8

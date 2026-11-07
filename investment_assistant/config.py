@@ -42,7 +42,8 @@ class WorkbenchConfig:
 
 @dataclass(frozen=True)
 class V3Config:
-    """v3 agent-first phase parameters (v3 spec §15.6); fixed values are the spec's, verbatim."""
+    """v3 agent-first phase parameters (v3 spec §15.6); the v3.1 keys follow the v3.1 design §14.
+    Fixed values are the spec's, verbatim."""
 
     top_n: int = 5
     collect_workers: int = 6
@@ -53,6 +54,12 @@ class V3Config:
     win_hi: float = 0.60
     win_lo: float = 0.40
     min_group: int = 3
+    pending_cap: int = 3
+    valid_sessions: int = 5
+    max_hold_default: int = 20
+    trail_atr: float = 3.0
+    brief_budget_minutes: int = 20
+    chat_turn_seconds: int = 300
     sector_etfs: tuple[str, ...] = ('QQQ', 'SMH', 'XLK', 'XLV', 'XLY', 'XLP', 'XLE', 'XLF',
                                     'XLI', 'XLB', 'XLU', 'XLRE', 'XLC')
     briefs_dir: str = ''
@@ -159,6 +166,18 @@ def _validate_v3(cfg: V3Config) -> V3Config:
         raise ValueError("v3.win_lo / v3.win_hi must satisfy 0 < win_lo < win_hi < 1")
     if cfg.min_group < 2:
         raise ValueError("v3.min_group must be >= 2")
+    if not 1 <= cfg.pending_cap <= 10:
+        raise ValueError("v3.pending_cap must be in [1, 10]")
+    if not 1 <= cfg.valid_sessions <= 20:
+        raise ValueError("v3.valid_sessions must be in [1, 20]")
+    if not 3 <= cfg.max_hold_default <= 30:
+        raise ValueError("v3.max_hold_default must be in [3, 30]")
+    if not 0 < cfg.trail_atr <= 10:
+        raise ValueError("v3.trail_atr must be in (0, 10]")
+    if not 1 <= cfg.brief_budget_minutes <= 120:
+        raise ValueError("v3.brief_budget_minutes must be in [1, 120]")
+    if not 30 <= cfg.chat_turn_seconds <= 1800:
+        raise ValueError("v3.chat_turn_seconds must be in [30, 1800]")
     return replace(cfg, sector_etfs=tuple(str(etf).strip().upper() for etf in cfg.sector_etfs))
 
 

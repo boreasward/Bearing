@@ -1,19 +1,20 @@
-"""v3 repository SQL against migration 032, in a disposable-schema Postgres (v3_db fixture)."""
+"""v3 repository SQL against migration 032 + 034, in a disposable-schema Postgres (v3_db fixture)."""
 from datetime import UTC, date, datetime
 
-from investment_assistant.facts import repo
+from investment_assistant.facts import plan_repo, repo
 
 SESSION = date(2026, 11, 5)
 
 
-def _run_row(run_id, session=SESSION):
-    return {
+def _run_row(run_id, session=SESSION, **override):
+    row = {
         'run_id': run_id, 'session': session, 'trigger': 'scheduled', 'status': 'ok', 'error': None,
         'market': {'regime': 'favorable'}, 'factors': {'AAPL': {'rs': 1.2}},
         'coverage': {'daily': {'ok': 4, 'target': 5}}, 'holdings': [{'ticker': 'AAPL', 'shares': 10}],
         'draft_md': '# 规则名单草稿', 'started_at': datetime(2026, 11, 5, 13, 0, tzinfo=UTC),
         'finished_at': datetime(2026, 11, 5, 13, 2, tzinfo=UTC),
     }
+    return {**row, **override}
 
 
 def _candidate(ticker, rank, *, screen_group='trigger'):
@@ -58,7 +59,7 @@ def test_runs_and_candidates(v3_db):
     assert all(row['session'] == SESSION for row in got)         # session 取自运行行
 
 
-def test_verdict_and_plan_upsert(v3_db):
+def test_verdict_upsert(v3_db):
     conn = v3_db
     repo.upsert_verdict(conn, _verdict_row('AAPL'))
     again = repo.upsert_verdict(conn, _verdict_row('AAPL', 'confirm', origin='chat', counter='反方'))
@@ -69,15 +70,43 @@ def test_verdict_and_plan_upsert(v3_db):
     stored = repo.verdicts(conn, SESSION)
     assert set(stored) == {'AAPL', 'MU'} and stored['AAPL']['verdict'] == 'confirm'
 
-    repo.upsert_plan(conn, _plan_row('AAPL'))
-    second = repo.upsert_plan(conn, _plan_row('AAPL', entry_type='breakout'))
-    assert conn.execute('SELECT count(*) FROM v3_plans').fetchone()[0] == 1
-    assert second['entry_type'] == 'breakout' and second['updated_at'] > second['created_at']
-    repo.upsert_plan(conn, _plan_row('AAPL', session=date(2026, 11, 6)))
+
+def test_plan_reads_stay_until_task3(v3_db):
+    """034 后 v3_plans 写入改走 plan_repo；latest_plan / plans 保留到 Task 3 删除，读法不变。"""
+    conn = v3_db
+    first = plan_repo.insert_plan(conn, _plan_row('AAPL'))
+    plan_repo.update_plan(conn, first['id'], status='open', stop=98.5)
+    plan_repo.insert_plan(conn, _plan_row('AAPL', session=date(2026, 11, 6), status='expired'))
     latest = repo.latest_plan(conn, 'AAPL')
     assert latest is not None and latest['session'] == date(2026, 11, 6)   # session 最新的一份
-    assert len(repo.plans(conn, SESSION)) == 1
+    assert len(repo.plans(conn, SESSION)) == 1                             # 读法仍是 032 列集
+    assert repo.plans(conn, SESSION)[0]['ticker'] == 'AAPL'
+    assert repo.plans(conn, SESSION)[0]['stop'] == 98.5                   # update_plan 写的值读得到
     assert repo.latest_plan(conn, 'MSFT') is None
+
+
+def test_latest_ok_run_skips_errors_and_previous_ok_run(v3_db):
+    conn = v3_db
+    assert repo.latest_ok_run(conn) is None                      # 空表返回 None
+    repo.insert_run(conn, _run_row('run-1', session=date(2026, 11, 3)))
+    repo.insert_run(conn, _run_row('run-2', session=date(2026, 11, 4), status='error', error='数据缺失'))
+    repo.insert_run(conn, _run_row('run-3', session=date(2026, 11, 4)))
+    repo.insert_run(conn, _run_row('run-4', session=SESSION))
+    latest = repo.latest_ok_run(conn)
+    assert latest is not None and latest['run_id'] == 'run-4'     # 跳过 error 运行
+    previous = repo.previous_ok_run(conn, SESSION)
+    assert previous is not None and previous['run_id'] == 'run-3'  # 只看更早的交易日
+    earlier = repo.previous_ok_run(conn, date(2026, 11, 4))
+    assert earlier is not None and earlier['run_id'] == 'run-1'
+    assert repo.previous_ok_run(conn, date(2026, 11, 3)) is None
+
+
+def test_insert_run_dropped_round_trip(v3_db):
+    conn = v3_db
+    saved = repo.insert_run(conn, _run_row('run-d', dropped=[{'ticker': 'AAA', 'reasons': ['illiquid']}]))
+    assert saved['dropped'] == [{'ticker': 'AAA', 'reasons': ['illiquid']}]
+    plain = repo.insert_run(conn, _run_row('run-e'))
+    assert plain['dropped'] == []                                # 缺省空列表
 
 
 def test_trade_and_equity_idempotent(v3_db):
@@ -105,6 +134,25 @@ def test_trade_and_equity_idempotent(v3_db):
     latest = repo.latest_equity(conn)
     assert latest is not None
     assert latest['as_of'] == date(2026, 11, 5) and latest['equity'] == 10100   # as_of 最新
+
+
+def test_list_trades_and_trade_carry_voided_at(v3_db):
+    conn = v3_db
+    row = {'request_id': 'req-v', 'ticker': 'AAPL', 'side': 'buy', 'quantity': 10, 'price': 100.5,
+           'fee': 0.5, 'executed_at': datetime(2026, 11, 5, 14, 0, tzinfo=UTC), 'plan_id': None,
+           'note': ''}
+    saved = repo.insert_trade(conn, row)
+    assert saved['voided_at'] is None
+    before_void = repo.trade(conn, saved['id'])
+    assert before_void is not None and before_void['voided_at'] is None     # 作废前为空
+    assert repo.trade(conn, 999) is None
+    plan_repo.insert_void(conn, {'request_id': 'vd-t', 'kind': 'trade', 'target_id': saved['id'],
+                                 'reason': '录错股数'})
+    trades = repo.list_trades(conn)
+    assert trades[0]['request_id'] == 'req-v'
+    assert trades[0]['voided_at'] is not None                     # 作废后非空（取自 v3_voids）
+    after_void = repo.trade(conn, saved['id'])
+    assert after_void is not None and after_void['voided_at'] is not None
 
 
 def test_tool_calls(v3_db):

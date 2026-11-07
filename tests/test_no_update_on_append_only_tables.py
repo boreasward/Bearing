@@ -1,9 +1,12 @@
 """Static guard: the append-only tables get rows added and never changed, no `UPDATE` / `DELETE` against them.
 
-`feature_flag_changes`, `sector_classifications` and the five append-only `v3_` tables of migration 032 (`v3_runs`,
-`v3_candidates`, `v3_trades`, `v3_equity`, `v3_tool_calls`). `v3_verdicts` and `v3_plans` are upserted by design
-(one row per session and ticker, rewritten in place) and are not listed. Scans every SQL string literal of the
-production code (an `ON CONFLICT … DO UPDATE` upsert counts). Offline: parses the source files, no database."""
+`feature_flag_changes`, `sector_classifications` and the append-only `v3_` tables of migration 032 (`v3_runs`,
+`v3_candidates`, `v3_trades`, `v3_equity`, `v3_tool_calls`) plus migration 034's record tables (`v3_plan_events`,
+`v3_cash_flows`, `v3_voids`, `v3_chat_messages` — voiding a trade or cash flow appends a `v3_voids` row, the
+original row is never touched). `v3_verdicts`, `v3_plans`, `v3_holding_reviews`, `v3_briefs`, `v3_chats` and
+`v3_settings` are upserted by design (one row per key, rewritten in place) and are not listed. Scans every SQL
+string literal of the production code (an `ON CONFLICT … DO UPDATE` upsert counts). Offline: parses the source
+files, no database."""
 import ast
 import re
 from pathlib import Path
@@ -11,7 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ('investment_assistant', 'scripts')
 TABLES = ('feature_flag_changes', 'sector_classifications',
-          'v3_runs', 'v3_candidates', 'v3_trades', 'v3_equity', 'v3_tool_calls')
+          'v3_runs', 'v3_candidates', 'v3_trades', 'v3_equity', 'v3_tool_calls',
+          'v3_plan_events', 'v3_cash_flows', 'v3_voids', 'v3_chat_messages')
 NAMES = '|'.join(TABLES)
 UPDATE = re.compile(rf'\bUPDATE\s+(?:ONLY\s+)?({NAMES})\b(.*)', re.I | re.S)
 DELETE = re.compile(rf'\b(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?({NAMES})\b', re.I)
@@ -65,7 +69,7 @@ def test_no_update_or_delete_on_append_only_tables():
 def test_scan_sees_the_real_inserts():
     inserted = {match.group(1).lower() for _, text in _sql_strings() for match in INSERT.finditer(text)}
     assert inserted >= {'sector_classifications', 'v3_runs', 'v3_candidates', 'v3_trades', 'v3_equity',
-                        'v3_tool_calls'}
+                        'v3_tool_calls', 'v3_plan_events', 'v3_cash_flows', 'v3_voids', 'v3_chat_messages'}
 
 
 def test_scanner_covers_concatenated_sql_and_upserts():

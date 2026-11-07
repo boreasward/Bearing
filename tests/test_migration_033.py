@@ -111,7 +111,7 @@ def test_fresh_database_builds_through_033(blank_schema):
 
     applied = db.apply_pending_migrations(blank_schema, MIGRATIONS)
     assert applied == [path.name for path in sorted(MIGRATIONS.glob('*.sql'))]
-    assert applied[-1] == '033_drop_v2_tables.sql'
+    assert applied[-2] == '033_drop_v2_tables.sql'    # 033 之后还有后续迁移（034 起）也照常建库
     for table in DROPPED:
         assert not _exists(blank_schema, table)
     for table in KEPT_FACT_TABLES:
@@ -199,7 +199,7 @@ def test_guard_lets_a_blank_schema_build_through_033_without_confirmation(guarde
 
     url, conn, _ = guarded
     applied = migrate.run(url, MIGRATIONS)
-    assert applied[-1] == DROP_FILE and len(applied) == len(list(MIGRATIONS.glob('*.sql')))
+    assert DROP_FILE in applied and len(applied) == len(list(MIGRATIONS.glob('*.sql')))
     assert not _exists(conn, 'trades') and _exists(conn, 'v3_runs')
 
 
@@ -235,7 +235,8 @@ def test_guard_passes_with_explicit_confirmation(guarded):
     _clear_seed_rows(conn)
     conn.execute('INSERT INTO notify_settings (id) VALUES (1)')
     conn.commit()
-    assert migrate.run(url, MIGRATIONS, allow_drop_v2_tables=True) == [DROP_FILE]
+    applied = migrate.run(url, MIGRATIONS, allow_drop_v2_tables=True)
+    assert applied[0] == DROP_FILE                                 # 033 及其后的待执行迁移一起应用
     assert not _exists(conn, 'notify_settings')
     assert DROP_FILE in _ledger(conn)
 
@@ -246,7 +247,8 @@ def test_guard_ignores_empty_tables(guarded):
     url, conn, upto = guarded
     migrate.run(url, upto)
     _clear_seed_rows(conn)
-    assert migrate.run(url, MIGRATIONS) == [DROP_FILE]
+    applied = migrate.run(url, MIGRATIONS)
+    assert applied[0] == DROP_FILE                                 # 033 及其后的待执行迁移一起应用
     assert not _exists(conn, 'notify_settings')
 
 
