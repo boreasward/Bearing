@@ -20,7 +20,8 @@ from investment_assistant.derivation.indicators import registry as indicator_reg
 ROOT = Path(__file__).resolve().parent.parent
 SESSION = date(2026, 10, 22)                         # Thursday
 NOW = datetime(2026, 10, 22, 22, 30, tzinfo=UTC)     # 18:30 New York
-MODULES = ('investment_assistant.data.registry', 'investment_assistant.derivation.indicators')
+MODULES = ('investment_assistant.data.registry', 'investment_assistant.derivation.indicators',
+           'investment_assistant.daily')
 
 
 def frame(ticker, end):
