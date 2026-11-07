@@ -83,9 +83,7 @@ def turn(
             },
         )
     workdir = lock.runtime_base(cfg) / "chats" / chat_id
-    mcpconfig.write(
-        workdir, repo_root=REPO_ROOT, session=session, mode="chat", agent_session=agent_session
-    )
+    mcpconfig.write(workdir, repo_root=REPO_ROOT, session=session, mode="chat", agent_session=agent_session)
     prompt = text
     if seq == 1:  # 首轮把操作手册正文接在提示词前（spec §9.5）
         prompt = workspace_file("playbook.md").read_text(encoding="utf-8").strip() + "\n\n" + text

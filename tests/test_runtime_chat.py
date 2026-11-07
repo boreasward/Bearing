@@ -65,11 +65,15 @@ def test_two_turns_stream_and_persist_messages(v3_tx, tmp_path):
     with core_tx.read_only_tx() as conn:
         rows = plan_repo.messages(conn, chat_id)
     assert [(row["seq"], row["role"], row["status"]) for row in rows] == [
-        (1, "user", "ok"), (2, "assistant", "ok"), (3, "user", "ok"), (4, "assistant", "ok"),
+        (1, "user", "ok"),
+        (2, "assistant", "ok"),
+        (3, "user", "ok"),
+        (4, "assistant", "ok"),
     ]
     assert [row["content"] for row in rows if row["role"] == "assistant"] == ["回答：好", "回答：好"]
     assert [row["agent_session"] for row in rows if row["role"] == "assistant"] == [
-        f"chat-{chat_id}-1", f"chat-{chat_id}-3",
+        f"chat-{chat_id}-1",
+        f"chat-{chat_id}-3",
     ]
     assert seen[0]["session_id"] == seen[1]["session_id"]  # 同一对话续接同一 Pi 会话
     assert seen[0]["workdir"] == seen[1]["workdir"] == lock.runtime_base(cfg) / "chats" / chat_id
@@ -152,7 +156,8 @@ def test_cancel_marks_the_message_cancelled(v3_tx, tmp_path):
     with core_tx.read_only_tx() as conn:
         rows = plan_repo.messages(conn, chat_id)
     assert [(row["seq"], row["role"], row["status"], row["content"]) for row in rows] == [
-        (1, "user", "ok", "问"), (2, "assistant", "cancelled", "第一段"),
+        (1, "user", "ok", "问"),
+        (2, "assistant", "cancelled", "第一段"),
     ]
 
 

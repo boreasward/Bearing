@@ -77,8 +77,9 @@ def test_call_items_dispatch_real_tools_without_a_subprocess(v3_tx, monkeypatch)
 
     fake = FakeRuntime(
         [("call", "save_summary", {"text": "今天没有新机会。"}), RuntimeEvent("done")],
-        env=lambda: make_env(session=__import__("datetime").date(2026, 11, 4), mode="brief",
-                             agent_session="fake-runtime-test"),
+        env=lambda: make_env(
+            session=__import__("datetime").date(2026, 11, 4), mode="brief", agent_session="fake-runtime-test"
+        ),
     )
     events = run(fake)
     kinds = [(e.kind, e.tool, e.ref) for e in events]

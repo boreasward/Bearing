@@ -123,9 +123,7 @@ def _no_model_day(*, session, result, draft_md, now, cfg) -> dict:
     """No model selected (spec §5): the brief stays a draft whose footer says so; no session,
     no push."""
     with core_tx._tx() as conn:
-        plan_repo.upsert_brief(
-            conn, _brief_row(session, run_id=result["run_id"], status="draft", draft_md=draft_md)
-        )
+        plan_repo.upsert_brief(conn, _brief_row(session, run_id=result["run_id"], status="draft", draft_md=draft_md))
     path = _render_final(session, now=now, cfg=cfg)
     return {
         "session": session.isoformat(),

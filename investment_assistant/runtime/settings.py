@@ -21,9 +21,7 @@ def current(conn) -> RuntimeSpec | None:
     from investment_assistant.facts import plan_repo
 
     row = plan_repo.settings(conn)
-    spec = RuntimeSpec(
-        runtime=row.get("runtime", ""), provider=row.get("provider", ""), model=row.get("model", "")
-    )
+    spec = RuntimeSpec(runtime=row.get("runtime", ""), provider=row.get("provider", ""), model=row.get("model", ""))
     return spec if spec.runtime and spec.provider and spec.model else None
 
 

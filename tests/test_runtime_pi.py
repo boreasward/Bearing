@@ -28,6 +28,7 @@ class _Stdout:
 class FakePopen:
     _lines: list  # install_popen 用子类注入每次回放的行
     _stall: bool = False
+
     def __init__(self, args, *, cwd=None, env=None, stdin=None, stdout=None, stderr=None, **kwargs):
         self.args, self.cwd, self.env, self.stdin = args, cwd, env, stdin
         self.killed = False
@@ -73,7 +74,14 @@ def test_ok_stream_texts_tools_usage_and_done(monkeypatch):
     instances = install_popen(monkeypatch, "ok.jsonl")
     events = run(PiRuntime())
     assert [e.kind for e in events] == [
-        "text", "text", "usage", "tool_start", "tool_end", "text", "usage", "done",
+        "text",
+        "text",
+        "usage",
+        "tool_start",
+        "tool_end",
+        "text",
+        "usage",
+        "done",
     ]
     assert "".join(e.text for e in events if e.kind == "text") == "今天先看待办。全部待办已完成。"
     assert events[3].tool == "mcp__ia__get_agenda" and events[4].tool == "mcp__ia__get_agenda"
@@ -90,8 +98,16 @@ def test_command_line_and_session_arguments(monkeypatch):
     args = instances[0].args
     assert args[0].endswith("/pi") and args[-1] == "提示词"
     for flag in (
-        "--mode", "json", "--approve", "--no-extensions", "-e", "builtin:mcp",
-        "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
+        "--mode",
+        "json",
+        "--approve",
+        "--no-extensions",
+        "-e",
+        "builtin:mcp",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-context-files",
     ):
         assert flag in args
     assert args[args.index("--tools") + 1] == "mcp__ia__*"

@@ -74,8 +74,9 @@ def completing_runtime():
             RuntimeEvent("done"),
         ]
 
-    return FakeRuntime(script, env=lambda: make_env(session=SESSION, mode="brief",
-                                                    agent_session=f"brief-{SESSION.isoformat()}-1"))
+    return FakeRuntime(
+        script, env=lambda: make_env(session=SESSION, mode="brief", agent_session=f"brief-{SESSION.isoformat()}-1")
+    )
 
 
 def seed_holding(conn):
@@ -282,8 +283,9 @@ def test_cli_argument_errors_exit_2(capsys):
 
 
 def test_plist_template_placeholders():
-    template = (Path(__file__).parents[1] / "scripts" / "launchd" /
-                "local.investment-assistant.daily.plist.example").read_text(encoding="utf-8")
+    template = (
+        Path(__file__).parents[1] / "scripts" / "launchd" / "local.investment-assistant.daily.plist.example"
+    ).read_text(encoding="utf-8")
     assert "__REPO__/.venv/bin/python" in template
     assert "--env-file" in template and "__REPO__/.env" in template
     assert template.count("<key>Weekday</key>") == 5  # 周二至周六

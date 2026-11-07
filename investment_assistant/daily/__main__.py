@@ -24,7 +24,9 @@ def _load_env(env_file: str | None) -> None:
 
 def _spec(args) -> "RuntimeSpec | None":
     """The per-run override: all three keys or none (v3 设计 §15.4 单次运行临时指定)."""
-    given = [name for name, value in (("runtime", args.runtime), ("provider", args.provider), ("model", args.model)) if value]
+    given = [
+        name for name, value in (("runtime", args.runtime), ("provider", args.provider), ("model", args.model)) if value
+    ]
     if len(given) == 3:
         from investment_assistant.runtime.base import RuntimeSpec
 

@@ -186,9 +186,7 @@ def test_killed_session_keeps_draft_and_records_reason(v3_tx, tmp_path):
 
     recorder = Recorder()
     runtime = FakeRuntime([RuntimeEvent("text", text=f"第{i}段") for i in range(80)], delay=0.05)
-    result = run_daily(
-        now=NOW, collect=False, cfg=cfg, spec=SPEC, runtime=runtime, client=recorder, budget_seconds=2
-    )
+    result = run_daily(now=NOW, collect=False, cfg=cfg, spec=SPEC, runtime=runtime, client=recorder, budget_seconds=2)
 
     assert result["status"] == "final" and result["complete"] is False and result["attempts"] == 1
     with core_tx.read_only_tx() as conn:
