@@ -6,14 +6,13 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from investment_assistant.daily.__main__ import EXIT_CODES
-from investment_assistant.runtime.base import RuntimeEvent, RuntimeSpec
-from investment_assistant.runtime.fake import FakeRuntime
-
 from investment_assistant.config import AssistantConfig, V3Config
+from investment_assistant.daily.__main__ import EXIT_CODES
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.facts import plan_repo
 from investment_assistant.notify.discord import DiscordChannel
+from investment_assistant.runtime.base import RuntimeEvent, RuntimeSpec
+from investment_assistant.runtime.fake import FakeRuntime
 from investment_assistant.toolsurface.env import make_env
 
 NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)

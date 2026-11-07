@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from investment_assistant.runtime import settings
 from investment_assistant.runtime.base import RuntimeSpec
 

@@ -6,11 +6,11 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
+
+from investment_assistant.config import AssistantConfig, V3Config
 from investment_assistant.runtime import chat, lock
 from investment_assistant.runtime.base import RuntimeEvent, RuntimeSpec
 from investment_assistant.runtime.fake import FakeRuntime
-
-from investment_assistant.config import AssistantConfig, V3Config
 from investment_assistant.toolsurface.env import make_env
 
 SESSION = date(2026, 11, 4)
@@ -225,8 +225,13 @@ def test_cancel_event_is_cleaned_up_after_the_turn(v3_tx, tmp_path):
         chat_id = start_chat(conn)
     list(chat.turn(chat_id=chat_id, text="问", cfg=cfg, runtime=FakeRuntime([]), now=NOW))
     assert chat_id not in chat._cancels
-    stream = chat.turn(chat_id=chat_id, text="再问", cfg=cfg, runtime=FakeRuntime(
-        [RuntimeEvent("text", text="一段"), RuntimeEvent("text", text="二段")]), now=NOW)
+    stream = chat.turn(
+        chat_id=chat_id,
+        text="再问",
+        cfg=cfg,
+        runtime=FakeRuntime([RuntimeEvent("text", text="一段"), RuntimeEvent("text", text="二段")]),
+        now=NOW,
+    )
     next(stream)
     chat.cancel(chat_id)
     list(stream)

@@ -4,14 +4,13 @@
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from investment_assistant.runtime.base import RuntimeEvent, RuntimeSpec
-from investment_assistant.runtime.fake import FakeRuntime
-
 from investment_assistant.config import AssistantConfig, V3Config
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.facts import plan_repo
 from investment_assistant.notify.discord import DiscordChannel
+from investment_assistant.runtime.base import RuntimeEvent, RuntimeSpec
+from investment_assistant.runtime.fake import FakeRuntime
 from investment_assistant.toolsurface.env import make_env
 
 NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)
@@ -94,9 +93,8 @@ def _open_plans(v3_tx):
 
 def test_partial_failure_retries_only_the_remaining_items(v3_tx, tmp_path):
     """A12：第一次只保存了 AAPL 的复查就 error；第二次只碰剩下的 MSFT，AAPL 的结论不变。"""
-    from investment_assistant.daily.session import run_brief_session
-
     import investment_assistant.core.tx as core_tx
+    from investment_assistant.daily.session import run_brief_session
 
     cfg = cfg_at(tmp_path)
     with core_tx._tx() as conn:
@@ -151,9 +149,8 @@ def test_partial_failure_retries_only_the_remaining_items(v3_tx, tmp_path):
 def test_killed_session_keeps_draft_and_records_reason(v3_tx, tmp_path):
     """Review Focus 4：会话无输出被超时杀掉——简报行状态与未完成原因写明，草稿与宿主算的持仓
     操作不受影响，不抛异常。"""
-    from investment_assistant.daily.job import run_daily
-
     import investment_assistant.core.tx as core_tx
+    from investment_assistant.daily.job import run_daily
     from investment_assistant.facts import repo as facts_repo
 
     cfg = cfg_at(tmp_path)
@@ -205,9 +202,8 @@ def test_killed_session_keeps_draft_and_records_reason(v3_tx, tmp_path):
 
 def test_timeout_killed_session_reports_timeout(v3_tx, tmp_path):
     """会话无输出被超时杀掉（Review Focus 4 的另一半）：error 记 'timeout'，不抛异常。"""
-    from investment_assistant.daily.session import run_brief_session
-
     import investment_assistant.core.tx as core_tx
+    from investment_assistant.daily.session import run_brief_session
 
     cfg = cfg_at(tmp_path)
     with core_tx._tx() as conn:
