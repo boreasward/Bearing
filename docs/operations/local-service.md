@@ -1,6 +1,6 @@
 # 本机服务
 
-本机服务是 v3 保留下来的外壳：托管前端构建产物，并承载 v3.1 的页面接口（`/api/...`，见下）。没有调度线程：每日的采集与名单由命令行的 `facts run` 完成（见 [v3-facts.md](v3-facts.md)），定时简报由独立的 LaunchAgent 跑（运维文档随收尾任务补上）。v2 的调度、任务、通知、Agent 连接都随旧系统移除（见 [roadmap](../roadmap.md) 第 5 步；原来的运维说明在 [archive/v2/operations/](../archive/v2/operations/scheduling-and-notifications.md)）。
+本机服务是 v3 保留下来的外壳：托管前端构建产物，并承载 v3.1 的页面接口（`/api/...`，见下）。没有调度线程：每日的采集与名单由命令行的 `facts run` 完成（见 [v3-facts.md](v3-facts.md)），定时简报由独立的 LaunchAgent 跑（见 [daily-run.md](daily-run.md)）。v2 的调度、任务、通知、Agent 连接都随旧系统移除（见 [roadmap](../roadmap.md)；原来的运维说明在 [archive/v2/operations/](../archive/v2/operations/scheduling-and-notifications.md)）。
 
 ## 当前状态
 

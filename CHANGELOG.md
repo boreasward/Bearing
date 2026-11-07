@@ -2,6 +2,23 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
+## [3.1.0] - 未发布
+
+每日简报、连贯的交易计划、止损纪律、账户、页面与对话（[设计 spec](docs/specs/2026-11-06-v3.1-plan-line-account-and-web-design.md)、[实施 plan](docs/plans/2026-11-07-v3.1-plan-line-account-and-web.md)，把 v3 设计的第 2、3 步合成一个版本交付，并新增计划线、止损纪律、账户三样 v3 设计里没有的东西）。按 spec §2 的目标七条：
+
+1. **每日简报定时产出并推送**：`python -m investment_assistant.daily run` 一条命令做五件事（采集、事实计算、计划与持仓复查、发草稿、简报会话 + 最终简报 + Discord），退出码 0/1/2/3；LaunchAgent 模板在 `scripts/launchd/`（安装需授权，运维说明见 [docs/operations/daily-run.md](docs/operations/daily-run.md)）。
+2. **计划是一条跨天的线**：`v3_plans` 改造为状态七态的计划线（待入场 / 已买入 + 五个终态），一只股票同时最多一份有效计划（数据库约束保证），每次变化记一行带原因的记录（`v3_plan_events`）；待入场最多 3 份，名额满时每天至多替换一份。
+3. **止损纪律**：买入即挂止损单（确认状态在计划上），止损只上不下，目标触及后次日起移动止损（`max(当前止损, 最高收盘 − 3×ATR, 成本)`，补录成本高于现价的例外），触及而没有卖出记录时每天排第一行提醒；到期与论点失效给「下次开盘卖出」。
+4. **账户**：期初现金 + 出入金 + 成交算出现金、总资产、浮动与已实现盈亏；对账返回差额；作废成交 / 出入金后全部重算（FIFO 保护拒绝超卖作废）。
+5. **信号变少**：待入场上限 3 份（`v3.pending_cap`），名额满时每天至多替换一只名次更高的候选；名单带连续天数与掉出原因。
+6. **页面与对话**：外壳上一个页面四块（今日操作、今日简报、计划与持仓、对话）加账户条与设置面板；`/api/...` 接口与 SSE 流式对话；运行时、提供方、模型存库里（无内置默认，保存前检查可用性），同一时刻只允许一个运行时进程。
+7. **适配周级波段**：计划有效期 5 个交易日（`v3.valid_sessions`，延续重起算），最长持有缺省 20 个交易日（`v3.max_hold_default`，从起算日算，到期为卖出指令）。
+
+- **迁移 034**：`v3_plans` 计划线改造与八张新表（变化记录、持仓复查、出入金、作废、简报、对话、消息、设置），可重跑；价位约束放宽为「全空或全有 + 入场低 ≤ 入场高 < 目标」，不再要求止损低于入场（实施期间 ruling R5：补录计划的止损以补录时最新收盘为基准）。真实库待用户授权执行（步骤见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md)）。
+- **工具面 31 个**（21 个两种模式 + 10 个仅对话）：新增账户 / 待办 / 延续 / 修订 / 持仓复查 / 一句话总结 / 出入金 / 确认止损单 / 调高止损 / 取消计划 / 作废 / 关注列表增删；`record_equity` 语义改为对账，`record_trade` 按计划线推进（清单见 [docs/operations/v3-facts.md](docs/operations/v3-facts.md)）。
+- **新命令**：`daily run`（五件事，支持 `--no-collect` 与单次临时指定运行时）与 `daily settings show|options|set`。
+- 验收对照（A1–A22 与沿用条款各由哪个测试证明）见 [docs/operations/daily-run.md](docs/operations/daily-run.md) 末尾。
+
 ## v3（进行中）
 
 - 迁移 033（删 v2 的表）已于 2026-11-06 经用户授权在真实库执行：先 `pg_dump` 全库备份到 `.local/v3/backup-before-033.dump`，61 张表删除，19 张保留表行数不变，`facts show` 照常；`migrate` 不再被删表保护拒绝，之后的新迁移可以正常应用到真实库。记录见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md)。

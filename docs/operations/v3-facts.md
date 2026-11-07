@@ -56,6 +56,12 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 | `min_group` | 3 | 行业组参与强度排序的最小样本数，不足记 `insufficient` |
 | `sector_etfs` | QQQ、SMH、XLK、XLV、XLY、XLP、XLE、XLF、XLI、XLB、XLU、XLRE、XLC | 行业 ETF 集合 |
 | `briefs_dir` | 空 | 草稿目录覆盖；空则按上面的优先级取 |
+| `pending_cap` | 3 | v3.1：待入场计划上限，名额满时每天至多替换一份 |
+| `valid_sessions` | 5 | v3.1：计划有效期（交易日），取代旧常量 `VALID_SESSIONS = 3` |
+| `max_hold_default` | 20 | v3.1：最长持有缺省值（交易日）；可选范围 3–30 不变 |
+| `trail_atr` | 3 | v3.1：移动止损的 ATR 倍数 |
+| `brief_budget_minutes` | 20 | v3.1：简报会话总预算（分钟，含重试），见 [daily-run.md](daily-run.md) |
+| `chat_turn_seconds` | 300 | v3.1：页面对话每轮时限（秒） |
 
 采集并发的实现是 `data.registry.run_adapter` 新增的 `workers` 参数：缺省 1，与改动前的逐个拉取完全等价，
 旧调用不受影响；只有事实任务按 `collect_workers` / `sec_workers` 传入。

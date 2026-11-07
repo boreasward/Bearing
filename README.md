@@ -1,6 +1,6 @@
 # Investment Assistant
 
-美股投研助手，v3 重做进行中。目标是让入口变成 agent：每天一份简报回答「最近行情适合交易什么」，落到个股，之后可以在同一个工作区对话追问。
+美股投研助手，v3.1.0 开发中。目标是让入口变成 agent：每天一份简报回答「最近行情适合交易什么」，落到个股，之后可以在同一个工作区对话追问。
 
 不接券商，不自动下单。所有规则都**未经验证**，系统输出的价位和仓位只是你所设规则的算术结果，不构成投资建议。
 
@@ -8,9 +8,10 @@
 
 ## 现在能做什么
 
-- **事实任务**：`python -m investment_assistant.facts run` 采集八族数据，用规则算出个股名单，落一条运行记录和一份草稿，全程不调模型；`facts show` 打印草稿。
-- **MCP 工具面**：`python -m investment_assistant.toolsurface` 以 stdio 给模型提供读事实、算计划价位、保存结论与计划的工具（brief / chat 两种模式）。
-- **服务外壳**：`./start.command` 启动一个只托管前端构建产物的服务，首页是占位页；每日简报的推送和页面还没做（v3 第 2、3 步）。
+- **每日任务**：`python -m investment_assistant.daily run` 一条命令做五件事——采集八族数据、算名单、复查计划与持仓（宿主计算，含止损纪律）、发草稿、跑简报会话并推送 Discord；`daily settings` 管运行时与模型。定时触发靠 LaunchAgent（见运维文档）。
+- **MCP 工具面**：`python -m investment_assistant.toolsurface` 以 stdio 给模型提供 31 个工具（brief / chat 两种模式，读事实、算与保存计划、记成交与账户、复查结论）。
+- **页面与对话**：`./start.command` 启动的外壳服务托管一个页面——今日操作、今日简报、计划与持仓（计划是一条跨天的线）、账户条，以及与 agent 的流式对话；页面接口见运维文档。
+- **事实任务**：`python -m investment_assistant.facts run` 采集与规则名单（每日任务的第 1、2 步就是它），`facts show` 打印草稿。
 
 PostgreSQL 是唯一的状态存储；外部数据来自 yfinance、SEC EDGAR、FRED。
 

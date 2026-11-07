@@ -1,35 +1,43 @@
 ---
 id: plan.status
-title: 计划状态与作废原因
+title: 计划状态与变化记录
 group: plan
-version: 1
+version: 2
 applies_to: [plan-1]
-summary: "计划只有 ok / invalid 两种状态；作废原因（决定性的）与提示（仅提醒的）要分开读。"
-related: [plan.earnings, plan.sizing, plan.context_flags]
-sources: [investment_assistant/execution/plan_levels.py, docs/archive/v2/features/daily-plan.md]
+summary: "计划是一条跨天的线，状态七个：pending（待入场）与 open（已买入）算有效计划，另有五个终态；一只股票同时最多一份有效计划，每次变化记一行带原因的记录。"
+related: [plan.earnings, plan.validity, plan.sizing, plan.max_hold]
+sources: [investment_assistant/execution/plan_line.py]
 ---
 
 ## 是什么
 
-每份规则计划有一个状态：`ok`（可用）或 `invalid`（作废）。让它作废的是「作废原因」；而「提示」只是提醒，不影响状态。
+v3.1 起计划不再每天一份、过期作废，而是一条跨天的线：从保存那天起一直跟着这份计划，直到进入终态。状态共七个：
+
+| 状态 | 含义 | 终态 |
+| --- | --- | --- |
+| `pending` | 待入场 | 否（有效计划） |
+| `open` | 已买入 | 否（有效计划） |
+| `closed` | 已平仓 | 是 |
+| `expired` | 已过期（有效期内没买） | 是 |
+| `invalidated` | 已作废（收盘跌破止损 / 财报进入有效期 / agent 复查否决） | 是 |
+| `replaced` | 被替换（名额满时被更好的候选换掉） | 是 |
+| `cancelled` | 已取消（用户取消） | 是 |
+
+「有效计划」= `pending` 或 `open`。终态不再变化；同一只股票之后可以有新的计划，那是另一条线，不复用旧状态。
 
 ## 怎么算 / 从哪来
 
-| 类别 | 代码 | 含义 |
-| --- | --- | --- |
-| 作废原因 | `earnings_in_validity` | 有效期内有财报，见[财报规则](plan.earnings.md) |
-| 作废原因 | `no_room` | 单票或总持仓上限下没有空间，见[建议仓位](plan.sizing.md) |
-| 提示 | `earnings_unknown`、`earnings_within_10d` | 财报日不明或临近 |
-| 提示 | `regime_risk_off`、`regime_unavailable`、`sector_weak` | 市场环境，见[市场环境提示](plan.context_flags.md) |
-
-任何一条作废原因成立，状态就是 `invalid`。另外，没有资金快照时仓位状态记 `no_equity`：只给每股风险、不给股数，既不作废也不算提示。ATR 算不出来或价位顺序不对时，根本不生成计划，记跳过原因 `atr_unavailable`。
+- **一只股票同时最多一份有效计划**：由数据库部分唯一索引保证，不只靠代码检查；两条路径同时给同一只股票建计划，第二条被数据库拒绝。
+- 状态迁移：`pending` → `open`（记下买入成交）；`pending` → `expired` / `invalidated` / `replaced` / `cancelled`；`open` → `closed`（持仓卖完，记下已实现盈亏与离场原因）；没有有效计划时买入由宿主建「补录」计划直接进 `open`。
+- 每天的待入场复查（`pending_check`，按顺序命中即停）：收盘跌破止损 → 作废；财报进入[有效期](plan.validity.md) → 作废；到有效期末日 → 过期；否则保持待入场。当天缺日线时只跳过「跌破止损」一条，写「缺日线，未复查」。
+- **变化记录**（`v3_plan_events`，只追加）：每次状态或数字变化记一行——计划、交易日、类型、一句给人读的原因、变化前后的值、来源（宿主 / agent / 用户）、引用的工具调用。宿主同计划同交易日同类型只记一次，重跑不产生重复行。
 
 ## 在系统里哪里看到
 
-- 计划块上的「已作废」与原因；推导视图的校验段。
-- 作废的计划在复盘的三方对比里记为「计划作废」，见三方对比状态。
+- 页面「计划与持仓」的计划卡片：状态、价位、可展开的变化时间线；「已结束」组缺省折叠。
+- 简报的「和昨天比变了什么」；对话里 `get_plans` 按状态 / 股票 / 编号读计划及其变化记录。
 
 ## 注意
 
-- 重跑批处理时，结果相同就返回原计划；结果不同则记入运行报告的冲突列表，**不覆盖**原计划。
-- 在[自定计划](plan.own.md)里，规则计划的作废原因降为提示，状态总是 `ok`。
+- 计划种类两种：`planned`（正常）与 `adopted`（补录）。补录计划的论点固定为「补录持仓，没有入场论点」。
+- 已过期、已作废之后才买入的，按补录处理，不复活旧计划。

@@ -57,7 +57,7 @@ cd web && npm install && npm run build && cd ..
 
 标签是可选的：`core` 把一只票放进核心池（最多 15 只），`sector:<ETF>`（`SMH`、`XLK`、`QQQ` 之一，至多一个）标注行业 ETF；股票池总数不超过 100。关注列表里没有 `active` 的美股，或标签、数量超限时，`facts` 当作没有股票池继续运行，不报错。
 
-**目前没有任何命令或工具能增删关注列表（`toolsurface` 的工具也不写它），只能直接用 SQL。** 表的必填列只有 `ticker`（唯一），`status` 默认 `active`，`tags` 默认空：
+**增删关注列表走对话工具**：v3.1 起对话里有 `watchlist_add` / `watchlist_remove` 两个工具（先复述、确认后才写），除此之外没有别的命令能改它（`toolsurface` 的读写工具不碰它）。要直接写 SQL 时，表的必填列只有 `ticker`（唯一），`status` 默认 `active`，`tags` 默认空：
 
 ```sql
 -- 加入关注
@@ -70,17 +70,17 @@ UPDATE watchlist_items SET status = 'archived', updated_at = now() WHERE ticker 
 DELETE FROM watchlist_items WHERE ticker = 'AAPL';
 ```
 
-v2 的写入实现（`upsert_watchlist_item`、`delete_watchlist_item`）在提交 `d082400` 的 `investment_assistant/db.py` 里，v3 第 2、3 步需要时可以从那里取回。
+v2 的写入实现（`upsert_watchlist_item`、`delete_watchlist_item`）曾随旧系统删除，v3.1 用新的对话工具补回了这个写入口。
 
 ## 建库
 
-迁移文件在 `migrations/`（001–033），`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事：
+迁移文件在 `migrations/`（001–034），`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事：
 
 ```bash
 INVESTMENT_ASSISTANT_DATABASE_URL=postgresql://... .venv/bin/python -m investment_assistant.migrate
 ```
 
-输出一行 JSON：`{"applied": [...], "count": N}`。新建的空库直接运行上面这条即可，一路应用到 033。
+输出一行 JSON：`{"applied": [...], "count": N}`。新建的空库直接运行上面这条即可，一路应用到 034。
 
 **`migrate` 在已有 v2 数据的库上会拒绝执行**：033 待执行、且它要删的表里有任何一张存在并且有行时，整个 `migrate` 退出、一条迁移都不应用，需要设置 `INVESTMENT_ASSISTANT_ALLOW_DROP_V2_TABLES=1` 确认；见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md)。
 
@@ -98,12 +98,17 @@ INVESTMENT_ASSISTANT_DATABASE_URL=postgresql://... .venv/bin/python -m investmen
 # MCP 工具面：一个进程服务一个交易日、一种模式（brief / chat），stdio JSON-RPC
 .venv/bin/python -m investment_assistant.toolsurface --session 2026-11-05 --mode brief --agent-session <会话编号> --env-file .env
 
-# 外壳服务：托管前端构建产物
+# 每日任务：采集与事实计算、计划复查、简报会话与推送（五件事见 operations/daily-run.md）
+.venv/bin/python -m investment_assistant.daily run
+.venv/bin/python -m investment_assistant.daily settings show    # 运行时与模型设置（show / options / set）
+
+# 外壳服务：托管前端页面与页面接口
 ./start.command
 ```
 
 - `facts run` 的参数、退出码、草稿位置与实测耗时见 [operations/v3-facts.md](operations/v3-facts.md)；`toolsurface` 的两条运维要求也在那里，Pi 客户端的接法见 [operations/pi-unattended.md](operations/pi-unattended.md)。
-- `start.command` 启动的服务只托管前端构建产物：首页是占位页，没有调度，也没有业务接口。启动链路、LaunchAgent 与认证见 [operations/local-service.md](operations/local-service.md)。打开 `http://127.0.0.1:8787`。
+- `daily run` 的退出码、同日重跑与补查、预算与重试、LaunchAgent 的安装见 [operations/daily-run.md](operations/daily-run.md)。
+- `start.command` 启动的服务托管 v3.1 的页面（今日操作、今日简报、计划与持仓、对话，另有账户条与设置面板）及其 `/api/...` 接口；接口清单与认证见 [operations/local-service.md](operations/local-service.md)。打开 `http://127.0.0.1:8787`。
 - 组件画廊只在开发模式可用：`cd web && npm run dev`，再打开 `#_ui`。
 
 ## 测试
