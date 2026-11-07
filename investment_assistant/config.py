@@ -60,9 +60,22 @@ class V3Config:
     trail_atr: float = 3.0
     brief_budget_minutes: int = 20
     chat_turn_seconds: int = 300
-    sector_etfs: tuple[str, ...] = ('QQQ', 'SMH', 'XLK', 'XLV', 'XLY', 'XLP', 'XLE', 'XLF',
-                                    'XLI', 'XLB', 'XLU', 'XLRE', 'XLC')
-    briefs_dir: str = ''
+    sector_etfs: tuple[str, ...] = (
+        "QQQ",
+        "SMH",
+        "XLK",
+        "XLV",
+        "XLY",
+        "XLP",
+        "XLE",
+        "XLF",
+        "XLI",
+        "XLB",
+        "XLU",
+        "XLRE",
+        "XLC",
+    )
+    briefs_dir: str = ""
 
 
 @dataclass(frozen=True)

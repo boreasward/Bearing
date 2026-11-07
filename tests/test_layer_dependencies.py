@@ -1,63 +1,82 @@
 """Architectural boundaries include imports hidden inside functions."""
+
 import ast
 from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1] / 'investment_assistant'
-LAYERS = ['core', 'data', 'derivation', 'execution', 'analysis']
-TOP = ['facts']
-EDGE = ['api', 'notify', 'toolsurface', 'runtime', 'daily']
-RANK = {**{name: index for index, name in enumerate(LAYERS)},
-        **dict.fromkeys(TOP, 7), **dict.fromkeys(EDGE, 8),
-        **dict.fromkeys(['db', 'config', 'runtime_paths', 'migrate'], -1)}
+ROOT = Path(__file__).resolve().parents[1] / "investment_assistant"
+LAYERS = ["core", "data", "derivation", "execution", "analysis"]
+TOP = ["facts"]
+EDGE = ["api", "notify", "toolsurface", "runtime", "daily"]
+RANK = {
+    **{name: index for index, name in enumerate(LAYERS)},
+    **dict.fromkeys(TOP, 7),
+    **dict.fromkeys(EDGE, 8),
+    **dict.fromkeys(["db", "config", "runtime_paths", "migrate"], -1),
+}
 
 
 def _modules():
     modules = {}
-    for path in ROOT.rglob('*.py'):
-        parts = path.relative_to(ROOT.parent).with_suffix('').parts
-        name = '.'.join(parts[:-1] if parts[-1] == '__init__' else parts)
-        modules[name] = (path, ast.parse(path.read_text(encoding='utf-8')))
+    for path in ROOT.rglob("*.py"):
+        parts = path.relative_to(ROOT.parent).with_suffix("").parts
+        name = ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+        modules[name] = (path, ast.parse(path.read_text(encoding="utf-8")))
     return modules
 
 
 def _imports(name, path, nodes):
-    package = name if path.name == '__init__.py' else name.rpartition('.')[0]
+    package = name if path.name == "__init__.py" else name.rpartition(".")[0]
     for node in nodes:
         if isinstance(node, ast.Import):
             yield from (alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
-                base = '.'.join(package.split('.')[:len(package.split('.')) - node.level + 1])
-                module = '.'.join(filter(None, [base, node.module]))
+                base = ".".join(package.split(".")[: len(package.split(".")) - node.level + 1])
+                module = ".".join(filter(None, [base, node.module]))
             else:
-                module = node.module or ''
+                module = node.module or ""
             yield module
-            yield from (f'{module}.{alias.name}' for alias in node.names if alias.name != '*')
+            yield from (f"{module}.{alias.name}" for alias in node.names if alias.name != "*")
 
 
 def test_no_upward_imports():
     violations = []
     for name, (path, tree) in _modules().items():
-        if name == 'investment_assistant':
+        if name == "investment_assistant":
             continue
-        source = name.split('.')[1]
+        source = name.split(".")[1]
         if source not in RANK:
-            violations.append(f'{name}: unmigrated package {source}')
+            violations.append(f"{name}: unmigrated package {source}")
             continue
         for target in _imports(name, path, ast.walk(tree)):
-            if not target.startswith('investment_assistant.'):
+            if not target.startswith("investment_assistant."):
                 continue
-            package = target.split('.')[1]
+            package = target.split(".")[1]
             if package not in RANK or RANK[package] > RANK[source]:
-                violations.append(f'{name} -> {target}')
-    assert not violations, '\n'.join(sorted(set(violations)))
+                violations.append(f"{name} -> {target}")
+    assert not violations, "\n".join(sorted(set(violations)))
 
 
-REMOVED = ('workbench', 'filings', 'us_research',
-           'workflow', 'views', 'services', 'tasks', 'review', 'optimize',
-           'analysis/agent', 'core/llm', 'execution/paper', 'api/routes',
-           'hermes', 'market', 'research', 'strategies', 'tickers')
+REMOVED = (
+    "workbench",
+    "filings",
+    "us_research",
+    "workflow",
+    "views",
+    "services",
+    "tasks",
+    "review",
+    "optimize",
+    "analysis/agent",
+    "core/llm",
+    "execution/paper",
+    "api/routes",
+    "hermes",
+    "market",
+    "research",
+    "strategies",
+    "tickers",
+)
 
 
 def test_removed_v2_packages_stay_gone():
@@ -76,8 +95,10 @@ def test_no_module_cycles():
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
                 for child in ast.iter_child_nodes(node):
                     yield from top_level(child)
-        graph[name] = {target for target in _imports(name, path, top_level(tree))
-                       if target in modules and target != name}
+
+        graph[name] = {
+            target for target in _imports(name, path, top_level(tree)) if target in modules and target != name
+        }
     # Tarjan: no optional test dependency and no recursion through function bodies.
     indices, low, stack, active, cycles = {}, {}, [], set(), []
 
@@ -105,4 +126,4 @@ def test_no_module_cycles():
     for node in sorted(graph):
         if node not in indices:
             visit(node)
-    assert not cycles, '\n'.join(' -> '.join(component) for component in cycles)
+    assert not cycles, "\n".join(" -> ".join(component) for component in cycles)
