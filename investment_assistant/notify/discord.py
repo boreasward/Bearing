@@ -16,8 +16,9 @@ class DiscordChannel(Enum):
 
 
 class DiscordClient:
-    def __init__(self, earnings_url: str, signals_url: str, *, policy: fetch_policy.FetchPolicy = PUSH_POLICY,
-                 sleep=time.sleep):
+    def __init__(
+        self, earnings_url: str, signals_url: str, *, policy: fetch_policy.FetchPolicy = PUSH_POLICY, sleep=time.sleep
+    ):
         self._urls = {
             DiscordChannel.EARNINGS: earnings_url,
             DiscordChannel.SIGNALS: signals_url,
@@ -35,7 +36,8 @@ class DiscordClient:
                 headers = getattr(resp, "headers", None)
                 retry_after = headers.get("Retry-After") if isinstance(headers, Mapping) else None
                 raise fetch_policy.http_error(
-                    resp.status_code, f"Discord send failed: {resp.status_code} {resp.text}", retry_after=retry_after)
+                    resp.status_code, f"Discord send failed: {resp.status_code} {resp.text}", retry_after=retry_after
+                )
 
         fetch_policy.fetch(f"discord:{channel.value}", attempt, policy=self._policy, sleep=self._sleep)
 
@@ -46,8 +48,10 @@ class DiscordClient:
 
     @classmethod
     def from_env(cls) -> "DiscordClient":
-        from dotenv import load_dotenv
         import os
+
+        from dotenv import load_dotenv
+
         load_dotenv()
         return cls(
             earnings_url=os.environ["DISCORD_WEBHOOK_EARNINGS"],
@@ -56,8 +60,10 @@ class DiscordClient:
 
     @classmethod
     def from_config(cls, notify_cfg) -> "DiscordClient":
-        from dotenv import load_dotenv
         import os
+
+        from dotenv import load_dotenv
+
         load_dotenv()
 
         def url(channel: str, env_key: str) -> str:
@@ -97,13 +103,12 @@ def chunk(text: str, *, limit: int = 1900) -> list[str]:
 
 def render_discord(notification: Notification) -> dict:
     return {
-        "embeds": [{
-            "title": notification.title,
-            "color": notification.color,
-            "fields": [
-                {"name": f.name, "value": f.value, "inline": f.inline}
-                for f in notification.fields
-            ],
-            "footer": {"text": notification.footer},
-        }]
+        "embeds": [
+            {
+                "title": notification.title,
+                "color": notification.color,
+                "fields": [{"name": f.name, "value": f.value, "inline": f.inline} for f in notification.fields],
+                "footer": {"text": notification.footer},
+            }
+        ]
     }
