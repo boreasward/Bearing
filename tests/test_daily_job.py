@@ -293,3 +293,5 @@ def test_plist_template_placeholders():
     # 与页面服务（.env、local-service.md）同一个运行目录：两边共用 pi.lock，简报落在同一个 briefs/
     assert "__HOME__/Library/Application Support/investment-assistant</string>" in template
     assert ".local/v3" not in template
+    # 包从仓库根目录导入（未装进 venv），launchd 缺省工作目录是 /
+    assert "<key>WorkingDirectory</key>\n    <string>__REPO__</string>" in template

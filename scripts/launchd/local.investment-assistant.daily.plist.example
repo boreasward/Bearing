@@ -18,6 +18,9 @@
         <string>--env-file</string>
         <string>__REPO__/.env</string>
     </array>
+    <!-- 包没有装进 venv，只能从仓库根目录导入：必须设工作目录，否则 launchd 在 / 下启动、找不到模块 -->
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
     <key>StartCalendarInterval</key>
     <array>
         <dict>
