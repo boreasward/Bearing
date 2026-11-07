@@ -160,4 +160,12 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 | 18 | 假实现（无 Pi、无网络跑全套） | `tests/test_runtime_fake.py`（全文件）、`tests/test_daily_session.py`（全部用假运行时） |
 | 19 | 超时与取消 | `tests/test_api_chat.py::test_cancel_ends_stream_and_next_turn_works`、`tests/test_runtime_chat.py::test_timeout_marks_the_message_timeout`、`tests/test_runtime_pi.py::test_stalled_stream_times_out_and_kills` |
 
-另：真实 Pi 客户端的冒烟（v3 设计验收的做法）**待真实运行**——本版没有再跑；上一次是 v3.0 在 2026-11-06 做的（见 [v3-facts.md](v3-facts.md) 冒烟记录）。
+另：真实 Pi 客户端的冒烟（v3 设计验收的做法）：v3.0 在 2026-11-06 做过一次（见 [v3-facts.md](v3-facts.md) 冒烟记录）；v3.1 在 2026-11-07 上线当天经用户授权用 `launchctl kickstart` 触发已安装的 LaunchAgent 做了一次，记录见下。
+
+### v3.1 上线冒烟（2026-11-07）
+
+- 前两次触发暴露两处问题，已修：plist 缺 `WorkingDirectory`（launchd 在 `/` 下启动，包未装进 venv，`ModuleNotFoundError`）；日线采集耗尽 launchd 的 256 个文件描述符
+  （yfinance 的 `cache_get` 是 64 条的 lru_cache，缓存的 curl_cffi 响应各自钉住 `hard_deadline` 线程的 curl 句柄；采集后残留约 200 个描述符、峰值约 345，修复后峰值约 147）。
+- 第三次：退出码 0，stdout `{"session": "2026-11-06", "status": "final", "attempts": 1, "complete": true, "pushed": true}`；简报会话 315 秒、token 输入 53495 / 输出 13220；
+  名单前五逐项有结论（1 否决、3 确认并各存一份待入场计划，第 5 名因名额已满未处理）；`v3_briefs` 为 `final` 且已推送 Discord；页面 `/api/briefs/latest` 返回该简报。
+- 验收 11（连续 3 个定时交易日无人干预）仍待真实运行。
