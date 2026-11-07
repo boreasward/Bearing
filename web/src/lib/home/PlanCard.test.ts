@@ -16,7 +16,7 @@ const PENDING: PlanCardData = {
   plan_id: 41,
   ticker: 'MU',
   status: 'pending',
-  kind: 'breakout',
+  kind: 'planned',
   levels: { entry_low: '95.10', entry_high: '97.30', stop: '91.40', target1: '104.70' },
   initial_stop: '91.40',
   trailing: false,
@@ -36,6 +36,7 @@ const PENDING: PlanCardData = {
   ended_session: null,
   end_reason: null,
   close_above_entry: true,
+  missing_bar: false,
 }
 
 const OPEN: PlanCardData = {
@@ -56,9 +57,11 @@ const CLOSED: PlanCardData = {
   plan_id: 43,
   ticker: 'NVDA',
   status: 'closed',
+  kind: 'adopted',
   ended_session: '2026-11-04',
   end_reason: 'trailing_stop',
   close_above_entry: false,
+  missing_bar: false,
   outcome: { realized_pnl: '520.00', r_multiple: '2.10', r_text: null, exit_reason: 'trailing_stop', stop_delay_sessions: 1, entry_in_zone: true },
 }
 
@@ -66,9 +69,17 @@ describe('PlanCard', () => {
   it('pending card shows status, levels, validity and the close-above-entry warning', () => {
     const { container } = render(PlanCard, { card: PENDING })
     expect(screen.getByText('待入场')).toBeInTheDocument()
+    expect(screen.getByText('计划')).toBeInTheDocument() // kind=planned 的计划/补录徽标（终审 M4：fixture 用真值）
     expect(container.textContent).toContain('入场 95.10–97.30 · 止损 91.40 · T1 104.70 · 建议 120 股')
     expect(container.textContent).toContain('有效至 2026-11-12')
     expect(screen.getByText('最新收盘高于入场区间')).toBeInTheDocument()
+    expect(screen.queryByText('缺日线，未复查')).toBeNull() // 当天有日线时不提示
+  })
+
+  it('pending card shows 缺日线，未复查 when the session bar is missing', () => {
+    render(PlanCard, { card: { ...PENDING, close_above_entry: false, missing_bar: true } })
+    expect(screen.getByText('缺日线，未复查')).toBeInTheDocument() // spec §6.3 末段固定文案（终审 F1）
+    expect(screen.queryByText('最新收盘高于入场区间')).toBeNull()
   })
 
   it('open card shows the next action, position pnl, held sessions and the stop-order state', () => {
@@ -83,6 +94,7 @@ describe('PlanCard', () => {
   it('closed card shows the recorded outcome including r_text', () => {
     render(PlanCard, { card: { ...CLOSED, outcome: { ...CLOSED.outcome, r_multiple: null, r_text: '补录，不计' } } })
     expect(screen.getByText('已平仓')).toBeInTheDocument()
+    expect(screen.getByText('补录')).toBeInTheDocument() // kind=adopted 的徽标（终审 M4：fixture 用真值）
     expect(screen.getByText('补录，不计')).toBeInTheDocument()
     expect(screen.getByText('520.00')).toBeInTheDocument()
   })

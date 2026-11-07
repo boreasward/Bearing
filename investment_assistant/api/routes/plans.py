@@ -36,7 +36,8 @@ def _bad(message: str) -> JSONResponse:
 
 def _card(conn, env, plan: dict) -> dict:
     """一张计划卡片（接口契约表）：价位与金额 Decimal（序列化成字符串），pending 卡片带
-    close_above_entry（最新收盘高于入场区间，spec §6.3 第 4 条；缺日线或非 pending 为 False）。"""
+    close_above_entry（最新收盘高于入场区间，spec §6.3 第 4 条）与 missing_bar（缺当日日线，
+    spec §6.3 末段「缺日线，未复查」）；非 pending 时两者均为 False。"""
     ticker = plan["ticker"]
     bars = data_repo.read_bars(conn, ticker, env.session, cutoff_at=env.cutoff_at)
     last_close = Decimal(str(bars[-1]["close"])) if bars else None
@@ -101,6 +102,8 @@ def _card(conn, env, plan: dict) -> dict:
             and last_close is not None
             and last_close > plan["entry_high"]
         ),
+        # 待入场计划缺当日日线（spec §6.3 末段，终审 F1）：与 brief_view / today_actions 同一判定
+        "missing_bar": bool(plan["status"] == "pending" and (not bars or bars[-1]["price_date"] != env.session)),
     }
 
 

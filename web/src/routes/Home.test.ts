@@ -36,26 +36,26 @@ const PLANS = {
   holdings: {
     plans: [
       {
-        plan_id: 42, ticker: 'AAPL', status: 'open', kind: 'breakout',
+        plan_id: 42, ticker: 'AAPL', status: 'open', kind: 'planned',
         levels: { entry_low: '199.00', entry_high: '201.00', stop: '201.50', target1: '210.00' },
         initial_stop: '191.40', trailing: false, shares: 50, valid_from: '2026-11-05', valid_until: '2026-11-12',
         start_session: '2026-11-06', max_hold_sessions: 20,
         next_action: { kind: 'stop_order', text: '未确认止损单', stop: '201.50', reason: null },
         position: { quantity: 50, avg_cost: '200.10', last_close: '205.30', unrealized_pnl: '260.00', unrealized_pct: '0.026' },
         held_sessions: 3, stop_order_status: 'none', confirmed_stop_order: null, outcome: {}, thesis: null,
-        created_at: '2026-11-05T22:00:00+00:00', ended_session: null, end_reason: null, close_above_entry: false,
+        created_at: '2026-11-05T22:00:00+00:00', ended_session: null, end_reason: null, close_above_entry: false, missing_bar: false,
       },
     ],
   },
   pending: {
     plans: [
       {
-        plan_id: 41, ticker: 'MU', status: 'pending', kind: 'breakout',
+        plan_id: 41, ticker: 'MU', status: 'pending', kind: 'planned',
         levels: { entry_low: '95.10', entry_high: '97.30', stop: '91.40', target1: '104.70' },
         initial_stop: '91.40', trailing: false, shares: 120, valid_from: '2026-11-05', valid_until: '2026-11-12',
         start_session: null, max_hold_sessions: 20, next_action: null, position: null, held_sessions: null,
         stop_order_status: 'none', confirmed_stop_order: null, outcome: {}, thesis: null,
-        created_at: '2026-11-05T22:00:00+00:00', ended_session: null, end_reason: null, close_above_entry: true,
+        created_at: '2026-11-05T22:00:00+00:00', ended_session: null, end_reason: null, close_above_entry: true, missing_bar: false,
       },
     ],
   },

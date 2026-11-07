@@ -169,6 +169,7 @@
     {#if card.status === 'pending'}
       {#if card.valid_until}<p class="text-xs text-muted-foreground">有效至 {card.valid_until}</p>{/if}
       {#if card.close_above_entry}<p class="text-sm text-warn">最新收盘高于入场区间</p>{/if}
+      {#if card.missing_bar}<p class="text-sm text-warn">缺日线，未复查</p>{/if}
       {#if card.thesis}<p class="text-xs text-muted-foreground">{card.thesis}</p>{/if}
     {:else if card.status === 'open' && card.position}
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">

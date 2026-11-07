@@ -1,6 +1,7 @@
 """Read tools over the v3_tx database: stored facts, env-fixed cutoff, error envelopes."""
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal as D
 
 import pytest
 
@@ -377,8 +378,8 @@ def test_get_plans_filters_and_carries_events(env, v3_tx):
     assert call(env, "get_plans", {"status": "paused"})["error"].startswith("invalid_status")
 
 
-def _plan_row(ticker, *, status="pending"):
-    return {
+def _plan_row(ticker, *, status="pending", **over):
+    row = {
         "session": SESSION,
         "ticker": ticker,
         "origin": "brief",
@@ -402,6 +403,45 @@ def _plan_row(ticker, *, status="pending"):
         "status": status,
         "kind": "planned",
     }
+    row.update(over)
+    return row
+
+
+def test_get_positions_carries_hold_action(v3_tx):
+    """终审 I1：确认过止损单的持仓在 get_positions 里带「继续持有」（spec §10：每只持仓含
+    下一个交易日的操作及原因），不再是 None。"""
+    data_repo.store_bars(v3_tx, "AAPL", _bars(), now=NOW)
+    plan_repo.insert_plan(
+        v3_tx,
+        _plan_row(
+            "AAPL",
+            status="open",
+            entry_low=D(94),
+            entry_high=D(98),
+            stop=D(96),
+            target1=D(104),
+            initial_stop=D(96),
+            confirmed_stop_order=D(96),  # 挂单 = 止损 → 第 5 条「继续持有」
+            start_session=SESSION,
+        ),
+    )
+    facts_repo.insert_trade(
+        v3_tx,
+        {
+            "request_id": "hold-buy",
+            "ticker": "AAPL",
+            "side": "buy",
+            "quantity": 10,
+            "price": D(100),
+            "executed_at": NOW,
+        },
+    )
+    v3_tx.commit()
+    env = make_env(session=SESSION, mode="brief", agent_session="t-hold", cfg=AssistantConfig(), now=NOW)
+    rows = call(env, "get_positions", {})["data"]
+    assert [row["ticker"] for row in rows] == ["AAPL"]
+    assert rows[0]["next_action"]["kind"] == "hold"
+    assert rows[0]["next_action"]["text"] == "继续持有"
 
 
 def test_get_agenda_reads_the_day(env, v3_tx):

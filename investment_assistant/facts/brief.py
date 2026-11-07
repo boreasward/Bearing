@@ -12,7 +12,8 @@ view keys consumed here:
 - holdings: holdings_view rows, plus optional 'earnings_note' and
   'review': {'verdict': 'holds'|'broken'|'unknown', 'reasons': str} (final only)
 - pending_plans: [{'ticker', 'day', 'entry_low', 'entry_high', 'stop', 'target1', 'shares',
-                   'valid_until'}] — one line each (当天没变的不展开)
+                   'valid_until', 'missing_bar'}] — one line each (当天没变的不展开)；missing_bar
+  时行尾加「缺日线，未复查」（spec §6.3 末段）
 - candidates: [{'ticker', 'rank', 'reason', 'streak', 'new', 'verdict', 'skip_reason', 'held'}]
 - dropped: [{'ticker', 'reasons': [code|str]}]
 - account: {'cash', 'equity', 'unrealized_pnl', 'realized_pnl'} | None
@@ -134,6 +135,7 @@ def _pending_plan_lines(plans: list[dict]) -> list[str]:
         f"- {row['ticker']}（第 {row.get('day', 1)} 天）："
         f"入场 {row['entry_low']}–{row['entry_high']}，止损 {row['stop']}，"
         f"目标 {row['target1']}，{row['shares']} 股，有效至 {row['valid_until']:%Y-%m-%d}"
+        + ("，缺日线，未复查" if row.get("missing_bar") else "")
         for row in plans
     ]
 
@@ -188,6 +190,8 @@ def _unresolved_lines(view: dict) -> list[str]:
         "本次没有采集，用的是库里已有的数据。"
     ]
     unresolved = view.get("unresolved") or {}
+    # §8 有意保持通用数据质量清单的「缺日线」：待入场计划的逐字提示「缺日线，未复查」
+    # 在第 5 段（终审 F1 裁定），两处各司其职。
     for ticker in unresolved.get("missing_bars") or []:
         lines.append(f"- {ticker}：缺日线")
     for item in unresolved.get("agenda") or []:

@@ -1,6 +1,6 @@
 // Page-API types: the binding contract is Task 5's route table (investment_assistant/api/routes).
-// Field names are copied verbatim from that table; the only addition beyond it is
-// `close_above_entry` on plan cards (spec §6.3 第 4 条, ruling R7).
+// Field names are copied verbatim from that table; the additions beyond it are
+// `close_above_entry` and `missing_bar` on plan cards (spec §6.3, rulings R7 + final-review F1).
 // Money and prices arrive as JSON strings (serialized Decimal) — never parse them into floats for
 // display math, hand them to MetricValue's `raw` instead. Timestamps are ISO 8601 with `T` and a
 // timezone offset; sessions and dates are `YYYY-MM-DD`.
@@ -112,6 +112,8 @@ export interface PlanCardData {
   end_reason: string | null
   /** pending plans whose latest close is above the entry zone (spec §6.3 第 4 条) */
   close_above_entry: boolean
+  /** pending plans whose session bar is missing — renders 「缺日线，未复查」 (spec §6.3 末段) */
+  missing_bar: boolean
 }
 
 export interface PlanEvent {

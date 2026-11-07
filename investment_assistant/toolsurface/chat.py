@@ -81,9 +81,13 @@ def record_trade(
         if replayed is not None:  # 同一 request_id 重发：返回原行，不重复推进计划
             return _respond(conn, env, replayed, transition=False)
         if linked_plan is not None:
-            found = conn.execute("SELECT id FROM v3_plans WHERE id = %s", (linked_plan,)).fetchone()
+            found = conn.execute("SELECT ticker FROM v3_plans WHERE id = %s", (linked_plan,)).fetchone()
             if found is None:
                 raise ValueError(f"invalid_argument: plan_id {linked_plan} 不存在")
+            if found[0] != ticker:  # 跨标的计划编号是接错线，不是加仓：拒绝且不写成交
+                raise ValueError(
+                    f"plan_ticker_mismatch: plan_id {linked_plan} 属于 {found[0]}，与成交标的 {ticker} 不符"
+                )
         row = {
             "id": None,
             "request_id": request_id,

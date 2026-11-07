@@ -37,6 +37,7 @@ CARD_KEYS = {
     "ended_session",
     "end_reason",
     "close_above_entry",
+    "missing_bar",
 }
 
 
@@ -172,6 +173,7 @@ def test_holdings_group_card_fields(client, v3_tx):
     assert card["next_action"]["kind"] == "stop_order"  # 未确认止损单
     assert card["stop_order_status"] == "none" and card["held_sessions"] == 0
     assert card["close_above_entry"] is False  # 非 pending 一律 False
+    assert card["missing_bar"] is False  # 非 pending 一律 False（与 close_above_entry 同口径）
     assert re.fullmatch(ISO_STAMP, card["created_at"])  # 时间是 ISO 8601 的 T 形式且带时区
 
 
@@ -184,6 +186,9 @@ def test_pending_group_marks_close_above_entry(client, v3_tx):
     assert by_ticker["MSFT"]["close_above_entry"] is True  # 最新收盘 100 > 入场区间上沿 98（R7 / spec §6.3 第 4 条）
     assert by_ticker["MSFT"]["position"] is None and by_ticker["MSFT"]["next_action"] is None
     assert by_ticker["ZZZ"]["close_above_entry"] is False  # 缺日线：false/omitted-safe
+    # 缺当日日线（终审 F1 / spec §6.3 末段）：ZZZ 没有任何日线 → True；MSFT 日线齐 → False
+    assert by_ticker["ZZZ"]["missing_bar"] is True
+    assert by_ticker["MSFT"]["missing_bar"] is False
 
 
 def test_ended_group_carries_outcome(client, v3_tx):

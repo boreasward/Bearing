@@ -128,6 +128,7 @@ def test_read_only_chat_is_rejected(v3_tx, tmp_path):
 
 def test_busy_lock_propagates(v3_tx, tmp_path):
     import investment_assistant.core.tx as core_tx
+    from investment_assistant.facts import plan_repo
 
     cfg = cfg_at(tmp_path)
     with core_tx._tx() as conn:
@@ -137,6 +138,16 @@ def test_busy_lock_propagates(v3_tx, tmp_path):
         with pytest.raises(lock.Busy) as exc:
             list(chat.turn(chat_id=chat_id, text="问", cfg=cfg, runtime=FakeRuntime([]), now=NOW))
         assert exc.value.kind == "chat"
+    with core_tx.read_only_tx() as conn:
+        # 终审 M3：Busy 竞态不留「有问无答」的孤儿用户行（用户行在拿到锁之后才写）
+        assert plan_repo.messages(conn, chat_id) == []
+    # 锁释放后同一问题照常成对落库
+    list(chat.turn(chat_id=chat_id, text="问", cfg=cfg, runtime=FakeRuntime([RuntimeEvent("done")]), now=NOW))
+    with core_tx.read_only_tx() as conn:
+        assert [(row["role"], row["status"]) for row in plan_repo.messages(conn, chat_id)] == [
+            ("user", "ok"),
+            ("assistant", "ok"),
+        ]
 
 
 def test_cancel_marks_the_message_cancelled(v3_tx, tmp_path):

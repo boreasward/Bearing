@@ -35,8 +35,11 @@ HOLDING_EVENTS = ("stop_hit", "target_hit", "stop_raised", "sell_instruction")
 NO_STOP_TEXT = "缺日线，未能给出止损"  # 补录计划还没算出止损（spec §6.6）
 
 
-def today_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig) -> list[dict]:
-    """每只未平仓持仓「下一个交易日的操作」（spec §7.4 第 1–4 条），按规则次序排序。"""
+def plan_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig) -> list[dict]:
+    """每只未平仓持仓「下一个交易日的操作」全表（spec §7.4 五条，含第 5 条「继续持有」）。
+
+    简报第 4 段、Discord 推送与 get_positions 的持仓行都取这张全表；「今日操作」（第 0 段）
+    用 :func:`today_actions` 的过滤视图。"""
     del cfg  # 目前无需配置；签名留给页面与简报共用
     by_ticker: dict[str, list[dict]] = {}
     for trade in facts_repo.list_trades(conn):
@@ -64,8 +67,6 @@ def today_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantCon
             if shown.get("confirmed_stop_order") is not None:
                 shown["confirmed_stop_order"] = _cent(shown["confirmed_stop_order"])
             action = next_action(plan=shown, position=position, unchecked=unchecked)
-        if action["kind"] == "hold":
-            continue
         actions.append(
             {
                 "plan_id": plan["id"],
@@ -79,6 +80,21 @@ def today_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantCon
         )
     actions.sort(key=lambda row: ACTION_ORDER.get(row["kind"], len(ACTION_ORDER)))
     return actions
+
+
+def today_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig) -> list[dict]:
+    """每只未平仓持仓「下一个交易日的操作」（spec §7.4 第 1–4 条），按规则次序排序。
+
+    第 5 条（继续持有）不进「今日操作」（spec §11 第 0 段），但持仓行仍带它（第 4 段）。"""
+    return [row for row in plan_actions(conn, session=session, cutoff_at=cutoff_at, cfg=cfg) if row["kind"] != "hold"]
+
+
+def actions_by_ticker(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig) -> dict[str, dict]:
+    """持仓行的操作表（含「继续持有」）：ticker -> {kind, text, stop, reason}。"""
+    return {
+        row["ticker"]: {"kind": row["kind"], "text": row["text"], "stop": row["stop"], "reason": row["reason"]}
+        for row in plan_actions(conn, session=session, cutoff_at=cutoff_at, cfg=cfg)
+    }
 
 
 def _changes(conn, session: date) -> dict:
@@ -187,10 +203,7 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
             else None
         )
         plans_map[plan["ticker"]] = row
-    actions = {
-        row["ticker"]: {"kind": row["kind"], "text": row["text"], "stop": row["stop"], "reason": row["reason"]}
-        for row in today_actions(conn, session=session, cutoff_at=cutoff_at, cfg=cfg)
-    }
+    actions = actions_by_ticker(conn, session=session, cutoff_at=cutoff_at, cfg=cfg)
     holdings = holdings_view(trades, closes=closes, plans=plans_map, splits=splits, actions=actions)
     reviews = plan_repo.holding_reviews(conn, session)
     plans_by_id = {plan["id"]: plan for plan in active}
@@ -233,6 +246,26 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
         unresolved_items.append("一句话总结")
 
     brief_row = plan_repo.brief(conn, session)
+    # 待入场计划的当日缺日线标志（spec §6.3 末段）：与 today_actions / 计划卡片同一判定
+    # （bars[-1]["price_date"] != session），保证卡片与简报不会各说各话。
+    pending_plans = []
+    for plan in active:
+        if plan["status"] != "pending":
+            continue
+        bars = data_repo.read_bars(conn, plan["ticker"], session, cutoff_at=cutoff_at)
+        pending_plans.append(
+            {
+                "ticker": plan["ticker"],
+                "day": len(trading_days_between(plan["session"], session)) + 1,
+                "entry_low": plan["entry_low"],
+                "entry_high": plan["entry_high"],
+                "stop": plan["stop"],
+                "target1": plan["target1"],
+                "shares": plan["shares"],
+                "valid_until": plan["valid_until"],
+                "missing_bar": not bars or bars[-1]["price_date"] != session,
+            }
+        )
     changes = _changes(conn, session)
     changes["new_count"] = len(cont["new"])
     changes["dropped_count"] = len(dropped)
@@ -255,20 +288,7 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
         "changes": changes,
         "market": market,
         "holdings": holdings,
-        "pending_plans": [
-            {
-                "ticker": plan["ticker"],
-                "day": len(trading_days_between(plan["session"], session)) + 1,
-                "entry_low": plan["entry_low"],
-                "entry_high": plan["entry_high"],
-                "stop": plan["stop"],
-                "target1": plan["target1"],
-                "shares": plan["shares"],
-                "valid_until": plan["valid_until"],
-            }
-            for plan in active
-            if plan["status"] == "pending"
-        ],
+        "pending_plans": pending_plans,
         "candidates": _candidate_rows(
             conn,
             session=session,

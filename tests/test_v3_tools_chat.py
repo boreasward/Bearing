@@ -169,6 +169,20 @@ def _events(v3_tx, plan_id):
     return [row["event"] for row in plan_repo.events(v3_tx, plan_id)]
 
 
+def test_record_trade_rejects_cross_ticker_plan_id(chat_env, v3_tx):
+    """终审 M2：plan_id 属于别的股票时拒绝（plan_ticker_mismatch），不写成交也不推进计划。"""
+    other = _plan(v3_tx, ticker="MSFT")
+    v3_tx.commit()
+    rejected = call(chat_env, "record_trade", {**TRADE, "plan_id": other["id"], "confirmed": True})
+    assert rejected["error"].startswith("plan_ticker_mismatch")
+    assert v3_tx.execute("SELECT count(*) FROM v3_trades").fetchone()[0] == 0
+    untouched = plan_repo.plan(v3_tx, other["id"])
+    assert untouched is not None and untouched["status"] == "pending"  # 计划不动
+    # 同标的的计划照常关联
+    ok = call(chat_env, "record_trade", {**TRADE, "plan_id": _plan(v3_tx)["id"], "confirmed": True})["data"]
+    assert ok["trade"]["plan_id"] is not None and ok["plan"]["status"] == "open"
+
+
 def test_buy_with_pending_plan_returns_stop_order_and_flow(chat_env, v3_tx):
     """A10：买入返回止损单指令；确认前有「未确认止损单」，确认后消失，上调后出现「需上调」。"""
     plan = _plan(v3_tx)

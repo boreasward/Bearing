@@ -16,7 +16,7 @@ from investment_assistant.facts.account import account_view
 from investment_assistant.facts.agenda import agenda
 from investment_assistant.facts.coverage import coverage_lines
 from investment_assistant.facts.holdings import holdings_view
-from investment_assistant.facts.view import today_actions
+from investment_assistant.facts.view import actions_by_ticker
 from investment_assistant.toolsurface.env import ToolEnv
 from investment_assistant.toolsurface.validation import normalize_ticker
 
@@ -73,10 +73,7 @@ def holdings_rows(conn, env: ToolEnv) -> list[dict]:
         plan = plan_repo.active_plan(conn, ticker)
         if plan is not None:
             plans[ticker] = plan
-    actions = {
-        row["ticker"]: {"kind": row["kind"], "text": row["text"], "stop": row["stop"], "reason": row["reason"]}
-        for row in today_actions(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg)
-    }
+    actions = actions_by_ticker(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg)
     return holdings_view(trades, closes=closes, plans=plans, splits=splits, actions=actions)
 
 

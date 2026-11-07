@@ -259,3 +259,51 @@ def test_view_holds_pending_plans_and_account(v3_tx):
     assert view["error"] is None and view["session"] == SESSION
     assert [row["ticker"] for row in view["holdings"]] == ["AAPL"]  # 持仓行来自成交
     assert view["holdings"][0]["kind"] == "planned"  # 计划还是 pending，只是持仓在
+
+
+def test_hold_position_flows_through_real_brief_path(v3_tx):
+    """终审 I1：确认过止损单的持仓走真实 brief_view —— 第 4 段开头「继续持有」、Discord 推送
+    持仓操作一行；「今日操作」（第 0 段）仍只收第 1–4 条，不含第 5 条。"""
+    from investment_assistant.facts.brief import discord_lines, render_brief
+
+    data_repo.store_bars(v3_tx, "AAPL", bars(), now=NOW)
+    plan_repo.insert_plan(v3_tx, plan("AAPL", confirmed_stop_order=D(96)))  # 挂单=止损 → 第 5 条
+    buy(v3_tx, "AAPL", "hold-buy")
+    v3_tx.commit()
+
+    view = brief_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run_view([]))
+
+    assert view["today_actions"] == []  # 第 0 段过滤掉第 5 条（spec §11 第 0 段）
+    action = view["holdings"][0]["next_action"]
+    assert action["kind"] == "hold" and action["text"] == "继续持有"
+
+    text = render_brief(view, final=True)
+    holding_line = next(line for line in text.splitlines() if line.startswith("- AAPL："))
+    assert holding_line.startswith("- AAPL：继续持有，")  # §4 每只持仓先写操作（spec §11 第 4 段）
+
+    lines = discord_lines(view, brief_path="/tmp/briefs/2026-11-04.md")
+    assert lines.count("AAPL：继续持有") == 1  # Discord：持仓操作各一行，且只一行
+    assert lines[-1] == "简报文件：/tmp/briefs/2026-11-04.md"
+
+
+def test_pending_missing_bar_flagged_in_section_5(v3_tx):
+    """终审 F1：待入场计划缺当日日线 → brief_view 标 missing_bar，第 5 段行尾「缺日线，未复查」
+    （spec §6.3 末段）；有当天日线的计划不带。"""
+    from investment_assistant.facts.brief import render_brief
+
+    data_repo.store_bars(v3_tx, "MSFT", bars(), now=NOW)  # 当天日线在
+    data_repo.store_bars(v3_tx, "BBB", bars(end=PREV), now=NOW)  # 日线停在昨天：同样算缺
+    plan_repo.insert_plan(v3_tx, plan("AAPL", status="pending", start_session=None))  # 完全没有日线
+    plan_repo.insert_plan(v3_tx, plan("BBB", status="pending", start_session=None))
+    plan_repo.insert_plan(v3_tx, plan("MSFT", status="pending", start_session=None))
+    v3_tx.commit()
+
+    view = brief_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run_view([]))
+    flags = {row["ticker"]: row["missing_bar"] for row in view["pending_plans"]}
+    assert flags == {"AAPL": True, "BBB": True, "MSFT": False}
+
+    text = render_brief(view, final=True)
+    lines = {line[2:].split("（")[0]: line for line in text.splitlines() if line.startswith("- ") and "（第" in line}
+    assert lines["AAPL"].endswith("，缺日线，未复查")
+    assert lines["BBB"].endswith("，缺日线，未复查")
+    assert "缺日线，未复查" not in lines["MSFT"]

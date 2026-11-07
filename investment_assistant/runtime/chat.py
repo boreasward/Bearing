@@ -70,18 +70,6 @@ def turn(
         session = latest["session"]
         seq = plan_repo.next_message_seq(conn, chat_id)
     agent_session = f"chat-{chat_id}-{seq}"
-    with core_tx._tx() as conn:
-        plan_repo.insert_message(
-            conn,
-            {
-                "chat_id": chat_id,
-                "seq": seq,
-                "role": "user",
-                "content": text,
-                "session": session,
-                "status": "ok",
-            },
-        )
     workdir = lock.runtime_base(cfg) / "chats" / chat_id
     mcpconfig.write(workdir, repo_root=REPO_ROOT, session=session, mode="chat", agent_session=agent_session)
     prompt = text
@@ -96,6 +84,19 @@ def turn(
     terminal = RuntimeEvent("error", text="runtime_ended_without_terminal")
     try:
         with lock.acquire("chat", cfg=cfg):
+            # 用户行在拿到锁之后才写：Busy 竞态下不留「有问无答」的孤儿消息行（终审 M3）
+            with core_tx._tx() as conn:
+                plan_repo.insert_message(
+                    conn,
+                    {
+                        "chat_id": chat_id,
+                        "seq": seq,
+                        "role": "user",
+                        "content": text,
+                        "session": session,
+                        "status": "ok",
+                    },
+                )
             for event in runtime.run(
                 prompt=prompt,
                 workdir=workdir,
