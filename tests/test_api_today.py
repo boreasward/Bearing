@@ -1,5 +1,6 @@
 """GET /api/today：今日操作与账户条；没有运行记录时页面照常打开（接口契约表第一行）。"""
 
+import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
 
@@ -103,7 +104,9 @@ def test_today_returns_actions_and_account(client, v3_tx):
     assert resp.status_code == 200
     body = resp.json()
     assert body["session"] == "2026-11-04"
-    assert isinstance(body["cutoff_at"], str)
+    assert re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^+Z]*(?:Z|[+-]\d{2}:\d{2})", body["cutoff_at"]
+    )  # 时间是 ISO 8601 的 T 形式且带时区（契约表）
     # 未确认止损单的持仓进「今日操作」（spec §7.4 第 4 条）
     assert [row["kind"] for row in body["actions"]] == ["stop_order"]
     action = body["actions"][0]

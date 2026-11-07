@@ -11,11 +11,11 @@ from fastapi.responses import JSONResponse
 from investment_assistant.api import deps
 from investment_assistant.data import repo as data_repo
 from investment_assistant.execution import plan_line
-from investment_assistant.execution.plan_levels import _cent
+from investment_assistant.execution.plan_levels import cent
 from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
-from investment_assistant.facts.holdings import _stop_order_status
+from investment_assistant.facts.holdings import stop_order_status
 from investment_assistant.toolsurface import plans as plan_tools
 
 router = APIRouter(prefix="/api/plans")
@@ -60,9 +60,9 @@ def _card(conn, env, plan: dict) -> dict:
         }
         shown = dict(plan)  # 给用户看的止损价取到分（与今日操作同一口径）
         if shown["stop"] is not None:
-            shown["stop"] = _cent(shown["stop"])
+            shown["stop"] = cent(shown["stop"])
         if shown.get("confirmed_stop_order") is not None:
-            shown["confirmed_stop_order"] = _cent(shown["confirmed_stop_order"])
+            shown["confirmed_stop_order"] = cent(shown["confirmed_stop_order"])
         unchecked = not bars or bars[-1]["price_date"] != env.session
         next_action = plan_line.next_action(plan=shown, position=position, unchecked=unchecked)
     return {
@@ -88,7 +88,7 @@ def _card(conn, env, plan: dict) -> dict:
         "held_sessions": plan_line.held_sessions(plan["start_session"], env.session)
         if plan["status"] == "open" and plan["start_session"] is not None
         else None,
-        "stop_order_status": _stop_order_status(plan),
+        "stop_order_status": stop_order_status(plan),
         "confirmed_stop_order": plan["confirmed_stop_order"],
         "outcome": plan["outcome"] or {},
         "thesis": plan["thesis"],

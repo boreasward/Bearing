@@ -38,6 +38,11 @@ def _runtime_for(spec: RuntimeSpec):
     return runtime_settings.build(spec)
 
 
+def _busy_code(holder_kind: str | None) -> str:
+    """锁被谁占着，error 码就是谁在跑（v3 设计验收 16）；前置 409 与 worker 的 error 帧共用。"""
+    return "brief_running" if holder_kind == "brief" else "chat_running"
+
+
 def _sse_frame(event: RuntimeEvent) -> str:
     payload = {"kind": event.kind, "text": event.text, "tool": event.tool, "ref": event.ref, "usage": event.usage}
     return f"event: {event.kind}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -53,6 +58,8 @@ def _sse_stream(*, chat_id: str, text: str, cfg: AssistantConfig, runtime, now: 
         try:
             for event in runtime_chat.turn(chat_id=chat_id, text=text, cfg=cfg, runtime=runtime, now=now):
                 events.put(event)
+        except lock.Busy:  # 前置检查与拿锁之间被占：以带 code 的 error 帧收尾
+            events.put(RuntimeEvent("error", text=_busy_code(lock.holder(cfg))))
         except ValueError as exc:  # 首事件前的前置拒绝（如并发时 no_run）以 error 事件收尾
             events.put(RuntimeEvent("error", text=str(exc)))
         except Exception as exc:  # noqa: BLE001 - 出错也必须有收尾事件，不悬挂连接
@@ -128,8 +135,7 @@ def post_message(chat_id: str, body: dict = REQUIRED_BODY):
         return JSONResponse({"error": "invalid_argument: text 必须是非空字符串"}, status_code=400)
     holder_kind = lock.holder(cfg)  # 锁持有者是谁，409 的 error 码就是谁在跑（v3 设计验收 16）
     if holder_kind is not None:
-        busy = "brief_running" if holder_kind == "brief" else "chat_running"
-        return JSONResponse({"error": busy}, status_code=409)
+        return JSONResponse({"error": _busy_code(holder_kind)}, status_code=409)
     spec = RuntimeSpec(runtime=chat_row["runtime"], provider=chat_row["provider"], model=chat_row["model"])
     return StreamingResponse(
         _sse_stream(chat_id=chat_id, text=body["text"], cfg=cfg, runtime=_runtime_for(spec), now=datetime.now(UTC)),

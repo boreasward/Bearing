@@ -25,6 +25,9 @@ def _stop_order_status(plan: dict[str, Any] | None) -> str:
     return "confirmed"
 
 
+stop_order_status = _stop_order_status  # 公开别名：页面计划卡片与持仓视图共用同一状态机（单一来源）
+
+
 def holdings_view(
     trades: list[dict],
     *,

@@ -173,6 +173,31 @@ def test_chat_running_is_409(page):
     assert resp.status_code == 409 and resp.json() == {"error": "chat_running"}
 
 
+def test_busy_inside_the_worker_is_a_coded_error_frame(page, monkeypatch):
+    """前置检查与 worker 拿锁之间锁被占：SSE 以带 code 的 error 帧收尾（brief/chat_running
+    按锁持有者，与 409 前置检查同一套映射）。"""
+    from investment_assistant.runtime import chat as runtime_chat
+    from investment_assistant.runtime import lock
+
+    _, chats_routes = page
+    chat_id = _new_chat(page)
+
+    def busy_turn(**kwargs):
+        raise lock.Busy("chat")  # turn 真实路径里 lock.acquire('chat') 失败的替身
+        yield  # pragma: no cover - 生成器签名
+
+    monkeypatch.setattr(runtime_chat, "turn", busy_turn)
+    for holder, code in (("brief", "brief_running"), ("chat", "chat_running")):
+        with lock.acquire(holder, cfg=chats_routes._cfg()):
+            stream = chats_routes._sse_stream(
+                chat_id=chat_id, text="问", cfg=chats_routes._cfg(), runtime=None, now=NOW
+            )
+            frames = list(stream)
+        assert len(frames) == 1 and frames[0].startswith("event: error")
+        payload = json.loads(frames[0].split("\n")[1][len("data: "):])
+        assert payload["kind"] == "error" and payload["text"] == code
+
+
 def test_read_only_chat_cannot_post(page):
     from investment_assistant.facts import plan_repo
 

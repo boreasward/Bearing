@@ -1,6 +1,7 @@
 """/api/plans*：三组卡片（含 close_above_entry）、单份计划与变化记录、stop-order / raise-stop / cancel。
 写入口只转发给工具面，校验错误 400，资源缺失 404（接口契约表）。"""
 
+import re
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
 
@@ -152,6 +153,9 @@ def seed(conn):
     return open_plan
 
 
+ISO_STAMP = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^+Z]*(?:Z|[+-]\d{2}:\d{2})"  # ISO 8601 T 形式且带时区
+
+
 def test_holdings_group_card_fields(client, v3_tx):
     with core_tx._tx() as conn:
         seed(conn)
@@ -168,6 +172,7 @@ def test_holdings_group_card_fields(client, v3_tx):
     assert card["next_action"]["kind"] == "stop_order"  # 未确认止损单
     assert card["stop_order_status"] == "none" and card["held_sessions"] == 0
     assert card["close_above_entry"] is False  # 非 pending 一律 False
+    assert re.fullmatch(ISO_STAMP, card["created_at"])  # 时间是 ISO 8601 的 T 形式且带时区
 
 
 def test_pending_group_marks_close_above_entry(client, v3_tx):
@@ -211,6 +216,7 @@ def test_plan_detail_card_and_events(client, v3_tx):
     assert set(body) == CARD_KEYS | {"events"}
     assert set(body["events"][0]) == {"session", "event", "reason", "before", "after", "source", "created_at"}
     assert body["events"][0]["event"] == "bought" and body["events"][0]["source"] == "user"
+    assert re.fullmatch(ISO_STAMP, body["events"][0]["created_at"])  # 同上：ISO 8601 带时区
     assert client.get("/api/plans/999999").status_code == 404
 
 

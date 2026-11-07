@@ -15,15 +15,22 @@ def test_unknown_api_path_returns_legacy_404_shape(client):
 
 def test_api_routers_mount_before_the_fallback_routes(client):
     """所有 /api/... 路由必须在 create_app 的两个兜底路由之前（否则被拦成 404）。
-    FastAPI 0.141 起 include_router 是惰性的 IncludedRouter 标记，标记的先后即注册的先后。"""
+    两种 FastAPI 形态都认：≥0.141 的惰性 IncludedRouter 标记，与更早版本（requirements 下限
+    0.115）include 时展开成的具体 /api/... 路由。"""
     routes = client.app.router.routes
     fallbacks = [i for i, route in enumerate(routes) if getattr(route, "path", "") == "/{full_path:path}"]
     assert len(fallbacks) == 2, "create_app 必须保留 GET 与其他方法两个兜底"
-    included = [i for i, route in enumerate(routes) if hasattr(route, "original_router")]
-    assert included, "页面接口的 router 必须在 app.routes 里"
-    assert all(i < fallbacks[0] for i in included)
-    for i in included:  # 每个 include 进来的页面 router 只含 /api/... 路径
-        assert all(getattr(sub, "path", "").startswith("/api/") for sub in routes[i].original_router.routes)
+    api_indexes = [
+        i
+        for i, route in enumerate(routes)
+        if getattr(route, "path", "").startswith("/api/") or hasattr(route, "original_router")
+    ]
+    assert api_indexes, "页面接口路由必须在 app.routes 里"
+    assert all(i < fallbacks[0] for i in api_indexes)
+    for route in routes:  # 惰性标记形态下，include 进来的页面 router 只含 /api/... 路径
+        subs = getattr(route, "original_router", None)
+        if subs is not None:
+            assert all(getattr(sub, "path", "").startswith("/api/") for sub in subs.routes)
 
 
 def test_page_api_paths_exist(client):

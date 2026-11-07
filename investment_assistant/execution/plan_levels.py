@@ -31,6 +31,9 @@ def _cent(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
+cent = _cent  # 公开别名：页面计划卡片等上层与内部共用同一取分实现（单一来源）
+
+
 def _floor(value: Decimal) -> int:
     return int(value.to_integral_value(rounding=ROUND_FLOOR))
 

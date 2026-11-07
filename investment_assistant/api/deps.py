@@ -57,11 +57,13 @@ def forward(fn: Callable[..., Any], env: ToolEnv, kwargs: dict) -> Any:
 
 
 def ok(data: Any):
-    """成功响应：直接用 CompatJSONResponse 序列化，Decimal/日期走 str，不经过
-    FastAPI 的 jsonable_encoder（它会把 Decimal 转成 float，违反“金额为字符串”）。"""
+    """成功响应：payload 先过 core_tx._jsonable（datetime→isoformat 的 ISO 8601 T 形式、
+    Decimal/UUID→str），再用 CompatJSONResponse；不经过 FastAPI 的 jsonable_encoder（它会把
+    Decimal 转成 float，违反“金额为字符串”）。"""
     from investment_assistant.api.app import CompatJSONResponse
+    from investment_assistant.core.tx import _jsonable
 
-    return CompatJSONResponse(data)
+    return CompatJSONResponse(_jsonable(data))
 
 
 def ok_or_error(result: Callable[[], Any]):
@@ -83,4 +85,4 @@ def ok_or_error(result: Callable[[], Any]):
         if detail is not None:
             payload["detail"] = _jsonable(detail)
         return CompatJSONResponse(payload, status_code=404 if code in NOT_FOUND_CODES else 400)
-    return CompatJSONResponse(data)
+    return ok(data)
