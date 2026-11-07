@@ -4,13 +4,12 @@ candidate skip reasons, change counts and the assembled view shape."""
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
 
-from investment_assistant.facts.view import brief_view, today_actions
-
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts.view import brief_view, today_actions
 
 SESSION = date(2026, 11, 4)  # 周三
 PREV = date(2026, 11, 3)
