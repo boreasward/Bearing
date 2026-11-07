@@ -33,7 +33,7 @@ describe('status vocabulary', () => {
   it('every domain of the type is in TONES and LABELS', () => {
     expect(domains.sort()).toEqual([
       'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'data_request', 'execution', 'feature_flag', 'fetch', 'instruction',
-      'knowledge', 'node', 'paper_decision', 'paper_order', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research_request', 'retro', 'roadmap_version', 'run', 'system',
+      'knowledge', 'node', 'paper_decision', 'paper_order', 'plan', 'plan_action', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research_request', 'retro', 'roadmap_version', 'run', 'stop_order', 'system',
     ])
     expect(Object.keys(LABELS).sort()).toEqual(domains)
   })
@@ -57,6 +57,33 @@ describe('status vocabulary', () => {
   it('instruction: exit is danger and sell_half warns', () => {
     expect(TONES.instruction.exit).toBe('danger')
     expect(TONES.instruction.sell_half).toBe('warn')
+  })
+
+  it('plan states: pending/open live, every ended state neutral (v3.1 spec §6.2)', () => {
+    expect(LABELS.plan).toEqual({
+      pending: '待入场', open: '已买入', closed: '已平仓', expired: '已过期', invalidated: '已作废', replaced: '被替换', cancelled: '已取消',
+    })
+    expect(TONES.plan.pending).toBe('info')
+    expect(TONES.plan.open).toBe('success')
+    for (const key of ['closed', 'expired', 'invalidated', 'replaced', 'cancelled'] as const) {
+      expect(TONES.plan[key], key).toBe('neutral')
+    }
+  })
+
+  it('plan_action: the two alert kinds warn, the three routine kinds stay regular (spec §7.4)', () => {
+    expect(LABELS.plan_action.stop_hit_unresolved).toBe('止损已触及，未见卖出记录')
+    expect(LABELS.plan_action.sell_next_open).toBe('下次开盘卖出')
+    expect(LABELS.plan_action.unchecked).toBe('缺日线，无法检查止损')
+    expect(LABELS.plan_action.stop_order).toBe('未确认止损单')
+    expect(LABELS.plan_action.hold).toBe('继续持有')
+    expect(TONES.plan_action).toEqual({
+      stop_hit_unresolved: 'danger', sell_next_open: 'warn', unchecked: 'info', stop_order: 'info', hold: 'neutral',
+    })
+  })
+
+  it('stop_order states: none neutral, needs_raise warn, confirmed success', () => {
+    expect(TONES.stop_order).toEqual({ none: 'neutral', needs_raise: 'warn', confirmed: 'success' })
+    expect(LABELS.stop_order.needs_raise).toBe('止损单需上调')
   })
 
   it('consistency tones: consistent success, mismatch danger, incomplete warn', () => {

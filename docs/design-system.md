@@ -124,6 +124,9 @@
 | `data_request` | data_requests.status | queued 信息；fetched 成功；failed 危险；deferred 警告 |
 | `feature_flag` | 功能当前值 | enabled 成功；disabled 中性 |
 | `roadmap_version` | roadmap_versions.status | planned 信息；in_progress 运行中；engineering_done 成功；user_acceptance_pending 警告；done 成功；dropped 中性 |
+| `plan` | v3.1 计划线状态（`GET /api/plans` 的 `status`） | pending 待入场信息；open 已买入成功；closed、expired、invalidated、replaced、cancelled 五种已结束状态全部中性 |
+| `plan_action` | 「下一个交易日的操作」五种（`next_action.kind`，v3.1 spec §7.4）；固定文案来自接口 `text`，`stop_order` 的「需上调」变体用 `StatusPill` 的 `text` 覆盖 | stop_hit_unresolved 危险、sell_next_open 警告（两种警示语气）；unchecked、stop_order 信息、hold 中性（常规） |
+| `stop_order` | 持仓的止损挂单状态（`stop_order_status`） | none 中性；needs_raise 警告；confirmed 成功 |
 
 ### 合并实施的五组中文（v2.12–v2.15 词表）
 
@@ -157,7 +160,7 @@
 
 ## 6. 组件清单
 
-通用层在 `web/src/lib/ui/<组件>/`（shadcn-svelte 1.7.2 复制来的，样式已按第 2 节改写；Bits UI 2.20.2），领域层在 `web/src/lib/ui/domain/`（自写）。页面**只组合这两层的原语**，不自己拼样式。
+通用层在 `web/src/lib/ui/<组件>/`（shadcn-svelte 1.7.2 复制来的，样式已按第 2 节改写；Bits UI 2.20.2），领域层在 `web/src/lib/ui/domain/`（自写）。页面**只组合这两层的原语**（v3.1 的首页例外：它自己的组合件在 `web/src/lib/home/`，见 6.2 末），不自己拼样式。
 
 ### 6.1 通用层
 
@@ -203,6 +206,24 @@
 | `Icon` | `{ name: IconName; size?: 16 \| 20; label?: string }` | `@lucide/svelte` 的薄包装；无 `label` 时 `aria-hidden="true"`，有则 `role="img"` + `aria-label`。`icons.ts` 是显式映射表（逐个 `import X from '@lucide/svelte/icons/<name>'`），**加图标就是在这张表加一行** |
 
 `icons.ts` 现有图标：`calendar-days`、`search`、`clipboard-list`、`database`、`book-open`、`wrench`、`settings`、`activity`、`bell`、`sun-moon`、`x`、`check`、`chevron-down`、`chevron-right`、`info`、`external-link`、`refresh-cw`、`triangle-alert`、`circle-x`、`loader`、`menu`、`panel-left-close`、`panel-left-open`、`microscope`、`map`。
+
+### 6.2.1 首页组件（`web/src/lib/home/`）
+
+v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域层原语，取数走 `lib/api.ts` 的 `get/post/put`；接口字段见 `types.ts`（照抄 Task 5 的接口契约表，金额与价位是字符串，展示用 `MetricValue` 的 `raw`，不做浮点运算）。所有写入接口先 `confirmed=false` 拿 `preview`，经 `ConfirmDialog` 复述确认后才 `confirmed=true`（A18）。
+
+| 组件 | props | 职责 |
+| --- | --- | --- |
+| `types.ts` | — | 接口契约的类型与 `errorText`（把 `{"error": "code: 说明"}` 的中文部分取出来） |
+| `markdown.ts` + `Markdown.svelte` | `{ source }` | 简报 Markdown 解析成块结构（标题 / 段落 / `-` 列表 / `|` 表格 / `**粗体**`，不认识的行按段落），用 `{#each}` 渲染，表格用 `ui/table`；不输出 HTML 字符串、不用 `{@html}` |
+| `sse.ts` | `readEvents(response, onEvent, signal?)` | 把 SSE 字节流（任意切片边界）还原成 `event:`/`data:` 帧；`AbortController` 中止后不再回调 |
+| `TodayActions.svelte` | `{ actions, onChanged? }` | 今日操作：空列表整块不渲染；`stop_hit_unresolved` 排第一；「确认已挂单」两步确认；卖出类动作带「记成交」 |
+| `BriefPanel.svelte` | — | 今日简报：最终稿 / 草稿（「二次确认未完成」Alert）/ 无简报的原因；`Select` 切历史（`GET /api/briefs`） |
+| `PlanCard.svelte` | `{ card, onChanged? }` | 一份计划卡：状态、价位（`PlanLevels`）、下一个交易日的操作（`plan_action`）；持仓另有浮动盈亏、已持有天数、止损单状态；已结束显示平仓结果；展开拉 `GET /api/plans/{id}` 看变化记录；pending 显示「最新收盘高于入场区间」、可取消计划；open 可调高止损 |
+| `PlanCards.svelte` | `{ version?, onChanged? }` | 三组：持仓、待入场、已结束（折叠）；`version` 变化重取 |
+| `AccountStrip.svelte` | `{ account?, onChanged? }` | 账户条：现金 / 总资产 / 浮动盈亏 / 已实现盈亏；现金为负显示 `notes`；「记出入金」「对账」入口 |
+| `TradeForm.svelte` / `CashFlowForm.svelte` / `ReconcileForm.svelte` | `{ bind:open, onDone? }`（TradeForm 另有 `ticker`/`planId`/`shares` 预填） | 三个写入表单（Dialog）：预填、失败保留草稿与 `request_id`、表单内 `Alert` 显示原因；提交先拿 `preview` 再 `ConfirmDialog` 确认写入 |
+| `ChatPanel.svelte` | `{ version? }` | 对话：历史 `Select` +「新开对话」；`sse.ts` 流式渲染（文字逐段、工具调用 `Collapsible` 可展开）；取消发 `…/cancel` 并显示「已取消」；409 `brief_running` 显示「正在生成简报，请稍后再问」；`error` 帧显示原因并恢复输入 |
+| `SettingsSheet.svelte` | `{ bind:open, onSaved? }` | 设置（`Sheet`）：运行时 / 提供方 / 模型，选项来自 `GET /api/settings/options`，每项可在 `Select` 与自由 `Input` 间切换；保存 `PUT /api/settings`，错误用 toast 显示原因 |
 
 ### 6.3 已知取舍
 

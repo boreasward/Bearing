@@ -8,6 +8,7 @@ export type StatusDomain =
   | 'execution' | 'knowledge' | 'instruction' | 'system' | 'block' | 'consistency'
   | 'account' | 'paper_order' | 'paper_decision' | 'reconcile'
   | 'research_request' | 'proposal' | 'portfolio_verdict' | 'data_request' | 'feature_flag' | 'roadmap_version'
+  | 'plan' | 'plan_action' | 'stop_order'
 
 // Keep every domain on ONE line, without spreads: status.test.ts reads this block by lines.
 export const TONES = {
@@ -51,6 +52,12 @@ export const TONES = {
   data_request: { queued: 'info', fetched: 'success', failed: 'danger', deferred: 'warn' },
   feature_flag: { enabled: 'success', disabled: 'neutral' },
   roadmap_version: { planned: 'info', in_progress: 'running', engineering_done: 'success', user_acceptance_pending: 'warn', done: 'success', dropped: 'neutral' },
+  // v3.1 计划线七态（接口 /api/plans 的 status）：pending / open 进行中，五种已结束状态全部中性
+  plan: { pending: 'info', open: 'success', closed: 'neutral', expired: 'neutral', invalidated: 'neutral', replaced: 'neutral', cancelled: 'neutral' },
+  // 「下一个交易日的操作」五种（spec §7.4 的 next_action.kind）：前两种警示语气，后三种常规
+  plan_action: { stop_hit_unresolved: 'danger', sell_next_open: 'warn', unchecked: 'info', stop_order: 'info', hold: 'neutral' },
+  // 持仓的止损挂单状态（stop_order_status）
+  stop_order: { none: 'neutral', needs_raise: 'warn', confirmed: 'success' },
 } as const satisfies Record<StatusDomain, Record<string, Tone>>
 
 // `execution.adopted` keeps its `{date}` / `{quantity}` placeholders: pass the filled sentence as StatusPill `text`.
@@ -93,6 +100,9 @@ export const LABELS: Record<StatusDomain, Record<string, string>> = {
   data_request: { queued: '排队中', fetched: '已补采', failed: '失败', deferred: '暂缓' },
   feature_flag: { enabled: '已开启', disabled: '已关闭' },
   roadmap_version: { planned: '已规划', in_progress: '实施中', engineering_done: '工程完成', user_acceptance_pending: '待用户验收', done: '已完成', dropped: '已放弃' },
+  plan: { pending: '待入场', open: '已买入', closed: '已平仓', expired: '已过期', invalidated: '已作废', replaced: '被替换', cancelled: '已取消' },
+  plan_action: { stop_hit_unresolved: '止损已触及，未见卖出记录', sell_next_open: '下次开盘卖出', unchecked: '缺日线，无法检查止损', stop_order: '未确认止损单', hold: '继续持有' },
+  stop_order: { none: '未挂止损单', needs_raise: '止损单需上调', confirmed: '已确认挂单' },
 }
 
 export type StatusInfo = { label: string; tone: Tone; known: boolean }
