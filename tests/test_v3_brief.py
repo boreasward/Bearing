@@ -206,3 +206,44 @@ def test_discord_lines_order():
     assert lines[4] == "结束的计划：结束 TSLA：5 个交易日未买入"
     assert lines[-1] == "简报文件：/tmp/briefs/2026-11-04.md"
     assert len(lines) == 6
+
+
+def test_draft_sends_unconcluded_top_n_into_confirmation():
+    """草稿里没有结论、没有原因、未持有的前 N 只标「进入二次确认」（§11 第 6 段）。"""
+    draft = render_brief(
+        view(
+            candidates=[
+                {
+                    "ticker": "AMD",
+                    "rank": 2,
+                    "reason": "理由 2",
+                    "streak": 1,
+                    "new": True,
+                    "verdict": None,
+                    "skip_reason": None,
+                    "held": False,
+                }
+            ]
+        ),
+        final=False,
+    )
+    line = next(l for l in draft.splitlines() if l.startswith("2. AMD"))
+    assert line.endswith("→ 进入二次确认")
+    final = render_brief(
+        view(
+            candidates=[
+                {
+                    "ticker": "AMD",
+                    "rank": 2,
+                    "reason": "理由 2",
+                    "streak": 1,
+                    "new": True,
+                    "verdict": None,
+                    "skip_reason": None,
+                    "held": False,
+                }
+            ]
+        ),
+        final=True,
+    )
+    assert "进入二次确认" not in final  # 最终简报不写这句

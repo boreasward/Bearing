@@ -14,7 +14,8 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 - `run` 可加 `--no-collect`（跳过采集，直接用库里已有的数据算）与 `--trigger scheduled|manual_batch`
   （写进运行记录与 `data_fetch_runs`，缺省 `manual_batch`）。
 - `show` 可加 `--session YYYY-MM-DD`；不给日期则取最新一条运行。
-- `run` 的 stdout 是一行 JSON（`run_id`、`session`、`status`、`error`、`candidates` 条数、`draft_path`）。
+- `run` 的 stdout 是一行 JSON（`run_id`、`session`、`status`、`error`、`candidates` 条数、
+  `draft_path`、`review`——当天的计划复查结果，`{'changes': […事件…], 'unchecked': [缺日线的持仓]}`）。
 
 退出码（两个子命令同一套）：
 
@@ -32,9 +33,11 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 `briefs/` → 都没设时仓库本地 `.local/v3/briefs/`。本机 `.env` 设了 `INVESTMENT_ASSISTANT_RUNTIME_BASE`，
 草稿落在 `~/Library/Application Support/investment-assistant/briefs/<交易日>.draft.md`。
 
-正常草稿固定五个小节：市场环境、适合交易什么（规则名单，每行一只、含理由）、持仓、今天下不了结论的
-（各族覆盖与缺日线清单）、页脚（数据截至与免责句）。基准（SPY）当日日线缺失时，运行记录 `status=error`、
-退出码 1、无 traceback，草稿只剩标题、缺失原因与页脚（这是设计好的错误路径，不是崩溃）。
+正常草稿是 v3.1 十段简报去掉 agent 部分的宿主版：今日操作（没有就不出现）、和昨天比变了什么、
+市场环境、持仓（含止损与下一交易日的操作）、待入场计划、规则名单（含连续天数与掉出名单）、
+账户、今天下不了结论的、页脚；标题下写明「二次确认未完成」。基准（SPY）当日日线缺失时，
+运行记录 `status=error`、退出码 1、无 traceback，草稿只剩标题、缺失原因与页脚；此时若有持仓，
+第一行写「今天无法检查止损」（这是设计好的错误路径，不是崩溃）。
 
 ## "v3" 配置键与默认值
 
@@ -78,8 +81,20 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
   --session 2026-11-05 --mode brief --agent-session <会话编号> [--env-file .env]
 ```
 
-- 18 个工具：15 个两种模式都有（读、算计划价位、保存结论与计划）；`record_equity`、`record_trade`、
-  `ensure_data` 三个只在 `chat` 模式可用。
+- 31 个工具：21 个两种模式都有（读、算计划价位、保存结论与计划、计划线的延续 / 修订 / 持仓复查 /
+  一句话总结）；`record_trade`、`record_equity`（对账）、`record_cash_flow`、`confirm_stop_order`、
+  `raise_stop`、`cancel_plan`、`void_record`、`watchlist_add`、`watchlist_remove`、`ensure_data`
+  十个只在 `chat` 模式可用。
+  - v3.1 新增：`get_account`（账户视图）、`get_agenda`（当天待办）、`continue_plan`、`revise_plan`、
+    `save_holding_review`、`save_summary`、`record_cash_flow`、`confirm_stop_order`、`raise_stop`、
+    `cancel_plan`、`void_record`、`watchlist_add`、`watchlist_remove`。
+  - v3.1 改动：`get_candidates` 每只加 `streak` / `has_active_plan` / `plan_id`，返回加 `dropped`；
+    `get_positions` 换成计划线口径的持仓行；`get_plans` 改按状态 / 股票 / 计划编号过滤，每份带变化记录；
+    `save_plan` 增加已有有效计划、名额与替换校验；`save_verdict` 的 veto 会作废待入场计划；
+    `record_equity` 语义改为对账（返回差额）；`record_trade` 按计划线推进（买入返回止损单指令，
+    卖完返回平仓结果）。
+  - 计划是跨天的一条线：`v3_plan_events` 里每次变化一行；带 `request_id` 的写工具先复述、
+    `confirmed` 为真才写、按 `request_id` 幂等。
 - 交易日与数据截止时点在进程启动时固定，模式与会话编号由宿主传入，模型改不了；每次调用（含出错的）
   写一行 `v3_tool_calls`（`agent_session`、`mode`、参数、结果摘要）。
 - 提供方与模型 id 只由宿主以命令行参数传入，不进任何仓库文件（做法见 [pi-unattended.md](pi-unattended.md)）。

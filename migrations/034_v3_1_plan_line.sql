@@ -36,7 +36,9 @@ ALTER TABLE v3_plans ADD CONSTRAINT v3_plans_sell_instruction_check
 ALTER TABLE v3_plans ADD CONSTRAINT v3_plans_levels_check CHECK (
   (stop IS NULL AND entry_low IS NULL AND entry_high IS NULL AND target1 IS NULL)
   OR (stop IS NOT NULL AND entry_low IS NOT NULL AND entry_high IS NOT NULL AND target1 IS NOT NULL
-      AND stop < entry_low AND entry_low <= entry_high AND entry_high < target1));
+      AND entry_low <= entry_high AND entry_high < target1));
+  -- 入场带与目标有序即可：移动止损会把 stop 抬到入场带之上（spec §7.1），创建时的全序由
+  -- save_plan 的 validate_levels 在代码里保证。
 CREATE UNIQUE INDEX IF NOT EXISTS uq_v3_plans_one_active_per_ticker
   ON v3_plans (ticker) WHERE status IN ('pending','open');
 CREATE INDEX IF NOT EXISTS idx_v3_plans_status ON v3_plans (status, created_at DESC);

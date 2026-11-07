@@ -110,6 +110,17 @@ def test_levels_all_null_or_ordered(v3_db):
     conn.rollback()
 
 
+def test_levels_allow_raised_stop_above_entry(v3_db):
+    """移动止损会把 stop 抬到入场带之上（spec §7.1）：约束只管入场带与目标有序，
+    不再要求 stop < entry_low；创建时的全序由 save_plan 的代码校验保证。"""
+    conn = v3_db
+    _insert_plan(conn, ticker="DDD", stop=114)  # entry 99–101、target 108，stop 已抬到 114
+    conn.commit()
+    with pytest.raises(errors.CheckViolation):
+        _insert_plan(conn, ticker="EEE", entry_low=102)  # 入场带倒序仍不行
+    conn.rollback()
+
+
 def test_032_rows_become_expired(db_033):
     conn = db_033
     conn.execute(

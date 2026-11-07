@@ -113,20 +113,6 @@ def test_verdict_upsert(v3_db):
     assert set(stored) == {"AAPL", "MU"} and stored["AAPL"]["verdict"] == "confirm"
 
 
-def test_plan_reads_stay_until_task3(v3_db):
-    """034 后 v3_plans 写入改走 plan_repo；latest_plan / plans 保留到 Task 3 删除，读法不变。"""
-    conn = v3_db
-    first = plan_repo.insert_plan(conn, _plan_row("AAPL"))
-    plan_repo.update_plan(conn, first["id"], status="open", stop=98.5)
-    plan_repo.insert_plan(conn, _plan_row("AAPL", session=date(2026, 11, 6), status="expired"))
-    latest = repo.latest_plan(conn, "AAPL")
-    assert latest is not None and latest["session"] == date(2026, 11, 6)  # session 最新的一份
-    assert len(repo.plans(conn, SESSION)) == 1  # 读法仍是 032 列集
-    assert repo.plans(conn, SESSION)[0]["ticker"] == "AAPL"
-    assert repo.plans(conn, SESSION)[0]["stop"] == 98.5  # update_plan 写的值读得到
-    assert repo.latest_plan(conn, "MSFT") is None
-
-
 def test_latest_ok_run_skips_errors_and_previous_ok_run(v3_db):
     conn = v3_db
     assert repo.latest_ok_run(conn) is None  # 空表返回 None

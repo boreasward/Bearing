@@ -15,11 +15,6 @@ _CANDIDATE_COLUMNS = (
     "setup_tier, industry, industry_tier, reason, detail"
 )
 _VERDICT_COLUMNS = "id, session, ticker, verdict, reasons, counter, refs, origin, agent_session, created_at, updated_at"
-_PLAN_COLUMNS = (
-    "id, session, ticker, origin, entry_type, entry_low, entry_high, stop, target1, "
-    "levels_source, max_hold_sessions, valid_from, valid_until, shares, sizing, warnings, "
-    "thesis, invalidation, counter, refs, agent_session, created_at, updated_at"
-)
 _TRADE_COLUMNS = "id, request_id, ticker, side, quantity, price, fee, executed_at, plan_id, note, voided_at, created_at"
 _TRADE_SELECT = (
     "t.id, t.request_id, t.ticker, t.side, t.quantity, t.price, t.fee, t.executed_at, "
@@ -146,68 +141,6 @@ def verdicts(conn, session: date) -> dict[str, dict]:
         row["ticker"]: row
         for row in _all(conn, f"SELECT {_VERDICT_COLUMNS} FROM v3_verdicts WHERE session = %s", (session,))
     }
-
-
-def upsert_plan(conn, row: dict) -> dict:
-    """032 时代的按交易日覆盖写法；034 删掉 (session, ticker) 唯一约束后这里的 ON CONFLICT 不再成立。
-    计划写入改走 plan_repo.insert_plan / update_plan；调用处（toolsurface/planning.py）随 Task 3 删除本函数。"""
-    saved = _one(
-        conn,
-        "INSERT INTO v3_plans (session, ticker, origin, entry_type, entry_low, entry_high, "
-        "stop, target1, levels_source, max_hold_sessions, valid_from, valid_until, shares, "
-        "sizing, warnings, thesis, invalidation, counter, refs, agent_session) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, "
-        "%s, %s, %s, %s::jsonb, %s) "
-        "ON CONFLICT (session, ticker) DO UPDATE SET origin = EXCLUDED.origin, "
-        "entry_type = EXCLUDED.entry_type, entry_low = EXCLUDED.entry_low, "
-        "entry_high = EXCLUDED.entry_high, stop = EXCLUDED.stop, target1 = EXCLUDED.target1, "
-        "levels_source = EXCLUDED.levels_source, "
-        "max_hold_sessions = EXCLUDED.max_hold_sessions, valid_from = EXCLUDED.valid_from, "
-        "valid_until = EXCLUDED.valid_until, shares = EXCLUDED.shares, "
-        "sizing = EXCLUDED.sizing, warnings = EXCLUDED.warnings, thesis = EXCLUDED.thesis, "
-        "invalidation = EXCLUDED.invalidation, counter = EXCLUDED.counter, "
-        "refs = EXCLUDED.refs, agent_session = EXCLUDED.agent_session, "
-        "updated_at = clock_timestamp() "
-        f"RETURNING {_PLAN_COLUMNS}",
-        [
-            row["session"],
-            row["ticker"],
-            row["origin"],
-            row["entry_type"],
-            row["entry_low"],
-            row["entry_high"],
-            row["stop"],
-            row["target1"],
-            row["levels_source"],
-            row["max_hold_sessions"],
-            row["valid_from"],
-            row["valid_until"],
-            row.get("shares"),
-            _plan_json(row.get("sizing") or {}),
-            _plan_json(row.get("warnings") or []),
-            row["thesis"],
-            row["invalidation"],
-            row.get("counter") or "",
-            _plan_json(row.get("refs") or []),
-            row["agent_session"],
-        ],
-    )
-    assert saved is not None  # RETURNING always yields the upserted row
-    return saved
-
-
-def plans(conn, session: date) -> list[dict]:
-    """Task 3 删除：调用处（toolsurface/reads.py）随 Task 3 改掉。"""
-    return _all(conn, f"SELECT {_PLAN_COLUMNS} FROM v3_plans WHERE session = %s ORDER BY id", (session,))
-
-
-def latest_plan(conn, ticker: str) -> dict | None:
-    """The plan of the latest trading session that has one for the ticker. Task 3 删除（调用处随 Task 3 改掉）。"""
-    return _one(
-        conn,
-        f"SELECT {_PLAN_COLUMNS} FROM v3_plans WHERE ticker = %s ORDER BY session DESC, id DESC LIMIT 1",
-        (ticker,),
-    )
 
 
 def insert_trade(conn, row: dict) -> dict:

@@ -113,10 +113,106 @@ def list_watchlist_items(conn, *, include_archived: bool = False) -> list[dict[s
     return [dict(zip(keys, row)) for row in rows]
 
 
+class WatchlistConflict(ValueError):
+    """The record was edited or removed since the client read it."""
+
+
+_WATCHLIST_UNSET = object()
+_WATCHLIST_FIELDS = ("status", "thesis", "tags")
+_WATCHLIST_DEFAULTS = {"status": "active", "thesis": None, "tags": []}
+
+
+def _normalize_watchlist_ticker(ticker: str) -> str:
+    normalized = str(ticker or "").strip().upper()
+    if not normalized:
+        raise ValueError("ticker is required")
+    if not normalized.replace(".", "").replace("-", "").isalnum():
+        raise ValueError("ticker contains unsupported characters")
+    return normalized
+
+
+def upsert_watchlist_item(
+    conn,
+    *,
+    ticker: str,
+    status=_WATCHLIST_UNSET,
+    thesis=_WATCHLIST_UNSET,
+    tags=_WATCHLIST_UNSET,
+    expected_updated_at=None,
+) -> dict[str, Any]:
+    """Insert or partially update one watchlist row (recovered from commit d082400, spec §10)."""
+    payload: dict[str, Any] = {"ticker": _normalize_watchlist_ticker(ticker)}
+    for field in _WATCHLIST_FIELDS:
+        value = locals()[field]
+        payload[f"{field}_supplied"] = value is not _WATCHLIST_UNSET
+        payload[field] = _WATCHLIST_DEFAULTS[field] if value is _WATCHLIST_UNSET else value
+    if payload["status"] not in {"active", "paused", "archived"}:
+        raise ValueError("status must be active, paused, or archived")
+    if expected_updated_at is not None:
+        from datetime import datetime
+
+        try:
+            expected = (
+                datetime.fromisoformat(expected_updated_at)
+                if isinstance(expected_updated_at, str)
+                else expected_updated_at
+            )
+            if not isinstance(expected, datetime) or expected.tzinfo is None:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise ValueError("expected_updated_at must be a timezone-aware timestamp") from None
+        payload["expected_updated_at"] = expected
+    assignments = ", ".join(
+        f"{field} = CASE WHEN %({field}_supplied)s THEN %({field})s ELSE watchlist_items.{field} END"
+        for field in _WATCHLIST_FIELDS
+    )
+    with conn.cursor() as cur:
+        if expected_updated_at is not None:
+            # A single compare-and-set UPDATE prevents lost edits and deleted-row resurrection.
+            # pi-lens-ignore: python-sql-injection -- 字段名来自固定元组 _WATCHLIST_FIELDS，值全部参数化
+            cur.execute(
+                f"""UPDATE watchlist_items SET {assignments}, updated_at=clock_timestamp()
+                WHERE ticker=%(ticker)s AND updated_at=%(expected_updated_at)s
+                RETURNING ticker,status,thesis,tags,created_at,updated_at""",
+                payload,
+            )
+        else:
+            # pi-lens-ignore: python-sql-injection -- 同上：字段名固定，值全部参数化
+            cur.execute(
+                f"""INSERT INTO watchlist_items(ticker,status,thesis,tags)
+                VALUES (%(ticker)s,%(status)s,%(thesis)s,%(tags)s)
+                ON CONFLICT(ticker) DO UPDATE SET {assignments}, updated_at=clock_timestamp()
+                RETURNING ticker,status,thesis,tags,created_at,updated_at""",
+                payload,
+            )
+        row = cur.fetchone()
+    if row is None:
+        raise WatchlistConflict("关注记录已修改或删除，请重新读取后再编辑")
+    conn.commit()
+    return dict(zip(["ticker", "status", "thesis", "tags", "created_at", "updated_at"], row))
+
+
+def delete_watchlist_item(conn, ticker: str) -> dict[str, Any]:
+    normalized = _normalize_watchlist_ticker(ticker)
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM watchlist_items WHERE ticker = %(ticker)s RETURNING ticker", {"ticker": normalized})
+        row = cur.fetchone()
+    conn.commit()
+    return {"ticker": normalized, "deleted": row is not None}
+
+
 def upsert_filing(
-    conn, *, ticker: str, form: str, filing_date, accession_number: str,
-    primary_document: str, file_path: str, run_id: str | None = None,
-    accepted_at: str | None = None, items: list[str] | None = None,
+    conn,
+    *,
+    ticker: str,
+    form: str,
+    filing_date,
+    accession_number: str,
+    primary_document: str,
+    file_path: str,
+    run_id: str | None = None,
+    accepted_at: str | None = None,
+    items: list[str] | None = None,
 ) -> None:
     """accepted_at/items only fill unknown values; a recorded acceptance is never replaced."""
     from datetime import datetime
@@ -138,9 +234,13 @@ def upsert_filing(
               items = COALESCE(filings.items, EXCLUDED.items)
             """,
             {
-                "ticker": ticker, "form": form, "filing_date": filing_date,
-                "accession_number": accession_number, "primary_document": primary_document,
-                "file_path": file_path, "run_id": run_id,
+                "ticker": ticker,
+                "form": form,
+                "filing_date": filing_date,
+                "accession_number": accession_number,
+                "primary_document": primary_document,
+                "file_path": file_path,
+                "run_id": run_id,
                 "accepted_at": datetime.fromisoformat(accepted_at) if accepted_at else None,
                 "items": items,
             },
