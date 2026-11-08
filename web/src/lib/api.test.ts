@@ -30,4 +30,16 @@ describe('api client', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'x' }, 400)))
     await expect(post('/api/x', {})).rejects.toThrow('x')
   })
+
+  it('write errors carry the server text detail as code: detail, so errorText shows the Chinese reason', async () => {
+    // 2026-11-08 用户截图：记出入金只显示「invalid_argument」，后端其实给了「effective_at 需带时区」
+    const { errorText } = await import('./home/types')
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'invalid_argument', detail: 'effective_at 需带时区' }, 400)))
+    const failure = await post('/api/x', {}).catch((error: unknown) => error)
+    expect((failure as Error).message).toBe('invalid_argument: effective_at 需带时区')
+    expect(errorText(failure)).toBe('effective_at 需带时区')
+    // detail 是对象（例如 active_plan_exists 带回已有计划）时只给错误码
+    vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'active_plan_exists', detail: { id: 3 } }, 400)))
+    await expect(put('/api/x', {})).rejects.toThrow(/^active_plan_exists$/)
+  })
 })

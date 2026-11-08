@@ -10,3 +10,16 @@ export function fmtBeijing(value: unknown): string {
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
   return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')} 北京`
 }
+
+/** A `YYYY-MM-DD` date as that day's local midnight with its UTC offset (`2026-11-08T00:00:00+08:00`), for
+ * endpoints that require a timezone; anything else comes back unchanged so the server names the problem. */
+export function localMidnightIso(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
+  if (!match) return value.trim()
+  const [, y, m, d] = match
+  const offset = -new Date(Number(y), Number(m) - 1, Number(d)).getTimezoneOffset()
+  const sign = offset >= 0 ? '+' : '-'
+  const hh = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0')
+  const mm = String(Math.abs(offset) % 60).padStart(2, '0')
+  return `${y}-${m}-${d}T00:00:00${sign}${hh}:${mm}`
+}

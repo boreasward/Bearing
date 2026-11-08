@@ -6,6 +6,7 @@
   import ConfirmDialog from '$lib/ui/confirm-dialog/ConfirmDialog.svelte'
   import Field from '$lib/ui/field/Field.svelte'
   import Input from '$lib/ui/input/input.svelte'
+  import { localMidnightIso } from '$lib/format'
   import { post } from '$lib/api'
   import { notify } from '$lib/ui/toast'
   import { errorText, type WritePreview } from './types'
@@ -39,7 +40,8 @@
     return {
       kind: draft.kind,
       amount: amountNumber,
-      ...(draft.effectiveAt.trim() === '' ? {} : { effective_at: draft.effectiveAt.trim() }),
+      // 后端要求带时区：日期按本机当天 0 点提交（北京时间录入时不会落到未来）
+      ...(draft.effectiveAt.trim() === '' ? {} : { effective_at: localMidnightIso(draft.effectiveAt) }),
       note: draft.note.trim(),
       request_id: requestId,
       confirmed,
@@ -104,7 +106,7 @@
           <Input {id} inputmode="decimal" class="text-right tabular-nums" bind:value={draft.amount} />
         {/snippet}
       </Field>
-      <Field label="生效日期" id="cash-at" hint="可空，默认当前交易日；YYYY-MM-DD">
+      <Field label="生效日期" id="cash-at" hint="可空，默认现在；YYYY-MM-DD，按本机当天 0 点生效">
         {#snippet children({ id })}
           <Input {id} placeholder="YYYY-MM-DD" bind:value={draft.effectiveAt} />
         {/snippet}
