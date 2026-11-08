@@ -42,7 +42,16 @@ def _bar(day, *, open_, high, low, close):
 
 
 def _event(event, session, reason=""):
-    return {"plan_id": 21, "session": session, "event": event, "reason": reason, "before": {}, "after": {}, "source": "host", "refs": []}
+    return {
+        "plan_id": 21,
+        "session": session,
+        "event": event,
+        "reason": reason,
+        "before": {},
+        "after": {},
+        "source": "host",
+        "refs": [],
+    }
 
 
 def _trade(side, day, price, quantity, *, voided=False, tid=1):
@@ -68,7 +77,11 @@ def _record(**over):
         "ended_session": date(2026, 11, 5),
         "end_reason": "已平仓：用户自行卖出",
         "planned": {},
-        "actual": {"first_buy": {"price": D("32.00"), "session": date(2026, 11, 3), "quantity": D(100)}, "last_sell": None, "quantity": D(100)},
+        "actual": {
+            "first_buy": {"price": D("32.00"), "session": date(2026, 11, 3), "quantity": D(100)},
+            "last_sell": None,
+            "quantity": D(100),
+        },
         "outcome": {"exit_reason": "manual"},
         "r_multiple": None,
         "r_text": None,
@@ -88,7 +101,9 @@ def test_window_spans_from_first_validity_to_last_valid_until():
     bars = [
         _bar(date(2026, 11, 2), open_="32.50", high="32.60", low="32.40", close="32.50"),  # 保存日不算
         _bar(date(2026, 11, 3), open_="31.60", high="31.70", low="31.50", close="31.60"),  # 全天低于区间
-        _bar(date(2026, 11, 4), open_="32.00", high="32.20", low="31.90", close="32.00"),  # 进过区间（在 valid_from 之前）
+        _bar(
+            date(2026, 11, 4), open_="32.00", high="32.20", low="31.90", close="32.00"
+        ),  # 进过区间（在 valid_from 之前）
     ]
     assert retrospect.touched_zone(plan, bars) is True
     assert retrospect.touched_zone(plan, bars[:2]) is False
@@ -132,65 +147,108 @@ def test_tags_each_code_once():
     assert record["followed"] is True
     # 买价出区间：outcome.entry_in_zone 为假
     out_of_zone = retrospect.deviation_tags(
-        plan=_plan(status="closed", outcome={"entry_in_zone": False, "exit_reason": "max_hold", "stop_delay_sessions": None}),
-        events=[_event("stop_order_confirmed", date(2026, 11, 3)), _event("sell_instruction", date(2026, 11, 5), "持有到期")],
-        trades=[_trade("buy", date(2026, 11, 3), "33.00", 100, tid=1), _trade("sell", date(2026, 11, 6), "32.00", 100, tid=2)],
+        plan=_plan(
+            status="closed", outcome={"entry_in_zone": False, "exit_reason": "max_hold", "stop_delay_sessions": None}
+        ),
+        events=[
+            _event("stop_order_confirmed", date(2026, 11, 3)),
+            _event("sell_instruction", date(2026, 11, 5), "持有到期"),
+        ],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "33.00", 100, tid=1),
+            _trade("sell", date(2026, 11, 6), "32.00", 100, tid=2),
+        ],
         bars=touch,
     )
     assert [tag["code"] for tag in out_of_zone] == ["entry_out_of_zone"]
     # 买价出区间：买入时的 deviation 事件（reason 逐字沿用 plan_line.deviations）
     by_event = retrospect.deviation_tags(
-        plan=_plan(status="closed", outcome={"entry_in_zone": True, "exit_reason": "max_hold", "stop_delay_sessions": None}),
+        plan=_plan(
+            status="closed", outcome={"entry_in_zone": True, "exit_reason": "max_hold", "stop_delay_sessions": None}
+        ),
         events=[
             _event("deviation", date(2026, 11, 3), "成交价 33.00 不在入场区间 31.80–32.10"),
             _event("stop_order_confirmed", date(2026, 11, 3)),
             _event("sell_instruction", date(2026, 11, 5), "持有到期"),
         ],
-        trades=[_trade("buy", date(2026, 11, 3), "33.00", 100, tid=1), _trade("sell", date(2026, 11, 6), "32.00", 100, tid=2)],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "33.00", 100, tid=1),
+            _trade("sell", date(2026, 11, 6), "32.00", 100, tid=2),
+        ],
         bars=touch,
     )
     assert [tag["code"] for tag in by_event] == ["entry_out_of_zone"]
     # 多买：买入时的 deviation 事件写了「多于计划的股数」
     over_bought = retrospect.deviation_tags(
-        plan=_plan(status="closed", outcome={"entry_in_zone": True, "exit_reason": "max_hold", "stop_delay_sessions": None}),
+        plan=_plan(
+            status="closed", outcome={"entry_in_zone": True, "exit_reason": "max_hold", "stop_delay_sessions": None}
+        ),
         events=[
             _event("deviation", date(2026, 11, 3), "买入 150 股，多于计划的 100 股"),
             _event("stop_order_confirmed", date(2026, 11, 3)),
             _event("sell_instruction", date(2026, 11, 5), "持有到期"),
         ],
-        trades=[_trade("buy", date(2026, 11, 3), "32.00", 150, tid=1), _trade("sell", date(2026, 11, 6), "32.50", 150, tid=2)],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "32.00", 150, tid=1),
+            _trade("sell", date(2026, 11, 6), "32.50", 150, tid=2),
+        ],
         bars=touch,
     )
     assert [tag["code"] for tag in over_bought] == ["over_bought"]
     # 止损未挂：买入到结束没有任何 stop_order_confirmed 事件
     missing = retrospect.deviation_tags(
-        plan=_plan(status="closed", outcome={"entry_in_zone": True, "exit_reason": "max_hold", "stop_delay_sessions": None}),
+        plan=_plan(
+            status="closed", outcome={"entry_in_zone": True, "exit_reason": "max_hold", "stop_delay_sessions": None}
+        ),
         events=[],
-        trades=[_trade("buy", date(2026, 11, 3), "32.00", 100, tid=1), _trade("sell", date(2026, 11, 10), "31.50", 100, tid=2)],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "32.00", 100, tid=1),
+            _trade("sell", date(2026, 11, 10), "31.50", 100, tid=2),
+        ],
         bars=touch,
     )
     assert [tag["code"] for tag in missing] == ["stop_order_missing"]
     # 止损触及后晚卖 N 个交易日（N 取 outcome.stop_delay_sessions）
     late_stop = retrospect.deviation_tags(
-        plan=_plan(status="closed", outcome={"entry_in_zone": True, "exit_reason": "initial_stop", "stop_delay_sessions": 2}),
+        plan=_plan(
+            status="closed", outcome={"entry_in_zone": True, "exit_reason": "initial_stop", "stop_delay_sessions": 2}
+        ),
         events=[_event("stop_order_confirmed", date(2026, 11, 3))],
-        trades=[_trade("buy", date(2026, 11, 3), "32.00", 100, tid=1), _trade("sell", date(2026, 11, 10), "31.00", 100, tid=2)],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "32.00", 100, tid=1),
+            _trade("sell", date(2026, 11, 10), "31.00", 100, tid=2),
+        ],
         bars=touch,
     )
     assert late_stop == [{"code": "late_sell_after_stop", "text": "止损触及后晚卖 2 个交易日", "sessions": 2}]
     # 卖出指令后晚卖 N 个交易日：X=11-02（周一），Y=11-06（周五），N = 11-04…11-06 共 3 个交易日
     late_instruction = retrospect.deviation_tags(
-        plan=_plan(status="closed", outcome={"entry_in_zone": True, "exit_reason": "manual", "stop_delay_sessions": None}),
-        events=[_event("sell_instruction", date(2026, 11, 2), "持有到期"), _event("stop_order_confirmed", date(2026, 11, 3))],
-        trades=[_trade("buy", date(2026, 11, 3), "32.00", 100, tid=1), _trade("sell", date(2026, 11, 6), "31.00", 100, tid=2)],
+        plan=_plan(
+            status="closed", outcome={"entry_in_zone": True, "exit_reason": "manual", "stop_delay_sessions": None}
+        ),
+        events=[
+            _event("sell_instruction", date(2026, 11, 2), "持有到期"),
+            _event("stop_order_confirmed", date(2026, 11, 3)),
+        ],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "32.00", 100, tid=1),
+            _trade("sell", date(2026, 11, 6), "31.00", 100, tid=2),
+        ],
         bars=touch,
     )
-    assert late_instruction == [{"code": "late_sell_after_instruction", "text": "卖出指令后晚卖 3 个交易日", "sessions": 3}]
+    assert late_instruction == [
+        {"code": "late_sell_after_instruction", "text": "卖出指令后晚卖 3 个交易日", "sessions": 3}
+    ]
     # 早卖：离场原因 manual 且没有止损触及、没有卖出指令
     early = retrospect.deviation_tags(
-        plan=_plan(status="closed", outcome={"entry_in_zone": True, "exit_reason": "manual", "stop_delay_sessions": None}),
+        plan=_plan(
+            status="closed", outcome={"entry_in_zone": True, "exit_reason": "manual", "stop_delay_sessions": None}
+        ),
         events=[_event("stop_order_confirmed", date(2026, 11, 3))],
-        trades=[_trade("buy", date(2026, 11, 3), "32.00", 100, tid=1), _trade("sell", date(2026, 11, 6), "31.00", 100, tid=2)],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "32.00", 100, tid=1),
+            _trade("sell", date(2026, 11, 6), "31.00", 100, tid=2),
+        ],
         bars=touch,
     )
     assert early == [{"code": "early_sell", "text": "早卖", "sessions": None}]
@@ -261,7 +319,9 @@ def test_hypothetical_never_in_zone():
 def test_hypothetical_trailing_and_max_hold_next_open():
     trail_bars = [
         _bar(date(2026, 11, 3), open_="32.00", high="32.50", low="31.90", close="32.00"),
-        _bar(date(2026, 11, 4), open_="32.50", high="34.50", low="32.40", close="34.50"),  # 触及目标 → 移动止损上移到 34.50 − 2×1 = 32.50
+        _bar(
+            date(2026, 11, 4), open_="32.50", high="34.50", low="32.40", close="34.50"
+        ),  # 触及目标 → 移动止损上移到 34.50 − 2×1 = 32.50
         _bar(date(2026, 11, 5), open_="32.45", high="32.60", low="32.30", close="32.40"),  # 低点 32.30 触及 32.50
     ]
     out = retrospect.hypothetical(plan=_plan(status="expired"), bars=trail_bars, trail_atr=D(2))
@@ -309,13 +369,22 @@ def test_plan_record_origin_kinds_and_groups():
             status="closed",
             ended_session=date(2026, 11, 6),
             end_reason="已平仓：持有到期",
-            outcome={"entry_in_zone": True, "exit_reason": "max_hold", "r_multiple": D("0.63"), "r_text": None, "stop_delay_sessions": None},
+            outcome={
+                "entry_in_zone": True,
+                "exit_reason": "max_hold",
+                "r_multiple": D("0.63"),
+                "r_text": None,
+                "stop_delay_sessions": None,
+            },
         ),
         events=[
             _event("stop_order_confirmed", date(2026, 11, 3)),
             _event("sell_instruction", date(2026, 11, 5), "持有到期"),
         ],
-        trades=[_trade("buy", date(2026, 11, 3), "32.00", 100, tid=1), _trade("sell", date(2026, 11, 6), "32.50", 100, tid=2)],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "32.00", 100, tid=1),
+            _trade("sell", date(2026, 11, 6), "32.50", 100, tid=2),
+        ],
         bars=bars,
         candidate=candidate,
         trail_atr=D(2),
@@ -357,7 +426,9 @@ def test_plan_record_origin_kinds_and_groups():
         },
     }
     # candidate 缺失 → 空分组
-    no_candidate = retrospect.plan_record(plan=_plan(status="expired"), events=[], trades=[], bars=bars[:1], candidate=None, trail_atr=D(2))
+    no_candidate = retrospect.plan_record(
+        plan=_plan(status="expired"), events=[], trades=[], bars=bars[:1], candidate=None, trail_atr=D(2)
+    )
     assert no_candidate["origin_kind"] == "rule"
     assert no_candidate["groups"] == {"trigger_rules": [], "setup_tier": None, "industry": None}
     assert no_candidate["hypothetical"] is not None  # 没买的计划算假设结果
@@ -418,7 +489,9 @@ def test_weekly_summary_counts_and_lists():
             outcome={},
             hypothetical={"status": "not_filled", "reason": "never_in_zone"},
         ),
-        _record(ticker="NVDA", ended_session=date(2026, 11, 13), r_multiple=D("9.99"), outcome={"exit_reason": "manual"}),  # 下周，不计
+        _record(
+            ticker="NVDA", ended_session=date(2026, 11, 13), r_multiple=D("9.99"), outcome={"exit_reason": "manual"}
+        ),  # 下周，不计
     ]
     candidates_week = [
         {"session": date(2026, 11, 2), "ticker": "MSFT", "detail": {"streak": 1}},
@@ -449,7 +522,11 @@ def test_weekly_summary_counts_and_lists():
     ]
     assert weekly["total_r"] == D("0.75")
     assert weekly["not_bought"] == [
-        {"ticker": "TSLA", "end_reason": "5 个交易日未买入", "hypothetical": {"status": "not_filled", "reason": "never_in_zone"}}
+        {
+            "ticker": "TSLA",
+            "end_reason": "5 个交易日未买入",
+            "hypothetical": {"status": "not_filled", "reason": "never_in_zone"},
+        }
     ]
     assert weekly["equity_start"] == D("12000.00") and weekly["equity_end"] == D("12500.50")
     assert weekly["realized_pnl"] == D("300.00")
@@ -459,9 +536,21 @@ def test_weekly_summary_counts_and_lists():
 
 def test_rule_stats_threshold_and_separation():
     records = [
-        _record(ticker="A", r_multiple=D("1.50"), groups={"trigger_rules": ["pullback"], "setup_tier": None, "industry": None}),
-        _record(ticker="B", r_multiple=D("-0.50"), groups={"trigger_rules": ["pullback"], "setup_tier": None, "industry": None}),
-        _record(ticker="C", r_multiple=D("2.00"), groups={"trigger_rules": ["trend_reclaim"], "setup_tier": None, "industry": None}),
+        _record(
+            ticker="A",
+            r_multiple=D("1.50"),
+            groups={"trigger_rules": ["pullback"], "setup_tier": None, "industry": None},
+        ),
+        _record(
+            ticker="B",
+            r_multiple=D("-0.50"),
+            groups={"trigger_rules": ["pullback"], "setup_tier": None, "industry": None},
+        ),
+        _record(
+            ticker="C",
+            r_multiple=D("2.00"),
+            groups={"trigger_rules": ["trend_reclaim"], "setup_tier": None, "industry": None},
+        ),
         # 没买的计划只有假设结果：realized 不计、hypothetical 计
         _record(
             ticker="D",
@@ -484,11 +573,22 @@ def test_rule_stats_threshold_and_separation():
             groups={"trigger_rules": ["pullback"], "setup_tier": None, "industry": None},
         ),
         # 一份计划进多组（trigger_rules 两条）
-        _record(ticker="G", r_multiple=D("1.00"), groups={"trigger_rules": ["a_rule", "b_rule"], "setup_tier": None, "industry": None}),
+        _record(
+            ticker="G",
+            r_multiple=D("1.00"),
+            groups={"trigger_rules": ["a_rule", "b_rule"], "setup_tier": None, "industry": None},
+        ),
     ]
     realized = retrospect.rule_stats(records, key="trigger_rules", realized=True, min_sample=2)
     assert realized == [
-        {"group": "pullback", "sample": 2, "win_rate": D("0.5"), "avg_r": D("0.50"), "total_r": D("1.00"), "insufficient": False},
+        {
+            "group": "pullback",
+            "sample": 2,
+            "win_rate": D("0.5"),
+            "avg_r": D("0.50"),
+            "total_r": D("1.00"),
+            "insufficient": False,
+        },
         {"group": "a_rule", "sample": 1, "win_rate": None, "avg_r": None, "total_r": None, "insufficient": True},
         {"group": "b_rule", "sample": 1, "win_rate": None, "avg_r": None, "total_r": None, "insufficient": True},
         {"group": "trend_reclaim", "sample": 1, "win_rate": None, "avg_r": None, "total_r": None, "insufficient": True},
@@ -505,4 +605,13 @@ def test_rule_stats_threshold_and_separation():
         realized=True,
         min_sample=1,
     )
-    assert tiers == [{"group": "favorable", "sample": 1, "win_rate": D(1), "avg_r": D("1.00"), "total_r": D("1.00"), "insufficient": False}]
+    assert tiers == [
+        {
+            "group": "favorable",
+            "sample": 1,
+            "win_rate": D(1),
+            "avg_r": D("1.00"),
+            "total_r": D("1.00"),
+            "insufficient": False,
+        }
+    ]

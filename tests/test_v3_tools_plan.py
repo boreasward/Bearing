@@ -4,12 +4,11 @@ holding review / summary) and the slot & replacement rules of spec §6.4."""
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
 
-from investment_assistant.facts.view import today_actions
-
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts.view import today_actions
 from investment_assistant.toolsurface.dispatch import call
 from investment_assistant.toolsurface.env import make_env
 
@@ -138,7 +137,10 @@ def test_compute_plan_levels_uses_host_arithmetic(v3_tx):
     assert d["ticker"] == "AAPL" and d["session"] == SESSION.isoformat()
     assert d["levels"] == {"entry_low": "99.00", "entry_high": "101.00", "stop": "96.00", "target1": "108.00"}
     assert d["sizing"]["status"] == "no_equity" and d["sizing"]["shares"] is None
-    assert d["entry_types"] == ["zone_limit", "breakout_stop", "next_open", "pullback"] and d["max_hold_range"] == [3, 30]
+    assert d["entry_types"] == ["zone_limit", "breakout_stop", "next_open", "pullback"] and d["max_hold_range"] == [
+        3,
+        30,
+    ]
 
 
 def test_save_plan_check_order_scope_and_verdict_first(v3_tx):

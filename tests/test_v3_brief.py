@@ -432,7 +432,10 @@ def test_weekly_renders_with_no_records():
     md = render_weekly(_weekly(), as_of=AS_OF)
     assert md.splitlines()[0] == "# 周报 · 2026-11-02–2026-11-06"
     assert "本周没有结束的计划" in md
-    assert "数据截至 2026-11-06 收盘（采集于北京时间 2026-11-05 08:30）。规则未经验证，不构成投资建议。金额单位美元。" in md
+    assert (
+        "数据截至 2026-11-06 收盘（采集于北京时间 2026-11-05 08:30）。规则未经验证，不构成投资建议。金额单位美元。"
+        in md
+    )
 
 
 def test_weekly_lists_closed_and_not_bought():

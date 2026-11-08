@@ -6,11 +6,10 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from investment_assistant.core.texts import money_value
-
 from fastapi import APIRouter
 
 from investment_assistant.api import deps
+from investment_assistant.core.texts import money_value
 from investment_assistant.facts.account import account_view
 from investment_assistant.facts.view import today_actions
 

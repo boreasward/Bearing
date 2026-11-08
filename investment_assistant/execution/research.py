@@ -103,7 +103,11 @@ def research_check(*, research: dict, bar: dict | None, bars: list[dict], sessio
     if condition:
         normalized = validate_condition(condition)
         if condition_met(normalized, bars):
-            detail = f"最低 {price_text(bar['low'])}" if normalized["kind"] == "touch_below" else f"收盘 {price_text(bar['close'])}"
+            detail = (
+                f"最低 {price_text(bar['low'])}"
+                if normalized["kind"] == "touch_below"
+                else f"收盘 {price_text(bar['close'])}"
+            )
             return {"event": "triggered", "reason": f"{condition_text(normalized)} 已到：{detail}"}
     if session >= research["valid_until"]:
         days = len(trading_days_between(research["created_session"] + timedelta(days=1), session))

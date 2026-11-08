@@ -160,7 +160,11 @@ def hypothetical(*, plan: dict, bars: list[dict], trail_atr: Decimal) -> dict:
 
     def finish(*, status, exit_session, exit_price, exit_reason, sessions) -> dict:
         result.update(
-            status=status, exit_session=exit_session, exit_price=exit_price, exit_reason=exit_reason, sessions_held=sessions
+            status=status,
+            exit_session=exit_session,
+            exit_price=exit_price,
+            exit_reason=exit_reason,
+            sessions_held=sessions,
         )
         risk = result["fill_price"] - plan["initial_stop"]
         result["r_multiple"] = _cent((exit_price - result["fill_price"]) / risk) if risk else None
@@ -204,7 +208,11 @@ def hypothetical(*, plan: dict, bars: list[dict], trail_atr: Decimal) -> dict:
                 sessions=held,
             )
         pending_open_exit = "sell_instruction" in names
-        sim["stop"], sim["trailing"], sim["sell_instruction"] = check["stop"], check["trailing"], check["sell_instruction"]
+        sim["stop"], sim["trailing"], sim["sell_instruction"] = (
+            check["stop"],
+            check["trailing"],
+            check["sell_instruction"],
+        )
     last = ordered[-1]  # 日线用完还没离场 → 进行中，按最后一根收盘算浮动 R
     return finish(
         status="unfinished",
@@ -215,7 +223,9 @@ def hypothetical(*, plan: dict, bars: list[dict], trail_atr: Decimal) -> dict:
     )
 
 
-def plan_record(*, plan: dict, events: list[dict], trades: list[dict], bars: list[dict], candidate: dict | None, trail_atr: Decimal) -> dict:
+def plan_record(
+    *, plan: dict, events: list[dict], trades: list[dict], bars: list[dict], candidate: dict | None, trail_atr: Decimal
+) -> dict:
     """复盘一行的全部纯内存组装（spec §5.1）：计划说的 / 实际做的 / 结果 / 偏差标签 /
     假设结果（只对没买的 ``planned`` 计划）/ 分组键（规则名单取候选行，研究记「用户研究」）。"""
     buys, sells = _ordered(trades, "buy"), _ordered(trades, "sell")
@@ -224,7 +234,7 @@ def plan_record(*, plan: dict, events: list[dict], trades: list[dict], bars: lis
         if buys
         else None
     )
-    last_sell = ({"price": sells[-1]["price"], "session": _ny_date(sells[-1]["executed_at"])} if sells else None)
+    last_sell = {"price": sells[-1]["price"], "session": _ny_date(sells[-1]["executed_at"])} if sells else None
     tags = deviation_tags(plan=plan, events=events, trades=trades, bars=bars)
     followed = not [tag for tag in tags if tag["code"] != NOT_FILLED] and (
         bool(buys) or any(tag["code"] == NOT_FILLED for tag in tags)
@@ -330,7 +340,9 @@ def weekly_summary(
     """一周的复盘汇总（spec §5.4）：只统计 ``ended_session`` 落在本周的复盘记录；
     ``tag_counts`` 只数偏差标签（``not_filled`` 不算），键是带 N 的标签文案。"""
     week = [
-        record for record in records if record.get("ended_session") is not None and week_start <= record["ended_session"] <= week_end
+        record
+        for record in records
+        if record.get("ended_session") is not None and week_start <= record["ended_session"] <= week_end
     ]
     tag_counts: dict[str, int] = {}
     for record in week:
@@ -357,7 +369,11 @@ def weekly_summary(
         "closed": closed,
         "total_r": sum((row["r_multiple"] for row in closed if row["r_multiple"] is not None), Decimal(0)),
         "not_bought": [
-            {"ticker": record["ticker"], "end_reason": record.get("end_reason"), "hypothetical": record.get("hypothetical")}
+            {
+                "ticker": record["ticker"],
+                "end_reason": record.get("end_reason"),
+                "hypothetical": record.get("hypothetical"),
+            }
             for record in week
             if record["status"] != "closed" and record["kind"] == "planned"
         ],

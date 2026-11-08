@@ -12,7 +12,13 @@ from investment_assistant.execution import research
 def _bars(*closes, low=None):
     """日线到当天为止（最后一根是当天）；low 缺省等于当天收盘。"""
     return [
-        {"price_date": date(2026, 10, 1 + i), "open": D(str(c)), "high": D(str(c)), "low": D(str(c)), "close": D(str(c))}
+        {
+            "price_date": date(2026, 10, 1 + i),
+            "open": D(str(c)),
+            "high": D(str(c)),
+            "low": D(str(c)),
+            "close": D(str(c)),
+        }
         for i, c in enumerate(closes)
     ]
 
@@ -138,7 +144,10 @@ def test_research_check_trigger_expire_or_none():
     waiting = {**base, "triggered_session": date(2026, 11, 20)}
     assert (
         research.research_check(
-            research=waiting, bar={"close": D("38.50"), "low": D("37.80")}, bars=_bars(38.50), session=date(2026, 11, 30)
+            research=waiting,
+            bar={"close": D("38.50"), "low": D("37.80")},
+            bars=_bars(38.50),
+            session=date(2026, 11, 30),
         )
         is None
     )

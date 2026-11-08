@@ -375,7 +375,9 @@ def render_weekly(weekly: dict, *, as_of: datetime) -> str:
     if not_bought:
         rows = ["## 没买的计划"]
         for row in not_bought:
-            rows.append(f"- {row['ticker']}：{row.get('end_reason') or '—'}，{_hypothetical_sentence(row.get('hypothetical'))}。")
+            rows.append(
+                f"- {row['ticker']}：{row.get('end_reason') or '—'}，{_hypothetical_sentence(row.get('hypothetical'))}。"
+            )
         sections.append(rows)
 
     def show(value) -> str:
