@@ -15,7 +15,7 @@ view keys consumed here:
                    'valid_until', 'missing_bar'}] — one line each (当天没变的不展开)；missing_bar
   时行尾加「缺日线，未复查」（spec §6.3 末段）
 - research: [{'ticker', 'day', 'thesis', 'condition_text', 'last_close', 'state', 'conclusion'}] —
-  one line each in section 5a (spec §8)；state ∈ triggered/watching/missing_bar/no_condition，
+  one line each in section 5a (spec §8)；state ∈ triggered/watching/missing_bar/no_condition/insufficient_history，
   conclusion 只进最终稿；空列表 -> 整段不出现
 - candidates: [{'ticker', 'rank', 'reason', 'streak', 'new', 'verdict', 'skip_reason', 'held'}]
 - dropped: [{'ticker', 'reasons': [code|str]}]
@@ -47,6 +47,7 @@ RESEARCH_STATE_TEXT = {
     "watching": "观察中",
     "missing_bar": "缺日线，未复查",
     "no_condition": "尚无条件",
+    "insufficient_history": "日线不足，未检查",
 }
 WEEKLY_EXIT_TEXT = {
     "initial_stop": "初始止损",

@@ -10,7 +10,7 @@ returning ``None`` means the day was already processed. The caller owns the tran
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
@@ -46,11 +46,13 @@ def review_research(conn, *, session: date, cutoff_at: datetime, cfg: AssistantC
     unchecked: list[str] = []
     errors: list[dict] = []
     for row in research_repo.research_by_status(conn, ("watching",)):
-        if not row.get("condition"):
-            continue  # 尚无条件：宿主不检查（spec §6.3），简报写「尚无条件」
         conn.execute("SAVEPOINT v3_review_one_research")
         try:
-            _review_one(conn, row, session=session, cutoff_at=cutoff_at, changes=changes, unchecked=unchecked)
+            if row.get("condition"):
+                _review_one(conn, row, session=session, cutoff_at=cutoff_at, changes=changes, unchecked=unchecked)
+            else:
+                # 尚无条件：宿主不逐日检查，但到有效期自然过期（spec §6.3「一直没有结论」）
+                _expire_without_condition(conn, row, session=session, changes=changes)
         except Exception as exc:  # noqa: BLE001 - 记录原因后续着复查其余研究；连接级故障在 ROLLBACK 时自然上抛
             conn.execute("ROLLBACK TO SAVEPOINT v3_review_one_research")
             changes[:] = [event for event in changes if event["research_id"] != row["id"]]
@@ -59,6 +61,35 @@ def review_research(conn, *, session: date, cutoff_at: datetime, cfg: AssistantC
         else:
             conn.execute("RELEASE SAVEPOINT v3_review_one_research")
     return {"changes": changes, "unchecked": unchecked, "errors": errors}
+
+
+def _expire_without_condition(conn, row: dict, *, session: date, changes: list) -> None:
+    """尚无条件的研究到有效期自然过期（spec §6.3）：不看日线，日期一到即终态；reason 沿用
+    「{n} 个交易日条件未到」口径，n 从 created_session 的下一个日历日起算（同 research_check）。"""
+    if session < row["valid_until"]:
+        return
+    anchor = (
+        add_trading_days(row["checked_through"], 1)
+        if row["checked_through"] is not None
+        else add_trading_days(row["created_session"], 1)
+    )
+    day = max(row["valid_until"], anchor)
+    days = len(trading_days_between(row["created_session"] + timedelta(days=1), day))
+    reason = f"{days} 个交易日条件未到"
+    research_repo.update_research(
+        conn, row["id"], status="expired", ended_session=day, end_reason=reason, checked_through=day
+    )
+    saved = _emit(
+        conn,
+        row["id"],
+        day,
+        "expired",
+        reason,
+        before={"status": "watching"},
+        after={"status": "expired", "ended_session": day},
+    )
+    if saved is not None:
+        changes.append(saved)
 
 
 def _review_one(conn, row: dict, *, session: date, cutoff_at: datetime, changes: list, unchecked: list) -> None:
@@ -77,10 +108,12 @@ def _review_one(conn, row: dict, *, session: date, cutoff_at: datetime, changes:
             history.append(bars[index])  # 均线条件要「到当天为止」的日线
             index += 1
         bar = bars_by_date.get(day)
-        if bar is None:  # 缺日线：不判、不推进；当天缺日线进 unchecked（spec §6.4 第 1 条）
+        if bar is None:
+            # 缺日线：不判、不推进，且停在缺口——补上后从缺口日重查，不跨过它把游标推到更晚
+            # （spec §6.4 第 1 条 / Review Focus 2）；当天缺日线进 unchecked，判定与停游标独立
             if day == session:
                 unchecked.append(ticker)
-            continue
+            break
         result = research_check(research=row, bar=bar, bars=history, session=day)
         if result is None:
             row = research_repo.update_research(conn, row["id"], checked_through=day)

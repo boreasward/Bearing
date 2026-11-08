@@ -150,3 +150,14 @@ def research_events(conn, research_id: int) -> list[dict]:
 
 def research_events_on(conn, session: date) -> list[dict]:
     return _all(conn, f"SELECT {_EVENT_COLUMNS} FROM v3_research_events WHERE session = %s ORDER BY id", (session,))
+
+
+def research_created_by_request(conn, request_id: str) -> dict | None:
+    """The created event carrying ``request_id`` in its refs, any session (idempotent replay lookup;
+    spec §6.2/B7 的幂等不限同日)."""
+    return _one(
+        conn,
+        f"SELECT {_EVENT_COLUMNS} FROM v3_research_events WHERE event = 'created' AND refs @> %s::jsonb "
+        "ORDER BY id LIMIT 1",
+        (_plan_json([request_id]),),
+    )

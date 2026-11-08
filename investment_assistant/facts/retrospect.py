@@ -55,8 +55,9 @@ def records(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig, l
 
 
 def _asof_ledger(conn, *, session: date, through: date, cutoff_at: datetime) -> dict:
-    """该交易日收盘口径的账本快照：收盘价读到 ``session``，出入金与成交只算纽约日历日在
-    ``through``（含）之前的，收盘价与拆股照 ``facts.account.account_view`` 的同一读法。"""
+    """该交易日收盘口径的账本快照：收盘价读到 ``session``，出入金、成交与拆股都只算纽约
+    日历日在 ``through``（含）之前生效的（周内拆股不回灌进周初快照）；收盘价照 ``facts.account.account_view``
+    的同一读法。"""
     trades = [trade for trade in facts_repo.list_trades(conn) if trade["executed_at"].astimezone(NY).date() <= through]
     flows = [flow for flow in plan_repo.cash_flows(conn) if flow["effective_at"].astimezone(NY).date() <= through]
     closes: dict[str, Decimal] = {}
@@ -65,7 +66,9 @@ def _asof_ledger(conn, *, session: date, through: date, cutoff_at: datetime) -> 
         bars = data_repo.read_bars(conn, ticker, session, cutoff_at=cutoff_at)
         if bars:
             closes[ticker] = Decimal(str(bars[-1]["close"]))
-        splits[ticker] = data_repo.split_events(conn, ticker, cutoff_at=cutoff_at)
+        splits[ticker] = [
+            split for split in data_repo.split_events(conn, ticker, cutoff_at=cutoff_at) if split[0] <= through
+        ]
     return ledger(cash_flows=flows, trades=trades, closes=closes, splits=splits)
 
 
@@ -74,9 +77,14 @@ def weekly_view(conn, *, week_end: date, cutoff_at: datetime, cfg: AssistantConf
     session 过滤成交，两个快照的已实现盈亏恒相等，给不出「本周已实现盈亏」（§5.4）。"""
     week_start = week_bounds(week_end)[0]
     all_records = records(conn, session=week_end, cutoff_at=cutoff_at, cfg=cfg)
-    # 周初快照：收盘价取本周首个交易日的前一个收盘，出入金与成交只算本周之前（含周末）
+    # 周初快照截在「本周首个实际交易日之前」（周一休市时首日是周二）：出入金与成交算到它
+    # 的前一日（含周末与休市日），收盘取它前一个交易日的收盘（spec §5.4）。
+    first_session = trading_days_between(week_start, week_end)[0]
     start_ledger = _asof_ledger(
-        conn, session=add_trading_days(week_start, -1), through=week_start - timedelta(days=1), cutoff_at=cutoff_at
+        conn,
+        session=add_trading_days(first_session, -1),
+        through=first_session - timedelta(days=1),
+        cutoff_at=cutoff_at,
     )
     end_ledger = _asof_ledger(conn, session=week_end, through=week_end, cutoff_at=cutoff_at)
     candidates_week: list[dict] = []

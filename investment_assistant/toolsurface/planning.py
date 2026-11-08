@@ -206,9 +206,11 @@ def _rule_pending(conn) -> list[dict]:
 
 
 def _replacement_for(conn, env: ToolEnv) -> dict | None:
-    """名额满时的替换候选（spec §6.4）：宿主按名次规则选定，agent 不能挑。"""
+    """名额满时的替换候选（spec §6.4）：与 agenda 同一口径——有观察中研究的股票不做候选（R6），
+    受害者只从规则计划里选（spec §6.6）；宿主按名次规则选定，agent 不能挑。"""
+    watching = set(research_repo.watching_tickers(conn))
     return replacement(
-        top_rows=_top_rows(conn, env),
+        top_rows=[row for row in _top_rows(conn, env) if row["ticker"] not in watching],
         pending=_rule_pending(conn),
         active_tickers={plan["ticker"] for plan in plan_repo.plans_by_status(conn, ("pending", "open"))},
         replaced_today=False,

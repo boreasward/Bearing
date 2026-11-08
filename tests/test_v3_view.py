@@ -411,3 +411,23 @@ def test_candidate_marked_研究中(v3_tx):
     by_ticker = {row["ticker"]: row for row in view["candidates"]}
     assert by_ticker["AAPL"]["has_research"] is True and by_ticker["AAPL"]["skip_reason"] == "研究中"
     assert by_ticker["MSFT"]["has_research"] is False and by_ticker["MSFT"]["skip_reason"] is None
+
+
+def test_research_ma_insufficient_state(v3_tx):
+    """P2-1：close_above_ma 当天有日线但历史不足 ma 根 → 「日线不足，未检查」，不是「观察中」。"""
+    from investment_assistant.facts.brief import render_brief
+
+    data_repo.store_bars(v3_tx, "AAA", bars(20), now=NOW)  # 只有 20 根
+    research_repo.insert_research(
+        v3_tx,
+        _research("AAA", condition={"kind": "close_above_ma", "ma": 200}, condition_text="收盘站上 200 日均线"),
+    )
+    v3_tx.commit()
+
+    view = brief_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run_view([]))
+
+    row = next(item for item in view["research"] if item["ticker"] == "AAA")
+    assert row["state"] == "insufficient_history"
+    assert row["last_close"] is not None  # 当天有日线
+    text = render_brief(view, final=True)
+    assert "日线不足，未检查" in text

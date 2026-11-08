@@ -8,6 +8,7 @@ from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
 from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts.agenda import agenda
 from investment_assistant.facts.view import today_actions
 from investment_assistant.toolsurface.dispatch import call
 from investment_assistant.toolsurface.env import make_env
@@ -628,3 +629,23 @@ def test_save_plan_with_watching_research_not_ready_is_rejected(v3_tx):
     rejected = call(env, "save_plan", {"ticker": "AAPL", **TEXTS})
     assert rejected["error"].startswith("research_not_ready")
     assert v3_tx.execute("SELECT count(*) FROM v3_plans WHERE ticker = 'AAPL'").fetchone()[0] == 0
+
+
+def test_replacement_skips_watching_ticker_like_agenda(v3_tx):
+    """P1-3：排名 1 是观察中研究股票时，agenda 与 save_plan 的替换候选同口径——选排名 2，保存能完成替换。"""
+    _seed(v3_tx)
+    research_repo.insert_research(v3_tx, _research("AAPL"))  # 排名 1：观察中的研究
+    victim = _plan(v3_tx, "AVGO")  # 名次 5：当天最差
+    for ticker in ("NVDA", "MU"):  # 名次 3/4：3 份规则计划占满名额
+        _plan(v3_tx, ticker)
+    v3_tx.commit()
+
+    day_agenda = agenda(v3_tx, session=SESSION, cfg=AssistantConfig())
+    assert day_agenda["replacement"] == {"candidate": "MSFT", "victim_plan_id": victim["id"], "victim_rank": 5}
+
+    env = _env(v3_tx, agent="t-rskip")
+    confirm(env, "MSFT")
+    saved = call(env, "save_plan", {"ticker": "MSFT", **TEXTS})["data"]  # 修复前：no_free_slot（候选仍是 AAPL）
+    assert saved["status"] == "pending" and saved["research_id"] is None
+    replaced = plan_repo.plan(v3_tx, victim["id"])
+    assert replaced is not None and replaced["status"] == "replaced"

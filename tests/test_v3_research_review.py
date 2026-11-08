@@ -3,12 +3,11 @@ missing bars neither judged nor advanced, catch-up once the bar arrives, per-res
 
 from datetime import UTC, date, datetime
 
-from investment_assistant.facts.research_review import review_research
-
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.facts import research_repo
+from investment_assistant.facts.research_review import review_research
 
 SESSION = date(2026, 11, 4)  # 周三
 D2 = date(2026, 11, 3)
@@ -153,3 +152,43 @@ def test_one_bad_research_does_not_stop_the_rest(v3_tx):
     assert "invalid_condition" in result["errors"][0]["error"]
     assert saved_research(v3_tx, bad["id"])["checked_through"] is None  # 回滚：没推进
     assert saved_research(v3_tx, good["id"])["triggered_session"] == SESSION
+
+
+def test_midweek_gap_stops_cursor_and_catches_up(v3_tx):
+    """P1-1：窗口中间缺日线 → 游标停在缺口，不跨过；补上缺口后从缺口日重查仍能判出 triggered。"""
+    gap_bars = [bar for bar in bars(19, end=D2) if bar["price_date"] != D1]  # D1 缺线，D2（=session）有线
+    data_repo.store_bars(v3_tx, "AAA", gap_bars, now=NOW)
+    saved = insert(v3_tx, "AAA")
+    v3_tx.commit()
+
+    first = review(v3_tx, session=D2)
+    # D1 缺线：不判、不推进、不跨过 D1 去推 D2；当天（D2）有线所以不进 unchecked
+    assert first["changes"] == [] and first["unchecked"] == []
+    row = saved_research(v3_tx, saved["id"])
+    assert row["checked_through"] is None and row["triggered_session"] is None
+
+    data_repo.store_bars(v3_tx, "AAA", bars(1, end=D1, close=110.0), now=NOW)  # 补 D1：条件在 D1 就到
+    v3_tx.commit()
+    caught = review(v3_tx, session=D2)
+    assert [event["event"] for event in caught["changes"]] == ["triggered"]
+    row = saved_research(v3_tx, saved["id"])
+    assert row["triggered_session"] == D1  # 触发日之后、待复看期间游标照常推进到 D2
+    assert row["checked_through"] == D2
+
+
+def test_unconditioned_research_expires_at_valid_until(v3_tx):
+    """P1-2：尚无条件的研究到 valid_until 自然过期（spec §6.3「一直没有结论」）；不看日线；重跑幂等。"""
+    saved = insert(v3_tx, "AAA", condition=None, valid_until=D1)  # 该股票完全没有日线
+    v3_tx.commit()
+
+    result = review(v3_tx)
+
+    assert [event["event"] for event in result["changes"]] == ["expired"]
+    row = saved_research(v3_tx, saved["id"])
+    assert row["status"] == "expired" and row["ended_session"] == D1
+    assert "条件未到" in row["end_reason"] and row["checked_through"] == D1
+    event = events_of(v3_tx, saved["id"], "expired")[0]
+    assert event["source"] == "host" and event["session"] == D1
+
+    again = review(v3_tx)
+    assert again["changes"] == [] and len(events_of(v3_tx, saved["id"], "expired")) == 1

@@ -20,6 +20,7 @@ from investment_assistant.data.calendar import trading_days_between
 from investment_assistant.execution.plan_levels import _cent
 from investment_assistant.execution.plan_line import held_sessions, next_action
 from investment_assistant.execution.positions import PositionError, build
+from investment_assistant.execution.research import validate_condition
 from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.account import account_view
@@ -166,6 +167,20 @@ def _candidate_rows(
     return out
 
 
+def _ma_history_short(condition: dict | None, bars: list[dict], session: date) -> bool:
+    """close_above_ma 当天有日线、但到当天为止的根数不足 ma：写「日线不足，未检查」
+    （spec §6.3 条件表），不算「观察中」；均线算术本身不动。"""
+    if not bars or bars[-1]["price_date"] != session or not condition:
+        return False
+    if condition.get("kind") != "close_above_ma":
+        return False
+    try:
+        normalized = validate_condition(condition)
+    except ValueError:
+        return False
+    return len([bar for bar in bars if bar["price_date"] <= session]) < int(normalized["ma"])
+
+
 def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig, run: dict) -> dict:
     """``render_brief`` 的全部输入；agent 已保存的结论（复查、verdict、一句话）一并带入。"""
     run = run or {}
@@ -297,6 +312,8 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
             state = "no_condition"
         elif not bars or bars[-1]["price_date"] != session:
             state = "missing_bar"
+        elif _ma_history_short(row["condition"], bars, session):
+            state = "insufficient_history"
         else:
             state = "watching"
         research_rows.append(

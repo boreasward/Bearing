@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import date
 
 from investment_assistant.config import AssistantConfig
-from investment_assistant.execution import plan_line
+from investment_assistant.execution.plan_line import free_slots, replacement
 from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 
@@ -43,8 +43,8 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
 
     active_tickers = {plan["ticker"] for plan in active}
     watching = set(research_repo.watching_tickers(conn))
-    free = plan_line.free_slots(pending_count=len(rule_pending), cap=cfg.v3.pending_cap)
-    replacement = None
+    free = free_slots(pending_count=len(rule_pending), cap=cfg.v3.pending_cap)
+    replacement_pick = None  # 本地名让位：replacement 是从 plan_line 导入的函数
     confirmations: list[dict] = []
     if free > 0:
         for row in top_rows:
@@ -62,20 +62,20 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
             )
     else:
         replaced_today = any(row["event"] == "replaced" for row in events)
-        replacement = plan_line.replacement(
+        replacement_pick = replacement(
             top_rows=[row for row in top_rows if row["ticker"] not in watching],  # 不做替换候选（R6）
             pending=rule_pending,
             active_tickers=active_tickers,
             replaced_today=replaced_today,
         )
-        if replacement is not None:
-            candidate = replacement["candidate"]
+        if replacement_pick is not None:
+            candidate = replacement_pick["candidate"]
             confirmations = [
                 {
                     "ticker": candidate,
                     "rank": rank_by_ticker[candidate],
                     "mode": "replace",
-                    "victim_plan_id": replacement["victim_plan_id"],
+                    "victim_plan_id": replacement_pick["victim_plan_id"],
                     "done": candidate in verdicts,
                 }
             ]
@@ -107,6 +107,6 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
         "research": research,
         "summary_done": summary_done,
         "free_slots": free,
-        "replacement": replacement,
+        "replacement": replacement_pick,
         "complete": complete,
     }

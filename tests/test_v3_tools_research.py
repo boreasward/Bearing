@@ -13,7 +13,9 @@ from investment_assistant.toolsurface.dispatch import call, tool_defs
 from investment_assistant.toolsurface.env import make_env
 
 SESSION = date(2026, 11, 4)  # 周三
+DAY2 = date(2026, 11, 5)  # 周四：跨日重放用
 NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)
+NOW2 = datetime(2026, 11, 6, 3, 30, tzinfo=UTC)
 TOP5 = ["AAPL", "MSFT", "NVDA", "MU", "AVGO"]
 TEXTS = {"thesis": "回调到 99 附近买入", "invalidation": "跌破 96 止损"}
 
@@ -381,3 +383,25 @@ def test_tool_counts_35_chat_23_brief(v3_tx):
     assert {"start_research", "conclude_research", "drop_research", "get_research"} <= chat_tools
     assert {"conclude_research", "get_research"} <= brief_tools
     assert "start_research" not in brief_tools and "drop_research" not in brief_tools
+
+
+def test_start_research_replay_across_days(v3_tx):
+    """P1-4/B7：request_id 幂等不限同日——次日重放返回原行；原研究已结束后重放也返回原行、不新建。"""
+    _seed(v3_tx)
+    day1 = _env(v3_tx, mode="chat", agent="t-replay1")
+    created = _start(day1, "SNDK", "x1", thesis="最近跌很多")
+    day2 = make_env(session=DAY2, mode="chat", agent_session="t-replay2", cfg=AssistantConfig(), now=NOW2)
+
+    replay = call(
+        day2, "start_research", {"ticker": "SNDK", "thesis": "最近跌很多", "request_id": "x1", "confirmed": True}
+    )["data"]
+    assert replay["replay"] is True and replay["research"]["id"] == created["id"]
+
+    call(day1, "drop_research", {"research_id": created["id"], "request_id": "drop-1", "confirmed": True})
+    again = call(
+        day2, "start_research", {"ticker": "SNDK", "thesis": "最近跌很多", "request_id": "x1", "confirmed": True}
+    )["data"]
+    assert again["replay"] is True and again["research"]["id"] == created["id"]
+    assert again["research"]["status"] == "dropped"  # 返回原行（已终态），不是误拒也不是新建
+    rows = research_repo.research_by_status(v3_tx, ("watching", "planned", "rejected", "expired", "dropped"))
+    assert [row["id"] for row in rows] == [created["id"]]  # 全库仍只有这一份

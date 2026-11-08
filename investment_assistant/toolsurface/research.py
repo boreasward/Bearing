@@ -47,11 +47,11 @@ def start_research(env: ToolEnv, *, ticker: str, thesis: str, request_id: str, c
         return {"write": False, "preview": f"将为 {ticker} 建立研究，论点：{thesis}。确认后写入。"}
 
     def _work(conn):
-        for event in research_repo.research_events_on(conn, env.session):
-            if event["event"] == "created" and request_id in (event["refs"] or []):
-                row = research_repo.research(conn, event["research_id"])
-                assert row is not None
-                return {"research": row, "event": event, "replay": True}
+        replay = research_repo.research_created_by_request(conn, request_id)
+        if replay is not None:  # 重放先于一切拒绝：原行即便已终态也返回它，不误拒、不新建
+            row = research_repo.research(conn, replay["research_id"])
+            assert row is not None
+            return {"research": row, "event": replay, "replay": True}
         plan = plan_repo.active_plan(conn, ticker)
         if plan is not None:
             raise ToolError("active_plan_exists: 该股票已有有效计划", detail=plan)

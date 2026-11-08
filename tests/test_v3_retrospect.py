@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
-from investment_assistant.data.calendar import add_trading_days
+from investment_assistant.data.calendar import add_trading_days, trading_days_between
 from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.retrospect import records, retrospect_view, weekly_view
@@ -192,3 +192,94 @@ def test_weekly_view_equity_and_realized(v3_tx):
     assert weekly["equity_start"] == D(10000)  # 周初快照不含本周的成交
     assert weekly["equity_end"] == D(10100) and weekly["realized_pnl"] == D(100)
     assert weekly["ended"] == 1 and weekly["not_bought"] and weekly["not_bought"][0]["ticker"] == "AAPL"
+
+
+def _bar(day, close, *, split=1.0):
+    return {
+        "price_date": day,
+        "open": close,
+        "high": close,
+        "low": close,
+        "close": close,
+        "adj_close": close,
+        "volume": 1000,
+        "split_factor": split,
+    }
+
+
+def test_weekly_view_splits_truncated_per_snapshot(v3_tx):
+    """P1-5：周内拆股不回灌进周初快照——周初 10 股按拆股前收盘估值，期末按拆股后股数与价。"""
+    plan_repo.insert_cash_flow(
+        v3_tx,
+        {
+            "request_id": "open-1",
+            "kind": "opening",
+            "amount": D(20000),
+            "effective_at": datetime(2026, 10, 20, tzinfo=UTC),
+            "note": "",
+        },
+    )
+    facts_repo.insert_trade(
+        v3_tx,
+        {
+            "request_id": "buy-1",
+            "ticker": "AAPL",
+            "side": "buy",
+            "quantity": 10,
+            "price": D(100),
+            "executed_at": datetime(2026, 10, 28, 15, tzinfo=NY),
+        },
+    )
+    pre = [_bar(day, 100.0) for day in trading_days_between(date(2026, 10, 26), date(2026, 11, 3))]
+    split_day = _bar(SESSION, 50.0, split=2.0)  # 周三 2:1 拆股，收盘价折半
+    data_repo.store_bars(v3_tx, "AAPL", pre + [split_day], now=NOW)
+    v3_tx.commit()
+
+    weekly = weekly_view(v3_tx, week_end=SESSION, cutoff_at=NOW, cfg=CFG)
+
+    # 周初（11/1 前的快照）：10 股 × 拆股前收盘 100 + 现金 19000 = 20000；拆股不该把它变成 20 股 × 100
+    assert weekly["equity_start"] == D(20000)
+    # 周末：拆股生效，20 股 × 50 + 现金 19000 = 20000
+    assert weekly["equity_end"] == D(20000)
+    assert weekly["realized_pnl"] == D(0)
+
+
+def test_weekly_start_snapshot_includes_holiday_monday_flow(v3_tx):
+    """P1-6：周一休市（2026-02-16 总统日）时本周首个实际交易日是周二——周一生效的期初入金
+    属于「本周之前」，要进周初快照；周报的日历周边界不变。"""
+    FRI = date(2026, 2, 13)
+    HOLIDAY_MON = date(2026, 2, 16)  # NYSE 休市
+    TUE = date(2026, 2, 17)
+    WED = date(2026, 2, 18)  # 本周最后一个交易日
+    FEB_NOW = datetime(2026, 2, 19, 3, 30, tzinfo=UTC)
+    plan_repo.insert_cash_flow(
+        v3_tx,
+        {
+            "request_id": "open-1",
+            "kind": "opening",
+            "amount": D(10000),
+            "effective_at": datetime(2026, 2, 16, 12, tzinfo=NY),  # 休市的周一生效
+            "note": "",
+        },
+    )
+    facts_repo.insert_trade(
+        v3_tx,
+        {
+            "request_id": "buy-1",
+            "ticker": "AAPL",
+            "side": "buy",
+            "quantity": 10,
+            "price": D(100),
+            "executed_at": datetime(2026, 2, 17, 15, tzinfo=NY),  # 本周首个交易日买入
+        },
+    )
+    data_repo.store_bars(
+        v3_tx, "AAPL", [_bar(day, 100.0) for day in [FRI, TUE, WED]], now=FEB_NOW
+    )
+    v3_tx.commit()
+
+    weekly = weekly_view(v3_tx, week_end=WED, cutoff_at=FEB_NOW, cfg=CFG)
+
+    assert weekly["week_start"] == HOLIDAY_MON and weekly["week_end"] == WED  # 日历周边界不变
+    assert weekly["equity_start"] == D(10000)  # 休市周一的入金进周初快照（修复前 through=周日会漏掉）
+    assert weekly["equity_end"] == D(10000)  # 9000 现金 + 10 股 × 100
