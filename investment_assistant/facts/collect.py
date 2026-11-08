@@ -17,7 +17,7 @@ from investment_assistant.data.adapters.universe import load as load_universe
 from investment_assistant.data.sources.edgar import COMPANY_TICKERS_TARGET
 from investment_assistant.db import list_watchlist_items
 from investment_assistant.execution.positions import PositionError, build
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 
 DAILY_FAMILIES = ("universe", "bars", "earnings", "sector", "fred", "news", "sec_filings", "fundamentals")
@@ -52,6 +52,7 @@ def target_facts(conn, cfg: AssistantConfig) -> TargetFacts:
         if position is not None:
             holdings.add(ticker)
     holdings.update(plan["ticker"] for plan in plan_repo.plans_by_status(conn, ("pending", "open")))
+    holdings.update(research_repo.watching_tickers(conn))  # 观察中的研究与有效计划同一处（spec §6.2），不写关注列表（R1）
     return TargetFacts(
         pool=tuple(pool),
         holdings=tuple(sorted(holdings)),

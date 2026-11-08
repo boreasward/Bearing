@@ -7,7 +7,7 @@ from decimal import Decimal as D
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.view import brief_view, today_actions
 
@@ -319,3 +319,95 @@ def test_pending_plan_day_counts_the_saving_session_as_day_one(v3_tx):
     view = brief_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run_view([]))
 
     assert {row["ticker"]: row["day"] for row in view["pending_plans"]} == {"AAPL": 1, "MSFT": 2}
+
+
+def _research(ticker, **over):
+    row = {
+        "ticker": ticker,
+        "thesis": "论点",
+        "origin": "chat",
+        "created_session": PREV,
+        "valid_until": date(2026, 11, 20),
+        "condition": {"kind": "close_above", "level": 105},
+        "agent_session": "view-test",
+    }
+    row.update(over)
+    return row
+
+
+def test_research_rows_states_and_changes(v3_tx):
+    """研究行四种状态（triggered / no_condition / missing_bar / watching）、第几天计数、
+    当天变化各一句、未完成项与 agent 结论句（spec §8 第 2、5a、8 段）。"""
+    data_repo.store_bars(v3_tx, "AAA", bars(), now=NOW)  # 条件已到
+    data_repo.store_bars(v3_tx, "BBB", bars(), now=NOW)  # 尚无条件
+    data_repo.store_bars(v3_tx, "CCC", bars(end=PREV), now=NOW)  # 当天缺日线
+    data_repo.store_bars(v3_tx, "DDD", bars(), now=NOW)  # 观察中
+    triggered = research_repo.insert_research(v3_tx, _research("AAA", triggered_session=SESSION))
+    research_repo.insert_research(v3_tx, _research("BBB", condition=None))
+    research_repo.insert_research(v3_tx, _research("CCC"))
+    research_repo.insert_research(v3_tx, _research("DDD", condition_text="收盘站上 105.00"))
+    research_repo.insert_research_event(
+        v3_tx,
+        {
+            "research_id": triggered["id"],
+            "session": SESSION,
+            "event": "triggered",
+            "reason": "收盘站上 105.00 已到：收盘 110.00",
+            "before": {},
+            "after": {},
+            "source": "host",
+            "refs": [],
+        },
+    )
+    ddd = research_repo.watching_research(v3_tx, "DDD")
+    assert ddd is not None
+    research_repo.insert_research_event(
+        v3_tx,
+        {
+            "research_id": ddd["id"],
+            "session": SESSION,
+            "event": "concluded",
+            "reason": "值得盯：继续等",
+            "before": {},
+            "after": {},
+            "source": "agent",
+            "refs": [],
+        },
+    )
+    v3_tx.commit()
+
+    view = brief_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run_view([]))
+
+    states = {row["ticker"]: row["state"] for row in view["research"]}
+    assert states == {"AAA": "triggered", "BBB": "no_condition", "CCC": "missing_bar", "DDD": "watching"}
+    assert {row["ticker"]: row["day"] for row in view["research"]} == {"AAA": 2, "BBB": 2, "CCC": 2, "DDD": 2}
+    row_ddd = next(row for row in view["research"] if row["ticker"] == "DDD")
+    assert row_ddd["conclusion"] == "值得盯：继续等"
+    assert row_ddd["condition_text"] == "收盘站上 105.00"
+    assert view["changes"]["research"] == [
+        "研究 AAA：收盘站上 105.00 已到：收盘 110.00",
+        "研究 DDD：值得盯：继续等",
+    ]
+    assert "研究 BBB 尚无条件" in view["unresolved"]["agenda"]  # 尚无条件
+    assert "研究复看 AAA" in view["unresolved"]["agenda"]  # 待办未完成
+
+
+def test_candidate_marked_研究中(v3_tx):
+    """R6：名单行标「研究中」，优先于「已有计划」等其他原因；没有研究的行不带。"""
+    facts_repo.insert_run(v3_tx, _run_row("run-1"))
+    facts_repo.insert_candidates(v3_tx, "run-1", [_candidate(t, i + 1) for i, t in enumerate(["AAPL", "MSFT"])])
+    research_repo.insert_research(v3_tx, _research("AAPL"))
+    plan_repo.insert_plan(v3_tx, plan("AAPL", status="pending", start_session=None))  # 同时有计划
+    v3_tx.commit()
+
+    view = brief_view(
+        v3_tx,
+        session=SESSION,
+        cutoff_at=NOW,
+        cfg=CFG,
+        run=run_view(facts_repo.candidates(v3_tx, "run-1")),
+    )
+
+    by_ticker = {row["ticker"]: row for row in view["candidates"]}
+    assert by_ticker["AAPL"]["has_research"] is True and by_ticker["AAPL"]["skip_reason"] == "研究中"
+    assert by_ticker["MSFT"]["has_research"] is False and by_ticker["MSFT"]["skip_reason"] is None

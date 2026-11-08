@@ -6,7 +6,7 @@ from decimal import Decimal as D
 
 from investment_assistant.config import AssistantConfig
 from investment_assistant.facts import agenda as facts_agenda
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 
 SESSION = date(2026, 11, 4)  # 周三
@@ -50,8 +50,22 @@ def _candidate(ticker, rank, *, streak=None):
     }
 
 
-def _plan(ticker, *, status="pending", session=PREV):
-    return {
+def _research(ticker, **over):
+    row = {
+        "ticker": ticker,
+        "thesis": "论点",
+        "origin": "chat",
+        "created_session": PREV,
+        "valid_until": date(2026, 11, 20),
+        "condition": {"kind": "close_above", "level": 105},
+        "agent_session": "agenda-test",
+    }
+    row.update(over)
+    return row
+
+
+def _plan(ticker, *, status="pending", session=PREV, **over):
+    row = {
         "session": session,
         "ticker": ticker,
         "origin": "brief",
@@ -77,6 +91,8 @@ def _plan(ticker, *, status="pending", session=PREV):
         "status": status,
         "kind": "planned",
     }
+    row.update(over)
+    return row
 
 
 def seed(conn, *, session=SESSION, run_id="run-1"):
@@ -271,3 +287,55 @@ def test_plan_saved_today_is_not_relisted(v3_tx):
 
     assert [item["plan_id"] for item in result["relisted"]] == [earlier["id"]]
     assert today["id"] not in [item["plan_id"] for item in result["relisted"]]
+
+
+def test_research_items_and_slots_ignore_research_plans(v3_tx):
+    """研究转成的计划不占名额；有观察中研究的股票不进确认清单；研究复看项参与完成判定。"""
+    seed(v3_tx)
+    research = research_repo.insert_research(v3_tx, _research("MU", triggered_session=SESSION))
+    plan_repo.insert_plan(v3_tx, _plan("AAPL"))
+    plan_repo.insert_plan(v3_tx, _plan("MSFT", research_id=research["id"]))
+    plan_repo.insert_plan(v3_tx, _plan("NVDA"))
+    v3_tx.commit()
+
+    result = agenda(v3_tx)
+
+    assert result["free_slots"] == 1  # 只数规则计划（AAPL、NVDA），研究计划不占名额
+    assert [item["ticker"] for item in result["confirmations"]] == ["AVGO"]  # MU 有观察中的研究：跳过
+    assert result["research"] == [{"research_id": research["id"], "ticker": "MU", "done": False}]
+
+    # 其余待办全部完成、研究复看没做 → 不算完成；补上当天的 agent 结论事件才算
+    for ticker in ("AAPL", "MSFT", "NVDA", "AVGO"):
+        facts_repo.upsert_verdict(
+            v3_tx,
+            {
+                "session": SESSION,
+                "ticker": ticker,
+                "verdict": "unknown",
+                "reasons": "数据不足",
+                "counter": "",
+                "refs": [],
+                "origin": "brief",
+                "agent_session": "agenda-test",
+            },
+        )
+    plan_repo.upsert_brief(v3_tx, {"session": SESSION, "status": "draft", "summary": "今天没有新机会。"})
+    v3_tx.commit()
+    undone = agenda(v3_tx)
+    assert undone["research"][0]["done"] is False and undone["complete"] is False
+    research_repo.insert_research_event(
+        v3_tx,
+        {
+            "research_id": research["id"],
+            "session": SESSION,
+            "event": "concluded",
+            "reason": "结论 watch：继续等",
+            "before": {},
+            "after": {},
+            "source": "agent",
+            "refs": [],
+        },
+    )
+    v3_tx.commit()
+    done = agenda(v3_tx)
+    assert done["research"][0]["done"] is True and done["complete"] is True

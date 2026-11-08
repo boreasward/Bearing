@@ -169,12 +169,19 @@ def revise_plan(
                 chosen = validate_levels(levels)
             except ValueError as exc:
                 raise ValueError(f"levels_invalid: {exc}") from None
-            problems = check_agent_levels(chosen, last_close=Decimal(str(bars[-1]["close"])), atr=atr)
+            problems = check_agent_levels(
+                chosen,
+                last_close=Decimal(str(bars[-1]["close"])),
+                atr=atr,
+                entry_atr=Decimal(str(env.cfg.v3.research_entry_atr)) if plan["research_id"] else Decimal(2),  # R7
+            )
             if problems:
                 raise ValueError(f"levels_invalid: {', '.join(problems)}")
             for key in ("entry_low", "entry_high", "stop", "target1"):
                 if chosen[key] != plan[key]:
                     fields[key] = chosen[key]
+            if "stop" in fields and plan["status"] == "pending":
+                fields["initial_stop"] = chosen["stop"]  # 买入前的止损就是初始止损（R3/B18）
         for key, value in (("thesis", thesis), ("invalidation", invalidation)):
             if value is not None:
                 if not isinstance(value, str):

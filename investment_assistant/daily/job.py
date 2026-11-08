@@ -5,15 +5,18 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import investment_assistant.core.tx as core_tx
 from investment_assistant.config import AssistantConfig, briefs_dir, load_config
 from investment_assistant.daily import push
 from investment_assistant.daily.session import run_brief_session
 from investment_assistant.data import collect as data_collect
+from investment_assistant.execution import retrospect
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
-from investment_assistant.facts.brief import render_brief
+from investment_assistant.facts import retrospect as facts_retrospect
+from investment_assistant.facts.brief import render_brief, render_weekly
 from investment_assistant.facts.job import run_facts
 from investment_assistant.facts.view import brief_view
 from investment_assistant.notify.discord import DiscordClient
@@ -22,6 +25,7 @@ from investment_assistant.runtime.base import Runtime, RuntimeSpec
 
 # 错误简报第一行的判别串来自 facts.brief.render_error_brief（有持仓时才有这一行）
 STOP_CHECK_WARNING = "今天无法检查止损"
+_BEIJING = ZoneInfo("Asia/Shanghai")  # 周报页脚的时间口径（同简报）
 
 
 def run_daily(
@@ -61,6 +65,7 @@ def run_daily(
             "attempts": 0,
             "complete": False,
             "pushed": False,
+            "weekly_pushed": False,
             "brief_path": None,
         }
 
@@ -74,7 +79,7 @@ def _run(*, now, collect, cfg, spec, runtime, client, env_file, budget_seconds) 
     with core_tx.read_only_tx() as conn:
         spec = spec if spec is not None else settings.current(conn)
     if spec is None:
-        return _no_model_day(session=session, result=result, draft_md=draft_md, now=now, cfg=cfg)
+        return _no_model_day(session=session, result=result, draft_md=draft_md, now=now, cfg=cfg, client=client)
     return _session_day(
         session=session,
         result=result,
@@ -115,22 +120,46 @@ def _error_day(*, session, result, draft_md, now, cfg, client) -> dict:
         "attempts": 0,
         "complete": False,
         "pushed": pushed,
+        "weekly_pushed": False,  # 事实任务失败的日子不产出周报、下次运行不补（spec §5.4 / R5）
         "brief_path": result["draft_path"],
     }
 
 
-def _no_model_day(*, session, result, draft_md, now, cfg) -> dict:
+def _weekly(session: date, *, now: datetime, cfg: AssistantConfig, client) -> bool:
+    """周报（spec §5.4）：每周最后一个交易日的运行在最终简报之后算本周汇总、写进当天的
+    简报行并单独推一条；同一周重跑不重推。全是宿主算的，模型不可用照常产出。"""
+    if not retrospect.is_week_end(session):
+        return False
+    client = client if client is not None else DiscordClient.from_config(cfg.notify)
+    with core_tx.read_only_tx() as conn:
+        weekly = facts_retrospect.weekly_view(conn, week_end=session, cutoff_at=now, cfg=cfg)
+    md = render_weekly(weekly, as_of=now.astimezone(_BEIJING))
+    with core_tx._tx() as conn:
+        plan_repo.update_brief(conn, session, weekly_md=md)
+        row = plan_repo.brief(conn, session)
+    assert row is not None  # 当天的简报行总是先写
+    if row["pushed_weekly_at"] is None:
+        push.push_weekly(md, client)
+        with core_tx._tx() as conn:
+            plan_repo.update_brief(conn, session, pushed_weekly_at=now)
+        return True
+    return False
+
+
+def _no_model_day(*, session, result, draft_md, now, cfg, client=None) -> dict:
     """No model selected (spec §5): the brief stays a draft whose footer says so; no session,
-    no push."""
+    no brief push — the weekly report still goes out (B19)."""
     with core_tx._tx() as conn:
         plan_repo.upsert_brief(conn, _brief_row(session, run_id=result["run_id"], status="draft", draft_md=draft_md))
     path = _render_final(session, now=now, cfg=cfg)
+    weekly_pushed = _weekly(session, now=now, cfg=cfg, client=client)
     return {
         "session": session.isoformat(),
         "status": "draft",
         "attempts": 0,
         "complete": False,
         "pushed": False,
+        "weekly_pushed": weekly_pushed,
         "brief_path": str(path),
     }
 
@@ -182,12 +211,14 @@ def _session_day(*, session, result, draft_md, now, cfg, spec, runtime, client, 
         with core_tx._tx() as conn:
             plan_repo.update_brief(conn, session, pushed_final_at=now)
         pushed = True
+    weekly_pushed = _weekly(session, now=now, cfg=cfg, client=client)
     return {
         "session": session.isoformat(),
         "status": "final",
         "attempts": session_result["attempts"],
         "complete": session_result["complete"],
         "pushed": pushed,
+        "weekly_pushed": weekly_pushed,
         "brief_path": str(path),
     }
 

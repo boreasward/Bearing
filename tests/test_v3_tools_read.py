@@ -7,7 +7,7 @@ import pytest
 
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.toolsurface.dispatch import call, tool_defs
 from investment_assistant.toolsurface.env import make_env
@@ -247,7 +247,7 @@ class _NoEnv:
 def test_get_concept_without_id_lists_the_40_kept_cards():
     from investment_assistant.toolsurface.reads import get_concept
 
-    out = get_concept(_NoEnv())
+    out = get_concept(_NoEnv())  # type: ignore[arg-type]  # 离线测试替身：get_concept 不读 env 的任何字段
     assert out["knowledge_version"] == "knowledge-1" and out["point_in_time"] is False
     ids = [item["id"] for item in out["concepts"]]
     assert len(ids) == 40 and len(set(ids)) == 40
@@ -258,7 +258,7 @@ def test_get_concept_without_id_lists_the_40_kept_cards():
 def test_get_concept_returns_the_card_body():
     from investment_assistant.toolsurface.reads import get_concept
 
-    out = get_concept(_NoEnv(), concept_id="plan.stop")
+    out = get_concept(_NoEnv(), concept_id="plan.stop")  # type: ignore[arg-type]  # 离线测试替身
     assert out["id"] == "plan.stop" and out["group"] == "plan" and out["concept_ref"] == "concept:plan.stop@1"
     assert out["title"] and out["summary"] and out["body"].strip()
     assert len(out["content_sha256"]) == 64
@@ -274,9 +274,9 @@ def test_get_concept_treats_an_archived_card_like_an_unknown_one():
     assert archived, "the archive keeps the v2 system cards"
     archived_id = archived[0].stem
     with pytest.raises(LookupError) as unknown:
-        get_concept(_NoEnv(), concept_id="no.such.card")
+        get_concept(_NoEnv(), concept_id="no.such.card")  # type: ignore[arg-type]  # 离线测试替身
     with pytest.raises(LookupError) as gone:
-        get_concept(_NoEnv(), concept_id=archived_id)
+        get_concept(_NoEnv(), concept_id=archived_id)  # type: ignore[arg-type]  # 离线测试替身
     assert str(gone.value) == str(unknown.value).replace("no.such.card", archived_id)
     assert "未知概念" in str(gone.value)
 
@@ -294,15 +294,17 @@ CHAT_ONLY = {
     "watchlist_add",
     "watchlist_remove",
     "ensure_data",
+    "start_research",
+    "drop_research",
 }
 
 
-def test_tool_surface_has_31_tools_with_10_chat_only():
+def test_tool_surface_has_35_tools_with_12_chat_only():
     brief_tools = {tool.name for tool in tool_defs("brief")}
     chat_tools = {tool.name for tool in tool_defs("chat")}
-    assert len(chat_tools) == 31
+    assert len(chat_tools) == 35
     assert chat_tools - brief_tools == CHAT_ONLY
-    assert len(brief_tools) == 21
+    assert len(brief_tools) == 23
 
 
 def test_get_candidates_carries_streak_plan_and_dropped(env, v3_tx):
@@ -339,6 +341,26 @@ def test_get_candidates_carries_streak_plan_and_dropped(env, v3_tx):
     assert by_ticker["AAPL"]["streak"] == 2 and by_ticker["NVDA"]["has_active_plan"] is True
     assert by_ticker["NVDA"]["plan_id"] == plan["id"] and by_ticker["AAPL"]["plan_id"] is None
     assert data["dropped"] == [{"ticker": "INTC", "reasons": ["rank_cut"]}]
+
+
+def test_get_candidates_has_research(env, v3_tx):
+    """R6：有观察中研究的名单行带 has_research（页面与简报据此标「研究中」）。"""
+    research_repo.insert_research(
+        v3_tx,
+        {
+            "ticker": "AAPL",
+            "thesis": "论点",
+            "origin": "chat",
+            "created_session": SESSION,
+            "valid_until": SESSION,
+            "agent_session": "seed",
+        },
+    )
+    v3_tx.commit()
+    data = call(env, "get_candidates", {})["data"]
+    by_ticker = {row["ticker"]: row for row in data["candidates"]}
+    assert by_ticker["AAPL"]["has_research"] is True
+    assert by_ticker["MSFT"]["has_research"] is False
 
 
 def test_get_plans_filters_and_carries_events(env, v3_tx):
@@ -450,6 +472,7 @@ def test_get_agenda_reads_the_day(env, v3_tx):
         "holdings",
         "relisted",
         "confirmations",
+        "research",
         "summary_done",
         "free_slots",
         "replacement",

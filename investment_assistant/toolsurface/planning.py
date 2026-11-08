@@ -21,9 +21,10 @@ from investment_assistant.execution.plan_levels import (
 )
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import research_repo
 from investment_assistant.facts.account import account_view
 from investment_assistant.toolsurface.env import ToolEnv
-from investment_assistant.toolsurface.reads import holdings_rows, session_bars, top_tickers
+from investment_assistant.toolsurface.reads import holdings_rows, scope_tickers, session_bars
 from investment_assistant.toolsurface.validation import (
     ToolError,
     check_agent_levels,
@@ -124,7 +125,7 @@ def save_verdict(
         raise ValueError("invalid_argument: counter / refs 类型不符")
 
     def _work(conn):
-        if not in_scope(env.mode, ticker, top_tickers(conn, env)):
+        if not in_scope(env.mode, ticker, scope_tickers(conn, env)):
             raise ValueError("out_of_scope")
         known = facts_repo.tool_call_refs(conn, env.agent_session)
         if any(ref not in known for ref in refs) or (verdict in ("confirm", "veto") and not refs):
@@ -166,16 +167,23 @@ def save_verdict(
 
 
 def _levels_of(
-    env: ToolEnv, conn, ticker: str, levels: dict | None, last_close: Decimal, atr: Decimal
+    env: ToolEnv,
+    conn,
+    ticker: str,
+    levels: dict | None,
+    last_close: Decimal,
+    atr: Decimal,
+    entry_atr: Decimal = Decimal(2),
 ) -> tuple[dict[str, Decimal], str, Decimal]:
-    """(价位, 来源, 仓位基准价)：agent 价位过两道校验；缺省取宿主规则价位。"""
+    """(价位, 来源, 仓位基准价)：agent 价位过两道校验；缺省取宿主规则价位。
+    研究计划的入场下限用放宽倍数（spec §6.6 第 3 条）。"""
     if levels is None:
         return rule_levels(last_close, atr), "host", last_close
     try:
         chosen = validate_levels(levels)
     except ValueError as exc:
         raise ValueError(f"levels_invalid: {exc}") from None
-    problems = check_agent_levels(chosen, last_close=last_close, atr=atr)
+    problems = check_agent_levels(chosen, last_close=last_close, atr=atr, entry_atr=entry_atr)
     if problems:
         raise ValueError(f"levels_invalid: {', '.join(problems)}")
     # 与自有计划同口径：风险按入场带中点计（spec §6 价位校验、§7 现有算术原样）
@@ -193,12 +201,16 @@ def _top_rows(conn, env: ToolEnv) -> list[dict]:
     ]
 
 
+def _rule_pending(conn) -> list[dict]:
+    """名额与替换只约束规则名单的计划（spec §6.6 第 1 条）：研究转成的计划不占名额、不做替换受害者。"""
+    return [plan for plan in plan_repo.plans_by_status(conn, ("pending",)) if plan["research_id"] is None]
+
+
 def _replacement_for(conn, env: ToolEnv) -> dict | None:
     """名额满时的替换候选（spec §6.4）：宿主按名次规则选定，agent 不能挑。"""
-    pending = plan_repo.plans_by_status(conn, ("pending",))
     return replacement(
         top_rows=_top_rows(conn, env),
-        pending=pending,
+        pending=_rule_pending(conn),
         active_tickers={plan["ticker"] for plan in plan_repo.plans_by_status(conn, ("pending", "open"))},
         replaced_today=False,
     )
@@ -207,7 +219,7 @@ def _replacement_for(conn, env: ToolEnv) -> dict | None:
 def _check_slot(conn, env: ToolEnv, ticker: str) -> dict | None:
     """返回 None 表示有空位；否则抛 no_free_slot / replacement_rank_not_better / replaced_today，
     满足替换条件时返回替换上下文（受害者计划编号）。"""
-    pending = plan_repo.plans_by_status(conn, ("pending",))
+    pending = _rule_pending(conn)
     if free_slots(pending_count=len(pending), cap=env.cfg.v3.pending_cap) > 0:
         return None
     detail = {"pending": pending}
@@ -249,7 +261,7 @@ def save_plan(
     hold = max_hold_sessions if isinstance(max_hold_sessions, int) and not isinstance(max_hold_sessions, bool) else None
 
     def _work(conn):
-        if not in_scope(env.mode, ticker, top_tickers(conn, env)):
+        if not in_scope(env.mode, ticker, scope_tickers(conn, env)):
             raise ValueError("out_of_scope")
         verdict = facts_repo.verdicts(conn, env.session).get(ticker)
         if verdict is None or verdict["verdict"] != "confirm":
@@ -264,7 +276,17 @@ def save_plan(
             raise ValueError("invalid_argument: levels 必须是对象")
         bars, atr = _bars_atr(conn, env, ticker)
         last_close = Decimal(str(bars[-1]["close"]))
-        chosen, source, sizing_ref = _levels_of(env, conn, ticker, levels, last_close, atr)
+        linked = research_repo.watching_research(conn, ticker)
+        is_research = linked is not None and linked["verdict"] == "ready"  # 仅 ready 算关联（spec §6.6）
+        chosen, source, sizing_ref = _levels_of(
+            env,
+            conn,
+            ticker,
+            levels,
+            last_close,
+            atr,
+            entry_atr=Decimal(str(env.cfg.v3.research_entry_atr)) if is_research else Decimal(2),
+        )
         valid_from, valid_until = validity(env.session, env.cfg.v3.valid_sessions)
         earnings = data_repo.latest_earnings(conn, ticker, cutoff_at=env.cutoff_at)
         invalid, warnings = earnings_flags(
@@ -275,7 +297,9 @@ def save_plan(
         existing = plan_repo.active_plan(conn, ticker)
         if existing is not None:
             raise ToolError("active_plan_exists: 该股票已有有效计划", detail=existing)
-        slot_replacement = _check_slot(conn, env, ticker)
+        if linked is not None and not is_research:
+            raise ValueError("research_not_ready: 研究尚未给出「可以出计划」的结论")
+        slot_replacement = None if is_research else _check_slot(conn, env, ticker)
         snapshot = _equity_snapshot(conn, env)
         ticker_value, total_value = _exposure(conn, env, ticker)
         sizing, size_invalid = size(
@@ -316,6 +340,7 @@ def save_plan(
                 "counter": counter,
                 "refs": refs,
                 "agent_session": env.agent_session,
+                "research_id": linked["id"] if linked is not None and is_research else None,
             },
         )
         plan_repo.insert_event(
@@ -331,6 +356,24 @@ def save_plan(
                 "refs": refs,
             },
         )
+        if linked is not None and is_research:
+            # 研究记 planned 并关联计划（spec §6.3）：之后这份计划与别的计划一样
+            research_repo.update_research(
+                conn, linked["id"], status="planned", plan_id=saved["id"], ended_session=env.session, end_reason="已转计划"
+            )
+            research_repo.insert_research_event(
+                conn,
+                {
+                    "research_id": linked["id"],
+                    "session": env.session,
+                    "event": "planned",
+                    "reason": f"已转计划 {saved['id']}",
+                    "before": {"status": "watching"},
+                    "after": {"status": "planned", "plan_id": saved["id"]},
+                    "source": "agent",
+                    "refs": refs,
+                },
+            )
         if slot_replacement is not None:
             reason = f"名额替换：换成 {ticker}"
             plan_repo.update_plan(

@@ -10,7 +10,7 @@ from investment_assistant.core import tx as core_tx
 from investment_assistant.data import registry as data_registry
 from investment_assistant.data.sources.edgar import COMPANY_TICKERS_TARGET
 from investment_assistant.facts import collect as facts_collect
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 
 SESSION = date(2026, 11, 4)
@@ -190,3 +190,41 @@ def test_collect_extra_uses_explicit_targets(v3_tx, monkeypatch):
         facts_collect.collect_extra([], session=SESSION, now=NOW, run_id="v3-x", trigger="manual_batch", cfg=cfg) == []
     )
     assert seen == []
+
+
+def test_target_facts_include_watching_research_not_watchlist(v3_tx):
+    """B15：观察中研究的股票进采集目标（与有效计划同一处）；关注列表与已结束研究不进。"""
+    cfg = AssistantConfig()
+    v3_tx.execute(
+        "INSERT INTO watchlist_items (ticker, status, thesis, tags) VALUES ('AAPL', 'active', '', %s)",
+        ([],),
+    )
+    research_repo.insert_research(
+        v3_tx,
+        {
+            "ticker": "SNDK",
+            "thesis": "论点",
+            "origin": "chat",
+            "created_session": SESSION,
+            "valid_until": SESSION,
+            "agent_session": "collect-test",
+        },
+    )
+    research_repo.insert_research(
+        v3_tx,
+        {
+            "ticker": "OLD",
+            "thesis": "论点",
+            "origin": "chat",
+            "status": "dropped",
+            "created_session": SESSION,
+            "valid_until": SESSION,
+            "agent_session": "collect-test",
+        },
+    )
+    v3_tx.commit()
+
+    facts = facts_collect.target_facts(v3_tx, cfg)
+
+    assert facts.pool == ("AAPL",)  # 关注列表不因研究而变（R1）
+    assert "SNDK" in facts.holdings and "OLD" not in facts.holdings

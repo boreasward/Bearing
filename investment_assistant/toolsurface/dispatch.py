@@ -15,6 +15,7 @@ from investment_assistant.toolsurface import chat as chat_tools
 from investment_assistant.toolsurface import ledger as ledger_tools
 from investment_assistant.toolsurface import planning, reads
 from investment_assistant.toolsurface import plans as plan_tools
+from investment_assistant.toolsurface import research as research_tools
 from investment_assistant.toolsurface import watchlist as watchlist_tools
 from investment_assistant.toolsurface.env import ToolEnv
 
@@ -141,6 +142,60 @@ _DEFS: tuple[ToolDef, ...] = (
         BOTH,
         "读取操作手册的概念卡；不给 concept_id 时返回全部概念的目录。",
         _schema({"concept_id": _STRING}),
+    ),
+    ToolDef(
+        "get_research",
+        research_tools.get_research,
+        BOTH,
+        "读取研究：缺省返回全部观察中的研究；可按状态、股票或编号过滤，每份带变化记录时间线。",
+        _schema({"status": _STRING, "ticker": _STRING, "research_id": {"type": "integer"}}),
+    ),
+    ToolDef(
+        "start_research",
+        research_tools.start_research,
+        CHAT_ONLY,
+        "用户点名发起研究（仅对话模式）：股票与论点建一份观察中的研究并记 created，"
+        "有效期为配置的交易日数；该股票已有有效计划或观察中的研究时拒绝并返回那份；"
+        "先复述，confirmed 为真才写，按 request_id 幂等。",
+        _schema(
+            {"ticker": _STRING, "thesis": _STRING, "request_id": _STRING, "confirmed": {"type": "boolean"}},
+            ("ticker", "thesis", "request_id", "confirmed"),
+        ),
+    ),
+    ToolDef(
+        "conclude_research",
+        research_tools.conclude_research,
+        BOTH,
+        "保存研究结论三选一（ready 可以出计划 / watch 值得盯 / reject 否决），附理由、反证与引用；"
+        "watch 带新条件是用户写入（先复述条件，confirmed 为真才写），简报模式不能改条件，有效期从当天重算。",
+        _schema(
+            {
+                "research_id": {"type": "integer"},
+                "verdict": _STRING,
+                "reasons": _STRING,
+                "counter": _STRING,
+                "refs": _STRINGS,
+                "condition": {"type": "object"},
+                "request_id": _STRING,
+                "confirmed": {"type": "boolean"},
+            },
+            ("research_id", "verdict", "reasons"),
+        ),
+    ),
+    ToolDef(
+        "drop_research",
+        research_tools.drop_research,
+        CHAT_ONLY,
+        "放弃一份观察中的研究（仅对话模式，页面也转发它）；先复述，confirmed 为真才写，按 request_id 幂等。",
+        _schema(
+            {
+                "research_id": {"type": "integer"},
+                "request_id": _STRING,
+                "confirmed": {"type": "boolean"},
+                "reason": _STRING,
+            },
+            ("research_id", "request_id", "confirmed"),
+        ),
     ),
     ToolDef(
         "compute_plan_levels",

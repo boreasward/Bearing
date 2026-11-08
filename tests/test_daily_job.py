@@ -17,6 +17,8 @@ from investment_assistant.toolsurface.env import make_env
 
 NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)
 SESSION = date(2026, 11, 4)
+FRIDAY = date(2026, 11, 6)  # 本周最后一个交易日（下一个交易日 11/9 在另一 ISO 周）
+NOW_FRIDAY = datetime(2026, 11, 7, 3, 30, tzinfo=UTC)
 SPEC = RuntimeSpec(runtime="fake", provider="prov-x", model="model-x")
 SEEN_AT = NOW - timedelta(hours=1)
 STOCKS = ("AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "INTC")
@@ -27,7 +29,7 @@ def cfg_at(tmp_path, **v3_kwargs):
     return AssistantConfig(v3=V3Config(briefs_dir=str(tmp_path / "rb" / "briefs"), **v3_kwargs))
 
 
-def seed_bars(conn, tickers, *, breakout=()):
+def seed_bars(conn, tickers, *, breakout=(), end=SESSION):
     for ticker in tickers:
         for i in range(300):
             close, volume = (
@@ -38,7 +40,7 @@ def seed_bars(conn, tickers, *, breakout=()):
                 "source, revision, fetched_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'yfinance', 1, %s)",
                 (
                     ticker,
-                    add_trading_days(SESSION, -(299 - i)),
+                    add_trading_days(end, -(299 - i)),
                     close,
                     close,
                     round(close * 0.99, 2),
@@ -62,7 +64,7 @@ class Recorder:
         self.sent.append((channel, text))
 
 
-def completing_runtime():
+def completing_runtime(session=SESSION):
     """一轮把当天待办做完：两只候选各存 unknown 结论 + 一句话总结。"""
 
     def script(prompt: str):
@@ -74,7 +76,7 @@ def completing_runtime():
         ]
 
     return FakeRuntime(
-        script, env=lambda: make_env(session=SESSION, mode="brief", agent_session=f"brief-{SESSION.isoformat()}-1")
+        script, env=lambda: make_env(session=session, mode="brief", agent_session=f"brief-{session.isoformat()}-1")
     )
 
 
@@ -295,3 +297,60 @@ def test_plist_template_placeholders():
     assert ".local/v3" not in template
     # 包从仓库根目录导入（未装进 venv），launchd 缺省工作目录是 /
     assert "<key>WorkingDirectory</key>\n    <string>__REPO__</string>" in template
+
+
+def test_week_end_writes_and_pushes_weekly_once(v3_tx, tmp_path):
+    """B6：周五 session 产出 weekly_md 并多推一条 Discord；同一周重跑不重推。"""
+    import investment_assistant.core.tx as core_tx
+
+    cfg = cfg_at(tmp_path)
+    with core_tx._tx() as conn:
+        seed_bars(conn, market_ticklers(cfg), breakout=BREAKOUTS, end=FRIDAY)
+    v3_tx.commit()
+    client = Recorder()
+    first = run_daily_with(
+        cfg, client, now=NOW_FRIDAY, runtime=completing_runtime(FRIDAY), budget_seconds=60
+    )
+    assert first["status"] == "final" and first["pushed"] is True and first["weekly_pushed"] is True
+    with core_tx.read_only_tx() as conn:
+        row = plan_repo.brief(conn, FRIDAY)
+    assert row is not None and "# 周报" in row["weekly_md"]
+    assert row["pushed_weekly_at"] is not None
+    assert len(client.sent) == 2 and "# 周报" in client.sent[1][1]
+    second = run_daily_with(
+        cfg, client, now=NOW_FRIDAY, runtime=completing_runtime(FRIDAY), budget_seconds=60
+    )
+    assert second["pushed"] is False and second["weekly_pushed"] is False
+    assert len(client.sent) == 2  # 重跑不重推
+
+
+def test_no_model_week_end_still_pushes_weekly(v3_tx, tmp_path):
+    """B19：没选定模型的周末日仍产出并推送周报（全是宿主算的），简报本身不推。"""
+    import investment_assistant.core.tx as core_tx
+
+    cfg = cfg_at(tmp_path)
+    seed_bars(v3_tx, market_ticklers(cfg), end=FRIDAY)
+    v3_tx.commit()
+    client = Recorder()
+    result = run_daily(cfg=cfg, spec=None, client=client, now=NOW_FRIDAY)
+    assert result["status"] == "draft" and result["pushed"] is False and result["weekly_pushed"] is True
+    with core_tx.read_only_tx() as conn:
+        row = plan_repo.brief(conn, FRIDAY)
+    assert row is not None and "# 周报" in row["weekly_md"] and row["pushed_weekly_at"] is not None
+    assert len(client.sent) == 1 and "# 周报" in client.sent[0][1]
+
+
+def test_midweek_has_no_weekly(v3_tx, tmp_path):
+    """周三（非周末交易日）不产出周报，也不多推。"""
+    import investment_assistant.core.tx as core_tx
+
+    cfg = cfg_at(tmp_path)
+    seed_bars(v3_tx, market_ticklers(cfg), breakout=BREAKOUTS)
+    v3_tx.commit()
+    client = Recorder()
+    result = run_daily_with(cfg, client, runtime=completing_runtime(), budget_seconds=60)
+    assert result["status"] == "final" and result["weekly_pushed"] is False
+    with core_tx.read_only_tx() as conn:
+        row = plan_repo.brief(conn, SESSION)
+    assert row is not None and row["weekly_md"] is None and row["pushed_weekly_at"] is None
+    assert len(client.sent) == 1

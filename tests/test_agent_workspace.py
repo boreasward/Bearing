@@ -22,3 +22,11 @@ def test_instructions_carry_the_discipline_addendum():
 def test_workspace_never_says_degradation():
     for path in (INSTRUCTIONS, PLAYBOOK):
         assert "降级" not in path.read_text(encoding="utf-8")
+
+
+def test_playbook_has_research_section():
+    """v3.2：待办第五类「研究复看」与对话里的研究流程，含用户确认纪律。"""
+    text = PLAYBOOK.read_text(encoding="utf-8")
+    assert "研究复看" in text
+    assert "conclude_research" in text and "start_research" in text
+    assert "不要替用户确认" in text

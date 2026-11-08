@@ -10,7 +10,7 @@ from investment_assistant.core.knowledge import agent_text, catalog
 from investment_assistant.data import repo as data_repo
 from investment_assistant.derivation.indicators import price as price_indicators
 from investment_assistant.execution.plan_line import ACTIVE, ENDED
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.account import account_view
 from investment_assistant.facts.agenda import agenda
@@ -56,6 +56,17 @@ def top_tickers(conn, env: ToolEnv) -> list[str]:
     return [row["ticker"] for row in facts_repo.candidates(conn, run["run_id"]) if row["rank"] <= env.cfg.v3.top_n]
 
 
+def scope_tickers(conn, env: ToolEnv) -> list[str]:
+    """简报模式的范围（spec §6.5）：名单前 N 只 ∪ 当天待办里的研究股票（观察中且条件已到）。"""
+    top = top_tickers(conn, env)
+    research = [
+        row["ticker"]
+        for row in research_repo.research_by_status(conn, ("watching",))
+        if row["triggered_session"] is not None
+    ]
+    return [*top, *(ticker for ticker in research if ticker not in top)]
+
+
 def session_bars(conn, env: ToolEnv, ticker: str) -> list[dict]:
     return data_repo.read_bars(conn, ticker, env.session, cutoff_at=env.cutoff_at)
 
@@ -99,6 +110,7 @@ def get_candidates(env: ToolEnv) -> dict:
         run = need_run(conn, env)
         verdicts = facts_repo.verdicts(conn, env.session)
         active = {plan["ticker"]: plan for plan in plan_repo.plans_by_status(conn, ("pending", "open"))}
+        watching = set(research_repo.watching_tickers(conn))
         rows = [
             {
                 "ticker": row["ticker"],
@@ -115,6 +127,7 @@ def get_candidates(env: ToolEnv) -> dict:
                 "streak": (row.get("detail") or {}).get("streak"),
                 "has_active_plan": row["ticker"] in active,
                 "plan_id": active[row["ticker"]]["id"] if row["ticker"] in active else None,
+                "has_research": row["ticker"] in watching,
             }
             for row in facts_repo.candidates(conn, run["run_id"])
         ]

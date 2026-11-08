@@ -20,7 +20,7 @@ from investment_assistant.data.calendar import trading_days_between
 from investment_assistant.execution.plan_levels import _cent
 from investment_assistant.execution.plan_line import held_sessions, next_action
 from investment_assistant.execution.positions import PositionError, build
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.account import account_view
 from investment_assistant.facts.agenda import agenda
@@ -33,6 +33,7 @@ _BEIJING = ZoneInfo("Asia/Shanghai")
 ACTION_ORDER = {"stop_hit_unresolved": 0, "sell_next_open": 1, "unchecked": 2, "stop_order": 3}
 ENDED_EVENTS = ("expired", "invalidated", "replaced", "cancelled", "closed")
 HOLDING_EVENTS = ("stop_hit", "target_hit", "stop_raised", "sell_instruction")
+RESEARCH_CONCLUSION_EVENTS = ("concluded", "rejected", "planned")  # 当天结论句取它们的 reason（spec §8 第 5a 段）
 NO_STOP_TEXT = "缺日线，未能给出止损"  # 补录计划还没算出止损（spec §6.6）
 
 
@@ -130,6 +131,7 @@ def _candidate_rows(
     new: set[str],
     active_by_ticker: dict[str, dict],
     day: dict,
+    watching: set[str],
 ) -> list[dict]:
     verdicts = day["verdicts"]
     replacement_candidate = (day["agenda"].get("replacement") or {}).get("candidate")
@@ -138,8 +140,11 @@ def _candidate_rows(
         ticker = row["ticker"]
         plan = active_by_ticker.get(ticker)
         held = plan is not None and plan["status"] == "open"
+        has_research = ticker in watching
         skip_reason = None
-        if plan is not None and plan["status"] == "pending":
+        if has_research:
+            skip_reason = "研究中"  # 结论走研究那条线，优先于其他原因（spec §6.6 / R6）
+        elif plan is not None and plan["status"] == "pending":
             skip_reason = "已有计划"
         elif row["rank"] <= cfg.v3.top_n and day["agenda"]["free_slots"] == 0 and ticker != replacement_candidate:
             skip_reason = "名额已满"
@@ -153,6 +158,7 @@ def _candidate_rows(
                 "verdict": verdicts[ticker]["verdict"] if ticker in verdicts else None,
                 "has_active_plan": plan is not None,
                 "plan_id": plan["id"] if plan is not None else None,
+                "has_research": has_research,
                 "skip_reason": skip_reason,
                 "held": held,
             }
@@ -239,10 +245,15 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
     )
 
     day_agenda = agenda(conn, session=session, cfg=cfg)
+    watching_research = research_repo.research_by_status(conn, ("watching",))
+    watching = {row["ticker"] for row in watching_research}
+    research_events_today = research_repo.research_events_on(conn, session)
     unresolved_items = []
     unresolved_items += [f"持仓复查 {item['ticker']}" for item in day_agenda["holdings"] if not item["done"]]
     unresolved_items += [f"再次上榜计划 {item['ticker']} 的结论" for item in day_agenda["relisted"] if not item["done"]]
     unresolved_items += [f"二次确认 {item['ticker']}" for item in day_agenda["confirmations"] if not item["done"]]
+    unresolved_items += [f"研究 {row['ticker']} 尚无条件" for row in watching_research if not row["condition"]]
+    unresolved_items += [f"研究复看 {item['ticker']}" for item in day_agenda["research"] if not item["done"]]
     if not day_agenda["summary_done"]:
         unresolved_items.append("一句话总结")
 
@@ -270,6 +281,46 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
     changes = _changes(conn, session)
     changes["new_count"] = len(cont["new"])
     changes["dropped_count"] = len(dropped)
+
+    # 第 5a 段「研究」（spec §8）：观察中的研究各一行，状态按 triggered → 尚无条件 → 缺日线 → 观察中
+    conclusions = {
+        event["research_id"]: event["reason"]
+        for event in research_events_today
+        if event["event"] in RESEARCH_CONCLUSION_EVENTS
+    }
+    research_rows = []
+    for row in watching_research:
+        bars = data_repo.read_bars(conn, row["ticker"], session, cutoff_at=cutoff_at)
+        if row["triggered_session"] is not None:
+            state = "triggered"
+        elif not row["condition"]:
+            state = "no_condition"
+        elif not bars or bars[-1]["price_date"] != session:
+            state = "missing_bar"
+        else:
+            state = "watching"
+        research_rows.append(
+            {
+                "research_id": row["id"],
+                "ticker": row["ticker"],
+                "day": len(trading_days_between(row["created_session"], session)),  # 两端都算：发起当天是第 1 天
+                "thesis": row["thesis"],
+                "condition_text": row["condition_text"],
+                "last_close": bars[-1]["close"] if bars else None,
+                "state": state,
+                "conclusion": conclusions.get(row["id"]),
+            }
+        )
+    research_tickers: dict[int, str] = {}
+
+    def _research_ticker(research_id: int) -> str:
+        """事件当天的研究可能已终态：按编号现查，缓存一次。"""
+        if research_id not in research_tickers:
+            found = research_repo.research(conn, research_id)
+            research_tickers[research_id] = found["ticker"] if found is not None else "?"
+        return research_tickers[research_id]
+
+    changes["research"] = [f"研究 {_research_ticker(event['research_id'])}：{event['reason']}" for event in research_events_today]
     footer = (
         {
             "runtime": brief_row["runtime"],
@@ -290,6 +341,7 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
         "market": market,
         "holdings": holdings,
         "pending_plans": pending_plans,
+        "research": research_rows,
         "candidates": _candidate_rows(
             conn,
             session=session,
@@ -299,6 +351,7 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
             new=set(cont["new"]),
             active_by_ticker=active_by_ticker,
             day={"verdicts": facts_repo.verdicts(conn, session), "agenda": day_agenda},
+            watching=watching,
         ),
         "dropped": dropped,
         "account": account_row,

@@ -11,7 +11,7 @@ from investment_assistant.core import tx as core_tx
 from investment_assistant.data import collect as data_collect
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import add_trading_days
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.__main__ import main
 from investment_assistant.facts.job import run_facts
@@ -252,3 +252,30 @@ def test_run_facts_reviews_plans_and_writes_draft_sections(v3_tx, tmp_path):
     assert run_row["holdings"] and run_row["holdings"][0]["ticker"] == "AAPL"
     # 草稿第一段是今日操作，排在市场环境之前
     assert draft.index("## 今日操作") < draft.index("## 市场环境")
+
+
+def test_run_facts_reviews_research(v3_tx, tmp_path):
+    """第 3 步在计划复查之后同一事务里复查研究：条件到的研究记 triggered，返回带 research_review。"""
+    cfg = cfg_with_briefs(tmp_path)
+    seed_bars(v3_tx, market_ticklers(cfg), breakout=BREAKOUTS)
+    saved = research_repo.insert_research(
+        v3_tx,
+        {
+            "ticker": "AAPL",
+            "thesis": "论点",
+            "origin": "chat",
+            "created_session": date(2026, 11, 3),
+            "valid_until": add_trading_days(SESSION, 20),
+            "condition": {"kind": "close_above", "level": 105},
+            "agent_session": "facts-job-test",
+        },
+    )
+    v3_tx.commit()
+
+    result = run_facts(now=NOW, collect=False, cfg=cfg)
+
+    assert result["status"] == "ok"
+    assert result["research_review"]["unchecked"] == [] and result["research_review"]["errors"] == []
+    assert [row["event"] for row in result["research_review"]["changes"]] == ["triggered"]  # 当天突破收 110
+    row = research_repo.research(v3_tx, saved["id"])
+    assert row is not None and row["triggered_session"] == SESSION and row["status"] == "watching"

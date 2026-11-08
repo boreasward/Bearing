@@ -6,7 +6,7 @@ from decimal import Decimal as D
 
 from investment_assistant.config import AssistantConfig
 from investment_assistant.data import repo as data_repo
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.view import today_actions
 from investment_assistant.toolsurface.dispatch import call
@@ -398,7 +398,7 @@ def test_revise_plan_only_pending_and_records_changed_keys(v3_tx):
     ]
     assert D(str(revised["stop"])) == D(95) and revised["thesis"] == TEXTS["thesis"]
     event = next(row for row in plan_repo.events(v3_tx, saved["id"]) if row["event"] == "revised")
-    assert set(event["after"]) == {"entry_low", "entry_high", "stop", "target1"}
+    assert set(event["after"]) == {"entry_low", "entry_high", "stop", "target1", "initial_stop"}  # R3：待入场改止损同步 initial_stop
     assert event["reason"] == "回踩更深" and event["source"] == "agent"
     assert call(env, "revise_plan", {"plan_id": saved["id"], "reason": ""})["error"].startswith("invalid_argument")
     assert call(env, "revise_plan", {"plan_id": saved["id"], "reason": "没有改动", "refs": [ref]})["error"].startswith(
@@ -497,3 +497,128 @@ def test_continue_plan_rejects_a_plan_saved_the_same_session(v3_tx):
         "saved_this_session"
     )
     assert _events(v3_tx, saved["id"]) == ["created"]
+
+
+# ---------------------------------------------------------------- v3.2 研究计划
+
+
+def _research(ticker, **over):
+    """直接插一份研究（不走工具），缺省观察中且结论 ready。"""
+    row = {
+        "ticker": ticker,
+        "thesis": "论点",
+        "origin": "chat",
+        "created_session": date(2026, 11, 3),
+        "valid_until": date(2026, 11, 20),
+        "verdict": "ready",
+        "reasons": "可以出计划",
+        "agent_session": "seed",
+    }
+    row.update(over)
+    return row
+
+
+def test_research_plan_ignores_slots_and_replacement(v3_tx):
+    """Review Focus 4 / B10：3 份规则计划满员且当天已替换过一次时，研究计划照常保存、不记 replaced。"""
+    _seed(v3_tx)
+    research = research_repo.insert_research(v3_tx, _research("AAPL"))
+    for ticker in ("MSFT", "NVDA", "MU"):  # 名次 2/3/4：规则计划占满 3 个名额
+        _plan(v3_tx, ticker)
+    replaced = _plan(v3_tx, "AVGO")
+    plan_repo.update_plan(
+        v3_tx, replaced["id"], status="replaced", ended_session=SESSION, end_reason="名额替换：换成别的"
+    )
+    plan_repo.insert_event(
+        v3_tx,
+        {
+            "plan_id": replaced["id"],
+            "session": SESSION,
+            "event": "replaced",
+            "reason": "名额替换",
+            "before": {"status": "pending"},
+            "after": {"status": "replaced"},
+            "source": "host",
+            "refs": [],
+        },
+    )
+    v3_tx.commit()
+    env = _env(v3_tx, agent="t-rslot")
+    confirm(env, "AAPL")
+    saved = call(env, "save_plan", {"ticker": "AAPL", **TEXTS})["data"]  # 换规则计划这里会 replaced_today
+    assert saved["research_id"] == research["id"] and saved["status"] == "pending"
+    for ticker in ("MSFT", "NVDA", "MU"):  # 没有规则计划被替换
+        victim = plan_repo.active_plan(v3_tx, ticker)
+        assert victim is not None and victim["status"] == "pending"
+    row = research_repo.research(v3_tx, research["id"])
+    assert row is not None
+    assert row["status"] == "planned" and row["plan_id"] == saved["id"] and row["end_reason"] == "已转计划"
+    events = [event["event"] for event in research_repo.research_events(v3_tx, research["id"])]
+    assert events == ["planned"]
+
+
+def test_research_plan_entry_floor_relaxed(v3_tx):
+    """B11 三例：研究计划入场下沿收盘 −3.5 ATR 通过、−4.5 ATR 被拒；规则名单计划 −2.5 ATR 仍被拒。"""
+    _seed(v3_tx)
+    research_repo.insert_research(v3_tx, _research("AAPL"))
+    research_repo.insert_research(v3_tx, _research("MSFT"))
+    v3_tx.commit()
+    env = _env(v3_tx, agent="t-floor")
+    confirm(env, "AAPL")
+    confirm(env, "MSFT")
+    confirm(env, "NVDA")
+    # 研究计划（research_entry_atr=4，ATR=2，收盘 100）：下沿 93 = 100 − 3.5×2，通过
+    relaxed = call(
+        env,
+        "save_plan",
+        {"ticker": "AAPL", **TEXTS, "levels": {"entry_low": 93, "entry_high": 94, "stop": 90, "target1": 99}},
+    )["data"]
+    assert relaxed["research_id"] is not None
+    # 研究计划：下沿 91 = 100 − 4.5×2，低于放宽后的下限 92，拒绝
+    too_low = call(
+        env,
+        "save_plan",
+        {"ticker": "MSFT", **TEXTS, "levels": {"entry_low": 91, "entry_high": 92, "stop": 88, "target1": 97}},
+    )
+    assert too_low["error"].startswith("levels_invalid") and "entry_too_low" in too_low["error"]
+    # 规则名单计划（下限收盘 − 2 ATR = 96）：下沿 95 = 100 − 2.5×2，仍拒绝
+    rule = call(
+        env,
+        "save_plan",
+        {"ticker": "NVDA", **TEXTS, "levels": {"entry_low": 95, "entry_high": 96, "stop": 92, "target1": 101}},
+    )
+    assert rule["error"].startswith("levels_invalid") and "entry_too_low" in rule["error"]
+
+
+def test_revise_pending_stop_updates_initial_stop(v3_tx):
+    """B18/R3：待入场计划修订止损时 initial_stop 同步，事件 before/after 都带它。"""
+    _seed(v3_tx)
+    env = _env(v3_tx, agent="t-istop")
+    t = TOP5[0]
+    confirm(env, t)
+    saved = call(env, "save_plan", {"ticker": t, **TEXTS})["data"]
+    ref = call(env, "get_market", {})["ref"]
+    revised = call(
+        env,
+        "revise_plan",
+        {
+            "plan_id": saved["id"],
+            "reason": "止损上调",
+            "levels": {"entry_low": 99, "entry_high": 101, "stop": 97, "target1": 108},
+            "refs": [ref],
+        },
+    )["data"]
+    assert D(str(revised["stop"])) == D(97) and D(str(revised["initial_stop"])) == D(97)
+    event = next(row for row in plan_repo.events(v3_tx, saved["id"]) if row["event"] == "revised")
+    assert "initial_stop" in event["after"] and "initial_stop" in event["before"]
+
+
+def test_save_plan_with_watching_research_not_ready_is_rejected(v3_tx):
+    """观察中的研究没有 ready 结论时，给它出计划被拒（research_not_ready），按普通计划也不行。"""
+    _seed(v3_tx)
+    research_repo.insert_research(v3_tx, _research("AAPL", verdict=None, reasons=""))  # 还没给结论
+    v3_tx.commit()
+    env = _env(v3_tx, agent="t-notready")
+    confirm(env, "AAPL")
+    rejected = call(env, "save_plan", {"ticker": "AAPL", **TEXTS})
+    assert rejected["error"].startswith("research_not_ready")
+    assert v3_tx.execute("SELECT count(*) FROM v3_plans WHERE ticker = 'AAPL'").fetchone()[0] == 0

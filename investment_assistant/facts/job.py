@@ -24,6 +24,7 @@ from investment_assistant.db import list_watchlist_items
 from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.facts import collect as facts_collect
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import research_review as facts_research_review
 from investment_assistant.facts import review as facts_review
 from investment_assistant.facts.brief import render_brief, render_error_brief
 from investment_assistant.facts.continuity import continuity
@@ -154,6 +155,7 @@ def _error_run(
         "error": error,
         "candidates": 0,
         "review": {"changes": [], "unchecked": [], "errors": []},
+        "research_review": {"changes": [], "unchecked": [], "errors": []},
         "draft_path": str(path),
     }
 
@@ -216,9 +218,10 @@ def run_facts(
             cfg=cfg,
             deps=deps,
         )
-    # 步骤 3：计划与持仓复查（宿主，写事件与计划字段）
+    # 步骤 3：计划与持仓复查 + 研究复查（宿主，写事件与计划/研究字段；同一事务）
     with core_tx._tx() as conn:
         review = facts_review.review_plans(conn, session=session, cutoff_at=now, cfg=cfg)
+        research_result = facts_research_review.review_research(conn, session=session, cutoff_at=now, cfg=cfg)
     # 名单连续性（与上一个 ok 运行比），掉出名单的原因取当天筛选结果
     with core_tx.read_only_tx() as conn:
         continuity_in = _continuity_inputs(conn, session=session, candidates=candidates)
@@ -279,5 +282,6 @@ def run_facts(
         "error": None,
         "candidates": len(candidates),
         "review": review,
+        "research_review": research_result,
         "draft_path": str(path),
     }

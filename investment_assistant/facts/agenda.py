@@ -10,8 +10,10 @@ from investment_assistant.config import AssistantConfig
 import investment_assistant.execution.plan_line as plan_line
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import research_repo
 
 RELISTED_DONE_EVENTS = ("continued", "revised", "invalidated")
+RESEARCH_DONE_EVENTS = ("concluded", "rejected", "planned")
 
 
 def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
@@ -23,6 +25,7 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
     active = plan_repo.plans_by_status(conn, ("pending", "open"))
     open_plans = [plan for plan in active if plan["status"] == "open"]
     pending = [plan for plan in active if plan["status"] == "pending"]
+    rule_pending = [plan for plan in pending if plan["research_id"] is None]  # 名额只约束规则计划（spec §6.6）
     reviews = plan_repo.holding_reviews(conn, session)
     events = plan_repo.events_on(conn, session)
     verdicts = facts_repo.verdicts(conn, session)
@@ -40,12 +43,14 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
         relisted.append({"plan_id": plan["id"], "ticker": plan["ticker"], "rank": rank, "done": done})
 
     active_tickers = {plan["ticker"] for plan in active}
-    free = plan_line.free_slots(pending_count=len(pending), cap=cfg.v3.pending_cap)
+    watching = set(research_repo.watching_tickers(conn))
+    free = plan_line.free_slots(pending_count=len(rule_pending), cap=cfg.v3.pending_cap)
     replacement = None
     confirmations: list[dict] = []
     if free > 0:
         for row in top_rows:
-            if row["ticker"] in active_tickers:
+            if row["ticker"] in active_tickers or row["ticker"] in watching:
+                # 有观察中研究的股票不进确认清单（spec §6.6 / R6）：结论走研究那条线
                 continue
             confirmations.append(
                 {
@@ -59,7 +64,10 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
     else:
         replaced_today = any(row["event"] == "replaced" for row in events)
         replacement = plan_line.replacement(
-            top_rows=top_rows, pending=pending, active_tickers=active_tickers, replaced_today=replaced_today
+            top_rows=[row for row in top_rows if row["ticker"] not in watching],  # 不做替换候选（R6）
+            pending=rule_pending,
+            active_tickers=active_tickers,
+            replaced_today=replaced_today,
         )
         if replacement is not None:
             candidate = replacement["candidate"]
@@ -73,18 +81,31 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
                 }
             ]
 
+    research_done = {
+        row["research_id"]
+        for row in research_repo.research_events_on(conn, session)
+        if row["source"] == "agent" and row["event"] in RESEARCH_DONE_EVENTS
+    }
+    research = [
+        {"research_id": row["id"], "ticker": row["ticker"], "done": row["id"] in research_done}
+        for row in research_repo.research_by_status(conn, ("watching",))
+        if row["triggered_session"] is not None
+    ]
+
     brief_row = plan_repo.brief(conn, session)
     summary_done = brief_row is not None and bool(brief_row["summary"])
     complete = (
         all(item["done"] for item in holdings)
         and all(item["done"] for item in relisted)
         and all(item["done"] for item in confirmations)
+        and all(item["done"] for item in research)
         and summary_done
     )
     return {
         "holdings": holdings,
         "relisted": relisted,
         "confirmations": confirmations,
+        "research": research,
         "summary_done": summary_done,
         "free_slots": free,
         "replacement": replacement,
