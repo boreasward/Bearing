@@ -57,16 +57,8 @@ def records(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig, l
 def _asof_ledger(conn, *, session: date, through: date, cutoff_at: datetime) -> dict:
     """该交易日收盘口径的账本快照：收盘价读到 ``session``，出入金与成交只算纽约日历日在
     ``through``（含）之前的，收盘价与拆股照 ``facts.account.account_view`` 的同一读法。"""
-    trades = [
-        trade
-        for trade in facts_repo.list_trades(conn)
-        if trade["executed_at"].astimezone(NY).date() <= through
-    ]
-    flows = [
-        flow
-        for flow in plan_repo.cash_flows(conn)
-        if flow["effective_at"].astimezone(NY).date() <= through
-    ]
+    trades = [trade for trade in facts_repo.list_trades(conn) if trade["executed_at"].astimezone(NY).date() <= through]
+    flows = [flow for flow in plan_repo.cash_flows(conn) if flow["effective_at"].astimezone(NY).date() <= through]
     closes: dict[str, Decimal] = {}
     splits: dict[str, list] = {}
     for ticker in sorted({trade["ticker"] for trade in trades}):
@@ -111,9 +103,7 @@ def retrospect_view(
     all_records = records(conn, session=session, cutoff_at=cutoff_at, cfg=cfg)
     return {
         "records": all_records if limit is None else all_records[:limit],
-        "weekly": weekly_view(
-            conn, week_end=week_end or week_bounds(session)[1], cutoff_at=cutoff_at, cfg=cfg
-        ),
+        "weekly": weekly_view(conn, week_end=week_end or week_bounds(session)[1], cutoff_at=cutoff_at, cfg=cfg),
         "rules": {
             "realized": {
                 key: rule_stats(all_records, key=key, realized=True, min_sample=cfg.v3.retro_min_sample)

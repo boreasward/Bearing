@@ -320,7 +320,9 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
             research_tickers[research_id] = found["ticker"] if found is not None else "?"
         return research_tickers[research_id]
 
-    changes["research"] = [f"研究 {_research_ticker(event['research_id'])}：{event['reason']}" for event in research_events_today]
+    changes["research"] = [
+        f"研究 {_research_ticker(event['research_id'])}：{event['reason']}" for event in research_events_today
+    ]
     footer = (
         {
             "runtime": brief_row["runtime"],

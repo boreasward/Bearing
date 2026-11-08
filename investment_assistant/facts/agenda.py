@@ -7,10 +7,9 @@ from __future__ import annotations
 from datetime import date
 
 from investment_assistant.config import AssistantConfig
-import investment_assistant.execution.plan_line as plan_line
-from investment_assistant.facts import plan_repo
+from investment_assistant.execution import plan_line
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
-from investment_assistant.facts import research_repo
 
 RELISTED_DONE_EVENTS = ("continued", "revised", "invalidated")
 RESEARCH_DONE_EVENTS = ("concluded", "rejected", "planned")

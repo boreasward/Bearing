@@ -149,9 +149,9 @@ def test_start_research_preview_confirm_idempotent_and_rejections(v3_tx):
     _seed(v3_tx)
     env = _env(v3_tx, mode="chat", agent="t-start")
     brief = _env(v3_tx, agent="t-start-brief")
-    assert call(
-        brief, "start_research", {"ticker": "SNDK", "thesis": "论点", "request_id": "r1", "confirmed": True}
-    )["error"].startswith("not_available_in_mode")
+    assert call(brief, "start_research", {"ticker": "SNDK", "thesis": "论点", "request_id": "r1", "confirmed": True})[
+        "error"
+    ].startswith("not_available_in_mode")
     preview = call(
         env, "start_research", {"ticker": "SNDK", "thesis": "最近跌很多", "request_id": "r1", "confirmed": False}
     )["data"]
@@ -171,7 +171,9 @@ def test_start_research_preview_confirm_idempotent_and_rejections(v3_tx):
     )["data"]
     assert replay["replay"] is True and replay["research"]["id"] == row["id"]  # 同 request_id 幂等
 
-    rejected = call(env, "start_research", {"ticker": "SNDK", "thesis": "再来一份", "request_id": "r2", "confirmed": True})
+    rejected = call(
+        env, "start_research", {"ticker": "SNDK", "thesis": "再来一份", "request_id": "r2", "confirmed": True}
+    )
     assert rejected["error"].startswith("research_exists") and rejected["detail"]["id"] == row["id"]
 
     plan = _plan(v3_tx, "MSFT")
@@ -185,9 +187,9 @@ def test_conclude_watch_needs_condition_and_user_confirmation(v3_tx):
     _seed(v3_tx)
     env = _env(v3_tx, mode="chat", agent="t-watch")
     created = _start(env, "SNDK", "w0")
-    assert call(
-        env, "conclude_research", {"research_id": created["id"], "verdict": "watch", "reasons": "值得盯"}
-    )["error"].startswith("condition_required")
+    assert call(env, "conclude_research", {"research_id": created["id"], "verdict": "watch", "reasons": "值得盯"})[
+        "error"
+    ].startswith("condition_required")
 
     condition = {"kind": "close_above", "level": 105}
     preview = call(
@@ -275,17 +277,23 @@ def test_conclude_reject_ends_research(v3_tx):
     env = _env(v3_tx, mode="chat", agent="t-reject")
     created = _start(env, "SNDK", "j0")
     ref = call(env, "get_research", {})["ref"]
-    assert call(
-        env, "conclude_research", {"research_id": created["id"], "verdict": "reject", "reasons": "不成立"}
-    )["error"].startswith("invalid_refs")
+    assert call(env, "conclude_research", {"research_id": created["id"], "verdict": "reject", "reasons": "不成立"})[
+        "error"
+    ].startswith("invalid_refs")
     saved = call(
-        env, "conclude_research", {"research_id": created["id"], "verdict": "reject", "reasons": "行业转弱", "refs": [ref]}
+        env,
+        "conclude_research",
+        {"research_id": created["id"], "verdict": "reject", "reasons": "行业转弱", "refs": [ref]},
     )["data"]
     row = saved["research"]
-    assert row["status"] == "rejected" and row["ended_session"] == SESSION.isoformat() and row["end_reason"] == "行业转弱"
+    assert (
+        row["status"] == "rejected" and row["ended_session"] == SESSION.isoformat() and row["end_reason"] == "行业转弱"
+    )
     assert saved["event"]["event"] == "rejected" and saved["event"]["source"] == "agent"
     again = call(
-        env, "conclude_research", {"research_id": created["id"], "verdict": "ready", "reasons": "再给结论", "refs": [ref]}
+        env,
+        "conclude_research",
+        {"research_id": created["id"], "verdict": "ready", "reasons": "再给结论", "refs": [ref]},
     )
     assert again["error"].startswith("not_watching")
 
@@ -301,7 +309,9 @@ def test_ready_then_save_plan_links_research_and_skips_slots(v3_tx):
     created = _start(env, "SNDK", "p0", thesis="跌很多，可能是入场时机")
     ref = call(env, "get_research", {})["ref"]
     concluded = call(
-        env, "conclude_research", {"research_id": created["id"], "verdict": "ready", "reasons": "可以出计划", "refs": [ref]}
+        env,
+        "conclude_research",
+        {"research_id": created["id"], "verdict": "ready", "reasons": "可以出计划", "refs": [ref]},
     )["data"]
     assert concluded["research"]["verdict"] == "ready" and concluded["research"]["status"] == "watching"
 

@@ -308,18 +308,14 @@ def test_week_end_writes_and_pushes_weekly_once(v3_tx, tmp_path):
         seed_bars(conn, market_ticklers(cfg), breakout=BREAKOUTS, end=FRIDAY)
     v3_tx.commit()
     client = Recorder()
-    first = run_daily_with(
-        cfg, client, now=NOW_FRIDAY, runtime=completing_runtime(FRIDAY), budget_seconds=60
-    )
+    first = run_daily_with(cfg, client, now=NOW_FRIDAY, runtime=completing_runtime(FRIDAY), budget_seconds=60)
     assert first["status"] == "final" and first["pushed"] is True and first["weekly_pushed"] is True
     with core_tx.read_only_tx() as conn:
         row = plan_repo.brief(conn, FRIDAY)
     assert row is not None and "# 周报" in row["weekly_md"]
     assert row["pushed_weekly_at"] is not None
     assert len(client.sent) == 2 and "# 周报" in client.sent[1][1]
-    second = run_daily_with(
-        cfg, client, now=NOW_FRIDAY, runtime=completing_runtime(FRIDAY), budget_seconds=60
-    )
+    second = run_daily_with(cfg, client, now=NOW_FRIDAY, runtime=completing_runtime(FRIDAY), budget_seconds=60)
     assert second["pushed"] is False and second["weekly_pushed"] is False
     assert len(client.sent) == 2  # 重跑不重推
 

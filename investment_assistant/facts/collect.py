@@ -52,7 +52,9 @@ def target_facts(conn, cfg: AssistantConfig) -> TargetFacts:
         if position is not None:
             holdings.add(ticker)
     holdings.update(plan["ticker"] for plan in plan_repo.plans_by_status(conn, ("pending", "open")))
-    holdings.update(research_repo.watching_tickers(conn))  # 观察中的研究与有效计划同一处（spec §6.2），不写关注列表（R1）
+    holdings.update(
+        research_repo.watching_tickers(conn)
+    )  # 观察中的研究与有效计划同一处（spec §6.2），不写关注列表（R1）
     return TargetFacts(
         pool=tuple(pool),
         holdings=tuple(sorted(holdings)),

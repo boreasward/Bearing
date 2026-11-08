@@ -398,7 +398,13 @@ def test_revise_plan_only_pending_and_records_changed_keys(v3_tx):
     ]
     assert D(str(revised["stop"])) == D(95) and revised["thesis"] == TEXTS["thesis"]
     event = next(row for row in plan_repo.events(v3_tx, saved["id"]) if row["event"] == "revised")
-    assert set(event["after"]) == {"entry_low", "entry_high", "stop", "target1", "initial_stop"}  # R3：待入场改止损同步 initial_stop
+    assert set(event["after"]) == {
+        "entry_low",
+        "entry_high",
+        "stop",
+        "target1",
+        "initial_stop",
+    }  # R3：待入场改止损同步 initial_stop
     assert event["reason"] == "回踩更深" and event["source"] == "agent"
     assert call(env, "revise_plan", {"plan_id": saved["id"], "reason": ""})["error"].startswith("invalid_argument")
     assert call(env, "revise_plan", {"plan_id": saved["id"], "reason": "没有改动", "refs": [ref]})["error"].startswith(

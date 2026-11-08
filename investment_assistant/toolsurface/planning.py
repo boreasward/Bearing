@@ -10,7 +10,6 @@ from investment_assistant.core.texts import NO_EQUITY_TEXT
 from investment_assistant.data import repo as data_repo
 from investment_assistant.derivation.indicators import price as price_indicators
 from investment_assistant.execution.entry_rules import ENTRY_TYPES
-from investment_assistant.execution.plan_line import free_slots, replacement
 from investment_assistant.execution.plan_levels import (
     MAX_HOLD_RANGE,
     earnings_flags,
@@ -19,9 +18,9 @@ from investment_assistant.execution.plan_levels import (
     validate_levels,
     validity,
 )
-from investment_assistant.facts import plan_repo
+from investment_assistant.execution.plan_line import free_slots, replacement
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
-from investment_assistant.facts import research_repo
 from investment_assistant.facts.account import account_view
 from investment_assistant.toolsurface.env import ToolEnv
 from investment_assistant.toolsurface.reads import holdings_rows, scope_tickers, session_bars
@@ -359,7 +358,12 @@ def save_plan(
         if linked is not None and is_research:
             # 研究记 planned 并关联计划（spec §6.3）：之后这份计划与别的计划一样
             research_repo.update_research(
-                conn, linked["id"], status="planned", plan_id=saved["id"], ended_session=env.session, end_reason="已转计划"
+                conn,
+                linked["id"],
+                status="planned",
+                plan_id=saved["id"],
+                ended_session=env.session,
+                end_reason="已转计划",
             )
             research_repo.insert_research_event(
                 conn,
