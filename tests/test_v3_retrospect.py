@@ -273,9 +273,7 @@ def test_weekly_start_snapshot_includes_holiday_monday_flow(v3_tx):
             "executed_at": datetime(2026, 2, 17, 15, tzinfo=NY),  # 本周首个交易日买入
         },
     )
-    data_repo.store_bars(
-        v3_tx, "AAPL", [_bar(day, 100.0) for day in [FRI, TUE, WED]], now=FEB_NOW
-    )
+    data_repo.store_bars(v3_tx, "AAPL", [_bar(day, 100.0) for day in [FRI, TUE, WED]], now=FEB_NOW)
     v3_tx.commit()
 
     weekly = weekly_view(v3_tx, week_end=WED, cutoff_at=FEB_NOW, cfg=CFG)
