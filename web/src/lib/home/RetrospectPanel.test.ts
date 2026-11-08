@@ -86,6 +86,45 @@ const VIEW: Retrospect = {
       hypothetical: null,
       groups: { trigger_rules: [], setup_tier: null, industry: null },
     },
+    {
+      // 审查 P2-6：假设结果没走完（日线用完还在持有）→「照做进行中」，不写「持有中」
+      plan_id: 13,
+      ticker: 'AMD',
+      status: 'cancelled',
+      kind: 'planned',
+      origin_kind: 'rule',
+      session: '2026-10-28',
+      ended_session: '2026-11-03',
+      end_reason: '被替换',
+      planned: {
+        entry_low: '160.00',
+        entry_high: '165.00',
+        initial_stop: '150.00',
+        target1: '180.00',
+        valid_from: '2026-10-29',
+        valid_until: '2026-11-10',
+        shares: null,
+        max_hold_sessions: 20,
+      },
+      actual: { first_buy: null, last_sell: null, quantity: '0' },
+      outcome: {},
+      r_multiple: null,
+      r_text: null,
+      tags: [],
+      followed: false,
+      hypothetical: {
+        status: 'unfinished',
+        reason: null,
+        fill_session: '2026-10-29',
+        fill_price: '162.00',
+        exit_session: null,
+        exit_price: null,
+        exit_reason: null,
+        sessions_held: null,
+        r_multiple: '-0.50',
+      },
+      groups: { trigger_rules: [], setup_tier: null, industry: null },
+    },
   ],
   weekly: {
     week_start: '2026-11-02',
@@ -139,18 +178,20 @@ describe('RetrospectPanel', () => {
     // 计划说的（PlanLevels 带 $；文案被 span 拆开，按整块文本断言）与起止
     expect(container.textContent).toContain('入场 $99.00–$101.00 · 止损 $96.00 · T1 $108.00')
     expect(screen.getByText('2026-10-30–2026-11-03')).toBeInTheDocument()
-    // 实际做的：一份未买入、一份补录买卖
-    expect(screen.getByText('未买入')).toBeInTheDocument()
+    // 实际做的：两份未买入、一份补录买卖
+    expect(screen.getAllByText('未买入').length).toBe(2)
     expect(screen.getByText(/买 \$96\.00 × 120（2026-10-21）/)).toBeInTheDocument()
     // 标签：偏差用 retro_tag，补录无标签且记照做
     expect(screen.getByText('未买入：价格进过入场区间')).toBeInTheDocument()
     expect(screen.getByText('照做')).toBeInTheDocument()
     expect(screen.getByText('补录，不计')).toBeInTheDocument()
-    // 假设结果一句
+    // 假设结果一句；未走完的写「照做进行中」（审查 P2-6，绑定文案是「进行中」）
     expect(screen.getByText(/照做会在 2026-11-02 成交于 \$100\.00，2026-11-03 以初始止损 \$96\.00 离场，R -1\.00/)).toBeInTheDocument()
+    expect(screen.getByText(/照做进行中，浮动 R -0\.50/)).toBeInTheDocument()
+    expect(screen.queryByText(/持有中/)).toBeNull()
   })
 
-  it('weekly summary shows the week numbers and money', async () => {
+  it('weekly summary shows the week numbers, money and the §5.4 details', async () => {
     stubRetrospect()
     render(RetrospectPanel)
     expect(await screen.findByText('AAPL')).toBeInTheDocument()
@@ -162,6 +203,47 @@ describe('RetrospectPanel', () => {
     expect(within(weekly).getByText('$520.00')).toBeInTheDocument() // 本周已实现盈亏
     expect(within(weekly).getAllByText('$34000.00').length).toBeGreaterThan(0) // 周初总资产
     expect(within(weekly).getAllByText('$34500.00').length).toBeGreaterThan(0) // 周末总资产
+    // 审查 P1-4：响应里 §5.4 的明细要在周汇总里——偏差计数、未买各行、名单变化
+    expect(within(weekly).getByText(/未买入：价格进过入场区间 ×1/)).toBeInTheDocument() // tag_counts
+    expect(within(weekly).getByText(/AAPL：5 个交易日未买入/)).toBeInTheDocument() // not_bought
+    expect(within(weekly).getByText(/新上榜 AAPL/)).toBeInTheDocument() // listing.new
+  })
+
+  it('switching the week shows that week’s weekly details', async () => {
+    // 审查 P1-4：两周的周报不同，切周后显示切过去的明细
+    const prior: Retrospect = {
+      ...VIEW,
+      weekly: {
+        ...VIEW.weekly,
+        week_start: '2026-10-19',
+        week_end: '2026-10-23',
+        ended: 3,
+        followed: 1,
+        deviated: 1,
+        tag_counts: { '止损触及后晚卖 1 个交易日': 1 },
+        closed: [{ ticker: 'MU', r_multiple: '2.10', exit_reason: 'trailing_stop', tags: ['止损触及后晚卖 1 个交易日'] }],
+        total_r: '2.10',
+        not_bought: [{ ticker: 'WDC', end_reason: '被替换', hypothetical: null }],
+        listing: { new: [], dropped: ['STX'], most_relisted: 'PGR' },
+      },
+    }
+    const router = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://local')
+      return json(url.searchParams.has('week') ? prior : VIEW)
+    })
+    vi.stubGlobal('fetch', router)
+    render(RetrospectPanel)
+    await screen.findByText('AAPL')
+    expect(screen.getByText(/新上榜 AAPL/)).toBeInTheDocument() // 本周明细先在
+    await fireEvent.click(screen.getByRole('combobox', { name: '选择周' }))
+    const option = await screen.findByRole('option', { name: /2026-10-19–2026-10-23/ })
+    await fireEvent.pointerUp(option)
+    await waitFor(() => expect(screen.getByText(/止损触及后晚卖 1 个交易日 ×1/)).toBeInTheDocument()) // 新周的 tag_counts
+    expect(screen.getByText(/MU：R 2\.10（移动止损）/)).toBeInTheDocument() // 新周的 closed 各份
+    expect(screen.getByText(/WDC：被替换/)).toBeInTheDocument() // 新周的 not_bought
+    expect(screen.getByText(/掉出 STX/)).toBeInTheDocument() // 新周的 listing.dropped
+    expect(screen.getByText(/再次上榜最多 PGR/)).toBeInTheDocument()
+    expect(screen.queryByText(/新上榜 AAPL/)).toBeNull() // 旧周明细不在了
   })
 
   it('insufficient rule groups show the sample count and 样本不足, never a rate', async () => {
@@ -190,6 +272,29 @@ describe('RetrospectPanel', () => {
       const urls = router.mock.calls.map(([u]) => String(u))
       expect(urls.some((u) => u.includes('/api/retrospect') && u.includes('week=2026-10-23'))).toBe(true)
     })
+  })
+
+  it('show more raises the limit 20 → 50 and reveals record 21', async () => {
+    // 审查 P1-2：§10 的「可翻」——不扩接口，用契约内的 limit 阶梯（20 → 50 → 100 封顶）
+    const many = Array.from({ length: 26 }, (_, i) => ({
+      ...VIEW.records[0]!,
+      plan_id: 100 + i,
+      ticker: `T${String(i + 1).padStart(2, '0')}`,
+    }))
+    const router = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://local')
+      const limit = Number(url.searchParams.get('limit') ?? '20')
+      return json({ ...VIEW, records: many.slice(0, limit) })
+    })
+    vi.stubGlobal('fetch', router)
+    render(RetrospectPanel)
+    expect(await screen.findByText('T20')).toBeInTheDocument()
+    expect(screen.queryByText('T21')).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: '显示更多' }))
+    expect(await screen.findByText('T21')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(router.mock.calls.some(([u]) => String(u).includes('limit=50'))).toBe(true))
+    await waitFor(() => expect(screen.queryByRole('button', { name: '显示更多' })).toBeNull()) // 26 < 50：没有更多了
   })
 
   it('shows the error reason when the fetch fails', async () => {

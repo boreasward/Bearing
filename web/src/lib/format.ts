@@ -35,19 +35,45 @@ export function nowInNewYork(now: Date = new Date()): { date: string; time: stri
   return { date: `${get('year')}-${get('month')}-${get('day')}`, time: `${get('hour')}:${get('minute')}` }
 }
 
-/** `${date}T${time}:00±offset` with the New York offset of that date (DST decided per date, spec §7): the offset
- * is read via `Intl`'s `timeZoneName: 'longOffset'` (`GMT-05:00` → `-05:00`). Malformed input is passed through
- * unchanged (no invented offset) so the server names the problem. */
+/** `${date}T${time}:00±offset` with the New York offset of that date and time: the offset is read via
+ * `Intl`'s `timeZoneName: 'longOffset'` (`GMT-05:00` → `-05:00`), first from the date's noon-UTC instant
+ * and then re-checked at the exact wall-clock instant — DST switches at 02:00 local, so times before the
+ * switch on a switch day keep the old offset (2026-03-08 01:30 → -05:00, 2026-11-01 00:30 → -04:00).
+ * Malformed input is passed through unchanged (no invented offset) so the server names the problem. */
 export function newYorkIso(date: string, time: string): string {
   const d = date.trim()
   const t = time.trim()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^\d{2}:\d{2}$/.test(t)) return `${d}T${t}`
   const [y, m, day] = d.split('-').map(Number)
-  // 正午 UTC 在美东仍是同一天（7/8 点），取它当时的偏移即该日期全天的偏移（切换只发生在凌晨 2 点）
+  const [hh, mm] = t.split(':').map(Number)
+  // 以「日期正午 UTC」的偏移为初值（正午 UTC 在美东仍是同一天），换算成 UTC 瞬间后复核；
+  // 纽约一年只切两次、每次 1 小时，两轮迭代必收敛
+  const wall = Date.UTC(y, m - 1, day, hh, mm)
+  let offset = nyOffsetMs(new Date(Date.UTC(y, m - 1, day, 12)))
+  for (let i = 0; i < 2; i += 1) {
+    const refined = nyOffsetMs(new Date(wall - offset))
+    if (refined === offset) break
+    offset = refined
+  }
+  return `${d}T${t}:00${offsetText(offset)}`
+}
+
+/** The New York UTC offset in milliseconds at that instant, via `Intl`'s `longOffset` name. */
+function nyOffsetMs(at: Date): number {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'longOffset' })
-    .formatToParts(new Date(Date.UTC(y, m - 1, day, 12)))
-  const offset = /^GMT([+-]\d{2}:\d{2})$/.exec(parts.find((p) => p.type === 'timeZoneName')?.value ?? '')
-  return offset ? `${d}T${t}:00${offset[1]}` : `${d}T${t}`
+    .formatToParts(at)
+  const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(parts.find((p) => p.type === 'timeZoneName')?.value ?? '')
+  if (!match) return 0
+  const [, sign, h, min] = match
+  const magnitude = Number(h) * 60 + Number(min)
+  return (sign === '+' ? 1 : -1) * magnitude * 60_000
+}
+
+/** Milliseconds → `±hh:mm` ISO offset text. */
+function offsetText(ms: number): string {
+  const sign = ms < 0 ? '-' : '+'
+  const magnitude = Math.abs(ms) / 60_000
+  return `${sign}${String(Math.floor(magnitude / 60)).padStart(2, '0')}:${String(magnitude % 60).padStart(2, '0')}`
 }
 
 /** Two decimals with the `$` prefix (`-$12.34` when negative); empty stays empty, unparseable text is shown as it was. */

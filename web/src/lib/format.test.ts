@@ -39,6 +39,12 @@ describe('newYorkIso', () => {
     expect(newYorkIso('2026-11-01', '10:30')).toBe('2026-11-01T10:30:00-05:00') // 11 月第一个周日起冬令时
   })
 
+  it('resolves the offset for the supplied time, not just the date (pre-02:00 on switch days)', () => {
+    // 切换发生在凌晨 2 点：切换日 2 点前的墙钟还在旧偏移里
+    expect(newYorkIso('2026-03-08', '01:30')).toBe('2026-03-08T01:30:00-05:00') // 跳表前仍是冬令时
+    expect(newYorkIso('2026-11-01', '00:30')).toBe('2026-11-01T00:30:00-04:00') // 回拨前仍是夏令时
+  })
+
   it('does not invent an offset for malformed input', () => {
     expect(newYorkIso('not-a-date', '10:30')).toBe('not-a-dateT10:30')
     expect(newYorkIso('2026-07-15', '')).toBe('2026-07-15T')

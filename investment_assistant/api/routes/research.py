@@ -57,11 +57,19 @@ def _card(conn, env, row: dict) -> dict:
     """一张研究卡片（接口契约表，字段以它为准、不用简报研究段的 state 枚举）：last_close
     取到分；condition_met_today 用 execution.research.condition_met 对读到交易日的日线判定
     （无条件、缺日线、均线历史不足时 None）；day 两端都算（发起当天是第 1 天，已结束的冻结
-    在结束日）；missing_bar 只对仍待每日复查的观察中研究（有条件且未触发）为真——缺当日日线
-    （spec §6.4「缺日线，未复查」），与计划卡片 missing_bar 同一判定。"""
+    在结束日）。missing_bar 只对仍待每日复查的观察中研究（有条件且未触发）为真——缺当日
+    日线（spec §6.4「缺日线，未复查」），与计划卡片 missing_bar 同一判定；这一范围内当日
+    缺日线时 condition_met_today 一并 None（不能凭最后一根历史日线报「今天条件到了」）。
+    已触发的不在每日复查范围里：仍按最后一根已知日线判，供时间线与调试看。"""
     ticker = row["ticker"]
     bars = data_repo.read_bars(conn, ticker, env.session, cutoff_at=env.cutoff_at)
     condition = row["condition"]
+    missing = bool(
+        row["status"] == "watching"
+        and condition
+        and row["triggered_session"] is None
+        and (not bars or bars[-1]["price_date"] != env.session)
+    )
     return {
         "research_id": row["id"],
         "ticker": ticker,
@@ -73,19 +81,16 @@ def _card(conn, env, row: dict) -> dict:
         "condition": _condition(condition),
         "condition_text": row["condition_text"],
         "last_close": price_value(bars[-1]["close"]) if bars else None,
-        "condition_met_today": condition_met(validate_condition(condition), bars) if condition else None,
+        "condition_met_today": (
+            None if missing or not condition else condition_met(validate_condition(condition), bars)
+        ),
         "triggered_session": row["triggered_session"],
         "verdict": row["verdict"],
         "reasons": row["reasons"],
         "plan_id": row["plan_id"],
         "ended_session": row["ended_session"],
         "end_reason": row["end_reason"],
-        "missing_bar": bool(
-            row["status"] == "watching"
-            and condition
-            and row["triggered_session"] is None
-            and (not bars or bars[-1]["price_date"] != env.session)
-        ),
+        "missing_bar": missing,
         "created_at": row["created_at"],
     }
 

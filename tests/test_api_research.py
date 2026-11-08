@@ -245,7 +245,7 @@ def test_card_display_state_boundaries(client, v3_tx):
         )
         research_repo.insert_research(  # (d) stale-only：有历史日线、没有当日的
             conn,
-            _research("INTC", condition={"kind": "close_above", "level": "105"}, condition_text="收盘站上 105.00"),
+            _research("INTC", condition={"kind": "close_above", "level": "100"}, condition_text="收盘站上 100.00"),
         )
     cards = {card["ticker"]: card for card in client.get("/api/research?group=watching").json()["research"]}
     # (a) 尚无条件：不判条件、也不算缺日线（宿主不逐日复查它，spec §6.4）
@@ -257,9 +257,11 @@ def test_card_display_state_boundaries(client, v3_tx):
     # (c) 均线历史不足：日线齐但根数不够 → 条件判不出（None）、不算缺日线
     assert cards["AMD"]["condition"] == {"kind": "close_above_ma", "level": None, "ma": 50}
     assert cards["AMD"]["condition_met_today"] is None and cards["AMD"]["missing_bar"] is False
-    # (d) stale-only：missing_bar 真、last_close 是最后一根历史收盘（非 None，与 SNDK 没有任何日线区分）
+    # (d) stale-only：missing_bar 真、last_close 是最后一根历史收盘（非 None，与 SNDK 没有任何日线区分）。
+    # 历史收盘 101 ≥ 100，若按最后一根已知日线判会是 True——但当日缺日线时不判（None），
+    # 否则未触发的研究会凭昨天的收盘显示「条件已到」（审查 P1-1，与页面缺日线优先级同一口径）
     assert cards["INTC"]["missing_bar"] is True and cards["INTC"]["last_close"] == "101.00"
-    assert cards["INTC"]["condition_met_today"] is False  # 101 < 105，按最后一根已知日线判
+    assert cards["INTC"]["condition_met_today"] is None
 
 
 def test_research_needs_a_run_record(client, v3_tx):

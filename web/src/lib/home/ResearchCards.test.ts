@@ -78,6 +78,19 @@ const WATCHING: ResearchCardData[] = [
     verdict: null,
     reasons: null,
   }),
+  // 审查 P1-1：未触发 + 当日缺日线，但最后一根历史日线满足条件——stale 的 true 不能盖过缺日线
+  card({
+    research_id: 7,
+    ticker: 'QCOM',
+    condition: { kind: 'close_above', level: '100.00', ma: null },
+    condition_text: '收盘站上 100.00',
+    last_close: '101.00',
+    condition_met_today: true,
+    triggered_session: null,
+    missing_bar: true,
+    verdict: null,
+    reasons: null,
+  }),
 ]
 const ENDED: ResearchCardData[] = [
   card({
@@ -157,27 +170,54 @@ describe('ResearchCards', () => {
     render(ResearchCards)
     await screen.findByText('SNDK')
     expect(screen.getByText('条件已到，待复看')).toBeInTheDocument() // IBM：triggered_session 非空
-    expect(screen.getByText('缺日线，未复查')).toBeInTheDocument() // INTC：missing_bar
+    expect(screen.getAllByText('缺日线，未复查').length).toBeGreaterThan(0) // INTC/QCOM：missing_bar
     expect(screen.getByText('日线不足，未检查')).toBeInTheDocument() // AMD：close_above_ma 且判不了
     expect(screen.getAllByText('尚无条件').length).toBeGreaterThan(0) // ORCL：无条件（条件行与状态行各一次）
     expect(screen.getAllByText('观察中').length).toBeGreaterThan(0) // SNDK：条件没到、正常盯
+  })
+
+  it('an untriggered missing-bar card shows 缺日线 even when the stale bar satisfies the condition', async () => {
+    // 审查 P1-1：优先级 触发（真 triggered_session）→ 无条件 → 缺日线 → 当日条件已到 → 均线不足 → 观察中
+    stubResearch()
+    render(ResearchCards)
+    await screen.findByText('QCOM')
+    const qcom = screen.getByText('QCOM').closest('[data-slot="card"]') as HTMLElement
+    expect(within(qcom).getByText('缺日线，未复查')).toBeInTheDocument()
+    expect(within(qcom).queryByText('条件已到，待复看')).toBeNull()
+    // 对照：真触发的 IBM 仍显示「条件已到，待复看」
+    const ibm = screen.getByText('IBM').closest('[data-slot="card"]') as HTMLElement
+    expect(within(ibm).getByText('条件已到，待复看')).toBeInTheDocument()
   })
 
   it('shows the condition with the latest close in dollars and the agent conclusion', async () => {
     stubResearch()
     render(ResearchCards)
     await screen.findByText('SNDK')
-    expect(screen.getByText(/收盘站上 105\.00/)).toBeInTheDocument()
+    expect(screen.getByText(/收盘站上 \$105\.00/)).toBeInTheDocument() // 审查 P1-3：价位带 $
     expect(screen.getAllByText('$101.00').length).toBeGreaterThan(0) // 最新收盘带 $
     expect(screen.getByText(/值得盯：等回调结束再入/)).toBeInTheDocument() // agent 结论一句
   })
 
-  it('ended planned card links to the plan; expired shows the end reason', async () => {
+  it('formats all three level-based condition kinds with dollars; close_above_ma keeps its wording', async () => {
+    // 审查 P1-3：三种价位条件由 kind + moneyText(level) 拼文案，不再直出服务端的裸数字文案
+    stubResearch()
+    render(ResearchCards)
+    await screen.findByText('SNDK')
+    expect(screen.getByText(/收盘站上 \$105\.00/)).toBeInTheDocument() // close_above
+    expect(screen.getByText(/收盘跌破 \$180\.00/)).toBeInTheDocument() // close_below
+    expect(screen.getByText(/最低价触及 \$35\.00 或以下/)).toBeInTheDocument() // touch_below
+    expect(screen.getByText(/收盘站上 50 日均线/)).toBeInTheDocument() // close_above_ma 沿用服务端文案
+    expect(screen.queryByText('收盘跌破 180.00')).toBeNull()
+  })
+
+  it('ended planned card links to the plan card anchor; expired shows the end reason', async () => {
+    // 审查 P2-5：「已转计划」是导航（同页锚点指向计划卡根节点），不是纯文本
     stubResearch()
     render(ResearchCards)
     await screen.findByText('SNDK')
     await fireEvent.click(screen.getByRole('button', { name: '已结束' }))
-    expect(await screen.findByText('已转计划 #41')).toBeInTheDocument()
+    const link = await screen.findByRole('link', { name: '已转计划 #41' })
+    expect(link).toHaveAttribute('href', '#plan-41')
     expect(screen.getByText(/20 个交易日条件未到/)).toBeInTheDocument()
   })
 

@@ -7,9 +7,10 @@
   import MetricValue from '$lib/ui/domain/MetricValue.svelte'
   import PlanLevels from '$lib/ui/domain/PlanLevels.svelte'
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
+  import { Button } from '$lib/ui/button/index'
   import { get } from '$lib/api'
   import { moneyText } from '$lib/format'
-  import { errorText, type Hypothetical, type Retrospect, type RetroRecord, type RuleKey, type RuleStatRow } from './types'
+  import { errorText, type Hypothetical, type Retrospect, type RetroRecord, type RuleKey, type RuleStatRow, type WeeklySummary } from './types'
 
   // 复盘（spec §10 复盘块）：顶部周汇总（Select 切周，本周与之前 8 周）、中间执行复盘表
   // （每份已结束计划一行）、底部规则检验两张表（真实成交 / 假设结果）× 三个分组键。
@@ -22,6 +23,11 @@
   let loadedWeek = $state<string | null>(null) // 最近一次取数的周（null = 本周）
   let selectedWeek = $state('')
   let weeks = $state<{ monday: string; friday: string }[]>([])
+  // 「可翻」（spec §10）：记录的 limit 阶梯 20 → 50 → 100（契约上限 100，不扩接口）
+  let recordLimit = $state(20)
+
+  const RECORD_LIMIT_STEPS = [20, 50, 100]
+  const RECORD_LIMIT_MAX = 100
 
   function shiftDay(day: string, days: number): string {
     const d = new Date(`${day}T00:00:00Z`)
@@ -34,7 +40,7 @@
     blockState = 'loading'
     message = ''
     try {
-      const data = await get<Retrospect>(`/api/retrospect?limit=20${week ? `&week=${week}` : ''}`, { errorDetails: true })
+      const data = await get<Retrospect>(`/api/retrospect?limit=${recordLimit}${week ? `&week=${week}` : ''}`, { errorDetails: true })
       view = data
       blockState = data.empty ? 'empty' : 'ready'
       message = data.empty ? '还没有已结束的计划' : ''
@@ -63,6 +69,13 @@
     // 与最近一次实际取数的周比
     if (!value || value === loadedWeek) return
     load(value)
+  }
+
+  function showMore() {
+    const next = RECORD_LIMIT_STEPS.find((step) => step > recordLimit)
+    if (next == null) return
+    recordLimit = next
+    load(loadedWeek)
   }
 
   // ---- 执行复盘行 ----
@@ -95,9 +108,18 @@
   function hypotheticalText(h: Hypothetical | null): string {
     if (!h) return ''
     if (h.status === 'not_filled') return `照做未成交：${NOT_FILLED_TEXT[h.reason ?? ''] ?? '价格未进入场区间'}`
-    if (h.status === 'unfinished') return `照做仍在持有，浮动 R ${h.r_multiple ?? ''}`
+    if (h.status === 'unfinished') return `照做进行中，浮动 R ${h.r_multiple ?? ''}`
     const exitKind = EXIT_TEXT[h.exit_reason ?? ''] ?? '离场'
     return `照做会在 ${h.fill_session} 成交于 ${moneyText(h.fill_price)}，${h.exit_session} 以${exitKind} ${moneyText(h.exit_price)} 离场，R ${h.r_multiple ?? ''}`
+  }
+
+  // 本周名单一句（spec §5.4）：新上榜 / 掉出 / 再次上榜最多，空项不写
+  function listingText(listing: WeeklySummary['listing']): string {
+    const parts: string[] = []
+    if (listing.new.length) parts.push(`新上榜 ${listing.new.join('、')}`)
+    if (listing.dropped.length) parts.push(`掉出 ${listing.dropped.join('、')}`)
+    if (listing.most_relisted) parts.push(`再次上榜最多 ${listing.most_relisted}`)
+    return parts.join(' · ')
   }
 
   // ---- 规则检验 ----
@@ -136,6 +158,23 @@
               <span class="flex items-center gap-1">周初总资产 <MetricValue value={null} raw={view.weekly.equity_start} currency /></span>
               <span class="flex items-center gap-1">周末总资产 <MetricValue value={null} raw={view.weekly.equity_end} currency /></span>
             </div>
+            <!-- 审查 P1-4：周报的 §5.4 明细——偏差计数、已平仓各份、未买各行、名单变化 -->
+            {#if Object.keys(view.weekly.tag_counts).length || view.weekly.closed.length || view.weekly.not_bought.length || listingText(view.weekly.listing)}
+              <ul class="grid gap-1 text-xs text-muted-foreground">
+                {#if Object.keys(view.weekly.tag_counts).length}
+                  <li>本周偏差：{Object.entries(view.weekly.tag_counts).map(([tag, count]) => `${tag} ×${count}`).join('；')}</li>
+                {/if}
+                {#each view.weekly.closed as row (row.ticker)}
+                  <li>{row.ticker}：R {row.r_multiple}（{EXIT_TEXT[row.exit_reason ?? ''] ?? row.exit_reason}）{row.tags.length ? ` · ${row.tags.join('、')}` : ''}</li>
+                {/each}
+                {#each view.weekly.not_bought as row (row.ticker)}
+                  <li>{row.ticker}：{row.end_reason}{row.hypothetical ? `；${hypotheticalText(row.hypothetical)}` : ''}</li>
+                {/each}
+                {#if listingText(view.weekly.listing)}
+                  <li>本周名单：{listingText(view.weekly.listing)}</li>
+                {/if}
+              </ul>
+            {/if}
           </div>
         </section>
 
@@ -191,6 +230,11 @@
               {/each}
             </Table.Body>
           </Table.Root>
+          {#if view.records.length >= recordLimit && recordLimit < RECORD_LIMIT_MAX}
+            <div>
+              <Button size="sm" variant="outline" onclick={showMore}>显示更多</Button>
+            </div>
+          {/if}
         </section>
 
         <section class="grid gap-2" aria-label="规则检验">

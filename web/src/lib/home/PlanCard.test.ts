@@ -74,6 +74,8 @@ describe('PlanCard', () => {
     expect(container.textContent).toContain('有效至 2026-11-12')
     expect(screen.getByText('最新收盘高于入场区间')).toBeInTheDocument()
     expect(screen.queryByText('缺日线，未复查')).toBeNull() // 当天有日线时不提示
+    // 根节点带锚点 id：研究卡「已转计划 #41」链接指向它（审查 P2-5）
+    expect(container.querySelector('[data-slot="card"]#plan-41')).not.toBeNull()
   })
 
   it('pending card shows 缺日线，未复查 when the session bar is missing', () => {

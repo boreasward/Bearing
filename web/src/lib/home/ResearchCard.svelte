@@ -7,6 +7,7 @@
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
   import { Skeleton } from '$lib/ui/skeleton/index'
   import { get, post } from '$lib/api'
+  import { moneyText } from '$lib/format'
   import { notify } from '$lib/ui/toast'
   import { errorText, type ResearchCardData, type ResearchDetail, type WritePreview } from './types'
 
@@ -16,21 +17,34 @@
 
   const VERDICT_TEXT: Record<string, string> = { ready: '可以出计划', watch: '值得盯', reject: '否决' }
 
-  // 五种显示文案从卡片字段推导（Task 4 契约，与研究段的 state 同序）：触发 → 无条件 → 缺日线
-  // → 均线日线不足（close_above_ma 且 condition_met_today 为 null 而当天有日线）→ 观察中。
+  // 显示文案从卡片字段推导（审查 P1-1 后的优先级）：真触发（triggered_session）→ 无条件 →
+  // 缺日线（missing_bar，stale 日线上的 condition_met 不能盖过它）→ 当日条件已到 →
+  // 均线日线不足（close_above_ma 且 condition_met_today 为 null）→ 观察中。
   // 只对观察中的研究显示；已结束的看状态徽标与结束原因。
   const watching = $derived(card.status === 'watching')
   const stateText = $derived.by(() => {
     if (!watching) return ''
-    if (card.triggered_session != null || card.condition_met_today === true) return '条件已到，待复看'
+    if (card.triggered_session != null) return '条件已到，待复看'
     if (card.condition == null) return '尚无条件'
     if (card.missing_bar) return '缺日线，未复查'
+    if (card.condition_met_today === true) return '条件已到，待复看'
     if (card.condition_met_today == null) return '日线不足，未检查'
     return '观察中'
   })
   const stateWarn = $derived(
     stateText === '条件已到，待复看' || stateText === '缺日线，未复查' || stateText === '日线不足，未检查',
   )
+
+  // 三种价位条件的文案由 kind + moneyText(level) 拼（审查 P1-3：页面价位两位小数带 $）；
+  // close_above_ma 与未知形状沿用服务端 condition_text
+  const conditionText = $derived.by(() => {
+    const c = card.condition
+    if (c == null) return card.condition_text ?? '尚无条件'
+    if (c.kind === 'close_above' && c.level != null) return `收盘站上 ${moneyText(c.level)}`
+    if (c.kind === 'close_below' && c.level != null) return `收盘跌破 ${moneyText(c.level)}`
+    if (c.kind === 'touch_below' && c.level != null) return `最低价触及 ${moneyText(c.level)} 或以下`
+    return card.condition_text ?? '尚无条件'
+  })
 
   // ---- 变化记录：首次展开时取 GET /api/research/{id} ----
   let timelineOpen = $state(false)
@@ -93,7 +107,7 @@
   <Card.Content class="grid gap-2">
     <p class="text-sm">{card.thesis}</p>
     <p class="flex flex-wrap items-center gap-1 text-sm">
-      <span class="text-muted-foreground">条件：</span>{card.condition_text ?? '尚无条件'}
+      <span class="text-muted-foreground">条件：</span>{conditionText}
       <span class="text-muted-foreground">· 最新收盘</span>
       <MetricValue value={null} raw={card.last_close} currency />
     </p>
@@ -104,7 +118,8 @@
       <p class="text-xs text-muted-foreground">结论：{VERDICT_TEXT[card.verdict] ?? card.verdict}{card.reasons ? `：${card.reasons}` : ''}</p>
     {/if}
     {#if card.plan_id != null}
-      <p class="text-xs text-muted-foreground">已转计划 #{card.plan_id}</p>
+      <!-- 审查P2-5：导航用锚点链接（design-system §7），指向计划卡根节点的 id -->
+      <a class="text-xs text-muted-foreground underline-offset-2 hover:underline" href={`#plan-${card.plan_id}`}>已转计划 #{card.plan_id}</a>
     {/if}
     {#if !watching && card.end_reason}
       <p class="text-xs text-muted-foreground">结束：{card.end_reason}</p>

@@ -144,7 +144,7 @@
   }
 </script>
 
-<Card.Root size="sm" class={ended ? 'opacity-80' : ''}>
+<Card.Root size="sm" id={`plan-${card.plan_id}`} class={ended ? 'opacity-80' : ''}>
   <Card.Header>
     <Card.Title class="flex flex-wrap items-center gap-2">
       {card.ticker}
