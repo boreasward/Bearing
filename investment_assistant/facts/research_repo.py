@@ -74,10 +74,10 @@ def update_research(conn, research_id: int, **fields) -> dict:
     if unknown:
         raise ValueError(f"v3_research columns not updatable: {unknown}")
     assignments, params = _set_clause(fields, UPDATABLE, _JSONB_UPDATABLE)
+    set_sql = ", ".join(part for part in (assignments, "updated_at = clock_timestamp()") if part)
     saved = _one(
         conn,
-        f"UPDATE v3_research SET {assignments}, updated_at = clock_timestamp() "
-        f"WHERE id = %s RETURNING {_RESEARCH_COLUMNS}",
+        f"UPDATE v3_research SET {set_sql} WHERE id = %s RETURNING {_RESEARCH_COLUMNS}",
         [*params, research_id],
     )
     assert saved is not None  # the research row is always there

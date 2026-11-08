@@ -37,7 +37,7 @@ def test_rerun_is_idempotent(v3_db):
     row = conn.execute("SELECT ticker, status, thesis FROM v3_research").fetchone()
     assert row == ("AAA", "watching", "论点")  # 已有数据不被改写
     indexes = conn.execute(
-        "SELECT count(*) FROM pg_indexes WHERE indexname IN ("
+        "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname IN ("
         "'uq_v3_research_one_watching_per_ticker', 'idx_v3_research_status', "
         "'uq_v3_research_events_host_once', 'idx_v3_research_events_session')"
     ).fetchone()[0]

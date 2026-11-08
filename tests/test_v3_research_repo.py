@@ -70,6 +70,16 @@ def test_update_whitelist_and_jsonb(v3_db):
     assert second["condition"] == {"kind": "rs_pullback", "days": 5}  # 未传的键不动
 
 
+def test_update_without_fields_refreshes_updated_at(v3_db):
+    conn = v3_db
+    saved = research_repo.insert_research(conn, _research_row("AAPL", verdict="watch", reasons="条件未满足"))
+    before = research_repo.research(conn, saved["id"])
+    assert before is not None
+    touched = research_repo.update_research(conn, saved["id"])  # 空更新：只刷新 updated_at
+    assert touched["verdict"] == "watch" and touched["reasons"] == "条件未满足"  # 值原样保留
+    assert touched["updated_at"] >= before["updated_at"]  # updated_at 不后退
+
+
 def test_event_host_once_agent_many(v3_db):
     conn = v3_db
     research_id = research_repo.insert_research(conn, _research_row("AAPL"))["id"]
