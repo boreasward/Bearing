@@ -106,9 +106,9 @@
           <Input {id} inputmode="decimal" class="text-right tabular-nums" bind:value={draft.amount} />
         {/snippet}
       </Field>
-      <Field label="生效日期" id="cash-at" hint="可空，默认现在；YYYY-MM-DD，按本机当天 0 点生效">
+      <Field label="生效日期" id="cash-at" hint="可空，默认现在；按本机当天 0 点生效">
         {#snippet children({ id })}
-          <Input {id} placeholder="YYYY-MM-DD" bind:value={draft.effectiveAt} />
+          <Input {id} type="date" bind:value={draft.effectiveAt} />
         {/snippet}
       </Field>
       <Field label="备注" id="cash-note" hint="可空">

@@ -57,7 +57,7 @@ describe('UiGallery', () => {
     expect(container.querySelector('[data-slot="data-block"][data-state="error"][class*="min-h-"]')).not.toBeNull()   // the page example
     // domain primitives
     expect(screen.getAllByText('第 3 版').length).toBeGreaterThan(0)
-    expect(container.textContent).toContain('入场 95.10–97.30 · 止损 91.40 · T1 104.70 · 建议 120 股')
+    expect(container.textContent).toContain('入场 $95.10–$97.30 · 止损 $91.40 · T1 $104.70 · 建议 120 股')
     expect(screen.getByText('stooq').closest('[data-slot="badge"]')).toHaveAttribute('data-fallback', 'true')
   })
 })

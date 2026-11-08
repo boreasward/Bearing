@@ -127,6 +127,8 @@
 | `plan` | v3.1 计划线状态（`GET /api/plans` 的 `status`） | pending 待入场信息；open 已买入成功；closed、expired、invalidated、replaced、cancelled 五种已结束状态全部中性 |
 | `plan_action` | 「下一个交易日的操作」五种（`next_action.kind`，v3.1 spec §7.4）；固定文案来自接口 `text`，`stop_order` 的「需上调」变体用 `StatusPill` 的 `text` 覆盖 | stop_hit_unresolved 危险、sell_next_open 警告（两种警示语气）；unchecked、stop_order 信息、hold 中性（常规） |
 | `stop_order` | 持仓的止损挂单状态（`stop_order_status`） | none 中性；needs_raise 警告；confirmed 成功 |
+| `research` | v3.2 研究五态（`GET /api/research` 的 `status`，spec §6.1） | watching（观察中）信息；planned（已转计划）成功；rejected、expired、dropped 三个终态中性 |
+| `retro_tag` | v3.2 复盘偏差标签（`execution.retrospect` 的 `tag.code`）+ `followed`（照做） | followed 成功；not_filled（未买入：价格未进入场区间）中性、不算偏差；七个偏差代码（not_bought_in_zone、entry_out_of_zone、over_bought、stop_order_missing、late_sell_after_stop、late_sell_after_instruction、early_sell）全部警告。带 N 的两个（晚卖 N 个交易日）由组件拼句后经 `StatusPill` 的 `text` 传入，表里存不带数字的文案 |
 
 ### 合并实施的五组中文（v2.12–v2.15 词表）
 
@@ -196,8 +198,8 @@
 | `CutoffTime` | `{ at: string \| null \| undefined; label?: string }`（默认「截止」） | `{label} {fmtBeijing(at)}`，后缀是 `fmtBeijing` 的「北京」（D17，`lib/format.ts` 不改）；`<time datetime>` 的 `title` 是相对时间（「3 小时前」「45 分钟前」「2 天前」「刚刚」）；`at` 为空显示 `StatusPill block.not_computed`，不透传「—」；无法解析的值原样显示、不带提示 |
 | `SampleSize` | `{ n: number \| null; min?: number }`（默认 5） | `n = {n}`；`n < min`（含 0）加 `block.insufficient`；`null` 显示 `block.not_computed`（没算） |
 | `CalcVersion` | `{ version: string }` | `口径 ` + 等宽代码样式的版本号 |
-| `MetricValue` | `{ value: number \| null \| undefined; raw?: string \| null; unit?: string; digits?: number; signed?: boolean; percent?: boolean; tone?: 'updown' \| 'none' }`（`digits` 默认 2，`tone` 默认 `none`） | 等宽数字（`tabular-nums`），单位前加半角空格（`12 股`），`percent` 的值是小数（0.032 → `3.2%`，无空格），`signed` 给正数加 `+`；`updown` 时正 `text-up`、负 `text-down`、零不着色；`-0.00` 归一成 `0.00`；`null` / `undefined` / `NaN` 显示 `block.not_computed`；传非空 `raw` 时优先显示原文，不解析或舍入后端 Decimal 字符串，`unit` 仍保留，长值可换行 |
-| `PlanLevels` | `{ low: number \| null; high: number \| null; stop: number \| null; target1: number \| null; shares?: number \| null; lead?: string; sharesLabel?: string }` | 一行标准写法 `入场 95.10–97.30 · 止损 91.40 · T1 104.70`，有股数时加 ` · 建议 120 股`；`lead`（默认「入场」）换掉区间前的词，`sharesLabel`（默认「建议」，空字符串则只写 `120 股`）换掉股数前的词（价格两位小数，区间用 U+2013）；props 是数字，而接口里的价位是字符串（`"95.10"`）：**调用方用 `Number()` 转换**再传（接口不变；无法转成数字的值按缺失处理）。缺的价位写「没算」，四个都缺时是一个 `block.not_computed` 徽标。`PlanLevels.test.ts` 钉住的是数字格式（两位小数、U+2013、缺值写「没算」）和 `lead` / `sharesLabel` 的默认值 |
+| `MetricValue` | `{ value: number \| null \| undefined; raw?: string \| null; unit?: string; digits?: number; signed?: boolean; percent?: boolean; currency?: boolean; tone?: 'updown' \| 'none' }`（`digits` 默认 2，`tone` 默认 `none`） | 等宽数字（`tabular-nums`），单位前加半角空格（`12 股`），`percent` 的值是小数（0.032 → `3.2%`，无空格），`signed` 给正数加 `+`；`updown` 时正 `text-up`、负 `text-down`、零不着色；`-0.00` 归一成 `0.00`；`null` / `undefined` / `NaN` 显示 `block.not_computed`；传非空 `raw` 时优先显示原文，不解析或舍入后端 Decimal 字符串，`unit` 仍保留，长值可换行。`currency`（v3.2 spec §7）时 `body` 走 `format.ts` 的 `moneyText`（`raw` 与 `value` 都适用：两位小数、前缀 `$`、负数 `-$12.34`、空仍显示 `block.not_computed`），`$` 前缀替代单位后缀，`tone` 的符号判断不变 |
+| `PlanLevels` | `{ low: number \| null; high: number \| null; stop: number \| null; target1: number \| null; shares?: number \| null; lead?: string; sharesLabel?: string }` | 一行标准写法 `入场 $95.10–$97.30 · 止损 $91.40 · T1 $104.70`（v3.2 spec §7：价格是金额，两位小数带 `$` 前缀），有股数时加 ` · 建议 120 股`；`lead`（默认「入场」）换掉区间前的词，`sharesLabel`（默认「建议」，空字符串则只写 `120 股`）换掉股数前的词（区间用 U+2013）；props 是数字，而接口里的价位是字符串（`"95.10"`）：**调用方用 `Number()` 转换**再传（接口不变；无法转成数字的值按缺失处理）。缺的价位写「没算」，四个都缺时是一个 `block.not_computed` 徽标。`PlanLevels.test.ts` 钉住的是数字格式（`$` 两位小数、U+2013、缺值写「没算」）和 `lead` / `sharesLabel` 的默认值 |
 | `RefLink` | `{ ref: string; onFact?: (key) => void; onCall?: (ref) => void; expanded?: boolean }` | 一条引用的渲染：`fact:` 有 `onFact` 时是调用回调的链接式按钮，否则纯文字；`call:` 有 `onCall`（调用方能展开）时是 `aria-expanded` 按钮，否则纯文字；其余（`know:`、`concept:`、`user:` 等）纯文字。列表外壳与展开的工具调用区域归调用方 |
 | `SourceBadge` | `{ source: string; fallback?: boolean }` | 数据来源名（等宽）；`fallback` 时加淡警告底与文字「备源」 |
 | `DataBlock` | `{ state; message?; skeleton?: 'row' \| 'block' \| 'table'; onRetry?; retryLabel?: string; page?: boolean; children? }` | 第 5 节五态包装；`degraded` 先 `Alert` 再渲染 `children`，`error` 有 `onRetry` 时加一个按钮（默认「重试」），`page` 撑满内容区（`min-h-[50vh]`） |
@@ -211,7 +213,7 @@
 
 v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域层原语，取数走 `lib/api.ts` 的 `get/post/put`；接口字段见 `types.ts`（照抄 Task 5 的接口契约表，金额与价位是字符串，展示用 `MetricValue` 的 `raw`，不做浮点运算）。所有写入接口先 `confirmed=false` 拿 `preview`，经 `ConfirmDialog` 复述确认后才 `confirmed=true`（A18）。
 
-布局（`Home.svelte`）：宽屏两栏各自纵向堆叠（左栏今日操作、简报；右栏账户条、计划与持仓），两栏不共用行高；窄屏两栏外壳用 `contents` 摊平成单栏，顺序靠 `order-*`（今日操作 → 账户条 → 计划与持仓 → 简报）。对话不在栏里：右下角悬浮的「助手」按钮（`Icon` `message-square`）打开右侧**非模态**面板（`<aside aria-label="助手">`，窄屏全宽、`sm` 起 28rem），关闭只设 `hidden` 不卸载，流式中的一轮不会因关面板而断；`Esc` 关闭并把焦点还给打开前的元素。
+布局（`Home.svelte`）：宽屏两栏各自纵向堆叠（左栏今日操作、简报、复盘；右栏账户条、计划与持仓、研究），两栏不共用行高；窄屏两栏外壳用 `contents` 摊平成单栏，顺序靠 `order-*`（今日操作 → 账户条 → 计划与持仓 → 研究 → 简报 → 复盘，v3.2 spec §10）。对话不在栏里：右下角悬浮的「助手」按钮（`Icon` `message-square`）打开右侧**非模态**面板（`<aside aria-label="助手">`，窄屏全宽、`sm` 起 28rem），关闭只设 `hidden` 不卸载，流式中的一轮不会因关面板而断；`Esc` 关闭并把焦点还给打开前的元素。
 
 | 组件 | props | 职责 |
 | --- | --- | --- |
@@ -223,9 +225,12 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `PlanCard.svelte` | `{ card, onChanged? }` | 一份计划卡：状态、价位（`PlanLevels`）、下一个交易日的操作（`plan_action`）；持仓另有浮动盈亏、已持有天数、止损单状态；已结束显示平仓结果；展开拉 `GET /api/plans/{id}` 看变化记录；pending 显示「最新收盘高于入场区间」、可取消计划；open 可调高止损 |
 | `PlanCards.svelte` | `{ version?, onChanged? }` | 三组：持仓、待入场、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态显示原因；「持仓」组标题旁「补录持仓」打开不带 `plan_id` 的 `TradeForm`（宿主补录计划，spec §6.6）；`version` 变化重取 |
 | `AccountStrip.svelte` | `{ account?, onChanged? }` | 账户条：现金 / 总资产 / 浮动盈亏 / 已实现盈亏；现金为负显示 `notes`；「记出入金」「对账」入口 |
-| `TradeForm.svelte` / `CashFlowForm.svelte` / `ReconcileForm.svelte` | `{ bind:open, onDone? }`（TradeForm 另有 `ticker`/`planId`/`shares` 预填） | 三个写入表单（Dialog）：预填、失败保留草稿与 `request_id`、表单内 `Alert` 显示原因；提交先拿 `preview` 再 `ConfirmDialog` 确认写入 |
-| `ChatPanel.svelte` | `{ version? }` | 对话：历史 `Select` +「新开对话」；`sse.ts` 流式渲染（文字逐段、工具调用 `Collapsible` 可展开）；取消发 `…/cancel` 并显示「已取消」；409 `brief_running` 显示「正在生成简报，请稍后再问」；`error` 帧显示原因并恢复输入 |
+| `TradeForm.svelte` / `CashFlowForm.svelte` / `ReconcileForm.svelte` | `{ bind:open, onDone? }`（TradeForm 另有 `ticker`/`planId`/`shares` 预填） | 三个写入表单（Dialog）：预填、失败保留草稿与 `request_id`、表单内 `Alert` 显示原因；提交先拿 `preview` 再 `ConfirmDialog` 确认写入。v3.2 spec §7：TradeForm 的「时间」拆成「日期（美东）」「时间（美东）」两个原生控件（`type="date"` / `type="time" step="60"`，默认 `nowInNewYork()`，提交拼 `newYorkIso` 带美东偏移）；出入金与对账的日期也是 `type="date"` 控件，提交口径不变 |
+| `ChatPanel.svelte` | `{ version?, prefill? }`（`prefill: { text, seq }`） | 对话：历史 `Select` +「新开对话」；`sse.ts` 流式渲染（文字逐段、工具调用 `Collapsible` 可展开）；取消发 `…/cancel` 并显示「已取消」；409 `brief_running` 显示「正在生成简报，请稍后再问」；`error` 帧显示原因并恢复输入；`prefill.seq` 变化时把输入框草稿设为 `text` 并聚焦（v3.2 研究块的「发起研究」预填，同一 seq 重渲染不覆盖用户草稿） |
 | `SettingsSheet.svelte` | `{ bind:open, onSaved? }` | 设置（`Sheet`）：运行时 / 提供方 / 模型，选项来自 `GET /api/settings/options`，每项可在 `Select` 与自由 `Input` 间切换；保存 `PUT /api/settings`，错误用 toast 显示原因 |
+| `ResearchCards.svelte` | `{ version?, onChanged?, onStartResearch? }` | 研究两组（v3.2 spec §10）：观察中、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态；观察中组标题旁「发起研究」按钮调 `onStartResearch('研究 ：')`（页面打开助手并预填，研究在对话里发起）；`version` 变化重取 |
+| `ResearchCard.svelte` | `{ card, onChanged? }` | 一张研究卡：股票、`StatusPill`（`research` 域）、第几天、论点、条件与最新收盘（`MetricValue` 的 `currency`）、五种显示文案（触发 → 无条件 → 缺日线 → 均线日线不足 → 观察中，从卡片字段推导）、agent 结论一句、「已转计划 #id」；展开拉 `GET /api/research/{id}` 看时间线；观察中的「放弃研究」两步确认（`POST /api/research/{id}/drop`，`confirmed=false` 先拿 preview） |
+| `RetrospectPanel.svelte` | `{ version? }` | 复盘（v3.2 spec §10）：顶部周汇总（`Select` 切周，本周与之前 8 周，值用各周周五；已结束 / 照做 / 有偏差、R 合计、已实现盈亏与周初周末总资产带 `$`）、中间执行复盘 `ui/table`（每份已结束计划一行：股票、起止、计划说的 `PlanLevels`、实际做的、R、偏差标签 `StatusPill`（`retro_tag` 域，带 N 的句子经 `text` 传入）、假设结果一句）、底部规则检验两张表（真实成交 / 假设结果）× 三个分组键，样本不足的组只显示样本数与「样本不足」，表头上方一行接口 `note`；`empty` 时整块「还没有已结束的计划」（B5）；`version` 变化重取 |
 
 ### 6.3 已知取舍
 

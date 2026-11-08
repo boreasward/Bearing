@@ -25,7 +25,7 @@
           {#each [{ label: '现金', value: account.cash, tone: 'none' as const }, { label: '总资产', value: account.equity, tone: 'none' as const }, { label: '浮动盈亏', value: account.unrealized_pnl, tone: 'updown' as const }, { label: '已实现盈亏', value: account.realized_pnl, tone: 'updown' as const }] as metric (metric.label)}
             <div class="grid gap-0.5">
               <dt class="text-xs text-muted-foreground">{metric.label}</dt>
-              <dd><MetricValue value={null} raw={metric.value} tone={metric.tone} /></dd>
+              <dd><MetricValue value={null} raw={metric.value} currency tone={metric.tone} /></dd>
             </div>
           {/each}
         </dl>

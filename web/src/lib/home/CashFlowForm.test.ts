@@ -31,6 +31,14 @@ describe('CashFlowForm', () => {
     expect(String(bodies[0].effective_at)).toMatch(/^2026-11-08T00:00:00[+-]\d{2}:\d{2}$/)
   })
 
+  it('uses a native date control for 生效日期', async () => {
+    render(CashFlowForm, { open: true })
+    await screen.findByRole('dialog')
+    const field = screen.getByLabelText('生效日期') as HTMLInputElement
+    expect(field.type).toBe('date')
+    expect(field.placeholder).toBe('') // 控件自带格式，不再手填 YYYY-MM-DD
+  })
+
   it('shows the server reason, not just the error code', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'invalid_argument', detail: 'effective_at 必须是 ISO 时间' }, 400)))
     render(CashFlowForm, { open: true })

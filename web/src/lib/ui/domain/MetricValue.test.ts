@@ -59,6 +59,25 @@ describe('MetricValue', () => {
     expect(zero.container.textContent?.trim()).toBe('0')
   })
 
+  it('currency renders moneyText on raw and value alike, the tone sign is unchanged', () => {
+    cleanup()
+    const raw = render(MetricValue, { value: null, raw: '1234.5', currency: true })
+    expect(raw.container.textContent?.trim()).toBe('$1234.50')
+    cleanup()
+    const value = render(MetricValue, { value: -12.3, currency: true, tone: 'updown' })
+    expect(value.container.textContent?.trim()).toBe('-$12.30')
+    expect(value.container.querySelector('.text-down')).not.toBeNull() // tone 的符号判断不变
+    cleanup()
+    const up = render(MetricValue, { value: 12.3, currency: true, tone: 'updown' })
+    expect(up.container.querySelector('.text-up')).not.toBeNull()
+    cleanup()
+    const missing = render(MetricValue, { value: null, raw: '', currency: true })
+    expect(missing.container.textContent).toContain('没算')
+    cleanup()
+    const unit = render(MetricValue, { value: 5, unit: '股', currency: true })
+    expect(unit.container.textContent?.trim()).toBe('$5.00') // 货币前缀替代单位后缀
+  })
+
   it('uses tabular numerals', () => {
     const { container } = render(MetricValue, { value: 5 })
     expect(container.querySelector('.tabular-nums')).not.toBeNull()

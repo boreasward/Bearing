@@ -68,6 +68,27 @@ const CHAT_DETAIL = {
   chat: { chat_id: 'c1', title: '关于止损的追问', runtime: 'pi', provider: 'anthropic', model: 'claude-sonnet', read_only: false, created_at: '2026-11-06T22:00:00+00:00' },
   messages: [],
 }
+const RESEARCH = {
+  watching: {
+    research: [
+      {
+        research_id: 1, ticker: 'SNDK', status: 'watching', thesis: '跌了很多，我认为是入场的时间', created_session: '2026-11-04',
+        day: 3, valid_until: '2026-12-02', condition: { kind: 'close_above', level: '105.00', ma: null }, condition_text: '收盘站上 105.00',
+        last_close: '101.00', condition_met_today: false, triggered_session: null, verdict: 'watch', reasons: '等回调结束再入',
+        plan_id: null, ended_session: null, end_reason: null, missing_bar: false, created_at: '2026-11-04T22:00:00+00:00',
+      },
+    ],
+  },
+  ended: { research: [] },
+}
+const RETROSPECT = {
+  records: [],
+  weekly: { week_start: '2026-11-02', week_end: '2026-11-06', ended: 0, followed: 0, deviated: 0, tag_counts: {}, closed: [], total_r: '0', not_bought: [], equity_start: null, equity_end: null, realized_pnl: '0', listing: { new: [], dropped: [], most_relisted: null } },
+  rules: { realized: { trigger_rules: [], setup_tier: [], industry: [] }, hypothetical: { trigger_rules: [], setup_tier: [], industry: [] } },
+  empty: true,
+  min_sample: 10,
+  note: '规则未经验证；样本不足的组不给数',
+}
 
 async function openAssistant() {
   await fireEvent.click(await screen.findByRole('button', { name: '打开助手' }))
@@ -86,6 +107,11 @@ function stubHomeApi(overrides: { latestBrief?: () => Response; today?: () => Re
       const group = url.searchParams.get('group') ?? 'holdings'
       return json(PLANS[group as keyof typeof PLANS] ?? { plans: [] })
     }
+    if (path === '/api/research') {
+      const group = url.searchParams.get('group') ?? 'watching'
+      return json(RESEARCH[group as keyof typeof RESEARCH] ?? { research: [] })
+    }
+    if (path === '/api/retrospect') return json(RETROSPECT)
     if (path === '/api/chats') return json(CHATS)
     if (path === '/api/chats/c1') return json(CHAT_DETAIL)
     return json({})
@@ -126,13 +152,16 @@ describe('Home', () => {
     }
     const blocks = (column: Element) => [...column.children].map((el) => ({ order: /order-(\d)/.exec(el.className)?.[1], text: el.textContent ?? '' }))
     const left = blocks(main)
-    expect(left.map((b) => b.order)).toEqual(['1', '4'])
+    // 窄屏单栏顺序：今日操作 → 账户条 → 计划与持仓 → 研究 → 简报 → 复盘（spec §10）
+    expect(left.map((b) => b.order)).toEqual(['1', '5', '6'])
     expect(left[0].text).toContain('今日操作')
     expect(left[1].text).toContain('今日简报')
+    expect(left[2].text).toContain('复盘')
     const right = blocks(side)
-    expect(right.map((b) => b.order)).toEqual(['2', '3'])
+    expect(right.map((b) => b.order)).toEqual(['2', '3', '4'])
     expect(right[0].text).toContain('总资产')
     expect(right[1].text).toContain('计划与持仓')
+    expect(right[2].text).toContain('研究')
     expect(grid!.textContent).not.toContain('选择对话') // 对话不在页面栏里，在助手面板里
   })
 
@@ -191,6 +220,25 @@ describe('Home', () => {
     await fireEvent.pointerUp(option)
     expect(await screen.findByText('没有变化')).toBeInTheDocument()
     await waitFor(() => expect(briefSelect.textContent).toContain('2026-11-05'))
+  })
+
+  it('shows the research block and the retrospect block on the page', async () => {
+    stubHomeApi()
+    render(Home)
+    expect(await screen.findByRole('heading', { name: '研究' })).toBeInTheDocument()
+    expect(await screen.findByText('SNDK')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '复盘' })).toBeInTheDocument()
+    expect(await screen.findByText('还没有已结束的计划')).toBeInTheDocument() // 空库不是错误（B5）
+  })
+
+  it('发起研究 opens the assistant with the prefilled draft', async () => {
+    stubHomeApi()
+    render(Home)
+    expect(await screen.findByText('SNDK')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: '发起研究' }))
+    const panel = document.querySelector('aside[aria-label="助手"]')!
+    expect(panel).not.toHaveAttribute('hidden')
+    await waitFor(() => expect((panel.querySelector('textarea') as HTMLTextAreaElement).value).toBe('研究 ：'))
   })
 
   it('links to the component gallery in dev', async () => {

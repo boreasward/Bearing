@@ -173,9 +173,9 @@
       {#if card.thesis}<p class="text-xs text-muted-foreground">{card.thesis}</p>{/if}
     {:else if card.status === 'open' && card.position}
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-        <span class="flex items-center gap-1">浮动盈亏 <MetricValue value={null} raw={card.position.unrealized_pnl} tone="updown" /></span>
+        <span class="flex items-center gap-1">浮动盈亏 <MetricValue value={null} raw={card.position.unrealized_pnl} currency tone="updown" /></span>
         <span class="flex items-center gap-1">持仓 <MetricValue value={null} raw={String(card.position.quantity)} unit="股" /></span>
-        <span class="flex items-center gap-1">成本 <MetricValue value={null} raw={card.position.avg_cost} /></span>
+        <span class="flex items-center gap-1">成本 <MetricValue value={null} raw={card.position.avg_cost} currency /></span>
       </div>
       <p class="text-xs text-muted-foreground">
         {#if card.held_sessions != null}已持有 {card.held_sessions} 个交易日 · {/if}
@@ -189,7 +189,7 @@
       {/if}
     {:else if ended && card.outcome && Object.keys(card.outcome).length}
       <ul class="grid gap-1 text-sm">
-        <li class="flex items-center gap-1">已实现盈亏 <MetricValue value={null} raw={card.outcome.realized_pnl ?? null} tone="updown" /></li>
+        <li class="flex items-center gap-1">已实现盈亏 <MetricValue value={null} raw={card.outcome.realized_pnl ?? null} currency tone="updown" /></li>
         {#if card.outcome.r_text}
           <li>{card.outcome.r_text}</li>
         {:else if card.outcome.r_multiple}

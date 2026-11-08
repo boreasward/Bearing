@@ -70,7 +70,7 @@ describe('PlanCard', () => {
     const { container } = render(PlanCard, { card: PENDING })
     expect(screen.getByText('待入场')).toBeInTheDocument()
     expect(screen.getByText('计划')).toBeInTheDocument() // kind=planned 的计划/补录徽标（终审 M4：fixture 用真值）
-    expect(container.textContent).toContain('入场 95.10–97.30 · 止损 91.40 · T1 104.70 · 建议 120 股')
+    expect(container.textContent).toContain('入场 $95.10–$97.30 · 止损 $91.40 · T1 $104.70 · 建议 120 股')
     expect(container.textContent).toContain('有效至 2026-11-12')
     expect(screen.getByText('最新收盘高于入场区间')).toBeInTheDocument()
     expect(screen.queryByText('缺日线，未复查')).toBeNull() // 当天有日线时不提示
@@ -86,7 +86,8 @@ describe('PlanCard', () => {
     const { container } = render(PlanCard, { card: OPEN })
     expect(screen.getByText('已买入')).toBeInTheDocument()
     expect(screen.getByText('未确认止损单')).toBeInTheDocument()
-    expect(screen.getByText('260.00')).toBeInTheDocument()
+    expect(screen.getByText('$260.00')).toBeInTheDocument()
+    expect(screen.getByText('$200.10')).toBeInTheDocument() // 成本带 $（spec §7）
     expect(container.textContent).toContain('已持有 3 个交易日')
     expect(screen.getByText('止损单需上调')).toBeInTheDocument()
   })
@@ -96,7 +97,7 @@ describe('PlanCard', () => {
     expect(screen.getByText('已平仓')).toBeInTheDocument()
     expect(screen.getByText('补录')).toBeInTheDocument() // kind=adopted 的徽标（终审 M4：fixture 用真值）
     expect(screen.getByText('补录，不计')).toBeInTheDocument()
-    expect(screen.getByText('520.00')).toBeInTheDocument()
+    expect(screen.getByText('$520.00')).toBeInTheDocument()
   })
 
   it('closed card shows the risk multiple when there is one', () => {

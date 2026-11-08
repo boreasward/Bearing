@@ -7,6 +7,7 @@
   import Input from '$lib/ui/input/input.svelte'
   import ConfirmDialog from '$lib/ui/confirm-dialog/ConfirmDialog.svelte'
   import { post } from '$lib/api'
+  import { nowInNewYork, newYorkIso } from '$lib/format'
   import { notify } from '$lib/ui/toast'
   import { errorText, type WritePreview } from './types'
 
@@ -26,19 +27,21 @@
     onDone?: () => void
   } = $props()
 
-  let draft = $state({ ticker: '', side: 'buy', quantity: '', price: '', executedAt: '', fee: '', note: '' })
+  let draft = $state({ ticker: '', side: 'buy', quantity: '', price: '', date: '', time: '', fee: '', note: '' })
   let error = $state('')
   let submitting = $state(false)
 
-  // every opening starts from the current prefill; the time defaults to now (with timezone)
+  // every opening starts from the current prefill; the date and time default to now in New York (spec §7)
   $effect(() => {
     if (open) {
+      const now = nowInNewYork()
       draft = {
         ticker,
         side: 'buy',
         quantity: shares == null ? '' : String(shares),
         price: '',
-        executedAt: new Date().toISOString(),
+        date: now.date,
+        time: now.time,
         fee: '',
         note: '',
       }
@@ -59,7 +62,8 @@
       Number(draft.quantity) > 0 &&
       draft.price !== '' &&
       Number(draft.price) > 0 &&
-      draft.executedAt.trim() !== '' &&
+      draft.date.trim() !== '' &&
+      draft.time.trim() !== '' &&
       Number.isFinite(feeNumber) &&
       feeNumber >= 0,
   )
@@ -70,7 +74,8 @@
       side: draft.side,
       quantity: Number(draft.quantity),
       price: Number(draft.price),
-      executed_at: draft.executedAt.trim(),
+      // 两个控件拼成带美东偏移的 ISO（夏令时按日期算，spec §7）；后端接口与校验不变
+      executed_at: newYorkIso(draft.date, draft.time),
       fee: feeNumber,
       note: draft.note.trim(),
       ...(planId == null ? {} : { plan_id: planId }),
@@ -146,9 +151,14 @@
           <Input {id} inputmode="decimal" class="text-right tabular-nums" bind:value={draft.price} />
         {/snippet}
       </Field>
-      <Field label="时间" id="trade-at" required hint="带时区的 ISO 时间，如 2026-11-06T10:30:00-05:00">
+      <Field label="日期（美东）" id="trade-date" required hint="成交发生在美股交易所，按美东日期">
         {#snippet children({ id })}
-          <Input {id} bind:value={draft.executedAt} />
+          <Input {id} type="date" bind:value={draft.date} />
+        {/snippet}
+      </Field>
+      <Field label="时间（美东）" id="trade-time" required hint="按美东时间">
+        {#snippet children({ id })}
+          <Input {id} type="time" step="60" bind:value={draft.time} />
         {/snippet}
       </Field>
       <Field label="手续费" id="trade-fee" hint="可空，默认 0">

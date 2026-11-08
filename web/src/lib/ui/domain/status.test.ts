@@ -33,7 +33,7 @@ describe('status vocabulary', () => {
   it('every domain of the type is in TONES and LABELS', () => {
     expect(domains.sort()).toEqual([
       'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'data_request', 'execution', 'feature_flag', 'fetch', 'instruction',
-      'knowledge', 'node', 'paper_decision', 'paper_order', 'plan', 'plan_action', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research_request', 'retro', 'roadmap_version', 'run', 'stop_order', 'system',
+      'knowledge', 'node', 'paper_decision', 'paper_order', 'plan', 'plan_action', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research', 'research_request', 'retro', 'retro_tag', 'roadmap_version', 'run', 'stop_order', 'system',
     ])
     expect(Object.keys(LABELS).sort()).toEqual(domains)
   })
@@ -93,6 +93,35 @@ describe('status vocabulary', () => {
   it('LABELS and TONES list exactly the same keys in every domain', () => {
     for (const domain of domains) {
       expect(Object.keys(LABELS[domain]).sort(), domain).toEqual(Object.keys(TONES[domain]).sort())
+    }
+  })
+
+  it('research: watching live, every terminal state neutral, planned success (spec §6.1)', () => {
+    expect(LABELS.research).toEqual({
+      watching: '观察中', planned: '已转计划', rejected: '已否决', expired: '已过期', dropped: '已放弃',
+    })
+    expect(TONES.research).toEqual({
+      watching: 'info', planned: 'success', rejected: 'neutral', expired: 'neutral', dropped: 'neutral',
+    })
+  })
+
+  it('retro_tag: followed success, not_filled neutral, every deviation warn (spec §5.2)', () => {
+    expect(LABELS.retro_tag).toEqual({
+      followed: '照做',
+      not_filled: '未买入：价格未进入场区间',
+      not_bought_in_zone: '未买入：价格进过入场区间',
+      entry_out_of_zone: '买价出区间',
+      over_bought: '多买',
+      stop_order_missing: '止损未挂',
+      // 带 {N} 的由组件拼句，表里写不带数字的文案
+      late_sell_after_stop: '止损触及后晚卖',
+      late_sell_after_instruction: '卖出指令后晚卖',
+      early_sell: '早卖',
+    })
+    expect(TONES.retro_tag.followed).toBe('success')
+    expect(TONES.retro_tag.not_filled).toBe('neutral')
+    for (const key of ['not_bought_in_zone', 'entry_out_of_zone', 'over_bought', 'stop_order_missing', 'late_sell_after_stop', 'late_sell_after_instruction', 'early_sell'] as const) {
+      expect(TONES.retro_tag[key], key).toBe('warn')
     }
   })
 

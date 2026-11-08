@@ -9,6 +9,7 @@ export type StatusDomain =
   | 'account' | 'paper_order' | 'paper_decision' | 'reconcile'
   | 'research_request' | 'proposal' | 'portfolio_verdict' | 'data_request' | 'feature_flag' | 'roadmap_version'
   | 'plan' | 'plan_action' | 'stop_order'
+  | 'research' | 'retro_tag'
 
 // Keep every domain on ONE line, without spreads: status.test.ts reads this block by lines.
 export const TONES = {
@@ -58,6 +59,10 @@ export const TONES = {
   plan_action: { stop_hit_unresolved: 'danger', sell_next_open: 'warn', unchecked: 'info', stop_order: 'info', hold: 'neutral' },
   // 持仓的止损挂单状态（stop_order_status）
   stop_order: { none: 'neutral', needs_raise: 'warn', confirmed: 'success' },
+  // v3.2 研究五态（GET /api/research 的 status）：观察中唯一进行中，四个终态全部中性，已转计划例外是 success
+  research: { watching: 'info', planned: 'success', rejected: 'neutral', expired: 'neutral', dropped: 'neutral' },
+  // v3.2 复盘偏差标签（execution.retrospect 的 tag.code）+ 照做：not_filled 不算偏差是 neutral，七个偏差全部 warn
+  retro_tag: { followed: 'success', not_filled: 'neutral', not_bought_in_zone: 'warn', entry_out_of_zone: 'warn', over_bought: 'warn', stop_order_missing: 'warn', late_sell_after_stop: 'warn', late_sell_after_instruction: 'warn', early_sell: 'warn' },
 } as const satisfies Record<StatusDomain, Record<string, Tone>>
 
 // `execution.adopted` keeps its `{date}` / `{quantity}` placeholders: pass the filled sentence as StatusPill `text`.
@@ -103,6 +108,9 @@ export const LABELS: Record<StatusDomain, Record<string, string>> = {
   plan: { pending: '待入场', open: '已买入', closed: '已平仓', expired: '已过期', invalidated: '已作废', replaced: '被替换', cancelled: '已取消' },
   plan_action: { stop_hit_unresolved: '止损已触及，未见卖出记录', sell_next_open: '下次开盘卖出', unchecked: '缺日线，无法检查止损', stop_order: '未确认止损单', hold: '继续持有' },
   stop_order: { none: '未挂止损单', needs_raise: '止损单需上调', confirmed: '已确认挂单' },
+  research: { watching: '观察中', planned: '已转计划', rejected: '已否决', expired: '已过期', dropped: '已放弃' },
+  // 带 N 的两个标签（晚卖 N 个交易日）由组件拼句后经 StatusPill 的 text 传入，表里存不带数字的文案
+  retro_tag: { followed: '照做', not_filled: '未买入：价格未进入场区间', not_bought_in_zone: '未买入：价格进过入场区间', entry_out_of_zone: '买价出区间', over_bought: '多买', stop_order_missing: '止损未挂', late_sell_after_stop: '止损触及后晚卖', late_sell_after_instruction: '卖出指令后晚卖', early_sell: '早卖' },
 }
 
 export type StatusInfo = { label: string; tone: Tone; known: boolean }

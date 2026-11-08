@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import * as Select from '$lib/ui/select/index'
   import * as Collapsible from '$lib/ui/collapsible/index'
   import { Alert, AlertDescription } from '$lib/ui/alert/index'
@@ -13,7 +14,8 @@
 
   // 对话（spec §12 / v3 设计 §15.2）：输入框在简报下方，回答流式出现（sse.ts 读 SSE），
   // 工具调用折叠可展开；可新开对话、回看历史；一轮可取消；简报运行中提问得到固定提示。
-  let { version = 0 }: { version?: number } = $props()
+  // `prefill`（v3.2 研究块）：seq 变化时把草稿设为 text 并聚焦——研究在对话里发起（spec §4）。
+  let { version = 0, prefill }: { version?: number; prefill?: { text: string; seq: number } } = $props()
 
   interface ToolCall {
     id: number
@@ -39,6 +41,16 @@
   let aborting: AbortController | null = null
   let toolSeq = 0
   let openTools = $state<Record<number, boolean>>({})
+  let inputEl = $state<HTMLTextAreaElement | null>(null)
+  let lastPrefillSeq = 0
+
+  $effect(() => {
+    const seq = prefill?.seq
+    if (seq === undefined || seq === lastPrefillSeq) return
+    lastPrefillSeq = seq
+    input = prefill!.text
+    void tick().then(() => inputEl?.focus())
+  })
 
   function busyText(code: string): string {
     if (code === 'brief_running') return '正在生成简报，请稍后再问'
@@ -267,7 +279,7 @@
     >
       <Field label="提问" id="chat-input">
         {#snippet children({ id })}
-          <Textarea {id} rows={2} bind:value={input} disabled={chat?.read_only ?? false} placeholder={chats.length ? '问点什么…' : '先新开一段对话'} />
+          <Textarea {id} rows={2} bind:ref={inputEl} bind:value={input} disabled={chat?.read_only ?? false} placeholder={chats.length ? '问点什么…' : '先新开一段对话'} />
         {/snippet}
       </Field>
       <div class="flex gap-2">

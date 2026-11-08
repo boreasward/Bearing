@@ -9,14 +9,16 @@
   import TodayActions from '$lib/home/TodayActions.svelte'
   import BriefPanel from '$lib/home/BriefPanel.svelte'
   import PlanCards from '$lib/home/PlanCards.svelte'
+  import ResearchCards from '$lib/home/ResearchCards.svelte'
+  import RetrospectPanel from '$lib/home/RetrospectPanel.svelte'
   import AccountStrip from '$lib/home/AccountStrip.svelte'
   import ChatPanel from '$lib/home/ChatPanel.svelte'
   import SettingsSheet from '$lib/home/SettingsSheet.svelte'
   import { errorText, type Today } from '$lib/home/types'
 
   // 唯一的页面（spec §12）：抬头（数据截至、总资产、设置入口）+ 内容块 + 助手面板。
-  // 宽屏两栏，每栏各自纵向堆叠（不共用行高）：左栏今日操作、简报；右栏账户条、计划与持仓。
-  // 窄屏两栏的外壳用 contents 摊平成单栏，顺序靠 order-*：今日操作 → 账户条 → 计划与持仓 → 简报。
+  // 宽屏两栏，每栏各自纵向堆叠（不共用行高）：左栏今日操作、简报、复盘；右栏账户条、计划与持仓、研究。
+  // 窄屏两栏的外壳用 contents 摊平成单栏，顺序靠 order-*：今日操作 → 账户条 → 计划与持仓 → 研究 → 简报 → 复盘（spec §10）。
   // 对话在右下角悬浮按钮打开的助手面板里（用户 2026-11-07）：非模态，关闭只隐藏不卸载，一轮回答不会断。
   let today = $state<Today | null>(null)
   let todayError = $state('')
@@ -25,6 +27,8 @@
   let settingsOpen = $state(false)
   let assistantOpen = $state(false)
   let assistantOpener: HTMLElement | null = null
+  let prefill = $state<{ text: string; seq: number } | undefined>(undefined)
+  let prefillSeq = 0
 
   function openAssistant() {
     assistantOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -47,10 +51,17 @@
 
   onMount(loadToday)
 
-  // 页面里任何一处写入完成：今日操作重取，计划组重取（version 变化触发）。
+  // 页面里任何一处写入完成：今日操作重取，计划组与研究组、复盘重取（version 变化触发）。
   function reload() {
     loadToday()
     plansVersion += 1
+  }
+
+  // 研究在对话里发起（spec §4）：打开助手面板并把输入框预填为一句话
+  function startResearch(text: string) {
+    prefillSeq += 1
+    prefill = { text, seq: prefillSeq }
+    openAssistant()
   }
 </script>
 
@@ -60,7 +71,7 @@
       {#if today}
         <!-- 副标按接口契约：「数据截至 {session}」；没有运行记录（session 为空）时退到采集时刻 -->
         <span>数据截至 {today.session ?? fmtBeijing(today.cutoff_at)}</span>
-        <span class="flex items-center gap-1">总资产 <MetricValue value={null} raw={today.account.equity} /></span>
+        <span class="flex items-center gap-1">总资产 <MetricValue value={null} raw={today.account.equity} currency /></span>
       {:else if todayError}
         <span>{todayError}</span>
       {/if}
@@ -79,11 +90,13 @@
   <div class="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
     <div data-column="main" class="contents lg:flex lg:flex-col lg:gap-4">
       <div class="order-1"><TodayActions actions={today?.actions ?? []} onChanged={reload} /></div>
-      <div class="order-4"><BriefPanel /></div>
+      <div class="order-5"><BriefPanel /></div>
+      <div class="order-6"><RetrospectPanel version={plansVersion} /></div>
     </div>
     <div data-column="side" class="contents lg:flex lg:flex-col lg:gap-4">
       <div class="order-2"><AccountStrip account={today?.account ?? null} onChanged={reload} /></div>
       <div class="order-3"><PlanCards version={plansVersion} onChanged={reload} /></div>
+      <div class="order-4"><ResearchCards version={plansVersion} onChanged={reload} onStartResearch={startResearch} /></div>
     </div>
   </div>
 </div>
@@ -107,7 +120,7 @@
       <Icon name="x" />
     </Button>
   </div>
-  <ChatPanel version={chatsVersion} />
+  <ChatPanel version={chatsVersion} {prefill} />
 </aside>
 
 <SettingsSheet bind:open={settingsOpen} onSaved={() => (chatsVersion += 1)} />

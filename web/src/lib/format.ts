@@ -23,3 +23,38 @@ export function localMidnightIso(value: string): string {
   const mm = String(Math.abs(offset) % 60).padStart(2, '0')
   return `${y}-${m}-${d}T00:00:00${sign}${hh}:${mm}`
 }
+
+/** The current New York date and time (`YYYY-MM-DD` / `HH:MM`) — the defaults of the trade date/time controls.
+ * Trades happen on US exchanges, so the page works in New York time whatever the browser zone is. */
+export function nowInNewYork(now: Date = new Date()): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now)
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
+  return { date: `${get('year')}-${get('month')}-${get('day')}`, time: `${get('hour')}:${get('minute')}` }
+}
+
+/** `${date}T${time}:00±offset` with the New York offset of that date (DST decided per date, spec §7): the offset
+ * is read via `Intl`'s `timeZoneName: 'longOffset'` (`GMT-05:00` → `-05:00`). Malformed input is passed through
+ * unchanged (no invented offset) so the server names the problem. */
+export function newYorkIso(date: string, time: string): string {
+  const d = date.trim()
+  const t = time.trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^\d{2}:\d{2}$/.test(t)) return `${d}T${t}`
+  const [y, m, day] = d.split('-').map(Number)
+  // 正午 UTC 在美东仍是同一天（7/8 点），取它当时的偏移即该日期全天的偏移（切换只发生在凌晨 2 点）
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'longOffset' })
+    .formatToParts(new Date(Date.UTC(y, m - 1, day, 12)))
+  const offset = /^GMT([+-]\d{2}:\d{2})$/.exec(parts.find((p) => p.type === 'timeZoneName')?.value ?? '')
+  return offset ? `${d}T${t}:00${offset[1]}` : `${d}T${t}`
+}
+
+/** Two decimals with the `$` prefix (`-$12.34` when negative); empty stays empty, unparseable text is shown as it was. */
+export function moneyText(raw: string | number | null | undefined): string {
+  if (raw === null || raw === undefined || raw === '') return ''
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return String(raw)
+  const fixed = Math.abs(n).toFixed(2)
+  return n < 0 && Number(fixed) !== 0 ? `-$${fixed}` : `$${fixed}`
+}

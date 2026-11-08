@@ -86,9 +86,9 @@
           <Input {id} inputmode="decimal" class="text-right tabular-nums" bind:value={draft.equity} />
         {/snippet}
       </Field>
-      <Field label="截至日期" id="reconcile-asof" hint="可空，默认当前交易日；YYYY-MM-DD">
+      <Field label="截至日期" id="reconcile-asof" hint="可空，默认当前交易日">
         {#snippet children({ id })}
-          <Input {id} placeholder="YYYY-MM-DD" bind:value={draft.asOf} />
+          <Input {id} type="date" bind:value={draft.asOf} />
         {/snippet}
       </Field>
       <Field label="备注" id="reconcile-note" hint="可空">

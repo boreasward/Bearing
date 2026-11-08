@@ -188,6 +188,141 @@ export interface RuntimeEventPayload {
   usage?: { input?: number; output?: number; total?: number }
 }
 
+// GET /api/research?group=…、GET /api/research/{id}、POST /api/research/{id}/drop（v3.2 接口契约表：
+// ResearchCard 19 键）。价位与金额是字符串；condition 为 null 表示尚无条件；condition_met_today
+// 为 null 表示无条件 / 缺日线 / 均线历史不足（真值只说明按最后一根已知日线判到了）。
+export interface ResearchCondition {
+  kind: string
+  level: string | null
+  ma: number | null
+}
+
+export interface ResearchCardData {
+  research_id: number
+  ticker: string
+  status: string
+  thesis: string
+  created_session: string
+  day: number
+  valid_until: string
+  condition: ResearchCondition | null
+  condition_text: string | null
+  last_close: string | null
+  condition_met_today: boolean | null
+  triggered_session: string | null
+  verdict: string | null
+  reasons: string | null
+  plan_id: number | null
+  ended_session: string | null
+  end_reason: string | null
+  missing_bar: boolean
+  created_at: string
+}
+
+export interface ResearchEvent {
+  session: string | null
+  event: string
+  reason: string | null
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  source: string
+  created_at: string
+}
+
+export interface ResearchDetail extends ResearchCardData {
+  events: ResearchEvent[]
+}
+
+// GET /api/retrospect?limit=20&week=…（facts.retrospect.retrospect_view 的输出；日期 ISO 字符串、
+// Decimal 全部序列化成字符串，统计值不做浮点运算）。
+export interface RetroTagRow {
+  code: string
+  text: string
+  sessions: number | null
+}
+
+export interface Hypothetical {
+  status: string | null
+  reason: string | null
+  fill_session: string | null
+  fill_price: string | null
+  exit_session: string | null
+  exit_price: string | null
+  exit_reason: string | null
+  sessions_held: number | null
+  r_multiple: string | null
+}
+
+export interface RetroRecord {
+  plan_id: number
+  ticker: string
+  status: string
+  kind: string
+  origin_kind: string
+  session: string
+  ended_session: string | null
+  end_reason: string | null
+  planned: {
+    entry_low: string | null
+    entry_high: string | null
+    initial_stop: string | null
+    target1: string | null
+    valid_from: string | null
+    valid_until: string | null
+    shares: number | null
+    max_hold_sessions: number | null
+  }
+  actual: {
+    first_buy: { price: string; session: string; quantity: number } | null
+    last_sell: { price: string; session: string } | null
+    quantity: string
+  }
+  outcome: CloseOutcome
+  r_multiple: string | null
+  r_text: string | null
+  tags: RetroTagRow[]
+  followed: boolean
+  hypothetical: Hypothetical | null
+  groups: { trigger_rules: string[]; setup_tier: string | null; industry: string | null }
+}
+
+export interface WeeklySummary {
+  week_start: string
+  week_end: string
+  ended: number
+  followed: number
+  deviated: number
+  tag_counts: Record<string, number>
+  closed: { ticker: string; r_multiple: string | null; exit_reason: string | null; tags: string[] }[]
+  total_r: string
+  not_bought: { ticker: string; end_reason: string | null; hypothetical: Hypothetical | null }[]
+  equity_start: string | null
+  equity_end: string | null
+  realized_pnl: string
+  listing: { new: string[]; dropped: string[]; most_relisted: string | null }
+}
+
+// 样本不足的组胜率 / 平均 R / R 合计为 null，insufficient 为真（spec §5.5）。
+export interface RuleStatRow {
+  group: string
+  sample: number
+  win_rate: string | null
+  avg_r: string | null
+  total_r: string | null
+  insufficient: boolean
+}
+
+export type RuleKey = 'trigger_rules' | 'setup_tier' | 'industry'
+
+export interface Retrospect {
+  records: RetroRecord[]
+  weekly: WeeklySummary
+  rules: { realized: Record<RuleKey, RuleStatRow[]>; hypothetical: Record<RuleKey, RuleStatRow[]> }
+  empty: boolean
+  min_sample: number
+  note: string
+}
+
 /** The server error envelope is `{"error": "code[: 中文说明]"}`: show the Chinese part, drop the code prefix. */
 export function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)

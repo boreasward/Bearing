@@ -124,6 +124,34 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(screen.getByLabelText('提问')).toBeEnabled())
   })
 
+  it('prefill sets the draft and focuses the input; an unchanged seq never overwrites it', async () => {
+    const router = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/chats?')) return json(CHATS)
+      if (url === '/api/chats/c1') return json(DETAIL)
+      if (url === '/api/chats/c1/messages') return sse([frame('done', {})])
+      return json({})
+    })
+    vi.stubGlobal('fetch', router)
+    const view = render(ChatPanel)
+    await screen.findByText('MU 的止损为什么是这个价位？')
+    const input = () => screen.getByLabelText('提问') as HTMLTextAreaElement
+    await fireEvent.input(input(), { target: { value: '自己打的一句话' } })
+
+    view.rerender({ prefill: { text: '研究 SNDK：', seq: 1 } })
+    await waitFor(() => expect(input().value).toBe('研究 SNDK：'))
+    expect(document.activeElement).toBe(input()) // 预填后聚焦
+
+    // 同一个 seq 重渲染不覆盖用户草稿（只有新预填才写）
+    await fireEvent.input(input(), { target: { value: '改过的草稿' } })
+    view.rerender({ prefill: { text: '研究 ：', seq: 1 } })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(input().value).toBe('改过的草稿')
+    // 新 seq 才重新预填
+    view.rerender({ prefill: { text: '研究 ：', seq: 2 } })
+    await waitFor(() => expect(input().value).toBe('研究 ：'))
+  })
+
   it('新开对话 posts /api/chats and switches to the new chat', async () => {
     const created = { chat_id: 'c2', title: '新对话', created_at: '2026-11-07T01:00:00+00:00', read_only: false, model: 'claude-sonnet' }
     const list = { chats: [...CHATS.chats, created] }
