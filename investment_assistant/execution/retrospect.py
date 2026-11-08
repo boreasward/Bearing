@@ -59,6 +59,14 @@ def _ny_date(value: datetime) -> date:
     return value.astimezone(NY).date()
 
 
+def _decimal_or_none(value) -> Decimal | None:
+    """仓储的 jsonb 编码把 Decimal 存成字符串（core.dbutil._plan_json），回读后归一回 Decimal；
+    None 原样返回，聚合（weekly_summary / rule_stats）只见到 Decimal。"""
+    if value is None or isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
 def validity_window(plan: dict) -> tuple[date, date]:
     """保存日的下一个交易日到最终 ``valid_until``（延续会覆盖 ``valid_from``，审阅记录 R2）。"""
     return add_trading_days(plan["session"], 1), plan["valid_until"]
@@ -258,6 +266,7 @@ def plan_record(
         if plan["status"] != "closed" and plan["kind"] == "planned"
         else None
     )
+    window_start, window_end = validity_window(plan)  # 「计划说的」用复盘窗口，不吃被延续覆盖的列值（R2）
     return {
         "plan_id": plan["id"],
         "ticker": plan["ticker"],
@@ -272,8 +281,8 @@ def plan_record(
             "entry_high": plan.get("entry_high"),
             "initial_stop": plan.get("initial_stop"),
             "target1": plan.get("target1"),
-            "valid_from": plan.get("valid_from"),
-            "valid_until": plan.get("valid_until"),
+            "valid_from": window_start,
+            "valid_until": window_end,
             "shares": plan.get("shares"),
             "max_hold_sessions": plan.get("max_hold_sessions"),
         },
@@ -283,7 +292,7 @@ def plan_record(
             "quantity": sum((trade["quantity"] for trade in buys), Decimal(0)),
         },
         "outcome": outcome,
-        "r_multiple": outcome.get("r_multiple"),
+        "r_multiple": _decimal_or_none(outcome.get("r_multiple")),
         "r_text": outcome.get("r_text"),
         "tags": tags,
         "followed": followed,
@@ -301,13 +310,14 @@ def week_bounds(session: date) -> tuple[date, date]:
     return session - timedelta(days=session.weekday()), session
 
 
-def _listing(candidates_week: list[dict]) -> dict:
+def _listing(candidates_week: list[dict], *, week_start: date, week_end: date) -> dict:
     """本周名单（spec §5.4）：新上榜 = 本周首次上榜当天 ``detail.streak`` 为 1；掉出 = 本周
-    最后一个交易日不在榜；再次上榜最多 = 周内掉出又回来的次数最多（没有则 None）。"""
+    最后一个交易日不在榜；再次上榜最多 = 周内掉出又回来的次数最多（没有则 None）。周内
+    的交易日历来自 data.calendar（而不是候选行的日期集）：整天空缺的日子也要算进出与回榜。"""
     rows = sorted(candidates_week or [], key=lambda row: (row["session"], row["ticker"]))
     if not rows:
         return {"new": [], "dropped": [], "most_relisted": None}
-    sessions = sorted({row["session"] for row in rows})
+    sessions = trading_days_between(week_start, week_end)
     seen: dict[str, list[date]] = {}
     first_streak: dict[str, int] = {}
     for row in rows:
@@ -364,7 +374,9 @@ def weekly_summary(
         "week_end": week_end,
         "ended": len(week),
         "followed": sum(1 for record in week if record["followed"]),
-        "deviated": sum(1 for record in week if not record["followed"]),
+        "deviated": sum(
+            1 for record in week if any(tag["code"] in DEVIATIONS for tag in record.get("tags") or [])
+        ),  # 有偏差 = 打了偏差标签，不等价于不照做（被替换且进过区间的未买计划两边都不是）
         "tag_counts": tag_counts,
         "closed": closed,
         "total_r": sum((row["r_multiple"] for row in closed if row["r_multiple"] is not None), Decimal(0)),
@@ -380,7 +392,7 @@ def weekly_summary(
         "equity_start": equity_start,
         "equity_end": equity_end,
         "realized_pnl": realized_pnl,
-        "listing": _listing(candidates_week),
+        "listing": _listing(candidates_week, week_start=week_start, week_end=week_end),
     }
 
 

@@ -47,7 +47,7 @@ def validate_condition(raw: Any) -> dict:
         converted = Decimal(str(level))
     except (InvalidOperation, TypeError, ValueError):
         raise ValueError(f"invalid_condition: {kind} 需要正数 level") from None
-    if converted <= 0:
+    if not converted.is_finite() or converted <= 0:  # NaN / Infinity 不是有限正数
         raise ValueError(f"invalid_condition: {kind} 需要正数 level")
     return {"kind": kind, "level": converted, "ma": None}
 

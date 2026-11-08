@@ -466,6 +466,16 @@ def test_weekly_lists_closed_and_not_bought():
                     "r_multiple": D("0.56"),
                 },
             },
+            {
+                "ticker": "ORCL",
+                "end_reason": "收盘跌破止损，未买入",
+                "hypothetical": {
+                    "status": "unfinished",
+                    "exit_session": date(2026, 11, 6),
+                    "exit_price": D("33.00"),
+                    "r_multiple": D("1.25"),
+                },
+            },
         ],
         equity_start=D("12000.00"),
         equity_end=D("12500.50"),
@@ -477,8 +487,10 @@ def test_weekly_lists_closed_and_not_bought():
     assert "偏差标签：早卖 ×1。" in md
     assert "- AAPL：R 1.25，用户自行卖出，标签：早卖" in md
     assert "- MSFT：R -0.50，初始止损，标签：无" in md
+    assert "R 合计 0.75。" in md  # §5.4 的 R 合计只含已平仓，不含假设结果的 0.56
     assert "- TSLA：5 个交易日未买入，如果照做：未成交，价格未进入场区间。" in md
     assert "- NVDA：被替换，如果照做：2026-11-05 以 32.45 离场（移动止损），R 0.56。" in md
+    assert "- ORCL：收盘跌破止损，未买入，如果照做：进行中（2026-11-06 收盘 33.00，R 1.25）。" in md
     assert "- 周初总资产 12000.00，周末总资产 12500.50，本周已实现盈亏 300.00。" in md
     assert "- 新上榜：MSFT；掉出：NVDA；再次上榜最多：ORCL。" in md
     assert md.strip().endswith("金额单位美元。")

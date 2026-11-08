@@ -344,7 +344,7 @@ def _hypothetical_sentence(simulation: dict | None) -> str:
             f"（{why}），R {simulation['r_multiple']}"
         )
     return (
-        f"如果照做：持有中（{simulation['exit_session']:%Y-%m-%d} 收盘 {price_text(simulation['exit_price'])}，"
+        f"如果照做：进行中（{simulation['exit_session']:%Y-%m-%d} 收盘 {price_text(simulation['exit_price'])}，"
         f"R {simulation['r_multiple']}）"
     )
 
@@ -370,6 +370,7 @@ def render_weekly(weekly: dict, *, as_of: datetime) -> str:
             why = WEEKLY_EXIT_TEXT.get(row.get("exit_reason") or "", row.get("exit_reason") or "—")
             tags = "、".join(row.get("tags") or []) or "无"
             rows.append(f"- {row['ticker']}：R {r if r is not None else '—'}，{why}，标签：{tags}")
+        rows.append(f"R 合计 {weekly.get('total_r', 0)}。")  # §5.4：只含已平仓，不含假设结果
         sections.append(rows)
     not_bought = weekly.get("not_bought") or []
     if not_bought:

@@ -53,6 +53,8 @@ def test_validate_condition_kinds_and_errors():
         {"kind": "close_above"},
         {"kind": "close_above", "level": -1},
         {"kind": "close_above", "level": 0},
+        {"kind": "close_above", "level": "NaN"},
+        {"kind": "close_below", "level": "Infinity"},
         {"kind": "close_above_ma"},
         {"kind": "close_above_ma", "ma": 30},
     ):

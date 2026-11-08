@@ -107,6 +107,16 @@ def test_window_spans_from_first_validity_to_last_valid_until():
     ]
     assert retrospect.touched_zone(plan, bars) is True
     assert retrospect.touched_zone(plan, bars[:2]) is False
+    # 复盘行的「计划说的」用同一个窗口（§5.1/R2）：延续过的 valid_from 不再露出被覆盖的值
+    record = retrospect.plan_record(
+        plan=_plan(valid_from=date(2026, 11, 6), valid_until=date(2026, 11, 13)),
+        events=[],
+        trades=[],
+        bars=bars[:1],
+        candidate=None,
+        trail_atr=D(2),
+    )
+    assert record["planned"]["valid_from"] == date(2026, 11, 3) and record["planned"]["valid_until"] == date(2026, 11, 13)
 
 
 def test_tags_each_code_once():
@@ -532,6 +542,102 @@ def test_weekly_summary_counts_and_lists():
     assert weekly["realized_pnl"] == D("300.00")
     assert weekly["listing"] == {"new": ["MSFT"], "dropped": ["NVDA"], "most_relisted": "ORCL"}
     assert weekly["week_start"] == date(2026, 11, 2) and weekly["week_end"] == date(2026, 11, 6)
+
+
+def test_plan_record_normalizes_repo_round_tripped_r_multiple():
+    """仓储的 jsonb 编码把 outcome 里的 Decimal 存成字符串（core.dbutil._plan_json），
+    回读后的 r_multiple 是 "1.25" 这样的字符串；复盘行归一回 Decimal，聚合不炸。"""
+    from json import loads
+
+    from investment_assistant.core.dbutil import _plan_json
+
+    outcome = {
+        "entry_in_zone": True,
+        "exit_reason": "manual",
+        "r_multiple": D("1.25"),
+        "r_text": None,
+        "stop_delay_sessions": None,
+    }
+    persisted = loads(_plan_json(outcome))  # 与 v3_plans.outcome 的 jsonb 往返同构
+    assert persisted["r_multiple"] == "1.25"  # 存的确实是字符串
+    record = retrospect.plan_record(
+        plan=_plan(status="closed", outcome=persisted, ended_session=date(2026, 11, 6), end_reason="已平仓"),
+        events=[_event("stop_order_confirmed", date(2026, 11, 3))],
+        trades=[_trade("buy", date(2026, 11, 3), "32.00", 100, tid=1), _trade("sell", date(2026, 11, 6), "33.00", 100, tid=2)],
+        bars=[],
+        candidate={"trigger_rules": ["pullback"], "setup_tier": "favorable", "industry": "半导体"},
+        trail_atr=D(2),
+    )
+    assert isinstance(record["r_multiple"], D) and record["r_multiple"] == D("1.25")
+    weekly = retrospect.weekly_summary(
+        records=[record],
+        week_start=date(2026, 11, 2),
+        week_end=date(2026, 11, 6),
+        equity_start=None,
+        equity_end=None,
+        realized_pnl=D(0),
+        candidates_week=[],
+    )
+    assert weekly["total_r"] == D("1.25")
+    stats = retrospect.rule_stats([record], key="trigger_rules", realized=True, min_sample=1)
+    assert stats[0]["total_r"] == D("1.25") and stats[0]["win_rate"] == D(1)
+
+
+def test_weekly_deviated_counts_only_tagged_plans():
+    """§5.4 的「有偏差」只数打了偏差标签的记录：被替换且价格进过区间的未买计划不算偏差。"""
+    touch = [_bar(date(2026, 11, 3), open_="32.00", high="32.20", low="31.90", close="32.00")]
+    record = retrospect.plan_record(
+        plan=_plan(status="replaced", ended_session=date(2026, 11, 5), end_reason="被更好的候选替换"),
+        events=[_event("replaced", date(2026, 11, 5), "被更好的候选替换")],
+        trades=[],
+        bars=touch,
+        candidate=None,
+        trail_atr=D(2),
+    )
+    assert record["tags"] == [] and record["followed"] is False  # 没标签、也不算照做
+    weekly = retrospect.weekly_summary(
+        records=[record],
+        week_start=date(2026, 11, 2),
+        week_end=date(2026, 11, 6),
+        equity_start=None,
+        equity_end=None,
+        realized_pnl=D(0),
+        candidates_week=[],
+    )
+    assert weekly["ended"] == 1 and weekly["followed"] == 0
+    assert weekly["deviated"] == 0  # 有偏差 ≠ 不照做：只有打了偏差标签才算
+
+
+def test_listing_uses_trading_calendar_across_empty_sessions():
+    """名单推导用交易日本历而不是候选行的日期集：最后一个交易日整天空缺照报掉出；周中空缺算再上榜。"""
+    # 周一在榜、之后整周没有候选行 → 掉出（只看候选行日期的实现会漏）
+    final_empty = retrospect.weekly_summary(
+        records=[],
+        week_start=date(2026, 11, 2),
+        week_end=date(2026, 11, 6),
+        equity_start=None,
+        equity_end=None,
+        realized_pnl=D(0),
+        candidates_week=[{"session": date(2026, 11, 2), "ticker": "AMD", "detail": {"streak": 3}}],
+    )
+    assert final_empty["listing"]["dropped"] == ["AMD"]
+    # 周一在榜、周二空缺、周三回榜 → 周二的空缺算一次再上榜
+    middle_empty = retrospect.weekly_summary(
+        records=[],
+        week_start=date(2026, 11, 2),
+        week_end=date(2026, 11, 6),
+        equity_start=None,
+        equity_end=None,
+        realized_pnl=D(0),
+        candidates_week=[
+            {"session": date(2026, 11, 2), "ticker": "AMD", "detail": {"streak": 3}},
+            {"session": date(2026, 11, 4), "ticker": "AMD", "detail": {"streak": 1}},
+            {"session": date(2026, 11, 5), "ticker": "AMD", "detail": {"streak": 2}},
+            {"session": date(2026, 11, 6), "ticker": "AMD", "detail": {"streak": 3}},
+        ],
+    )
+    assert middle_empty["listing"]["most_relisted"] == "AMD"
+    assert middle_empty["listing"]["dropped"] == []
 
 
 def test_rule_stats_threshold_and_separation():
