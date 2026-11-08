@@ -116,7 +116,9 @@ def test_window_spans_from_first_validity_to_last_valid_until():
         candidate=None,
         trail_atr=D(2),
     )
-    assert record["planned"]["valid_from"] == date(2026, 11, 3) and record["planned"]["valid_until"] == date(2026, 11, 13)
+    assert record["planned"]["valid_from"] == date(2026, 11, 3) and record["planned"]["valid_until"] == date(
+        2026, 11, 13
+    )
 
 
 def test_tags_each_code_once():
@@ -563,7 +565,10 @@ def test_plan_record_normalizes_repo_round_tripped_r_multiple():
     record = retrospect.plan_record(
         plan=_plan(status="closed", outcome=persisted, ended_session=date(2026, 11, 6), end_reason="已平仓"),
         events=[_event("stop_order_confirmed", date(2026, 11, 3))],
-        trades=[_trade("buy", date(2026, 11, 3), "32.00", 100, tid=1), _trade("sell", date(2026, 11, 6), "33.00", 100, tid=2)],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "32.00", 100, tid=1),
+            _trade("sell", date(2026, 11, 6), "33.00", 100, tid=2),
+        ],
         bars=[],
         candidate={"trigger_rules": ["pullback"], "setup_tier": "favorable", "industry": "半导体"},
         trail_atr=D(2),
