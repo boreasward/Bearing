@@ -165,5 +165,6 @@ def test_week_parameter_switches_weekly(client, v3_tx):
 def test_bad_week_400(client, v3_tx):
     assert client.get("/api/retrospect?week=not-a-date").status_code == 400
     assert client.get("/api/retrospect?week=2026-13-99").status_code == 400
+    assert client.get("/api/retrospect?week=20261104").status_code == 400  # 契约只认 YYYY-MM-DD，基本格式拦掉
     assert client.get("/api/retrospect?limit=0").status_code == 400
     assert client.get("/api/retrospect?limit=101").status_code == 400

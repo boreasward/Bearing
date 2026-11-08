@@ -28,6 +28,8 @@ def get_retrospect(limit: int = 20, week: str | None = None):
             week_end = date.fromisoformat(week)
         except ValueError:
             return _bad("week 需为 YYYY-MM-DD")
+        if week_end.isoformat() != week:  # 契约只认 YYYY-MM-DD：fromisoformat 也认 20261104，拦掉
+            return _bad("week 需为 YYYY-MM-DD")
 
     def _read(env):
         return env.read(

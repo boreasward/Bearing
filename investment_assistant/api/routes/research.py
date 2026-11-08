@@ -29,6 +29,18 @@ def _bad(message: str) -> JSONResponse:
     return JSONResponse({"error": f"invalid_argument: {message}"}, status_code=400)
 
 
+def _ok_or_contract_error(result):
+    """同 deps.ok_or_error，但错误按接口契约表返回单串 {"error": "code[: 说明]"}——forward 的
+    missing_argument / unknown_argument 带着「: 参数名」，拆成 detail 键会违反契约。只用于本模块的
+    写入口（deps.ok_or_error 的既有调用方不受影响）。"""
+    try:
+        data = result()
+    except ValueError as exc:
+        code = str(exc).partition(":")[0].strip()
+        return JSONResponse({"error": str(exc)}, status_code=404 if code in deps.NOT_FOUND_CODES else 400)
+    return deps.ok(data)
+
+
 def _condition(condition: dict | None) -> dict | None:
     """存储的条件 JSON 转成契约形状 {"kind","level","ma"}：level 过 price_value 取到分
     （价位是字符串），close_above_ma 的 ma 原样是整数。"""
@@ -118,6 +130,6 @@ def research_detail(research_id: int):
 
 @router.post("/{research_id}/drop")
 def drop(research_id: int, body: dict = BODY):
-    return deps.ok_or_error(
+    return _ok_or_contract_error(
         lambda: deps.forward(research_tools.drop_research, deps.web_env(), {**body, "research_id": research_id})
     )

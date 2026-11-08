@@ -10,6 +10,7 @@ from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts import research_repo
 
 SESSION = date(2026, 11, 4)  # 周三
+D2 = date(2026, 11, 3)  # 周二：stale-only 日线与已触发研究用
 NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)
 
 CARD_KEYS = {
@@ -37,8 +38,8 @@ EVENT_FIELDS = {"session", "event", "reason", "before", "after", "source", "crea
 ISO_STAMP = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^+Z]*(?:Z|[+-]\d{2}:\d{2})"  # ISO 8601 T 形式且带时区
 
 
-def _bars(n=20, *, close=100.0):
-    days = [SESSION - timedelta(days=i) for i in range(n)][::-1]
+def _bars(n=20, *, close=100.0, end=SESSION):  # end：日线停在哪一天（缺省含当日）
+    days = [end - timedelta(days=i) for i in range(n)][::-1]
     return [
         {
             "price_date": d,
@@ -210,7 +211,55 @@ def test_bad_group_and_limit_400(client, v3_tx):
     assert client.get("/api/research?limit=101").status_code == 400
     with core_tx._tx() as conn:  # 有运行记录才轮得到表单校验（web_env 先于 forward，同计划接口）
         _run(conn)
-    assert client.post("/api/research/1/drop", json={"request_id": "x"}).status_code == 400  # 缺 confirmed
+    missing = client.post("/api/research/1/drop", json={"request_id": "x"})  # 缺 confirmed
+    assert missing.status_code == 400
+    assert missing.json() == {"error": "missing_argument: confirmed"}  # 契约：单串，不拆 detail
+    extra = client.post(  # 未知键：forward 先拒，不到宿主函数
+        "/api/research/1/drop", json={"request_id": "x", "confirmed": True, "bogus": 1}
+    )
+    assert extra.status_code == 400 and extra.json() == {"error": "unknown_argument: bogus"}
+
+
+def test_card_display_state_boundaries(client, v3_tx):
+    """Task 5 从卡片字段推导显示状态——四种边界：尚无条件、已触发但缺当日日线、
+    均线历史不足、只有历史日线（stale-only，要能和完全没有日线区分开）。"""
+    with core_tx._tx() as conn:
+        _run(conn)
+        data_repo.store_bars(conn, "IBM", _bars(), now=NOW)  # 日线齐（含当日）
+        data_repo.store_bars(conn, "ORCL", _bars(close=101.0, end=D2), now=NOW)  # 只到 11-03
+        data_repo.store_bars(conn, "AMD", _bars(), now=NOW)  # 20 根 < ma 50
+        data_repo.store_bars(conn, "INTC", _bars(close=101.0, end=D2), now=NOW)  # 只到 11-03
+        research_repo.insert_research(conn, _research("IBM"))  # (a) 尚无条件
+        research_repo.insert_research(  # (b) 已触发（11-03 条件已到），当日缺日线
+            conn,
+            _research(
+                "ORCL",
+                condition={"kind": "close_above", "level": "100"},
+                condition_text="收盘站上 100.00",
+                triggered_session=D2,
+            ),
+        )
+        research_repo.insert_research(  # (c) 均线历史不足：20 根日线 < 50 日均线
+            conn,
+            _research("AMD", condition={"kind": "close_above_ma", "ma": 50}, condition_text="收盘站上 50 日均线"),
+        )
+        research_repo.insert_research(  # (d) stale-only：有历史日线、没有当日的
+            conn,
+            _research("INTC", condition={"kind": "close_above", "level": "105"}, condition_text="收盘站上 105.00"),
+        )
+    cards = {card["ticker"]: card for card in client.get("/api/research?group=watching").json()["research"]}
+    # (a) 尚无条件：不判条件、也不算缺日线（宿主不逐日复查它，spec §6.4）
+    assert cards["IBM"]["condition"] is None and cards["IBM"]["condition_met_today"] is None
+    assert cards["IBM"]["missing_bar"] is False and cards["IBM"]["last_close"] == "100.00"
+    # (b) 已触发：显示「条件已到，待复看」——即便当日缺日线也不算 missing_bar
+    assert cards["ORCL"]["triggered_session"] == D2.isoformat() and cards["ORCL"]["missing_bar"] is False
+    assert cards["ORCL"]["condition_met_today"] is True  # 按最后一根已知日线（11-03 收盘 101）判
+    # (c) 均线历史不足：日线齐但根数不够 → 条件判不出（None）、不算缺日线
+    assert cards["AMD"]["condition"] == {"kind": "close_above_ma", "level": None, "ma": 50}
+    assert cards["AMD"]["condition_met_today"] is None and cards["AMD"]["missing_bar"] is False
+    # (d) stale-only：missing_bar 真、last_close 是最后一根历史收盘（非 None，与 SNDK 没有任何日线区分）
+    assert cards["INTC"]["missing_bar"] is True and cards["INTC"]["last_close"] == "101.00"
+    assert cards["INTC"]["condition_met_today"] is False  # 101 < 105，按最后一根已知日线判
 
 
 def test_research_needs_a_run_record(client, v3_tx):
