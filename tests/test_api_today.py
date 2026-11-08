@@ -115,6 +115,10 @@ def test_today_returns_actions_and_account(client, v3_tx):
     account = body["account"]
     assert set(account) == {"cash", "equity", "unrealized_pnl", "realized_pnl", "cash_negative", "notes"}
     assert isinstance(account["cash"], str) and D(account["cash"]) == D(9000)  # 金额是字符串
+    # 金额取到分、股数去掉存储尾零：页面原样显示这些字符串（2026-11-07 用户截图）
+    assert account["cash"] == "9000.00" and account["equity"] == "10000.00"
+    assert account["unrealized_pnl"] == "0.00" and account["realized_pnl"] == "0.00"
+    assert str(action["quantity"]) == "10"
     assert D(account["equity"]) == D(10000)  # 9000 + 10 × 100
 
 

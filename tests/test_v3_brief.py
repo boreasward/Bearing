@@ -285,3 +285,28 @@ def test_regime_line_does_not_repeat_the_same_word():
     assert "- 区制：中性\n" in neutral and "中性（中性）" not in neutral
     risk_on = render_brief(view(market={**market, "label": "risk_on", "regime_tier": "favorable"}), final=True)
     assert "- 区制：进攻（有利）" in risk_on
+
+
+def test_display_values_for_money_quantity_and_price():
+    from investment_assistant.core.texts import money_value, price_value, quantity_value
+
+    assert str(money_value(D("-2736.000000000000"))) == "-2736.00"
+    assert str(money_value(D("12.345"))) == "12.35"
+    assert money_value(None) is None
+    assert str(quantity_value(D("120.000000"))) == "120"
+    assert str(quantity_value(D("0.500000"))) == "0.5"
+    assert str(price_value(D("75.870000"))) == "75.87"
+    assert str(price_value(D("100.000000"))) == "100"
+
+
+def test_holding_line_shows_money_to_the_cent():
+    holding = {
+        "ticker": "RKLB",
+        "next_action": {"kind": "hold", "text": "继续持有"},
+        "stop": D("44.280000"),
+        "unrealized_pnl": D("-2736.000000000000"),
+        "pnl_pct": -0.3005,
+    }
+    text = render_brief(view(holdings=[holding]), final=True)
+    line = next(row for row in text.splitlines() if row.startswith("- RKLB"))
+    assert "止损 44.28" in line and "浮动盈亏 -2736.00（-30.0%）" in line

@@ -14,6 +14,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from investment_assistant.config import AssistantConfig
+from investment_assistant.core.texts import quantity_value
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import trading_days_between
 from investment_assistant.execution.plan_levels import _cent
@@ -74,7 +75,7 @@ def plan_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConf
                 "kind": action["kind"],
                 "text": action["text"],
                 "stop": action["stop"],
-                "quantity": position["quantity"],
+                "quantity": quantity_value(position["quantity"]),
                 "reason": action["reason"],
             }
         )

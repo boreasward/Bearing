@@ -170,6 +170,9 @@ def test_holdings_group_card_fields(client, v3_tx):
     assert isinstance(card["levels"]["entry_low"], str) and D(card["levels"]["stop"]) == D(96)
     assert set(card["position"]) == {"quantity", "avg_cost", "last_close", "unrealized_pnl", "unrealized_pct"}
     assert D(card["position"]["quantity"]) == D(10) and D(card["position"]["last_close"]) == D(100)
+    # 2026-11-07 用户截图：「-2736.000000000000」「120.000000 股」「成本 75.870000」——页面原样显示这些字符串
+    assert card["position"]["quantity"] == "10" and card["position"]["avg_cost"] == "100"
+    assert card["position"]["unrealized_pnl"] == "0.00" and card["position"]["last_close"] == "100"
     assert card["next_action"]["kind"] == "stop_order"  # 未确认止损单
     assert card["stop_order_status"] == "none" and card["held_sessions"] == 0
     assert card["close_above_entry"] is False  # 非 pending 一律 False

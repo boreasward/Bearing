@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from investment_assistant.core.texts import NO_EQUITY_TEXT, REGIME_LABEL_TEXT, price_text
+from investment_assistant.core.texts import NO_EQUITY_TEXT, REGIME_LABEL_TEXT, money_value, price_text, quantity_value
 from investment_assistant.facts.coverage import coverage_lines
 from investment_assistant.facts.ranking import TIER_TEXT
 
@@ -111,7 +111,7 @@ def _holding_lines(holdings: list[dict], *, final: bool) -> list[str]:
             parts.append(action["text"])
         if row.get("stop") is not None:
             parts.append(f"止损 {price_text(row['stop'])}")
-        pnl, pct = row.get("unrealized_pnl"), row.get("pnl_pct")
+        pnl, pct = money_value(row.get("unrealized_pnl")), row.get("pnl_pct")
         if pnl is not None:
             parts.append(f"浮动盈亏 {pnl}（{pct:+.1%}）" if pct is not None else f"浮动盈亏 {pnl}")
         elif pct is not None:
@@ -125,7 +125,7 @@ def _holding_lines(holdings: list[dict], *, final: bool) -> list[str]:
             verdict = REVIEW_VERDICT_TEXT.get(review.get("verdict"), review.get("verdict"))
             parts.append(f"复查：{verdict}——{review['reasons']}" if review.get("reasons") else f"复查：{verdict}")
         if not parts and row.get("quantity") is not None:
-            parts.append(f"{row['quantity']} 股，均价 {price_text(row['avg_cost'])}")
+            parts.append(f"{quantity_value(row['quantity'])} 股，均价 {price_text(row['avg_cost'])}")
         lines.append(f"- {row['ticker']}：" + "，".join(parts) + "。")
     return lines
 

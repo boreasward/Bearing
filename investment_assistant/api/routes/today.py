@@ -6,6 +6,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+from investment_assistant.core.texts import money_value
+
 from fastapi import APIRouter
 
 from investment_assistant.api import deps
@@ -26,11 +28,11 @@ def _account_row(conn, *, session: date | None, cutoff_at: datetime) -> dict:
     unrealized = sum(
         (row["unrealized_pnl"] for row in ledger["positions"] if row["unrealized_pnl"] is not None), Decimal(0)
     )
-    return {
-        "cash": ledger["cash"],
-        "equity": ledger["equity"],
-        "unrealized_pnl": unrealized,
-        "realized_pnl": ledger["realized_pnl"],
+    return {  # 页面原样显示这些字符串：金额取到分（core.texts.money_value）
+        "cash": money_value(ledger["cash"]),
+        "equity": money_value(ledger["equity"]),
+        "unrealized_pnl": money_value(unrealized),
+        "realized_pnl": money_value(ledger["realized_pnl"]),
         "cash_negative": ledger["cash_negative"],
         "notes": ledger["notes"],
     }

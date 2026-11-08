@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from investment_assistant.api import deps
 from investment_assistant.data import repo as data_repo
 from investment_assistant.execution import plan_line
+from investment_assistant.core.texts import money_value, price_value, quantity_value
 from investment_assistant.execution.plan_levels import cent
 from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.facts import plan_repo
@@ -50,13 +51,13 @@ def _card(conn, env, plan: dict) -> dict:
     position_row = None
     next_action = None
     if plan["status"] == "open" and position is not None:
-        position_row = {
-            "quantity": position["quantity"],
-            "avg_cost": position["avg_cost"],
-            "last_close": last_close,
+        position_row = {  # 页面原样显示：股数去尾零、价格去尾零、金额取到分（core.texts）
+            "quantity": quantity_value(position["quantity"]),
+            "avg_cost": price_value(position["avg_cost"]),
+            "last_close": price_value(last_close),
             "unrealized_pnl": None
             if last_close is None
-            else position["quantity"] * (last_close - position["avg_cost"]),
+            else money_value(position["quantity"] * (last_close - position["avg_cost"])),
             "unrealized_pct": None if last_close is None else last_close / position["avg_cost"] - 1,
         }
         shown = dict(plan)  # 给用户看的止损价取到分（与今日操作同一口径）
