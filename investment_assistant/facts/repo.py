@@ -114,8 +114,7 @@ def candidate_at(conn, session: date, ticker: str) -> dict | None:
     """A ticker's candidate row of the latest run on that trading session (highest id), if any."""
     return _one(
         conn,
-        f"SELECT {_CANDIDATE_COLUMNS} FROM v3_candidates WHERE session = %s AND ticker = %s "
-        "ORDER BY id DESC LIMIT 1",
+        f"SELECT {_CANDIDATE_COLUMNS} FROM v3_candidates WHERE session = %s AND ticker = %s ORDER BY id DESC LIMIT 1",
         (session, ticker),
     )
 

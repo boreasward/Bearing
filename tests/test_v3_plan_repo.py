@@ -318,9 +318,7 @@ def test_plan_row_carries_research_id(v3_db):
 def test_brief_weekly_columns_update_and_survive_upsert(v3_db):
     conn = v3_db
     repo.insert_run(conn, _run_row("run-w"))  # v3_briefs.run_id 有外键
-    plan_repo.upsert_brief(
-        conn, {"session": SESSION, "run_id": None, "status": "draft", "draft_md": "# 草稿"}
-    )
+    plan_repo.upsert_brief(conn, {"session": SESSION, "run_id": None, "status": "draft", "draft_md": "# 草稿"})
     weekly = plan_repo.update_brief(conn, SESSION, weekly_md="# 周报", pushed_weekly_at=PUSHED_AT)
     assert weekly["weekly_md"] == "# 周报" and weekly["pushed_weekly_at"] == PUSHED_AT
     again = plan_repo.upsert_brief(

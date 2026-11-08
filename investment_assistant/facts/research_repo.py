@@ -113,9 +113,7 @@ def watching_tickers(conn) -> list[str]:
     """The tickers with a watching research, sorted and deduplicated."""
     return [
         row["ticker"]
-        for row in _all(
-            conn, "SELECT DISTINCT ticker FROM v3_research WHERE status = 'watching' ORDER BY ticker", []
-        )
+        for row in _all(conn, "SELECT DISTINCT ticker FROM v3_research WHERE status = 'watching' ORDER BY ticker", [])
     ]
 
 
