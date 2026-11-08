@@ -157,6 +157,30 @@ def seed(conn):
 ISO_STAMP = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^+Z]*(?:Z|[+-]\d{2}:\d{2})"  # ISO 8601 T 形式且带时区
 
 
+def test_card_prices_two_decimals(client, v3_tx):
+    """v3.2 §7：持仓卡的均价、最新收盘与浮动盈亏都是两位小数字符串（price_value / money_value
+    取到分，四舍五入）。"""
+    with core_tx._tx() as conn:
+        _run(conn)
+        data_repo.store_bars(conn, "AAPL", _bars(close=100.456), now=NOW)
+        facts_repo.insert_trade(
+            conn,
+            {
+                "request_id": "t-2",
+                "ticker": "AAPL",
+                "side": "buy",
+                "quantity": D(10),
+                "price": D("99.984"),
+                "executed_at": datetime(2026, 11, 4, 15, tzinfo=UTC),
+            },
+        )
+        plan_repo.insert_plan(conn, _plan_row("AAPL", status="open", start_session=SESSION))
+    position = client.get("/api/plans?group=holdings").json()["plans"][0]["position"]
+    assert position["avg_cost"] == "99.98"  # 99.984 → 99.98
+    assert position["last_close"] == "100.46"  # 100.456 → 100.46（HALF_UP）
+    assert position["unrealized_pnl"] == "4.72"  # 10 × (100.456 − 99.984)
+
+
 def test_holdings_group_card_fields(client, v3_tx):
     with core_tx._tx() as conn:
         seed(conn)
@@ -170,9 +194,9 @@ def test_holdings_group_card_fields(client, v3_tx):
     assert isinstance(card["levels"]["entry_low"], str) and D(card["levels"]["stop"]) == D(96)
     assert set(card["position"]) == {"quantity", "avg_cost", "last_close", "unrealized_pnl", "unrealized_pct"}
     assert D(card["position"]["quantity"]) == D(10) and D(card["position"]["last_close"]) == D(100)
-    # 2026-11-07 用户截图：「-2736.000000000000」「120.000000 股」「成本 75.870000」——页面原样显示这些字符串
-    assert card["position"]["quantity"] == "10" and card["position"]["avg_cost"] == "100"
-    assert card["position"]["unrealized_pnl"] == "0.00" and card["position"]["last_close"] == "100"
+    # 股数去存储尾零（quantity_value）、价格与金额取到分（price_value / money_value，v3.2 §7）
+    assert card["position"]["quantity"] == "10" and card["position"]["avg_cost"] == "100.00"
+    assert card["position"]["unrealized_pnl"] == "0.00" and card["position"]["last_close"] == "100.00"
     assert card["next_action"]["kind"] == "stop_order"  # 未确认止损单
     assert card["stop_order_status"] == "none" and card["held_sessions"] == 0
     assert card["close_above_entry"] is False  # 非 pending 一律 False

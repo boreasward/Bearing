@@ -68,6 +68,8 @@ def create_app() -> FastAPI:
         page_routes.ledger.router,
         page_routes.chats.router,
         page_routes.settings.router,
+        page_routes.research.router,
+        page_routes.retrospect.router,
     ):
         app.include_router(page_router)
 

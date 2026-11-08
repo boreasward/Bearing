@@ -33,6 +33,23 @@ def test_api_routers_mount_before_the_fallback_routes(client):
             assert all(getattr(sub, "path", "").startswith("/api/") for sub in subs.routes)
 
 
+def test_research_and_retrospect_routes_before_catch_all(client):
+    """v3.2 新增的四个页面路由（研究两组 / 单份 / 放弃、复盘）也注册在两个兜底之前，
+    且都在公开 openapi 面里。"""
+    routes = client.app.router.routes
+    fallbacks = [i for i, route in enumerate(routes) if getattr(route, "path", "") == "/{full_path:path}"]
+    assert len(fallbacks) == 2
+    wanted = {"/api/research", "/api/research/{research_id}", "/api/research/{research_id}/drop", "/api/retrospect"}
+    indexes = []  # 惰性 IncludedRouter 形态看子路由，展开形态看路由自身（同上面的顺序测试）
+    for i, route in enumerate(routes):
+        subs = getattr(route, "original_router", None)
+        for candidate in [route] if subs is None else subs.routes:
+            if getattr(candidate, "path", "") in wanted:
+                indexes.append(i)
+    assert indexes and all(i < fallbacks[0] for i in indexes)
+    assert wanted <= set(client.app.openapi()["paths"])
+
+
 def test_page_api_paths_exist(client):
     """契约表的 20 条路径全部注册（openapi 是公开面；不含两个兑底）。"""
     schema = client.app.openapi()
