@@ -55,6 +55,27 @@ def test_v3_1_ranges(tmp_path):
     assert (cfg.v3.pending_cap, cfg.v3.trail_atr, cfg.v3.chat_turn_seconds) == (10, 10, 1800)
 
 
+def test_v3_2_defaults(tmp_path):
+    cfg = load_config(tmp_path / "missing.json")
+    assert (cfg.v3.research_sessions, cfg.v3.research_entry_atr, cfg.v3.retro_min_sample) == (20, 4.0, 10)
+
+
+def test_v3_2_ranges(tmp_path):
+    for bad, message in (
+        ({"research_sessions": 0}, r"v3\.research_sessions must be in \[1, 60\]"),
+        ({"research_sessions": 61}, r"v3\.research_sessions must be in \[1, 60\]"),
+        ({"research_entry_atr": 1.9}, r"v3\.research_entry_atr must be in \[2, 8\]"),
+        ({"research_entry_atr": 8.1}, r"v3\.research_entry_atr must be in \[2, 8\]"),
+        ({"retro_min_sample": 0}, r"v3\.retro_min_sample must be in \[1, 100\]"),
+        ({"retro_min_sample": 101}, r"v3\.retro_min_sample must be in \[1, 100\]"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            load_config(_write(tmp_path, {"v3": bad}))
+    ok = {"research_sessions": 60, "research_entry_atr": 8, "retro_min_sample": 100}
+    cfg = load_config(_write(tmp_path, {"v3": ok}))  # 边界值本身合法
+    assert (cfg.v3.research_sessions, cfg.v3.research_entry_atr, cfg.v3.retro_min_sample) == (60, 8.0, 100)
+
+
 def test_file_overrides_and_validation(tmp_path):
     cfg = load_config(_write(tmp_path, {"v3": {"top_n": 3, "win_hi": 0.7}}))
     assert cfg.v3.top_n == 3 and cfg.v3.win_hi == 0.7

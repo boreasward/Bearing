@@ -101,6 +101,22 @@ def test_runs_and_candidates(v3_db):
     assert all(row["session"] == SESSION for row in got)  # session 取自运行行
 
 
+def test_candidate_at_returns_latest_run_row(v3_db):
+    conn = v3_db
+    repo.insert_run(conn, _run_row("run-1"))
+    repo.insert_run(conn, _run_row("run-2"))  # 同一交易日的第二次运行
+    repo.insert_candidates(conn, "run-1", [_candidate("AAPL", 1)])
+    repo.insert_candidates(conn, "run-2", [_candidate("AAPL", 1, screen_group="setup")])
+    repo.insert_candidates(conn, "run-2", [_candidate("MU", 2)])
+    got = repo.candidate_at(conn, SESSION, "AAPL")
+    assert got is not None and got["run_id"] == "run-2"  # 该交易日最新一次运行的那行（id DESC）
+    assert got["screen_group"] == "setup"
+    mu = repo.candidate_at(conn, SESSION, "MU")
+    assert mu is not None and mu["run_id"] == "run-2"
+    assert repo.candidate_at(conn, SESSION, "NVDA") is None
+    assert repo.candidate_at(conn, date(2026, 11, 4), "AAPL") is None  # 别的交易日没有
+
+
 def test_verdict_upsert(v3_db):
     conn = v3_db
     repo.upsert_verdict(conn, _verdict_row("AAPL"))

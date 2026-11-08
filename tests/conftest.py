@@ -53,6 +53,7 @@ WORKBENCH_MIGRATIONS = (
     "032_v3_agent_first.sql",
     "033_drop_v2_tables.sql",
     "034_v3_1_plan_line.sql",
+    "035_v3_2_research_and_retro.sql",
 )
 
 
@@ -88,14 +89,15 @@ def _workbench_schema(migrations):
 
 @pytest.fixture
 def workbench_db():
-    """The schema through migration 034: the fact tables and the v3_ tables, the v2 tables dropped."""
+    """The schema through migration 035: the fact tables and the v3_ tables, the v2 tables dropped."""
     yield from _workbench_schema(WORKBENCH_MIGRATIONS)
 
 
 @pytest.fixture
 def v3_db():
-    """The schema after migration 034 (迁移 034 之后的 schema): the seven v3_ tables of 032, reshaped
-    as the plan line, plus the v3.1 tables (events, reviews, cash flows, voids, briefs, chats, settings)."""
+    """The schema after migration 035 (迁移 035 之后的 schema): the v3_ tables of 032 reshaped as the plan
+    line, the v3.1 tables (events, reviews, cash flows, voids, briefs, chats, settings), and the v3.2
+    research tables plus the plan/brief columns of 035."""
     yield from _workbench_schema(WORKBENCH_MIGRATIONS)
 
 

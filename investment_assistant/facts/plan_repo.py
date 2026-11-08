@@ -12,7 +12,7 @@ _PLAN_COLUMNS = (
     "max_hold_sessions, valid_from, valid_until, shares, sizing, warnings, thesis, "
     "invalidation, counter, refs, agent_session, start_session, reviewed_through, "
     "stop_hit_session, target_hit_session, sell_instruction, ended_session, end_reason, "
-    "outcome, created_at, updated_at"
+    "outcome, research_id, created_at, updated_at"
 )
 _EVENT_COLUMNS = "id, plan_id, session, event, reason, before, after, source, refs, created_at"
 _REVIEW_COLUMNS = "id, plan_id, session, verdict, reasons, counter, refs, agent_session, created_at, updated_at"
@@ -23,7 +23,7 @@ _VOID_COLUMNS = "id, request_id, kind, target_id, reason, created_at"
 _BRIEF_COLUMNS = (
     "id, session, run_id, status, error, draft_md, final_md, summary, agenda, runtime, "
     "provider, model, usage, elapsed_seconds, pushed_error_at, pushed_final_at, "
-    "created_at, updated_at"
+    "weekly_md, pushed_weekly_at, created_at, updated_at"
 )
 _CHAT_COLUMNS = "id, chat_id, title, runtime, provider, model, read_only, created_at, updated_at"
 _MESSAGE_COLUMNS = (
@@ -42,10 +42,10 @@ def insert_plan(conn, row: dict) -> dict:
         "valid_until, shares, sizing, warnings, thesis, invalidation, counter, refs, "
         'agent_session, status, kind, "trailing", confirmed_stop_order, start_session, '
         "reviewed_through, stop_hit_session, target_hit_session, sell_instruction, "
-        "ended_session, end_reason, outcome) "
+        "ended_session, end_reason, outcome, research_id) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, "
         "%s::jsonb, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-        "%s, %s::jsonb) "
+        "%s, %s::jsonb, %s) "
         f"RETURNING {_PLAN_COLUMNS}",
         [
             row["session"],
@@ -82,6 +82,7 @@ def insert_plan(conn, row: dict) -> dict:
             row.get("ended_session"),
             row.get("end_reason"),
             _plan_json(row.get("outcome") or {}),
+            row.get("research_id"),
         ],
     )
     assert saved is not None  # RETURNING always yields the inserted row
@@ -314,6 +315,8 @@ BRIEF_UPDATABLE = (
     "elapsed_seconds",
     "pushed_error_at",
     "pushed_final_at",
+    "weekly_md",
+    "pushed_weekly_at",
 )
 _BRIEF_JSONB = ("agenda", "usage")
 

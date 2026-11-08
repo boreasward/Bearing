@@ -3,8 +3,9 @@
 `feature_flag_changes`, `sector_classifications` and the append-only `v3_` tables of migration 032 (`v3_runs`,
 `v3_candidates`, `v3_trades`, `v3_equity`, `v3_tool_calls`) plus migration 034's record tables (`v3_plan_events`,
 `v3_cash_flows`, `v3_voids`, `v3_chat_messages` — voiding a trade or cash flow appends a `v3_voids` row, the
-original row is never touched). `v3_verdicts`, `v3_plans`, `v3_holding_reviews`, `v3_briefs`, `v3_chats` and
-`v3_settings` are upserted by design (one row per key, rewritten in place) and are not listed. Scans every SQL
+original row is never touched) and migration 035's `v3_research_events`. `v3_verdicts`, `v3_plans`,
+`v3_holding_reviews`, `v3_briefs`, `v3_chats`, `v3_settings` and `v3_research` are upserted or updated
+by design (one row per key, rewritten in place) and are not listed. Scans every SQL
 string literal of the production code (an `ON CONFLICT … DO UPDATE` upsert counts). Offline: parses the source
 files, no database."""
 
@@ -26,6 +27,7 @@ TABLES = (
     "v3_cash_flows",
     "v3_voids",
     "v3_chat_messages",
+    "v3_research_events",
 )
 NAMES = "|".join(TABLES)
 UPDATE = re.compile(rf"\bUPDATE\s+(?:ONLY\s+)?({NAMES})\b(.*)", re.IGNORECASE | re.DOTALL)
@@ -90,6 +92,7 @@ def test_scan_sees_the_real_inserts():
         "v3_cash_flows",
         "v3_voids",
         "v3_chat_messages",
+        "v3_research_events",
     }
 
 

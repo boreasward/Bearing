@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from investment_assistant.facts import plan_repo, repo
+from investment_assistant.facts import plan_repo, repo, research_repo
 
 SESSION = date(2026, 11, 9)
 NEXT_SESSION = date(2026, 11, 10)
@@ -293,6 +293,42 @@ def test_chats_messages_and_seq(v3_db):
     assert [row["seq"] for row in plan_repo.messages(conn, "ch-1")] == [1, 2]
     assert answered["tool_refs"] == ["call:1"]
     assert plan_repo.messages(conn, "ch-2") == []
+
+
+def test_plan_row_carries_research_id(v3_db):
+    conn = v3_db
+    research = research_repo.insert_research(
+        conn,
+        {
+            "ticker": "AAPL",
+            "thesis": "论点",
+            "origin": "chat",
+            "created_session": SESSION,
+            "valid_until": date(2026, 11, 20),
+            "agent_session": "chat-ch-1-1",
+        },
+    )
+    saved = plan_repo.insert_plan(conn, _plan_row("AAPL", research_id=research["id"]))
+    assert saved["research_id"] == research["id"]  # 计划行携带研究关联
+    assert plan_repo.plan(conn, saved["id"]) == saved
+    plain = plan_repo.insert_plan(conn, _plan_row("MU"))
+    assert plain["research_id"] is None  # 不带研究的计划也可以
+
+
+def test_brief_weekly_columns_update_and_survive_upsert(v3_db):
+    conn = v3_db
+    repo.insert_run(conn, _run_row("run-w"))  # v3_briefs.run_id 有外键
+    plan_repo.upsert_brief(
+        conn, {"session": SESSION, "run_id": None, "status": "draft", "draft_md": "# 草稿"}
+    )
+    weekly = plan_repo.update_brief(conn, SESSION, weekly_md="# 周报", pushed_weekly_at=PUSHED_AT)
+    assert weekly["weekly_md"] == "# 周报" and weekly["pushed_weekly_at"] == PUSHED_AT
+    again = plan_repo.upsert_brief(
+        conn,
+        {"session": SESSION, "run_id": "run-w", "status": "draft", "draft_md": "# 草稿二"},
+    )
+    assert again["weekly_md"] == "# 周报"  # upsert_brief 不写这两列，重跑不清空
+    assert again["pushed_weekly_at"] == PUSHED_AT
 
 
 def test_settings_empty_and_round_trip(v3_db):

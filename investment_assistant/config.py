@@ -42,8 +42,8 @@ class WorkbenchConfig:
 
 @dataclass(frozen=True)
 class V3Config:
-    """v3 agent-first phase parameters (v3 spec §15.6); the v3.1 keys follow the v3.1 design §14.
-    Fixed values are the spec's, verbatim."""
+    """v3 agent-first phase parameters (v3 spec §15.6); the v3.1 keys follow the v3.1 design §14
+    and the v3.2 keys the v3.2 design §12. Fixed values are the spec's, verbatim."""
 
     top_n: int = 5
     collect_workers: int = 6
@@ -60,6 +60,9 @@ class V3Config:
     trail_atr: float = 3.0
     brief_budget_minutes: int = 20
     chat_turn_seconds: int = 300
+    research_sessions: int = 20
+    research_entry_atr: float = 4.0
+    retro_min_sample: int = 10
     sector_etfs: tuple[str, ...] = (
         "QQQ",
         "SMH",
@@ -191,6 +194,12 @@ def _validate_v3(cfg: V3Config) -> V3Config:
         raise ValueError("v3.brief_budget_minutes must be in [1, 120]")
     if not 30 <= cfg.chat_turn_seconds <= 1800:
         raise ValueError("v3.chat_turn_seconds must be in [30, 1800]")
+    if not 1 <= cfg.research_sessions <= 60:
+        raise ValueError("v3.research_sessions must be in [1, 60]")
+    if not 2 <= cfg.research_entry_atr <= 8:
+        raise ValueError("v3.research_entry_atr must be in [2, 8]")
+    if not 1 <= cfg.retro_min_sample <= 100:
+        raise ValueError("v3.retro_min_sample must be in [1, 100]")
     return replace(cfg, sector_etfs=tuple(str(etf).strip().upper() for etf in cfg.sector_etfs))
 
 

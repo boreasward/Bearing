@@ -15,8 +15,8 @@ MIGRATION_034 = (Path(__file__).resolve().parents[1] / "migrations" / "034_v3_1_
 
 @pytest.fixture
 def db_033():
-    """The workbench schema as migration 033 left it, before 034 ever runs."""
-    yield from _workbench_schema(tuple(name for name in WORKBENCH_MIGRATIONS if name != "034_v3_1_plan_line.sql"))
+    """The workbench schema as migration 033 left it: everything before 034, so 034 (and its dependents) never ran."""
+    yield from _workbench_schema(WORKBENCH_MIGRATIONS[: WORKBENCH_MIGRATIONS.index("034_v3_1_plan_line.sql")])
 
 
 def _insert_plan(
