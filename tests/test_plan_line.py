@@ -273,7 +273,7 @@ def test_next_action_priority():
         plan={**base, "confirmed_stop_order": D(95)}, position=position, unchecked=False
     )
     assert raise_needed["kind"] == "stop_order"
-    assert raise_needed["text"] == "止损单需上调至 100（当前挂单 95）"
+    assert raise_needed["text"] == "止损单需上调至 100.00（当前挂单 95.00）"
     # 5. 继续持有（挂单与止损一致）
     assert plan_line.next_action(plan={**base, "confirmed_stop_order": D(100)}, position=position, unchecked=False) == {
         "kind": "hold",
@@ -464,4 +464,4 @@ def test_stop_order_raise_text_trims_storage_zeros():
     position = {"quantity": D(10), "avg_cost": D(95), "opened_at": None}
     plan = {**_open_plan(), "stop": D("100.500000"), "confirmed_stop_order": D("95.000000")}
     action = plan_line.next_action(plan=plan, position=position, unchecked=False)
-    assert action["text"] == "止损单需上调至 100.50（当前挂单 95）"
+    assert action["text"] == "止损单需上调至 100.50（当前挂单 95.00）"

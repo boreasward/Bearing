@@ -24,19 +24,13 @@ NO_EQUITY_TEXT = "未提供账户资金，未算股数"
 
 
 def price_value(value):
-    """给用户看的价格（Decimal）：去掉存储精度带来的尾零（库里是 6 位小数），不四舍五入；
-    有小数时至少两位（40.5 → 40.50），整数不带小数（100.000000 → 100）。None 原样返回。"""
+    """给用户看的价格（Decimal）：取到分、四舍五入（40.5 → 40.50、98.000000 → 98.00、123.4567 → 123.46），
+    与 money_value 同口径；库里精度不变，只改显示。None 原样返回。"""
     if value is None:
         return None
-    from decimal import Decimal
+    from decimal import ROUND_HALF_UP, Decimal
 
-    number = Decimal(str(value)).normalize()
-    exponent = number.as_tuple().exponent
-    if exponent >= 0:
-        return number.quantize(Decimal(1))
-    if exponent == -1:
-        return number.quantize(Decimal("0.01"))
-    return number
+    return Decimal(str(value)).quantize(Decimal("0.01"), ROUND_HALF_UP)
 
 
 def price_text(value) -> str:

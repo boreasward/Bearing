@@ -25,14 +25,17 @@ def in_scope(mode: str, ticker: str, top: list[str]) -> bool:
     return True if mode == "chat" else ticker in top
 
 
-def check_agent_levels(levels: dict[str, Decimal], *, last_close: Decimal, atr: Decimal) -> list[str]:
-    """Agent 自报价位的四条宿主护栏（spec §6）：先顺序，再入场带位置、止损距离与 1R 回报。"""
+def check_agent_levels(
+    levels: dict[str, Decimal], *, last_close: Decimal, atr: Decimal, entry_atr: Decimal = Decimal(2)
+) -> list[str]:
+    """Agent 自报价位的四条宿主护栏（spec §6）：先顺序，再入场带位置、止损距离与 1R 回报。
+    入场下限默认收盘 − 2 ATR；研究计划把下限放宽到收盘 − `entry_atr` × ATR（spec §6.6，缺省 4 由调用方传）。"""
     if not levels_ordered(levels):
         return ["unordered"]
     problems: list[str] = []
     if levels["entry_high"] > last_close + atr:
         problems.append("entry_too_high")
-    if levels["entry_low"] < last_close - 2 * atr:
+    if levels["entry_low"] < last_close - entry_atr * atr:
         problems.append("entry_too_low")
     stop_distance = levels["entry_low"] - levels["stop"]
     if stop_distance < atr / 2:

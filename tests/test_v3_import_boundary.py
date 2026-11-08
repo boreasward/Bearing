@@ -27,6 +27,8 @@ KEPT = (
     "investment_assistant.execution.entry_rules",
     "investment_assistant.execution.positions",
     "investment_assistant.execution.plan_line",
+    "investment_assistant.execution.research",
+    "investment_assistant.execution.retrospect",
     "investment_assistant.execution.account",
     "investment_assistant.db",
     "investment_assistant.config",

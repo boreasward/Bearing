@@ -22,7 +22,7 @@ def _account_row(conn, *, session: date | None, cutoff_at: datetime) -> dict:
     session 为 None——read_bars 的 end_date 与 NULL 比较恒为假，等于没有收盘价。"""
     ledger = account_view(
         conn,
-        session=session,
+        session=session,  # type: ignore[arg-type]  # None 即“不取日线”
         cutoff_at=cutoff_at,  # type: ignore[arg-type]  # None 即“不取日线”
     )["ledger"]
     unrealized = sum(

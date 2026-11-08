@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal as D
 
-from investment_assistant.facts.brief import discord_lines, render_brief, render_error_brief
+from investment_assistant.facts.brief import discord_lines, render_brief, render_error_brief, render_weekly
 
 SESSION = date(2026, 11, 4)
 AS_OF = datetime(2026, 11, 5, 8, 30)
@@ -254,8 +254,8 @@ def test_price_text_trims_storage_zeros_without_rounding():
 
     assert price_text(D("164.130000")) == "164.13"
     assert price_text(D("40.500000")) == "40.50"
-    assert price_text(D("34.457")) == "34.457"  # 不四舍五入
-    assert price_text(D("100.000000")) == "100"
+    assert price_text(D("34.457")) == "34.46"  # 取到分、四舍五入（spec §7 / B14）
+    assert price_text(D("100.000000")) == "100.00"
     assert price_text(None) == "—"
 
 
@@ -296,7 +296,7 @@ def test_display_values_for_money_quantity_and_price():
     assert str(quantity_value(D("120.000000"))) == "120"
     assert str(quantity_value(D("0.500000"))) == "0.5"
     assert str(price_value(D("75.870000"))) == "75.87"
-    assert str(price_value(D("100.000000"))) == "100"
+    assert str(price_value(D("100.000000"))) == "100.00"
 
 
 def test_holding_line_shows_money_to_the_cent():
@@ -310,3 +310,172 @@ def test_holding_line_shows_money_to_the_cent():
     text = render_brief(view(holdings=[holding]), final=True)
     line = next(row for row in text.splitlines() if row.startswith("- RKLB"))
     assert "止损 44.28" in line and "浮动盈亏 -2736.00（-30.0%）" in line
+
+
+def _research_rows():
+    return [
+        {
+            "ticker": "SNDK",
+            "day": 3,
+            "thesis": "近期大幅下跌，我认为是入场的时间",
+            "condition_text": "收盘站上 38.00",
+            "last_close": D("38.50"),
+            "state": "triggered",
+            "conclusion": "可以出计划",
+        },
+        {
+            "ticker": "MU",
+            "day": 2,
+            "thesis": "内存涨价周期",
+            "condition_text": "最低价触及 35.00 或以下",
+            "last_close": D("36.10"),
+            "state": "watching",
+            "conclusion": None,
+        },
+        {
+            "ticker": "WDC",
+            "day": 5,
+            "thesis": "同板块联动",
+            "condition_text": "收盘跌破 30.00",
+            "last_close": None,
+            "state": "missing_bar",
+            "conclusion": None,
+        },
+        {
+            "ticker": "STX",
+            "day": 1,
+            "thesis": "论点未定",
+            "condition_text": None,
+            "last_close": D("30.00"),
+            "state": "no_condition",
+            "conclusion": None,
+        },
+    ]
+
+
+def test_research_section_states_and_absent_when_empty():
+    """第 5a 段「研究」：排在待入场计划之后；四种状态文案；最终稿多一句结论；没有研究时整段不出现。"""
+    final = render_brief(view(research=_research_rows()), final=True)
+    lines = final.splitlines()
+    assert "## 研究" in lines
+    assert lines.index("## 研究") > lines.index("## 待入场计划")
+    assert lines.index("## 研究") < lines.index("## 适合交易什么（规则名单）")
+    assert (
+        "- SNDK（第 3 天）：近期大幅下跌，我认为是入场的时间；条件：收盘站上 38.00；"
+        "最新收盘 38.50；条件已到，待复看；结论：可以出计划" in lines
+    )
+    assert "- MU（第 2 天）：内存涨价周期；条件：最低价触及 35.00 或以下；最新收盘 36.10；观察中" in lines
+    assert "- WDC（第 5 天）：同板块联动；条件：收盘跌破 30.00；最新收盘 —；缺日线，未复查" in lines
+    assert "- STX（第 1 天）：论点未定；条件：尚无条件；最新收盘 30.00；尚无条件" in lines
+    # 草稿没有结论句，研究段照常
+    draft = render_brief(view(research=_research_rows()), final=False)
+    assert "## 研究" in draft.splitlines() and "结论：" not in draft
+    # 论点截到 40 字
+    long_thesis = "长" * 60
+    rows = [{**_research_rows()[1], "thesis": long_thesis}]
+    text = render_brief(view(research=rows), final=True)
+    assert f"：{'长' * 40}；条件：" in text and f"{'长' * 41}" not in text
+    # research 为空 → 整段不出现
+    assert "## 研究" not in render_brief(view(research=[]), final=True).splitlines()
+
+
+def test_changes_include_research_lines():
+    changes = {
+        "new_plans": [],
+        "ended_plans": [],
+        "holding_changes": [],
+        "research": ["新研究 SNDK：论点待补", "研究 SNDK 条件已到：收盘站上 38.00"],
+        "new_count": 0,
+        "dropped_count": 0,
+    }
+    text = render_brief(view(changes=changes), final=True)
+    assert "新研究 SNDK：论点待补" in text and "研究 SNDK 条件已到：收盘站上 38.00" in text
+    assert "没有变化" not in text
+
+
+def test_footer_says_usd():
+    assert "金额单位美元" in render_brief(view(), final=True)
+    assert "金额单位美元" in render_brief(view(), final=False)
+    assert render_brief(view(), final=True).strip().endswith("金额单位美元。")
+
+
+def test_discord_research_triggered_line_after_new_plans():
+    lines = discord_lines(view(research=_research_rows()), brief_path="/tmp/briefs/2026-11-04.md")
+    assert lines[3] == "新计划：新计划 MSFT：放量突破"  # 新计划行之后
+    assert lines[4] == "研究 SNDK：条件已到（收盘站上 38.00）"
+    assert lines[5] == "结束的计划：结束 TSLA：5 个交易日未买入"
+    assert lines[-1] == "简报文件：/tmp/briefs/2026-11-04.md"
+
+
+def _weekly(**over):
+    row = {
+        "week_start": date(2026, 11, 2),
+        "week_end": date(2026, 11, 6),
+        "ended": 0,
+        "followed": 0,
+        "deviated": 0,
+        "tag_counts": {},
+        "closed": [],
+        "total_r": D(0),
+        "not_bought": [],
+        "equity_start": None,
+        "equity_end": None,
+        "realized_pnl": D("0.00"),
+        "listing": {"new": [], "dropped": [], "most_relisted": None},
+    }
+    row.update(over)
+    return row
+
+
+def test_weekly_renders_with_no_records():
+    """Review Focus 6：空周的周报照常产出，有标题与页脚。"""
+    md = render_weekly(_weekly(), as_of=AS_OF)
+    assert md.splitlines()[0] == "# 周报 · 2026-11-02–2026-11-06"
+    assert "本周没有结束的计划" in md
+    assert "数据截至 2026-11-06 收盘（采集于北京时间 2026-11-05 08:30）。规则未经验证，不构成投资建议。金额单位美元。" in md
+
+
+def test_weekly_lists_closed_and_not_bought():
+    weekly = _weekly(
+        ended=2,
+        followed=1,
+        deviated=1,
+        tag_counts={"早卖": 1},
+        closed=[
+            {"ticker": "AAPL", "r_multiple": D("1.25"), "exit_reason": "manual", "tags": ["早卖"]},
+            {"ticker": "MSFT", "r_multiple": D("-0.50"), "exit_reason": "initial_stop", "tags": []},
+        ],
+        total_r=D("0.75"),
+        not_bought=[
+            {
+                "ticker": "TSLA",
+                "end_reason": "5 个交易日未买入",
+                "hypothetical": {"status": "not_filled", "reason": "never_in_zone"},
+            },
+            {
+                "ticker": "NVDA",
+                "end_reason": "被替换",
+                "hypothetical": {
+                    "status": "exited",
+                    "exit_session": date(2026, 11, 5),
+                    "exit_price": D("32.45"),
+                    "exit_reason": "trailing_stop",
+                    "r_multiple": D("0.56"),
+                },
+            },
+        ],
+        equity_start=D("12000.00"),
+        equity_end=D("12500.50"),
+        realized_pnl=D("300.00"),
+        listing={"new": ["MSFT"], "dropped": ["NVDA"], "most_relisted": "ORCL"},
+    )
+    md = render_weekly(weekly, as_of=AS_OF)
+    assert "本周结束 2 份：照做 1 份、有偏差 1 份。" in md
+    assert "偏差标签：早卖 ×1。" in md
+    assert "- AAPL：R 1.25，用户自行卖出，标签：早卖" in md
+    assert "- MSFT：R -0.50，初始止损，标签：无" in md
+    assert "- TSLA：5 个交易日未买入，如果照做：未成交，价格未进入场区间。" in md
+    assert "- NVDA：被替换，如果照做：2026-11-05 以 32.45 离场（移动止损），R 0.56。" in md
+    assert "- 周初总资产 12000.00，周末总资产 12500.50，本周已实现盈亏 300.00。" in md
+    assert "- 新上榜：MSFT；掉出：NVDA；再次上榜最多：ORCL。" in md
+    assert md.strip().endswith("金额单位美元。")

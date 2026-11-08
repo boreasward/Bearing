@@ -138,7 +138,7 @@ def test_compute_plan_levels_uses_host_arithmetic(v3_tx):
     assert d["ticker"] == "AAPL" and d["session"] == SESSION.isoformat()
     assert d["levels"] == {"entry_low": "99.00", "entry_high": "101.00", "stop": "96.00", "target1": "108.00"}
     assert d["sizing"]["status"] == "no_equity" and d["sizing"]["shares"] is None
-    assert d["entry_types"] == ["zone_limit", "breakout_stop", "next_open"] and d["max_hold_range"] == [3, 30]
+    assert d["entry_types"] == ["zone_limit", "breakout_stop", "next_open", "pullback"] and d["max_hold_range"] == [3, 30]
 
 
 def test_save_plan_check_order_scope_and_verdict_first(v3_tx):

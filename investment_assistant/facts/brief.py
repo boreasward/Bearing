@@ -7,13 +7,16 @@ view keys consumed here:
 - today_actions: [{'ticker', 'text'}] in §7.4 order; empty -> section 0 absent
 - summary: str | None — the agent's one-liner (final only)
 - changes: {'new_plans': [str], 'ended_plans': [str], 'holding_changes': [str],
-            'new_count': int, 'dropped_count': int} — lines are pre-assembled sentences
+            'research': [str], 'new_count': int, 'dropped_count': int} — lines are pre-assembled sentences
 - market: the market-view dict the old draft rendered
 - holdings: holdings_view rows, plus optional 'earnings_note' and
   'review': {'verdict': 'holds'|'broken'|'unknown', 'reasons': str} (final only)
 - pending_plans: [{'ticker', 'day', 'entry_low', 'entry_high', 'stop', 'target1', 'shares',
                    'valid_until', 'missing_bar'}] — one line each (当天没变的不展开)；missing_bar
   时行尾加「缺日线，未复查」（spec §6.3 末段）
+- research: [{'ticker', 'day', 'thesis', 'condition_text', 'last_close', 'state', 'conclusion'}] —
+  one line each in section 5a (spec §8)；state ∈ triggered/watching/missing_bar/no_condition，
+  conclusion 只进最终稿；空列表 -> 整段不出现
 - candidates: [{'ticker', 'rank', 'reason', 'streak', 'new', 'verdict', 'skip_reason', 'held'}]
 - dropped: [{'ticker', 'reasons': [code|str]}]
 - account: {'cash', 'equity', 'unrealized_pnl', 'realized_pnl'} | None
@@ -38,6 +41,19 @@ DROPPED_REASON_TEXT = {
     "illiquid": "流动性不足",
     "no_setup": "形态不满足",
     "earnings_soon": "财报临近",
+}
+RESEARCH_STATE_TEXT = {
+    "triggered": "条件已到，待复看",
+    "watching": "观察中",
+    "missing_bar": "缺日线，未复查",
+    "no_condition": "尚无条件",
+}
+WEEKLY_EXIT_TEXT = {
+    "initial_stop": "初始止损",
+    "trailing_stop": "移动止损",
+    "max_hold": "持有到期",
+    "thesis_broken": "论点失效",
+    "manual": "用户自行卖出",
 }
 
 
@@ -87,6 +103,7 @@ def _change_lines(view: dict) -> list[str]:
         *(changes.get("new_plans") or []),
         *(changes.get("ended_plans") or []),
         *(changes.get("holding_changes") or []),
+        *(changes.get("research") or []),
     ]
     new_count = changes.get("new_count") or 0
     dropped_count = changes.get("dropped_count") or 0
@@ -144,6 +161,22 @@ def _pending_plan_lines(plans: list[dict]) -> list[str]:
         + ("，缺日线，未复查" if row.get("missing_bar") else "")
         for row in plans
     ]
+
+
+def _research_lines(research: list[dict], *, final: bool) -> list[str]:
+    """第 5a 段「研究」每行（spec §8）：论点截到 40 字，条件缺省「尚无条件」；
+    结论一句只进最终稿。"""
+    lines = []
+    for row in research:
+        line = (
+            f"- {row['ticker']}（第 {row.get('day', 1)} 天）：{(row.get('thesis') or '')[:40]}；"
+            f"条件：{row.get('condition_text') or '尚无条件'}；最新收盘 {price_text(row.get('last_close'))}；"
+            f"{RESEARCH_STATE_TEXT.get(row.get('state') or '', row.get('state') or '—')}"
+        )
+        if final and row.get("conclusion"):
+            line += f"；结论：{row['conclusion']}"
+        lines.append(line)
+    return lines
 
 
 def _candidate_lines(candidates: list[dict], *, top_n: int, final: bool) -> list[str]:
@@ -209,10 +242,10 @@ def _footer_text(view: dict, *, final: bool) -> str:
     session, as_of = view["session"], view["as_of"]
     text = f"数据截至 {session:%Y-%m-%d} 收盘（采集于北京时间 {as_of:%Y-%m-%d %H:%M}）。规则未经验证，不构成投资建议。"
     if not final:
-        return text
+        return text + "金额单位美元。"
     footer = view.get("footer") or {}
     if not footer.get("model"):
-        return text + " 未选定模型，二次确认未做。"
+        return text + " 未选定模型，二次确认未做。金额单位美元。"
     info = [
         f"运行时 {footer.get('runtime') or '—'}",
         f"提供方 {footer.get('provider') or '—'}",
@@ -226,7 +259,7 @@ def _footer_text(view: dict, *, final: bool) -> str:
     text += " " + "；".join(info) + "。"
     if footer.get("note"):
         text += footer["note"]
-    return text
+    return text + "金额单位美元。"
 
 
 def render_brief(view: dict, *, final: bool) -> str:
@@ -246,6 +279,9 @@ def render_brief(view: dict, *, final: bool) -> str:
     sections.append(["## 市场环境", *_market_lines(view.get("market") or {})])
     sections.append(["## 持仓", *_holding_lines(view.get("holdings") or [], final=final)])
     sections.append(["## 待入场计划", *_pending_plan_lines(view.get("pending_plans") or [])])
+    research = view.get("research") or []
+    if research:
+        sections.append(["## 研究", *_research_lines(research, final=final)])
     sections.append(
         [
             "## 适合交易什么（规则名单）",
@@ -270,8 +306,8 @@ def render_error_brief(*, session: date, as_of: datetime, error: str, has_holdin
 
 
 def discord_lines(view: dict, *, brief_path: str) -> list[str]:
-    """The Discord summary (spec §11): today's actions first, the one-liner, one line per
-    holding's next action, one line each for new and ended plans, then the brief file."""
+    """The Discord summary (spec §11)：今日操作、一句话、持仓操作、新计划、条件已到的研究各一行、
+    结束的计划，最后是简报文件。"""
     lines: list[str] = []
     for row in view.get("today_actions") or []:
         lines.append(f"{row['ticker']}：{row['text']}")
@@ -284,7 +320,84 @@ def discord_lines(view: dict, *, brief_path: str) -> list[str]:
     changes = view.get("changes") or {}
     if changes.get("new_plans"):
         lines.append("新计划：" + "；".join(changes["new_plans"]))
+    for row in view.get("research") or []:
+        if row.get("state") == "triggered":
+            lines.append(f"研究 {row['ticker']}：条件已到（{row['condition_text']}）")
     if changes.get("ended_plans"):
         lines.append("结束的计划：" + "；".join(changes["ended_plans"]))
     lines.append(f"简报文件：{brief_path}")
     return lines
+
+
+def _hypothetical_sentence(simulation: dict | None) -> str:
+    """没买计划的假设结果一句（spec §5.3 / §5.4）：未成交写原因，已离场写日期价格原因与 R，
+    进行中按最后一根收盘写浮动 R。"""
+    if not simulation:
+        return "如果照做：—"
+    if simulation.get("status") == "not_filled":
+        reason = "收盘跌破止损" if simulation.get("reason") == "close_below_stop" else "价格未进入场区间"
+        return f"如果照做：未成交，{reason}"
+    if simulation.get("status") == "exited":
+        why = WEEKLY_EXIT_TEXT.get(simulation.get("exit_reason") or "", simulation.get("exit_reason") or "—")
+        return (
+            f"如果照做：{simulation['exit_session']:%Y-%m-%d} 以 {price_text(simulation['exit_price'])} 离场"
+            f"（{why}），R {simulation['r_multiple']}"
+        )
+    return (
+        f"如果照做：持有中（{simulation['exit_session']:%Y-%m-%d} 收盘 {price_text(simulation['exit_price'])}，"
+        f"R {simulation['r_multiple']}）"
+    )
+
+
+def render_weekly(weekly: dict, *, as_of: datetime) -> str:
+    """周报（spec §5.4）：结束的计划、已平仓、没买的、账户、名单，页脚与简报同句加「金额单位美元」；
+    没有记录的周写「本周没有结束的计划」。"""
+    sections = [[f"# 周报 · {weekly['week_start']:%Y-%m-%d}–{weekly['week_end']:%Y-%m-%d}"]]
+    ended = ["## 结束的计划"]
+    if not weekly.get("ended"):
+        ended.append("本周没有结束的计划。")
+    else:
+        ended.append(f"本周结束 {weekly['ended']} 份：照做 {weekly['followed']} 份、有偏差 {weekly['deviated']} 份。")
+        counts = weekly.get("tag_counts") or {}
+        if counts:
+            ended.append("偏差标签：" + "、".join(f"{text} ×{count}" for text, count in counts.items()) + "。")
+    sections.append(ended)
+    closed = weekly.get("closed") or []
+    if closed:
+        rows = ["## 已平仓"]
+        for row in closed:
+            r = row.get("r_multiple")
+            why = WEEKLY_EXIT_TEXT.get(row.get("exit_reason") or "", row.get("exit_reason") or "—")
+            tags = "、".join(row.get("tags") or []) or "无"
+            rows.append(f"- {row['ticker']}：R {r if r is not None else '—'}，{why}，标签：{tags}")
+        sections.append(rows)
+    not_bought = weekly.get("not_bought") or []
+    if not_bought:
+        rows = ["## 没买的计划"]
+        for row in not_bought:
+            rows.append(f"- {row['ticker']}：{row.get('end_reason') or '—'}，{_hypothetical_sentence(row.get('hypothetical'))}。")
+        sections.append(rows)
+
+    def show(value) -> str:
+        return "—" if value is None else f"{money_value(value)}"
+
+    account_line = (
+        f"- 周初总资产 {show(weekly.get('equity_start'))}，周末总资产 {show(weekly.get('equity_end'))}，"
+        f"本周已实现盈亏 {show(weekly.get('realized_pnl'))}。"
+    )
+    sections.append(["## 账户", account_line])
+    listing = weekly.get("listing") or {}
+    parts = []
+    if listing.get("new"):
+        parts.append("新上榜：" + "、".join(listing["new"]))
+    if listing.get("dropped"):
+        parts.append("掉出：" + "、".join(listing["dropped"]))
+    if listing.get("most_relisted"):
+        parts.append(f"再次上榜最多：{listing['most_relisted']}")
+    sections.append(["## 名单", ("- " + "；".join(parts) + "。") if parts else "本周名单没有变化。"])
+    footer = (
+        f"数据截至 {weekly['week_end']:%Y-%m-%d} 收盘（采集于北京时间 {as_of:%Y-%m-%d %H:%M}）。"
+        "规则未经验证，不构成投资建议。金额单位美元。"
+    )
+    sections.append([footer])
+    return "\n\n".join("\n".join(section) for section in sections) + "\n"
