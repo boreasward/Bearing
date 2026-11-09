@@ -252,10 +252,37 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `layout.svelte.ts` | `layout`、`toggleNav()`、`setSegment(segment)`、`toggleDrawer(pane)` | 存 `ws.nav.collapsed`（`1` / 缺省展开）、`ws.nav.segment`（`quick` / `chats`）、`ws.drawer`（`dash` / `market` / `jobs` / `closed`）；缺省 quick、dash，存储禁用仍可用 |
 | `router.ts` | `parseHash(hash): Route`、`hrefOf(route)` | chat / view / gallery；七视图，plans / research 可带数字 id；未知回空 chat；`#_ui` 保持开发画廊 |
 | `resource.svelte.ts` | `createResource<T>(path: string \| (() => string \| null), opts?)` → `{ data, state, error, load(), invalidate() }` | 响应式读取自动订阅与首次加载；写入后失效保留旧数据直至新结果抵达；最后消费者卸载后停止自动重取；重新挂载取脏缓存；空路径 empty，旧请求不覆盖新路径 / 新请求 |
-| `stores/index.ts` | `today`、`market`、`runs`、`ledger`、`account`、`plans(group)`、`research(group)`、`retrospect`、`chats`、`invalidateAll()` | 一接口一共享缓存，分组缓存按组复用；写入完成后统一失效 |
+| `stores/index.ts` | `today`、`market`、`runs`、`ledger`、`ledgerForLimit(limit)`、`account`、`plans(group)`、`research(group)`、`retrospect`、`chats`、`invalidateAll()` | 一接口一共享缓存，分组缓存按组复用；写入完成后统一失效 |
 | `stores/types.ts` | Task 3 页面契约类型 | 新类型以真实 JSON 为准：金额与数量字符串，Today 账户 cash / equity 可空；旧 home 类型的数字 quantity 在接入旧组件时须显式转换 |
 
 消费者在 Svelte 模板中直接读 `today.state` / `today.data` / `today.error`（或在 effect 中读）即订阅；组件外按需 `await today.load()`，普通非响应式读取不触发网络。动态路径函数可以读响应式状态；返回 null 时清空数据并转 empty。`invalidateAll()` 只立即刷新仍有消费者的资源，其余标脏等下次挂载。`errorDetails` 缺省开启以读取接口错误，错误经中文映射后展示；取数只经 `lib/api.ts`，不新加依赖。
+
+### 6.2.3 数据视图与抽屉（`web/src/lib/views/`、`drawer/`）
+
+| 组件 / 模块 | API | 职责 |
+| --- | --- | --- |
+| `registry.ts` | `ToolName`（35 个字面量）、`REGISTRY: Record<ToolName, ViewEntry>`、`viewFor(tool)` | 条目 `{ component, title(data) }`；未知工具回退 `GenericCard`；组件渲染调用时快照，动作跳对象页读取现状 |
+| `CallMeta` | `{ tool; ref; session; calledAt; write?: 'written' \| 'preview' \| 'replayed' }` | 裸工具名、真实调用编号与时点，不为页面接口编造调用编号 |
+| `labels.ts` | `FIELD_LABELS`、`TOOL_LABELS` | 工具中文标题与接口字段中文，覆盖后端共用 fixtures 的顶层键 |
+| `cards/SourceLine` | `{ meta: CallMeta; calcVersion? }` | 等宽来源行 `{tool} · call:N · {session}`；无 session 用北京时间；无 ref 写 `{tool} · 调用中`；有计算版本才附加 |
+| `cards/CardFrame` | `{ title, data, meta?, calcVersion?, badges?, contextChip?, children, emptyMessage? }` | 所有快照共用卡片标题、写入徽标、来源行、中文错误、空列表 / null 与待确认复述；单一对象在页头「就这个继续问」，多个计划 / 研究各行提供动作；错误 / preview 不显示写入动作 |
+| `cards/MarketCard` | `{ data: MarketData; meta?; full?; pane?; onBring?(chip) }` | 缺省四格与前两只领涨、ETF 前 6 行；full 展示 ETF 全表、宏观与关注表；pane 独立启用三行区制与全部 ETF / 关注表，不显示宏观，按 RS20 降序且不改原数据；三种用法共用表格。watch.change_pct 已为百分点，展示前转为 MetricValue 的小数口径 |
+| `cards/PlanSnapshotCard` | `{ data: unknown; meta }` | 原始计划 / 包装行 / 列表及持仓快照；价位用 Number 转成 PlanLevels，缺值写「没算」；打开计划、预填 TradeForm、「就这个继续问」 |
+| `cards/ResearchSnapshotCard` | `{ data: unknown; meta }` | 原始研究的状态、论点、条件、有效期；打开研究与「就这个继续问」 |
+| `cards/AccountCard` | `{ data: unknown; meta? }` | 账户数字、持仓、对账差额、仓位快照来源；记出入金 / 对账复用已有表单。页面接口省略 meta，快照必须提供真实 CallMeta |
+| `cards/LevelsCard` / `TradeCard` / `NoteCard` | `{ data: unknown; meta }` | PlanLevels 与 ATR / 口径；成交、计划变化、止损单、平仓结果；保存的文字与写入徽标 |
+| `cards/AgendaCard` / `BarsTable` | `{ data: unknown; meta }` | facts agenda 四组清单（空组「无」）；日期 / 开高低收 / 量表格，数字右对齐 |
+| `cards/GenericCard` | `{ data: unknown; meta }` | 平面字典键值两列；字典列表取字段并集前 8 列并写剩余列数；其他 JSON 前 40 行可展开；空与缺值有原因 |
+| `ResourceBlock` / `RunStatus` | `{ resource, emptyMessage, children }` / `{ brief }` | 共享 store 五态与重试，no_run 映射 empty；daily_run 状态，unfinished 额外徽标 |
+| `drawer/DashboardPane` | `{ onBring(chip) }` | 今日操作 / 账户 / 持仓与计划 / 研究中 / 市场温度五块；今日操作复用两步确认接口和 TradeForm；每个对象行可带进对话 |
+| `drawer/MarketPane` | `{ onBring(chip) }` | 共享 MarketCard 的 pane 模式，打开完整行情链接；回调只触发一次 |
+| `drawer/JobsPane` | `{ onBring(chip) }` | 最近 4 次与下次北京时间、研究条件检查、当前纽约日历周一至周五窗口内的周报；同一天多次运行分别展示 |
+| `AccountView` / `MarketView` / `JobsView` | 无 props，自取共享 store | 账户三张流水（20→40→60→80→100，保留已作废行与原因）、行情 full、任务计划与 20 行运行表；任务行分别展开 usage / 耗时 / 模型，链接 `#today?session=日期` |
+| `views/context.ts` | `ContextChip = { kind: 'ticker' \| 'plan' \| 'research'; ticker; id }`、`bringToChat(chip)`、`actionCompleted(text)` | 浏览器内事件 `workbench:bring` 的 detail 为 ContextChip，`workbench:action` 的 detail 为 `{ text }`；导出事件常量与事件类型；无 window 时不操作 |
+
+`ledgerForLimit(limit)` 校验 1–100 的整数并按 limit 共享缓存；20 复用 `ledger`，其余请求 `/api/ledger?limit=N`。`invalidateAll()` 同时刷新仍挂载的各条数资源；账户显示更多后保持当前条数，任一表达到当前条数时才能继续请求，最高 100。
+
+动作只有 confirmed=true 成功后才调用一次 `invalidateAll()` 与 `actionCompleted`。复用表单自己的 toast，不重复提示；表单的 onDone 不带提交数据，完成文案只写「已记录成交」「已记录出入金」「已记录对账」等真实概述，不把可能已被编辑的预填值冒充成交结果。Task 6 的 Home 在挂载时监听两个事件、卸载时移除监听：bring 交给对话芯片输入，action 追加到活动 / 最近对话的当前回合，仅本页保留，不持久化。抽屉直接调用 onBring，避免同一动作再发一次全局事件。
 
 ### 6.3 已知取舍
 

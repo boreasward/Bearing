@@ -5,6 +5,12 @@ export const today = createResource<TodayData>('/api/today')
 export const market = createResource<MarketData>('/api/market')
 export const runs = createResource<RunsData>('/api/runs')
 export const ledger = createResource<LedgerData>('/api/ledger')
+const ledgerLimits = new Map<number, Resource<LedgerData>>([[20, ledger]])
+export function ledgerForLimit(limit: number): Resource<LedgerData> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('流水条数须为 1 至 100 的整数')
+  if (!ledgerLimits.has(limit)) ledgerLimits.set(limit, createResource<LedgerData>(`/api/ledger?limit=${limit}`))
+  return ledgerLimits.get(limit)!
+}
 export const account = createResource<AccountData>('/api/account')
 export const retrospect = createResource<RetrospectData>('/api/retrospect')
 export const chats = createResource<ChatsData>('/api/chats')
@@ -20,7 +26,7 @@ export function research(group: 'watching' | 'ended'): Resource<ResearchData> {
   return researchGroups.get(group)!
 }
 export function invalidateAll(): void {
-  for (const resource of [today, market, runs, ledger, account, retrospect, chats, ...planGroups.values(), ...researchGroups.values()]) {
+  for (const resource of [today, market, runs, ...ledgerLimits.values(), account, retrospect, chats, ...planGroups.values(), ...researchGroups.values()]) {
     resource.invalidate()
   }
 }
