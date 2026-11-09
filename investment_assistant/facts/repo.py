@@ -22,7 +22,11 @@ _TRADE_SELECT = (
 )
 _TRADE_VOID_JOIN = " LEFT JOIN v3_voids v ON v.kind = 'trade' AND v.target_id = t.id"
 _EQUITY_COLUMNS = "id, request_id, as_of, equity, note, created_at"
-_TOOL_CALL_COLUMNS = "id, agent_session, mode, session, seq, tool, args, result_sha256, error, called_at"
+_TOOL_CALL_COLUMNS = "id, agent_session, mode, session, seq, tool, args, result_sha256, error, called_at, result, truncated"
+_RUN_BRIEF_COLUMNS = (
+    "status", "error", "runtime", "provider", "model", "usage", "elapsed_seconds",
+    "pushed_final_at", "pushed_error_at", "pushed_weekly_at",
+)
 
 
 def insert_run(conn, row: dict) -> dict:
@@ -74,6 +78,24 @@ def previous_ok_run(conn, before: date) -> dict | None:
         "ORDER BY session DESC, created_at DESC, id DESC LIMIT 1",
         (before,),
     )
+
+
+def runs_with_briefs(conn, *, limit: int) -> list[dict]:
+    """Recent runs with the brief of their trading session, preserving SQL value types."""
+    brief_columns = ", ".join(f"b.{name} AS brief_{name}" for name in _RUN_BRIEF_COLUMNS)
+    rows = _all(
+        conn,
+        f"SELECT r.*, b.session AS brief_session, {brief_columns}, "
+        "b.weekly_md IS NOT NULL AS brief_weekly_present "
+        "FROM v3_runs r LEFT JOIN v3_briefs b ON b.session = r.session "
+        "ORDER BY r.session DESC, r.started_at DESC LIMIT %s",
+        (limit,),
+    )
+    for row in rows:
+        brief_session = row.pop("brief_session")
+        brief = {name: row.pop(f"brief_{name}") for name in (*_RUN_BRIEF_COLUMNS, "weekly_present")}
+        row["brief"] = brief if brief_session is not None else None
+    return rows
 
 
 def insert_candidates(conn, run_id: str, rows: list[dict]) -> int:
@@ -191,6 +213,16 @@ def list_trades(conn, ticker: str | None = None) -> list[dict]:
     )
 
 
+def recent_trades(conn, *, limit: int) -> list[dict]:
+    """Latest ledger trades, including the void record when one exists."""
+    return _all(
+        conn,
+        f"SELECT {_TRADE_SELECT}, v.id AS voided_by, v.reason AS void_reason "
+        f"FROM v3_trades t{_TRADE_VOID_JOIN} ORDER BY t.id DESC LIMIT %s",
+        (limit,),
+    )
+
+
 def trade(conn, trade_id: int) -> dict | None:
     """One trade by id, `voided_at` from the v3_voids row if voided."""
     return _one(conn, f"SELECT {_TRADE_SELECT} FROM v3_trades t{_TRADE_VOID_JOIN} WHERE t.id = %s", (trade_id,))
@@ -216,6 +248,10 @@ def latest_equity(conn) -> dict | None:
     return _one(conn, f"SELECT {_EQUITY_COLUMNS} FROM v3_equity ORDER BY as_of DESC, id DESC LIMIT 1", [])
 
 
+def recent_equity(conn, *, limit: int) -> list[dict]:
+    return _all(conn, f"SELECT {_EQUITY_COLUMNS} FROM v3_equity ORDER BY id DESC LIMIT %s", (limit,))
+
+
 def next_seq(conn, agent_session: str) -> int:
     """The next call number of an agent session, starting at 1."""
     row = _one(
@@ -229,7 +265,8 @@ def insert_tool_call(conn, row: dict) -> dict:
     saved = _one(
         conn,
         "INSERT INTO v3_tool_calls (agent_session, mode, session, seq, tool, args, "
-        "result_sha256, error) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s) "
+        "result_sha256, error, result, truncated) "
+        "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s::jsonb, %s) "
         f"RETURNING {_TOOL_CALL_COLUMNS}",
         [
             row["agent_session"],
@@ -240,10 +277,20 @@ def insert_tool_call(conn, row: dict) -> dict:
             _plan_json(row.get("args") or {}),
             row.get("result_sha256"),
             row.get("error"),
+            _plan_json(row["result"]) if row.get("result") is not None else None,
+            row.get("truncated", False),
         ],
     )
     assert saved is not None  # RETURNING always yields the inserted row
     return saved
+
+
+def tool_call(conn, agent_session: str, seq: int) -> dict | None:
+    return _one(
+        conn,
+        f"SELECT {_TOOL_CALL_COLUMNS} FROM v3_tool_calls WHERE agent_session = %s AND seq = %s",
+        (agent_session, seq),
+    )
 
 
 def tool_call_refs(conn, agent_session: str) -> set[str]:

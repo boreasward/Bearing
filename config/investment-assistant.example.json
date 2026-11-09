@@ -10,5 +10,11 @@
     "risk_pct": 0.01,
     "single_cap": 0.25,
     "total_cap": 1.0
+  },
+  "v3": {
+    "daily_weekdays": [2, 3, 4, 5, 6],
+    "daily_hour": 11,
+    "daily_minute": 30,
+    "tool_result_max_bytes": 524288
   }
 }

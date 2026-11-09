@@ -272,6 +272,16 @@ def cash_flows(conn) -> list[dict]:
     )
 
 
+def recent_cash_flows(conn, *, limit: int) -> list[dict]:
+    return _all(
+        conn,
+        f"SELECT {_CASH_FLOW_SELECT}, v.id AS voided_by, v.reason AS void_reason FROM v3_cash_flows c "
+        "LEFT JOIN v3_voids v ON v.kind = 'cash_flow' AND v.target_id = c.id "
+        "ORDER BY c.id DESC LIMIT %s",
+        (limit,),
+    )
+
+
 def cash_flow(conn, flow_id: int) -> dict | None:
     return _one(
         conn,
@@ -294,6 +304,10 @@ def insert_void(conn, row: dict) -> dict:
         saved = _one(conn, f"SELECT {_VOID_COLUMNS} FROM v3_voids WHERE request_id = %s", (row["request_id"],))
     assert saved is not None  # the replayed row is always there
     return saved
+
+
+def recent_voids(conn, *, limit: int) -> list[dict]:
+    return _all(conn, f"SELECT {_VOID_COLUMNS} FROM v3_voids ORDER BY id DESC LIMIT %s", (limit,))
 
 
 def voids(conn) -> list[dict]:
@@ -400,8 +414,19 @@ def insert_chat(conn, row: dict) -> dict:
 
 
 def chats(conn, *, limit: int = 30) -> list[dict]:
-    """Recent chats, newest first."""
-    return _all(conn, f"SELECT {_CHAT_COLUMNS} FROM v3_chats ORDER BY created_at DESC, id DESC LIMIT {int(limit)}", [])
+    """Chats ordered by last message time, falling back to chat creation for empty chats."""
+    columns = ", ".join(f"c.{name}" for name in _CHAT_COLUMNS.split(", "))
+    return _all(
+        conn,
+        f"SELECT {columns}, COALESCE(MAX(m.created_at), c.created_at) AS last_message_at "
+        "FROM v3_chats c LEFT JOIN v3_chat_messages m ON m.chat_id = c.chat_id "
+        "GROUP BY c.id ORDER BY last_message_at DESC, c.id DESC LIMIT %s",
+        (limit,),
+    )
+
+
+def touch_chat(conn, chat_id: str) -> None:
+    conn.execute("UPDATE v3_chats SET updated_at = clock_timestamp() WHERE chat_id = %s", (chat_id,))
 
 
 def chat(conn, chat_id: str) -> dict | None:

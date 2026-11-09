@@ -48,6 +48,11 @@
 
 ## LaunchAgent 的安装
 
+v3.2.1 的下次运行推算读取配置 JSON 的 `v3.daily_weekdays`（缺省 `[2, 3, 4, 5, 6]`，ISO 星期 1 为周一）、
+`v3.daily_hour`（11）、`v3.daily_minute`（30），按 `Asia/Shanghai` 找严格晚于现在的下一个时刻。
+这些配置仅用于推算，不改变 launchd 的触发时间；修改时间时须同步修改配置和已安装 plist 的 `StartCalendarInterval`，
+否则页面显示的下次运行会与实际触发不一致。星期须为 1–7 的非空整数子集，小时 0–23、分钟 0–59。
+
 模板在 `scripts/launchd/local.investment-assistant.daily.plist.example`，安装三步（本机已于 2026-11-07 经用户授权安装）：
 
 ```bash

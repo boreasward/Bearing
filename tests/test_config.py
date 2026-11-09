@@ -85,3 +85,43 @@ def test_load_config_ignores_removed_v2_keys(tmp_path):
     assert cfg.filings == AssistantConfig().filings
     assert cfg.notify.webhooks == {'signals': 'https://hook'}
     assert cfg.sec_monitor == AssistantConfig().sec_monitor
+
+
+def test_v3_daily_schedule_defaults(tmp_path):
+    cfg = load_config(tmp_path / "missing.json").v3
+    assert cfg.daily_weekdays == (2, 3, 4, 5, 6)
+    assert cfg.daily_hour == 11
+    assert cfg.daily_minute == 30
+    assert cfg.tool_result_max_bytes == 524288
+
+
+@pytest.mark.parametrize("overrides,message", [
+    ({"daily_weekdays": []}, "v3.daily_weekdays must be a non-empty subset of 1..7"),
+    ({"daily_weekdays": [0]}, "v3.daily_weekdays must be a non-empty subset of 1..7"),
+    ({"daily_weekdays": [8]}, "v3.daily_weekdays must be a non-empty subset of 1..7"),
+    ({"daily_weekdays": [2.5]}, "v3.daily_weekdays must be a non-empty subset of 1..7"),
+    ({"daily_weekdays": [True]}, "v3.daily_weekdays must be a non-empty subset of 1..7"),
+    ({"daily_hour": -1}, "v3.daily_hour must be in [0, 23]"),
+    ({"daily_hour": 24}, "v3.daily_hour must be in [0, 23]"),
+    ({"daily_minute": -1}, "v3.daily_minute must be in [0, 59]"),
+    ({"daily_minute": 60}, "v3.daily_minute must be in [0, 59]"),
+    ({"tool_result_max_bytes": 1000}, "v3.tool_result_max_bytes must be in [65536, 8388608]"),
+    ({"tool_result_max_bytes": 8388609}, "v3.tool_result_max_bytes must be in [65536, 8388608]"),
+])
+def test_v3_daily_schedule_ranges(tmp_path, overrides, message):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"v3": overrides}))
+    with pytest.raises(ValueError) as exc:
+        load_config(path)
+    assert str(exc.value) == message
+
+
+@pytest.mark.parametrize("hour,minute,max_bytes", [(0, 0, 65536), (23, 59, 8388608)])
+def test_v3_daily_schedule_json_arrays_become_tuples(tmp_path, hour, minute, max_bytes):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"v3": {"daily_weekdays": [2, 3], "daily_hour": hour,
+                                        "daily_minute": minute, "tool_result_max_bytes": max_bytes}}))
+    cfg = load_config(path).v3
+    assert cfg.daily_weekdays == (2, 3)
+    assert cfg.daily_hour == hour and cfg.daily_minute == minute
+    assert cfg.tool_result_max_bytes == max_bytes

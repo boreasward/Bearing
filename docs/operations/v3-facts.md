@@ -65,6 +65,9 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 | `research_sessions` | 20 | v3.2：研究有效期（交易日），发起或 `watch` 结论当天起算；可选范围 1–60 |
 | `research_entry_atr` | 4.0 | v3.2：研究计划 agent 自报价位的入场下限倍数（最新收盘 − 该倍数 × ATR）；可选范围 2–8 |
 | `retro_min_sample` | 10 | v3.2：规则检验每组的样本门槛，不足写「样本不足」；可选范围 1–100 |
+| `daily_weekdays` | `[2, 3, 4, 5, 6]` | v3.2.1：下次运行推算的 ISO 星期（周一为 1），须为 1–7 的非空整数子集；JSON 数组载入后转为 tuple |
+| `daily_hour` / `daily_minute` | 11 / 30 | v3.2.1：`Asia/Shanghai` 时刻；小时 0–23、分钟 0–59；须与 LaunchAgent 同步，见 [daily-run.md](daily-run.md) |
+| `tool_result_max_bytes` | 524288 | v3.2.1：工具结果留存的字节阈值配置；可选范围 65536–8388608；结果写入由工具面完成 |
 
 采集并发的实现是 `data.registry.run_adapter` 新增的 `workers` 参数：缺省 1，与改动前的逐个拉取完全等价，
 旧调用不受影响；只有事实任务按 `collect_workers` / `sec_workers` 传入。

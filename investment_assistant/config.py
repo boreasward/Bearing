@@ -63,6 +63,10 @@ class V3Config:
     research_sessions: int = 20
     research_entry_atr: float = 4.0
     retro_min_sample: int = 10
+    daily_weekdays: tuple[int, ...] = (2, 3, 4, 5, 6)
+    daily_hour: int = 11
+    daily_minute: int = 30
+    tool_result_max_bytes: int = 524288
     sector_etfs: tuple[str, ...] = (
         "QQQ",
         "SMH",
@@ -200,7 +204,23 @@ def _validate_v3(cfg: V3Config) -> V3Config:
         raise ValueError("v3.research_entry_atr must be in [2, 8]")
     if not 1 <= cfg.retro_min_sample <= 100:
         raise ValueError("v3.retro_min_sample must be in [1, 100]")
-    return replace(cfg, sector_etfs=tuple(str(etf).strip().upper() for etf in cfg.sector_etfs))
+    if (
+        not isinstance(cfg.daily_weekdays, (list, tuple))
+        or not cfg.daily_weekdays
+        or any(type(day) is not int or not 1 <= day <= 7 for day in cfg.daily_weekdays)
+    ):
+        raise ValueError("v3.daily_weekdays must be a non-empty subset of 1..7")
+    if not 0 <= cfg.daily_hour <= 23:
+        raise ValueError("v3.daily_hour must be in [0, 23]")
+    if not 0 <= cfg.daily_minute <= 59:
+        raise ValueError("v3.daily_minute must be in [0, 59]")
+    if not 65536 <= cfg.tool_result_max_bytes <= 8388608:
+        raise ValueError("v3.tool_result_max_bytes must be in [65536, 8388608]")
+    return replace(
+        cfg,
+        sector_etfs=tuple(str(etf).strip().upper() for etf in cfg.sector_etfs),
+        daily_weekdays=tuple(cfg.daily_weekdays),
+    )
 
 
 def briefs_dir(cfg: AssistantConfig) -> Path:

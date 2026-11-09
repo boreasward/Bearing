@@ -12,6 +12,7 @@ V3_PACKAGES = ("facts", "toolsurface")
 # must start with investment_assistant.toolsurface.); facts -> toolsurface is forbidden by the check below.
 KEPT = (
     "investment_assistant.core.tx",
+    "investment_assistant.core.schedule",
     "investment_assistant.core.dbutil",
     "investment_assistant.core.constants",
     "investment_assistant.core.redact",
