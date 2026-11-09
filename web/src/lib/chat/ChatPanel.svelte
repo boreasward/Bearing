@@ -176,8 +176,9 @@
   }
   async function research() { input = '研究 '; await focusInput() }
 </script>
-<div class="mx-auto flex h-full w-full max-w-[760px] flex-col gap-4 p-4">
-  <div class="grid min-h-0 flex-1 content-start gap-[14px] overflow-y-auto">
+<div class="flex h-full w-full flex-col">
+  <div class="min-h-0 flex-1 overflow-y-auto">
+  <div class="mx-auto grid w-full max-w-[760px] content-start gap-[14px] p-4">
   {#if !selected}<ChatEmpty disabled={busy} onNewChat={() => { void createChat() }} />{/if}
   {#if current?.chat?.read_only}<Alert variant="info"><AlertDescription>该对话在切换运行时后变为只读，可看不可写。</AlertDescription></Alert>{/if}
   {#each current?.items ?? [] as item (item.id)}
@@ -192,7 +193,8 @@
   {#if current?.notice}<p role="status" class="text-sm">{current.notice}</p>{/if}
   {#if current?.error}<Alert variant="danger"><AlertDescription>{current.error}</AlertDescription></Alert>{/if}
   </div>
-  <form class="grid shrink-0 gap-2 bg-card py-3" onsubmit={event => { event.preventDefault(); void send() }}>
+  </div>
+  <form class="mx-auto grid w-full max-w-[760px] shrink-0 gap-2 bg-card px-4 pt-3 pb-4" onsubmit={event => { event.preventDefault(); void send() }}>
     <ContextChips {chips} onRemove={index => { chips = chips.filter((_, i) => i !== index) }} />
     <QuickPrompts onSend={text => { input = text; void send(text) }} onResearch={research} disabled={busy || current?.loading || current?.chat?.read_only === true} />
     <Field label="提问" id="chat-input">{#snippet children({ id })}<Textarea {id} rows={2} bind:ref={inputEl} bind:value={input} disabled={current?.loading || current?.chat?.read_only === true} placeholder="问点什么…" />{/snippet}</Field>
