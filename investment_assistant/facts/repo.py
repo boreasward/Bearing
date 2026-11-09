@@ -22,10 +22,20 @@ _TRADE_SELECT = (
 )
 _TRADE_VOID_JOIN = " LEFT JOIN v3_voids v ON v.kind = 'trade' AND v.target_id = t.id"
 _EQUITY_COLUMNS = "id, request_id, as_of, equity, note, created_at"
-_TOOL_CALL_COLUMNS = "id, agent_session, mode, session, seq, tool, args, result_sha256, error, called_at, result, truncated"
+_TOOL_CALL_COLUMNS = (
+    "id, agent_session, mode, session, seq, tool, args, result_sha256, error, called_at, result, truncated"
+)
 _RUN_BRIEF_COLUMNS = (
-    "status", "error", "runtime", "provider", "model", "usage", "elapsed_seconds",
-    "pushed_final_at", "pushed_error_at", "pushed_weekly_at",
+    "status",
+    "error",
+    "runtime",
+    "provider",
+    "model",
+    "usage",
+    "elapsed_seconds",
+    "pushed_final_at",
+    "pushed_error_at",
+    "pushed_weekly_at",
 )
 
 

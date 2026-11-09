@@ -10,15 +10,24 @@ SESSION = date(2026, 11, 9)
 NOW = datetime(2026, 11, 9, 12, tzinfo=UTC)
 
 
-@pytest.mark.parametrize("result,truncated", [
-    ({"a": 1}, False),
-    ([{"a": 1}], False),
-    ({"truncated": True, "bytes": 600000}, True),
-])
+@pytest.mark.parametrize(
+    "result,truncated",
+    [
+        ({"a": 1}, False),
+        ([{"a": 1}], False),
+        ({"truncated": True, "bytes": 600000}, True),
+    ],
+)
 def test_insert_tool_call_stores_result_and_truncated(v3_tx, result, truncated):
     row = {
-        "agent_session": "call-session", "mode": "chat", "session": SESSION,
-        "seq": 1, "tool": "get_market", "args": {}, "result": result, "truncated": truncated,
+        "agent_session": "call-session",
+        "mode": "chat",
+        "session": SESSION,
+        "seq": 1,
+        "tool": "get_market",
+        "args": {},
+        "result": result,
+        "truncated": truncated,
     }
     saved = repo.insert_tool_call(v3_tx, row)
     assert saved["result"] == result
@@ -35,27 +44,50 @@ def test_insert_tool_call_stores_result_and_truncated(v3_tx, result, truncated):
 
 
 def _run(conn, run_id, session, started_at=NOW):
-    return repo.insert_run(conn, {
-        "run_id": run_id, "session": session, "trigger": "scheduled", "status": "ok",
-        "draft_md": "draft", "started_at": started_at, "finished_at": started_at,
-    })
+    return repo.insert_run(
+        conn,
+        {
+            "run_id": run_id,
+            "session": session,
+            "trigger": "scheduled",
+            "status": "ok",
+            "draft_md": "draft",
+            "started_at": started_at,
+            "finished_at": started_at,
+        },
+    )
 
 
 def test_runs_with_briefs_left_joins_by_session(v3_tx):
     older = _run(v3_tx, "older", date(2026, 11, 6))
     newer = _run(v3_tx, "newer", SESSION)
-    plan_repo.upsert_brief(v3_tx, {
-        "session": SESSION, "run_id": "newer", "status": "final",
-        "runtime": "fake", "usage": {"input": 4}, "elapsed_seconds": 4,
-    })
+    plan_repo.upsert_brief(
+        v3_tx,
+        {
+            "session": SESSION,
+            "run_id": "newer",
+            "status": "final",
+            "runtime": "fake",
+            "usage": {"input": 4},
+            "elapsed_seconds": 4,
+        },
+    )
     plan_repo.update_brief(v3_tx, SESSION, weekly_md="weekly", pushed_weekly_at=NOW, pushed_final_at=NOW)
     rows = repo.runs_with_briefs(v3_tx, limit=20)
     assert [{key: row[key] for key in newer} for row in rows] == [newer, older]
     assert rows[1]["brief"] is None
     assert rows[0]["brief"] == {
-        "status": "final", "error": None, "runtime": "fake", "provider": None, "model": None,
-        "usage": {"input": 4}, "elapsed_seconds": 4, "pushed_final_at": NOW,
-        "pushed_error_at": None, "weekly_present": True, "pushed_weekly_at": NOW,
+        "status": "final",
+        "error": None,
+        "runtime": "fake",
+        "provider": None,
+        "model": None,
+        "usage": {"input": 4},
+        "elapsed_seconds": 4,
+        "pushed_final_at": NOW,
+        "pushed_error_at": None,
+        "weekly_present": True,
+        "pushed_weekly_at": NOW,
     }
     # A brief belongs to the trading session, including its earlier reruns.
     rerun = _run(v3_tx, "earlier-rerun", SESSION, NOW.replace(hour=11))
@@ -68,20 +100,49 @@ def test_runs_with_briefs_left_joins_by_session(v3_tx):
 def test_recent_ledger_rows_carry_void_info(v3_tx):
     trades, flows, equities = [], [], []
     for i in range(3):
-        trades.append(repo.insert_trade(v3_tx, {
-            "request_id": f"trade-{i}", "ticker": "AAA", "side": "buy",
-            "quantity": 1, "price": 10, "executed_at": NOW,
-        }))
-        flows.append(plan_repo.insert_cash_flow(v3_tx, {
-            "request_id": f"flow-{i}", "kind": "deposit", "amount": 100, "effective_at": NOW,
-        }))
+        trades.append(
+            repo.insert_trade(
+                v3_tx,
+                {
+                    "request_id": f"trade-{i}",
+                    "ticker": "AAA",
+                    "side": "buy",
+                    "quantity": 1,
+                    "price": 10,
+                    "executed_at": NOW,
+                },
+            )
+        )
+        flows.append(
+            plan_repo.insert_cash_flow(
+                v3_tx,
+                {
+                    "request_id": f"flow-{i}",
+                    "kind": "deposit",
+                    "amount": 100,
+                    "effective_at": NOW,
+                },
+            )
+        )
         equities.append(repo.insert_equity(v3_tx, {"request_id": f"equity-{i}", "as_of": NOW, "equity": 100}))
-    trade_void = plan_repo.insert_void(v3_tx, {
-        "request_id": "void-trade", "kind": "trade", "target_id": trades[-1]["id"], "reason": "wrong trade",
-    })
-    flow_void = plan_repo.insert_void(v3_tx, {
-        "request_id": "void-flow", "kind": "cash_flow", "target_id": flows[-1]["id"], "reason": "wrong flow",
-    })
+    trade_void = plan_repo.insert_void(
+        v3_tx,
+        {
+            "request_id": "void-trade",
+            "kind": "trade",
+            "target_id": trades[-1]["id"],
+            "reason": "wrong trade",
+        },
+    )
+    flow_void = plan_repo.insert_void(
+        v3_tx,
+        {
+            "request_id": "void-flow",
+            "kind": "cash_flow",
+            "target_id": flows[-1]["id"],
+            "reason": "wrong flow",
+        },
+    )
     for reader, inserted, void in (
         (repo.recent_trades, trades, trade_void),
         (plan_repo.recent_cash_flows, flows, flow_void),
@@ -105,9 +166,16 @@ def test_chats_order_by_last_message_and_touch(v3_tx):
     v3_tx.execute("UPDATE v3_chats SET created_at = %s WHERE chat_id = 'first'", (NOW.replace(year=2000, hour=10),))
     v3_tx.execute("UPDATE v3_chats SET created_at = %s WHERE chat_id = 'second'", (NOW.replace(year=2000, hour=11),))
     assert [row["chat_id"] for row in plan_repo.chats(v3_tx)] == ["second", "first"]
-    message = plan_repo.insert_message(v3_tx, {
-        "chat_id": "first", "seq": 1, "role": "user", "content": "hello", "status": "ok",
-    })
+    message = plan_repo.insert_message(
+        v3_tx,
+        {
+            "chat_id": "first",
+            "seq": 1,
+            "role": "user",
+            "content": "hello",
+            "status": "ok",
+        },
+    )
     rows = plan_repo.chats(v3_tx)
     assert [row["chat_id"] for row in rows] == [first["chat_id"], second["chat_id"]]
     assert rows[0]["last_message_at"] == message["created_at"]

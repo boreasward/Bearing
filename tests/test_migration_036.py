@@ -21,9 +21,11 @@ def test_rerun_is_idempotent(v3_db):
 
 def test_new_columns_exist(v3_db):
     assert MIGRATION_PATH.is_file()
-    columns = dict(v3_db.execute(
-        "SELECT column_name, data_type FROM information_schema.columns "
-        "WHERE table_schema = current_schema() AND table_name = 'v3_tool_calls' "
-        "AND column_name IN ('result', 'truncated')"
-    ))
+    columns = dict(
+        v3_db.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'v3_tool_calls' "
+            "AND column_name IN ('result', 'truncated')"
+        )
+    )
     assert columns == {"result": "jsonb", "truncated": "boolean"}

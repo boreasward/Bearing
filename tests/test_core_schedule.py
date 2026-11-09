@@ -39,8 +39,6 @@ def test_naive_now_is_rejected():
 
 
 def test_single_weekday_and_explicit_timezone():
-    result = next_run_at(
-        datetime(2026, 11, 9, 11, 30, tzinfo=UTC), weekdays=(1,), hour=11, minute=30, tz="UTC"
-    )
+    result = next_run_at(datetime(2026, 11, 9, 11, 30, tzinfo=UTC), weekdays=(1,), hour=11, minute=30, tz="UTC")
     assert result == datetime(2026, 11, 16, 11, 30, tzinfo=UTC)
     assert result.tzinfo == ZoneInfo("UTC")
