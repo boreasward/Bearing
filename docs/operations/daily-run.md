@@ -1,19 +1,19 @@
-# 每日任务（v3.1）
+# 每日任务（v3.1；v3.2 增研究复查与周报）
 
 一个 LaunchAgent 在北京时间 11:30（周二至周六，美股收盘后的早晨）触发一条命令 `python -m investment_assistant.daily run`。
 本文是它的运维说明：它做什么、怎么装、重跑与补查的行为、简报落在哪、预算与重试、故障排查；末尾是本版验收条款与测试的对照表。
 
-## 一天做五件事（spec §5）
+## 一天做五件事（spec §5；v3.2 第 3 步加研究复查、周末日加周报）
 
-1. **采集**：沿用 `facts` 的八族采集；采集目标在原有持仓之外新增待入场计划的股票，保证它们掉出股票池也有当天的日线。
+1. **采集**：沿用 `facts` 的八族采集；采集目标在原有持仓之外新增待入场计划的股票与观察中研究的股票，保证它们掉出股票池也有当天的日线。
 2. **事实计算**：沿用现有的名单计算，结果不变。
-3. **计划与持仓复查**（宿主计算，不调模型）：每份有效计划当天的状态变化、每只持仓下一个交易日的操作、名单的连续性标记。
+3. **计划复查与研究复查**（宿主计算，不调模型）：每份有效计划当天的状态变化、每只持仓下一个交易日的操作、名单的连续性标记；之后逐份复查观察中且有条件的研究（缺日线不判不推进、条件到了记一次待复看、到期无触发过期，与计划线同样的补查做法）。
 4. **发布草稿**：草稿已含第 3 步全部结果，写库（`v3_briefs`，每个交易日一行）并写文件。
-5. **简报会话**（agent）：按当天待办逐项给结论；完成后合成最终简报，写库、写文件、发 Discord。
+5. **简报会话**（agent）：按当天待办逐项给结论；完成后合成最终简报，写库、写文件、发 Discord。每周最后一个交易日的运行在最终简报之后另算一份周报（宿主算，见下文「周报」）。
 
 第 5 步失败或超时不影响前四步的产物：最终简报里宿主算出的内容照常，agent 的部分写「未完成」和原因。
-数据库不可达或基准 SPY 当期日线缺失时写一份只有原因的错误简报并推送一次通知；此时若有持仓，第一行是「今天无法检查止损」加原因。
-没有选定模型（设置三项为空）时前四步照常，不启动会话，简报保持草稿、页脚写「未选定模型，二次确认未做」。
+数据库不可达或基准 SPY 当期日线缺失时写一份只有原因的错误简报并推送一次通知；此时若有持仓，第一行是「今天无法检查止损」加原因。错误日不产出周报、下次运行也不补（页面的复盘块是现算的，那一周的汇总照常能看）。
+没有选定模型（设置三项为空）时前四步照常，不启动会话，简报保持草稿、页脚写「未选定模型，二次确认未做」；周报照常产出并推送（它全是宿主算的）。
 
 ## 命令行与退出码
 
@@ -78,7 +78,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 
 目录按优先级：配置键 `v3.briefs_dir` → 环境变量 `INVESTMENT_ASSISTANT_RUNTIME_BASE` 下的 `briefs/` → 都没设时仓库本地 `.local/v3/briefs/`（与 [v3-facts.md](v3-facts.md) 的草稿目录一致）。
 
-- `<交易日>.draft.md`：第 4 步的草稿（十段简报去掉 agent 部分，开头写「二次确认未完成」）；
+- `<交易日>.draft.md`：第 4 步的草稿（十一段简报去掉 agent 部分，开头写「二次确认未完成」；v3.2 起「待入场计划」之后多一段「研究」）；
 - `<交易日>.md`：最终简报（含 agent 结论与页脚的运行时、模型、token 用量与耗时）；
 - `briefs/<交易日>/attempt-N/`：简报会话第 N 次尝试的工作目录（每次尝试新进程、不续接会话）。
 
@@ -89,6 +89,14 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 - 简报摘要发 **signals** 频道；地址取配置 `notify.webhooks.signals`，缺省环境变量 `DISCORD_WEBHOOK_SIGNALS`。
 - 每个交易日推送一次：顺序是今日操作（有就排第一行）、一句话、持仓操作各一行、新计划与结束的计划各一行、文件位置。
 - 按长度上限分条（每条不超过 1900 字符，超长单行按字符切），由构造保证不超限，不会因超长发不出去。
+- v3.2：研究条件到了的在「新计划」之后加一行「研究 {股票}：条件已到（{条件}）」。
+
+## 周报（v3.2）
+
+- **什么时候产出**：每周最后一个交易日（判定：当天的下一个交易日落在另一个 ISO 周）的运行，在最终简报之后算本周汇总，写进当天简报行的新列 `weekly_md`，并单独推一条 Discord（`pushed_weekly_at` 记推送时刻；同一周重跑不重推，与简报推送的幂等规则一致）。
+- **没有选定模型的日子**：周报照常产出并推送（周报全是宿主算的，不依赖会话）；事实任务失败（错误简报）的日子不产出、下次运行也不补——页面的复盘块是现算的，那一周的汇总照常能看。
+- **内容**：本周结束的计划几份、照做 / 有偏差各几份、偏差标签各出现几次；已平仓计划的 R 合计与各份一行；没买的计划各一份一行（结束原因、假设结果）；账户的周初与周末总资产、本周已实现盈亏；本周名单的新上榜、掉出、再次上榜最多的股票；页脚沿用简报（数据截止、规则未经验证、金额单位美元）。
+- 页面复盘块顶部显示最近一周，可切换以前的周；周报的数字与页面复盘块出自同一个函数，只有一份口径。
 
 ## 预算与重试
 
@@ -112,10 +120,10 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 
 ## 验收对照
 
-下表是 v3.1 spec（[2026-11-06 v3.1 设计](../specs/2026-11-06-v3.1-plan-line-account-and-web-design.md)）§18 的 A1–A22 与沿用的 v3 设计验收条款，
+下表先列 v3.1 spec（[2026-11-06 v3.1 设计](../specs/2026-11-06-v3.1-plan-line-account-and-web-design.md)）§18 的 A1–A22，再列 v3.2 spec（[2026-11-08 v3.2 设计](../specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md)）§16 的 B1–B19 与 Review Focus 六条，
 逐条写下「由哪个测试证明」；测试名都实存于仓库，`tests/` 下的为后端、`web/src/` 下的为前端。没有任何测试能证明的（只能真实运行才能证明的）标「待真实运行」。
 
-### 本版新增（A1–A22）
+### v3.1 新增（A1–A22）
 
 | # | 标准 | 证明 |
 | --- | --- | --- |
@@ -141,6 +149,41 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 | A20 | 拆股按比例调整并留记录 | `tests/test_plan_line.py::test_split_adjust`、`tests/test_v3_review.py::test_split_adjusts_levels_with_event` |
 | A21 | 漏跑一天后补查出那天的止损触及 | `tests/test_v3_review.py::test_catch_up_finds_stop_hit_on_missed_session` |
 | A22 | 先错后成再推一次，再重跑不推 | `tests/test_daily_job.py::test_error_day_pushes_once_with_stop_warning_line`、`test_error_then_success_pushes_again_then_stops` |
+
+### v3.2 新增（B1–B19，spec §16）
+
+| # | 标准 | 证明 |
+| --- | --- | --- |
+| B1 | 已平仓计划的复盘行：计划说的、实际做的、R 与 `outcome` 一致；偏差标签八个代码各至少一例，`not_filled` 记照做 | `tests/test_retrospect.py::test_tags_each_code_once`（八代码 + `not_filled`=照做逐字断言）、`test_plan_record_origin_kinds_and_groups`（行的内容与分组键）、`test_plan_record_normalizes_repo_round_tripped_r_multiple`（R 倍数经仓储回读与 `outcome` 一致） |
+| B2 | 被替换 / 被取消 / agent 否决的不打 `not_bought_in_zone`；过期没买且价格进过区间打它 | `tests/test_retrospect.py::test_not_bought_in_zone_only_for_expired`（三种非用户决定的终态不打；只有 `expired` 打；从未进区间 → `not_filled`） |
+| B3 | 假设结果：成交价、离场价、R 与手算一致；收盘跌破止损前未成交；日线用完进行中；替换与取消不影响模拟 | `tests/test_retrospect.py::test_hypothetical_fill_then_initial_stop_gap_exit`（成交价 `min(开盘, 入场上沿)`、跳空离场、R 手算）、`test_hypothetical_close_below_stop_before_fill`、`test_hypothetical_never_in_zone`、`test_hypothetical_trailing_and_max_hold_next_open`、`test_hypothetical_unfinished_marks_to_last_close`；模拟器不读状态、只按价位与日线算，替换与取消不进它的输入 |
+| B4 | 规则检验：样本不足的组没有胜率与平均 R 的数字；真实与假设两张表互不相加 | `tests/test_retrospect.py::test_rule_stats_threshold_and_separation`（门槛内给数、门槛外只给样本数；真实只计已平仓 `planned`、假设只计已离场的假设结果） |
+| B5 | 复盘在空库上返回空记录与「还没有已结束的计划」，不报错 | `tests/test_v3_retrospect.py::test_empty_database_gives_empty_view`（records 空、empty 真、rules 各组空、weekly 有周界）、`web/src/lib/home/RetrospectPanel.test.ts`（「shows the empty message when there is nothing to review」） |
+| B6 | 周报只在每周最后一个交易日的运行里产出并推送；同一周重跑不重推 | `tests/test_daily_job.py::test_week_end_writes_and_pushes_weekly_once`（周五产出 `weekly_md`、多推一条、重跑不重推）、`test_midweek_has_no_weekly`（周三不产出也不多推） |
+| B7 | 发起研究：建记录、记 `created`；已有有效计划或观察中研究时拒绝并返回那份；同一 `request_id` 重放返回原行 | `tests/test_v3_tools_research.py::test_start_research_preview_confirm_idempotent_and_rejections`（预览逐字、写入、重放幂等、`research_exists` / `active_plan_exists` 各带 detail）、`test_start_research_replay_across_days`（跨日重放同一 `request_id` 仍回原行）。注：spec B7 原文「加关注列表」按审阅记录 R1 改为「进采集目标」，不写关注列表（见 B15） |
+| B8 | 条件四种各有到了 / 没到 / 日线不足；缺日线不推进 `checked_through`；到记一次 `triggered` 重跑不重复；到期无触发 `expired` | `tests/test_research_rules.py::test_condition_met_each_kind_hit_miss_and_short_history`（四种条件 × 三种答案）、`tests/test_v3_research_review.py::test_missing_bar_does_not_advance_and_catches_up`（缺日线不判不推进、补上后同一天还能判出）、`test_triggered_once_and_rerun_idempotent`、`test_expires_when_valid_until_passes_without_trigger` |
+| B9 | 待办里出现条件已到的研究；agent `ready` → 计划带 `research_id`、研究记 `planned`；brief 模式 `watch` 带新条件被拒；`reject` → `rejected` | `tests/test_v3_agenda.py::test_research_items_and_slots_ignore_research_plans`（research 待办参与完成判定）、`tests/test_v3_tools_research.py::test_ready_then_save_plan_links_research_and_skips_slots`、`test_brief_mode_watch_with_new_condition_is_rejected`（拒 `condition_needs_user`，原条件不变）、`test_conclude_reject_ends_research` |
+| B10 | 研究计划不占名额：3 份规则计划满员时照常保存；替换受害者只从规则计划里选；同一股票第二份有效计划仍被拒 | `tests/test_v3_tools_plan.py::test_research_plan_ignores_slots_and_replacement`（满员 + 同日已替换过，研究计划照常保存、不记 `replaced`、名额仍 0）、`test_replacement_skips_watching_ticker_like_agenda`（替换候选跳过观察中研究股票）；一只一份有效计划由 `uq_v3_plans_one_active_per_ticker` 保证（`tests/test_migration_034.py::test_one_active_plan_per_ticker_is_a_db_constraint`） |
+| B11 | 研究计划入场下沿收盘 − 3.5 ATR 通过、− 4.5 ATR 拒；规则名单计划 − 2.5 ATR 仍拒 | `tests/test_v3_tools_plan.py::test_research_plan_entry_floor_relaxed`（三例齐）、纯函数层 `tests/test_v3_tool_validation.py::test_entry_floor_follows_entry_atr` |
+| B12 | 简报：有研究时出现「研究」段与每份一行；条件已到写「条件已到，待复看」；缺日线写「缺日线，未复查」；没有研究时整段不出现；Discord 有研究条件行；页脚含「金额单位美元」 | `tests/test_v3_brief.py::test_research_section_states_and_absent_when_empty`（四种状态文案、排在待入场计划之后、空时不出现）、`test_changes_include_research_lines`、`test_discord_research_triggered_line_after_new_plans`、`test_footer_says_usd` |
+| B13 | 页面：研究卡片两组、放弃两步确认、「发起研究」预填助手输入框；复盘块三部分；记成交日期与时间控件拼带美东偏移的 ISO（夏令时与冬令时各一例）；金额与价格两位小数带 `$` | `web/src/lib/home/ResearchCards.test.ts`（两组、放弃两步确认、「发起研究」回调预填）、`web/src/lib/home/ChatPanel.test.ts`（prefill 预填并聚焦输入框）、`web/src/lib/home/RetrospectPanel.test.ts`（周汇总 / 执行复盘 / 规则检验三部分）、`web/src/lib/home/TradeForm.test.ts`（拼出带美东偏移的 `executed_at`）、`web/src/lib/format.test.ts`（`newYorkIso` 夏令时 / 冬令时 / 切换日七例、`moneyText` 两位小数带 `$`） |
+| B14 | `price_value` 取到分三个断言 | `tests/test_workbench_labels.py::test_price_value_two_decimals`（`40.5→40.50`、`98.000000→98.00`、`123.4567→123.46` 逐字）、`tests/test_v3_brief.py::test_price_text_trims_storage_zeros_without_rounding` |
+| B15 | 研究采集：观察中研究的股票进每日采集目标；关注列表与筛选范围不因研究而变 | `tests/test_v3_collect.py::test_target_facts_include_watching_research_not_watchlist`（采集目标含研究股票，关注列表不变） |
+| B16 | 一只股票同时两份观察中研究被数据库约束拒绝 | `tests/test_migration_035.py::test_one_watching_research_per_ticker_is_a_db_constraint` |
+| B17 | 研究股票同时在名单前 N 只：不进二次确认清单，待办仍可完成；名单行标「研究中」 | `tests/test_v3_agenda.py::test_research_items_and_slots_ignore_research_plans`（confirmations 跳过、研究复看计入完成判定）、`tests/test_v3_view.py::test_candidate_marked_研究中`（名单行 `has_research` 与「研究中」）、`tests/test_v3_tools_read.py::test_get_candidates_has_research` |
+| B18 | 待入场计划修订止损后 `initial_stop` 同步；研究计划修订价位时入场下限按放宽值 | `tests/test_v3_tools_plan.py::test_revise_pending_stop_updates_initial_stop`（同步且事件 before / after 都带它）；放宽下限的护栏由 `tests/test_v3_tool_validation.py::test_entry_floor_follows_entry_atr` 与 save_plan 路径的 `test_research_plan_entry_floor_relaxed` 证明，`revise_plan` 对带 `research_id` 的计划传同一个 `entry_atr`（R7），修订路径本身无单独的端到端测试 |
+| B19 | 没选定模型的周末交易日仍产出并推送周报；错误日不产出 | `tests/test_daily_job.py::test_no_model_week_end_still_pushes_weekly`（draft 日 `weekly_pushed` 为真、周报单独推送）；错误日不产出无直接测试：错误路径不调周报、`weekly_pushed` 恒为 False（`daily/job.py`，spec §5.4 / R5），错误日的推送语义由 `test_error_day_pushes_once_with_stop_warning_line` 覆盖 |
+
+### v3.2 Review Focus 六条（实施 plan）
+
+| # | 焦点 | 证明 |
+| --- | --- | --- |
+| 1 | 延续过的待入场计划过期：窗口从保存日的下一个交易日算到最终 `valid_until`，不漏中间交易日 | `tests/test_retrospect.py::test_window_spans_from_first_validity_to_last_valid_until` |
+| 2 | 研究股票缺日线：不判、不推进 `checked_through`、写「缺日线，未复查」；补上后还能判出条件到了 | `tests/test_v3_research_review.py::test_missing_bar_does_not_advance_and_catches_up`、`test_midweek_gap_stops_cursor_and_catches_up` |
+| 3 | 简报会话 agent 给 `watch` 且带新条件：拒 `condition_needs_user`，原条件与有效期不变 | `tests/test_v3_tools_research.py::test_brief_mode_watch_with_new_condition_is_rejected` |
+| 4 | 3 份规则计划满员、同一天已替换过，研究计划保存照常成功、不记 `replaced`、名额仍 0 | `tests/test_v3_tools_plan.py::test_research_plan_ignores_slots_and_replacement` |
+| 5 | 记成交日期落在美东夏令时 / 冬令时切换日附近：拼出的 ISO 偏移分别是 `-04:00` 与 `-05:00`，后端解析得同一时刻 | `web/src/lib/format.test.ts` 的 `newYorkIso` 七例（含按时刻取偏移的切换日两例）、`web/src/lib/home/TradeForm.test.ts`（表单拼 `executed_at`） |
+| 6 | 空库：复盘接口与页面显示「还没有已结束的计划」，简报没有「研究」段，周报在没有记录的周也能产出 | `tests/test_v3_retrospect.py::test_empty_database_gives_empty_view`、`tests/test_v3_brief.py::test_weekly_renders_with_no_records` |
 
 ### 沿用的 v3 设计验收（编号是 v3 设计的）
 

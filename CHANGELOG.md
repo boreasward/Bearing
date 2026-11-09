@@ -2,6 +2,25 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/archive/v2/roadmap/roadmap.md)。
 
+## [3.2.0] - 未发布
+
+检验与复盘、研究与跟踪、页面的时间控件与金额（[设计 spec](docs/specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md)、[实施 plan](docs/plans/2026-11-08-v3.2-retrospect-research-and-page-polish.md)，在 v3.1 的计划线、账户、简报与页面之上加三样东西；每日任务第 2 步、关注列表与旧口径（`screen-1`、`rule_levels`、`size`、`pending_cap=3`、`holding_check`）均未动）。按 spec §2 的目标七条：
+
+1. **执行复盘**：每份已结束的计划一行——计划说的（行上最终价位）、实际做的（成交）、R 倍数、偏差标签（八个代码，价格从未进入场区间而没买记「照做」）；补录只算结果不打标签。全部从记录现算，不另存副本。
+2. **规则检验**：按触发规则、形态档位、行业组三个键分组的样本数、胜率、平均 R、R 合计；样本数低于 `v3.retro_min_sample`（缺省 10）的组只写「样本不足」，不给数。
+3. **如果照做会怎样**：没买的计划用后续日线模拟假设结果（成交、持有、未成交、进行中），单独一列、单独一张表，任何汇总不与真实成交相加。
+4. **研究是一条独立记录**：用户在对话里点名股票写论点，agent 当场给结论三选一（可以出计划 / 值得盯 / 否决）；「值得盯」落一个宿主能用日线检查的条件（四种，agent 提出、用户确认）。
+5. **研究每天由宿主跟踪，不调模型**：逐日补查条件（缺日线不判不推进）；条件到了才进当天待办让 agent 复看；一直不到就过期。观察中研究的股票进每日采集目标，不写关注列表。
+6. **研究转成的计划不占 3 个待入场名额**（用户决定）：名额与替换受害者只数规则计划；其余纪律（一只一份有效计划、止损、账户、股数）全部照旧；入场类型加第四种 `pullback`；agent 自报入场下限对研究计划放宽到收盘 − `v3.research_entry_atr` × ATR（缺省 4）。
+7. **页面的时间控件与金额**：记成交的日期与时间用原生控件（时区固定美东，偏移按日期与时刻取，夏令时切换日不取错）；出入金与对账的日期用控件；页面金额与价格两位小数带 `$`，后端 `price_value` / `price_text` 取到分。
+
+- **迁移 035**（可重跑，只新建对象不改旧行）：`v3_research`（一只股票同时最多一份观察中的研究，部分唯一索引）、`v3_research_events`（只追加变化记录，宿主事件按（研究、交易日、类型）唯一）、`v3_plans.research_id`、`v3_briefs.weekly_md` 与 `pushed_weekly_at`。已在一次性库验证，**尚未在真实库执行**（步骤见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md)，需用户逐步授权）。
+- **工具面 35 个**（23 个两模式 + 12 个仅对话）：新增 `start_research`（chat）、`conclude_research`（两模式；`watch` 带条件是用户写入，brief 模式带新条件被拒）、`drop_research`（chat 与页面）、`get_research`（两模式）；`save_plan`（链接 ready 研究、跳名额、放宽下限、`pullback`）、`revise_plan`（研究计划同一下限、待入场修订止损同步 `initial_stop`）、`get_agenda`（research 待办、`free_slots` 只数规则计划、二次确认与替换跳过观察中研究股票）、`get_candidates`（`has_research`）、`compute_plan_levels`（`entry_types` 四种）的变化与简报模式范围的扩定见 [docs/operations/v3-facts.md](docs/operations/v3-facts.md)。
+- **简报与推送**：新增第 5a 段「研究」（排在待入场计划之后，没有研究时整段不出现），第 2 段加研究变化、第 8 段加研究未决行、页脚加「金额单位美元」；Discord 摘要加研究条件到了的一行。每周最后一个交易日的运行在最终简报之后算本周汇总写进 `weekly_md` 并单独推一条（同周重跑不重推；没选定模型照常产出推送；错误日不产出也不补）。
+- **页面**：4 个新接口（研究两组与单份、放弃研究、复盘视图带 `week` 切换）与两个新块（研究卡片组、复盘面板）；新组件 `ResearchCards` / `ResearchCard` / `RetrospectPanel`，`MetricValue` 加 `currency`，`ChatPanel` 支持预填。
+- **与 v3.1 设计的出入**（spec §15，冲突时以 v3.2 设计为准）：待入场名额只约束规则名单的计划；`ENTRY_TYPES` 四种（加 `pullback`）；`check_agent_levels` 的 `entry_too_low` 对研究计划从 2 ATR 放宽到 `research_entry_atr`（缺省 4）；待办五类（加「研究复看」）；简报模式的范围加当天待办里的研究股票；简报十一段（加「研究」）；页面六块（加「研究」「复盘」）；`price_value` 从去尾零改为固定两位（取到分）；记成交时间从手填 ISO 改为美东日期与时间控件。
+- 验收对照（B1–B19 与 Review Focus 六条各由哪个测试证明）见 [docs/operations/daily-run.md](docs/operations/daily-run.md) 末尾。
+
 ## [3.1.0] - 未发布
 
 每日简报、连贯的交易计划、止损纪律、账户、页面与对话（[设计 spec](docs/specs/2026-11-06-v3.1-plan-line-account-and-web-design.md)、[实施 plan](docs/plans/2026-11-07-v3.1-plan-line-account-and-web.md)，把 v3 设计的第 2、3 步合成一个版本交付，并新增计划线、止损纪律、账户三样 v3 设计里没有的东西）。按 spec §2 的目标七条：

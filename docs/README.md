@@ -4,7 +4,7 @@
 
 ## 系统现在是什么样
 
-v3 重做进行中。旧系统（v2）已在 2026-11-06 移除，仓库里是 v3 的事实层与工具面、数据层与推导层、前端组件层和一个服务外壳；v3.1（开发中）在外壳上加了页面与对话，并新增计划线、止损纪律、账户与每日简报。
+v3 重做进行中。旧系统（v2）已在 2026-11-06 移除，仓库里是 v3 的事实层与工具面、数据层与推导层、前端组件层和一个服务外壳；v3.1（开发中）在外壳上加了页面与对话，并新增计划线、止损纪律、账户与每日简报；v3.2（代码与测试已落地，待上线）在 v3.1 之上加检验与复盘、研究与跟踪、页面的时间控件与金额。
 
 | 文档 | 内容 |
 | --- | --- |
@@ -13,10 +13,11 @@ v3 重做进行中。旧系统（v2）已在 2026-11-06 移除，仓库里是 v3
 | [plans/2026-11-05-v3-facts-and-tools.md](plans/2026-11-05-v3-facts-and-tools.md) | v3 第一阶段实施 plan：文档归档、Pi 无人值守可行性验证、事实层与工具面 |
 | [specs/2026-11-06-v2-removal-design.md](specs/2026-11-06-v2-removal-design.md)、[plans/2026-11-06-v2-removal.md](plans/2026-11-06-v2-removal.md) | 提前移除 v2（v3 第 5 步）的设计与实施 plan：保留什么、删什么、迁移 033、与 v3 设计的出入 |
 | [specs/2026-11-06-v3.1-plan-line-account-and-web-design.md](specs/2026-11-06-v3.1-plan-line-account-and-web-design.md)、[plans/2026-11-07-v3.1-plan-line-account-and-web.md](plans/2026-11-07-v3.1-plan-line-account-and-web.md) | v3.1（开发中）：每日简报、计划线、止损纪律、账户、页面与对话的设计与实施 plan（迁移 034） |
+| [specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md](specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md)、[plans/2026-11-08-v3.2-retrospect-research-and-page-polish.md](plans/2026-11-08-v3.2-retrospect-research-and-page-polish.md) | v3.2（代码与测试已落地，待上线）：检验与复盘（执行复盘、规则检验、假设结果、周报）、研究与跟踪、页面的时间控件与金额的设计与实施 plan（迁移 035） |
 | [operations/](operations/) | 运维文档：本机服务（外壳与页面接口）、每日任务、迁移与备份、v3 事实任务与工具面、Pi 无人值守 |
 | [design-system.md](design-system.md) | 设计标准：原则、令牌（浅 / 深取值）、布局、状态词汇与语气、数据块五态、组件清单与 API、交互、图标与图表、文案；组件画廊在 `npm run dev` → `#_ui`（v3 保留的组件层仍以它为标准，spec §15.1） |
 | [getting-started.md](getting-started.md) | v3 的上手指南：安装、配置（`.env` 与配置文件）、建库、运行（`facts`、`toolsurface`、`daily`、外壳服务与页面）、三套测试 |
-| [knowledge/concepts/](knowledge/concepts/) | 概念卡：指标（`indicator.`）、规则（`rule.`）、计划（`plan.`）三组共 40 张，`toolsurface` 的概念卡工具读它们 |
+| [knowledge/concepts/](knowledge/concepts/) | 概念卡：指标（`indicator.`）、规则（`rule.`）、计划（`plan.`）三组共 42 张，`toolsurface` 的概念卡工具读它们 |
 
 ### v2（已归档）
 
@@ -35,10 +36,10 @@ v2 的路线、功能、架构、概念卡与运维文档已移入 [archive/v2/]
 | 文档 | 内容 |
 | --- | --- |
 | [local-service.md](operations/local-service.md) | 外壳服务：当前状态（已 bootout）、LaunchAgent、启动链路、页面接口清单、重新加载与卸载、日志与路径、认证 |
-| [daily-run.md](operations/daily-run.md) | 每日任务（v3.1）：五件事、命令行与退出码、LaunchAgent 安装、重跑与补查、简报与草稿位置、Discord、预算与重试、故障排查、验收对照 |
-| [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–034、真实库备份与执行（含 033 的执行记录与 034 的步骤）、一次性测试库 |
+| [daily-run.md](operations/daily-run.md) | 每日任务（v3.1；v3.2 增研究复查与周报）：五件事、命令行与退出码、LaunchAgent 安装、重跑与补查、简报与草稿位置、Discord、周报、预算与重试、故障排查、验收对照（A1–A22、B1–B19 与 Review Focus） |
+| [migrations-and-backup.md](operations/migrations-and-backup.md) | 迁移清单 001–035、真实库备份与执行（含 033 的执行记录、034 的步骤与记录、035 的步骤）、一次性测试库 |
 | [pi-unattended.md](operations/pi-unattended.md) | Pi 无人值守运行可行性（v3 第 0 步）：专用配置目录、实测命令行、事件与成败判定、十项检查结果 |
-| [v3-facts.md](operations/v3-facts.md) | v3 事实任务与工具面（v3 第 1 步）：命令与退出码、草稿位置、`v3` 配置键、并行期共用事实表、迁移 032 与真实库试跑记录 |
+| [v3-facts.md](operations/v3-facts.md) | v3 事实任务与工具面（v3 第 1 步）：命令与退出码、草稿位置、`v3` 配置键、工具面 35 个（v3.2 加研究与复盘相关变化）、并行期共用事实表、迁移 032 与真实库试跑记录 |
 | [../scripts/README.md](../scripts/README.md) | 脚本：`scripts/start_local.py`（本机服务入口）与 `scripts/pi_precheck/`（v3 第 0 步的 Pi 无人值守核查） |
 
 ## 方向与历史

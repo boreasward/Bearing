@@ -34,9 +34,9 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 `briefs/` → 都没设时仓库本地 `.local/v3/briefs/`。本机 `.env` 设了 `INVESTMENT_ASSISTANT_RUNTIME_BASE`，
 草稿落在 `~/Library/Application Support/investment-assistant/briefs/<交易日>.draft.md`。
 
-正常草稿是 v3.1 十段简报去掉 agent 部分的宿主版：今日操作（没有就不出现）、和昨天比变了什么、
-市场环境、持仓（含止损与下一交易日的操作）、待入场计划、规则名单（含连续天数与掉出名单）、
-账户、今天下不了结论的、页脚；标题下写明「二次确认未完成」。基准（SPY）当日日线缺失时，
+正常草稿是十一段简报去掉 agent 部分的宿主版：今日操作（没有就不出现）、和昨天比变了什么（v3.2 含研究的变化）、
+市场环境、持仓（含止损与下一交易日的操作）、待入场计划、研究（v3.2：观察中的研究每份一行；没有研究时整段不出现）、
+规则名单（含连续天数与掉出名单）、账户、今天下不了结论的、页脚；标题下写明「二次确认未完成」，页脚含「金额单位美元」。基准（SPY）当日日线缺失时，
 运行记录 `status=error`、退出码 1、无 traceback，草稿只剩标题、缺失原因与页脚；此时若有持仓，
 第一行写「今天无法检查止损」（这是设计好的错误路径，不是崩溃）。
 
@@ -62,6 +62,9 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 | `trail_atr` | 3 | v3.1：移动止损的 ATR 倍数 |
 | `brief_budget_minutes` | 20 | v3.1：简报会话总预算（分钟，含重试），见 [daily-run.md](daily-run.md) |
 | `chat_turn_seconds` | 300 | v3.1：页面对话每轮时限（秒） |
+| `research_sessions` | 20 | v3.2：研究有效期（交易日），发起或 `watch` 结论当天起算；可选范围 1–60 |
+| `research_entry_atr` | 4.0 | v3.2：研究计划 agent 自报价位的入场下限倍数（最新收盘 − 该倍数 × ATR）；可选范围 2–8 |
+| `retro_min_sample` | 10 | v3.2：规则检验每组的样本门槛，不足写「样本不足」；可选范围 1–100 |
 
 采集并发的实现是 `data.registry.run_adapter` 新增的 `workers` 参数：缺省 1，与改动前的逐个拉取完全等价，
 旧调用不受影响；只有事实任务按 `collect_workers` / `sec_workers` 传入。
@@ -88,10 +91,10 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
   --session 2026-11-05 --mode brief --agent-session <会话编号> [--env-file .env]
 ```
 
-- 31 个工具：21 个两种模式都有（读、算计划价位、保存结论与计划、计划线的延续 / 修订 / 持仓复查 /
-  一句话总结）；`record_trade`、`record_equity`（对账）、`record_cash_flow`、`confirm_stop_order`、
-  `raise_stop`、`cancel_plan`、`void_record`、`watchlist_add`、`watchlist_remove`、`ensure_data`
-  十个只在 `chat` 模式可用。
+- 35 个工具：23 个两种模式都有（读、算计划价位、保存结论与计划、计划线的延续 / 修订 / 持仓复查 /
+  一句话总结、研究结论与读研究）；`record_trade`、`record_equity`（对账）、`record_cash_flow`、`confirm_stop_order`、
+  `raise_stop`、`cancel_plan`、`void_record`、`watchlist_add`、`watchlist_remove`、`ensure_data`、
+  `start_research`、`drop_research` 十二个只在 `chat` 模式可用（`drop_research` 页面也调它）。
   - v3.1 新增：`get_account`（账户视图）、`get_agenda`（当天待办）、`continue_plan`、`revise_plan`、
     `save_holding_review`、`save_summary`、`record_cash_flow`、`confirm_stop_order`、`raise_stop`、
     `cancel_plan`、`void_record`、`watchlist_add`、`watchlist_remove`。
@@ -100,6 +103,19 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
     `save_plan` 增加已有有效计划、名额与替换校验；`save_verdict` 的 veto 会作废待入场计划；
     `record_equity` 语义改为对账（返回差额）；`record_trade` 按计划线推进（买入返回止损单指令，
     卖完返回平仓结果）。
+  - v3.2 新增：`start_research`（chat；用户写入：股票 + 论点建研究，先复述、`confirmed` 才写、
+    按 `request_id` 幂等；该股票已有有效计划或观察中研究时拒并返回那份）、`conclude_research`（两模式；
+    agent 写入：结论 `ready` / `watch` / `reject` 三选一带理由与反证；`watch` 带条件是用户写入，
+    brief 模式带新条件被拒 `condition_needs_user`）、`drop_research`（chat + 页面；用户放弃）、
+    `get_research`（两模式；按状态 / 股票 / 编号读研究，每份带变化记录）。
+  - v3.2 改动：`save_plan` 的 `entry_type` 接受第四种 `pullback`；该股票有观察中且结论 `ready` 的研究时，
+    保存成功后研究记 `planned`、计划记 `research_id`，名额检查只数 `research_id` 为空的待入场计划
+    （替换受害者同理），agent 自报入场下限放宽到收盘 − `v3.research_entry_atr` × ATR；`revise_plan` 对带
+    `research_id` 的计划用同一个放宽下限，待入场计划修订止损时同步 `initial_stop`；`get_agenda` 返回加
+    `research`（待复看清单，计入完成判定），`free_slots` 只数规则计划，二次确认清单与替换候选跳过有观察中
+    研究的股票；`get_candidates` 每只加 `has_research`（简报名单据此标「研究中」）；`compute_plan_levels`
+    返回的 `entry_types` 四种；简报模式的范围从「名单前 N 只」扩成「名单前 N 只 ∪ 当天待办里的研究股票」
+    （`scope_tickers`）。
   - 计划是跨天的一条线：`v3_plan_events` 里每次变化一行；带 `request_id` 的写工具先复述、
     `confirmed` 为真才写、按 `request_id` 幂等。
 - 交易日与数据截止时点在进程启动时固定，模式与会话编号由宿主传入，模型改不了；每次调用（含出错的）

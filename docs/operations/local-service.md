@@ -24,6 +24,7 @@
   - `GET /api/today`：今日操作与账户条。
   - `GET /api/briefs`、`GET /api/briefs/latest`、`GET /api/briefs/{session}`：简报列表与单份简报。
   - `GET /api/plans`、`GET /api/plans/{id}`：计划三组卡片与单份计划（含变化记录）；`POST /api/plans/{id}/stop-order`、`/raise-stop`、`/cancel`：计划写入口。
+  - `GET /api/research`（v3.2）：研究两组卡片（`group=watching|ended`、`limit`，观察中缺省）；`GET /api/research/{id}`：单份含变化记录时间线；`POST /api/research/{id}/drop`：放弃研究（先复述，`confirmed` 为真才写）；`GET /api/retrospect`（v3.2）：复盘——执行复盘记录（`limit` 阶梯 20 / 50 / 100）、周报（`week` 切换以前的周）与规则检验两张表。
   - `POST /api/trades`、`/api/cash-flows`、`/api/reconcile`、`/api/voids`、`GET /api/account`：账本（写入口先复述，`confirmed` 为真才写）。
   - `GET /api/chats`、`POST /api/chats`、`GET /api/chats/{id}`：对话列表、新建、详情；`POST /api/chats/{id}/messages`：一轮提问，响应是 `text/event-stream`（SSE），每个事件一帧 `event: <kind>\ndata: <json>\n\n`，末帧必为 `done`/`error`/`cancelled`；`POST /api/chats/{id}/cancel`：取消当轮。对话轮次与每日简报共用一个运行时锁，简报运行期间提问得到 409 `brief_running`。
   - `GET /api/settings`、`GET /api/settings/options`、`PUT /api/settings`：运行时与模型设置。

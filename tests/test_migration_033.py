@@ -178,7 +178,7 @@ def test_fresh_database_builds_through_033(blank_schema):
 
     applied = db.apply_pending_migrations(blank_schema, MIGRATIONS)
     assert applied == [path.name for path in sorted(MIGRATIONS.glob("*.sql"))]
-    assert applied[-2] == "033_drop_v2_tables.sql"  # 033 之后还有后续迁移（034 起）也照常建库
+    assert applied[-3] == "033_drop_v2_tables.sql"  # 033 之后还有后续迁移（034 起）也照常建库
     for table in DROPPED:
         assert not _exists(blank_schema, table)
     for table in KEPT_FACT_TABLES:
@@ -235,6 +235,7 @@ def guarded(tmp_path):
     if not base:
         pytest.skip("explicit test database URL required; disposable schema only")
     import psycopg
+    from psycopg import sql
 
     schema = f"g033_{uuid.uuid4().hex[:12]}"
     upto = tmp_path / "upto_032"
@@ -242,14 +243,14 @@ def guarded(tmp_path):
     for name in UPTO_032:
         shutil.copy(MIGRATIONS / name, upto / name)
     with psycopg.connect(base) as conn:
-        conn.execute(f"CREATE SCHEMA {schema}")
-        conn.execute(f"SET search_path TO {schema}")
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
         conn.commit()
         try:
             yield f"{base}?options=-csearch_path%3D{schema}", conn, upto
         finally:
             conn.rollback()
-            conn.execute(f"DROP SCHEMA {schema} CASCADE")
+            conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
             conn.commit()
 
 
