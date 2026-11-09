@@ -20,7 +20,9 @@
 <Card.Root size="sm">
   <Card.Header>
     <Card.Title class="flex flex-wrap items-center gap-2">{title}
-      {#if preview}<StatusPill domain="write" value="preview" />{:else if meta?.write}<StatusPill domain="write" value={meta.write} />{/if}
+      {#if !error}
+        {#if preview}<StatusPill domain="write" value="preview" />{:else if meta?.write}<StatusPill domain="write" value={meta.write} />{/if}
+      {/if}
       {#if !error && !preview}{@render badges?.()}{/if}
     </Card.Title>
     {#if chip && !error && !preview}

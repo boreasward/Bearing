@@ -265,7 +265,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `CallMeta` | `{ tool; ref; session; calledAt; write?: 'written' \| 'preview' \| 'replayed' }` | 裸工具名、真实调用编号与时点，不为页面接口编造调用编号 |
 | `labels.ts` | `FIELD_LABELS`、`TOOL_LABELS` | 工具中文标题与接口字段中文，覆盖后端共用 fixtures 的顶层键 |
 | `cards/SourceLine` | `{ meta: CallMeta; calcVersion? }` | 等宽来源行 `{tool} · call:N · {session}`；无 session 用北京时间；无 ref 写 `{tool} · 调用中`；有计算版本才附加 |
-| `cards/CardFrame` | `{ title, data, meta?, calcVersion?, badges?, contextChip?, children, emptyMessage? }` | 所有快照共用卡片标题、写入徽标、来源行、中文错误、空列表 / null 与待确认复述；单一对象在页头「就这个继续问」，多个计划 / 研究各行提供动作；错误 / preview 不显示写入动作 |
+| `cards/CardFrame` | `{ title, data, meta?, calcVersion?, badges?, contextChip?, children, emptyMessage? }` | 所有快照共用卡片标题、写入徽标、来源行、中文错误、空列表 / null 与待确认复述；单一对象在页头「就这个继续问」，多个计划 / 研究各行提供动作；错误 / preview 不显示写入动作；错误信封保留来源和中文原因，并抑制所有写入状态徽标 |
 | `cards/MarketCard` | `{ data: MarketData; meta?; full?; pane?; onBring?(chip) }` | 缺省四格与前两只领涨、ETF 前 6 行；full 展示 ETF 全表、宏观与关注表；pane 独立启用三行区制与全部 ETF / 关注表，不显示宏观，按 RS20 降序且不改原数据；三种用法共用表格。watch.change_pct 已为百分点，展示前转为 MetricValue 的小数口径 |
 | `cards/PlanSnapshotCard` | `{ data: unknown; meta }` | 原始计划 / 包装行 / 列表及持仓快照；价位用 Number 转成 PlanLevels，缺值写「没算」；打开计划、预填 TradeForm、「就这个继续问」 |
 | `cards/ResearchSnapshotCard` | `{ data: unknown; meta }` | 原始研究的状态、论点、条件、有效期；打开研究与「就这个继续问」 |
@@ -274,7 +274,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `cards/AgendaCard` / `BarsTable` | `{ data: unknown; meta }` | facts agenda 四组清单（空组「无」）；日期 / 开高低收 / 量表格，数字右对齐 |
 | `cards/GenericCard` | `{ data: unknown; meta }` | 平面字典键值两列；字典列表取字段并集前 8 列并写剩余列数；其他 JSON 前 40 行可展开；空与缺值有原因 |
 | `ResourceBlock` / `RunStatus` | `{ resource, emptyMessage, children }` / `{ brief }` | 共享 store 五态与重试，no_run 映射 empty；daily_run 状态，unfinished 额外徽标 |
-| `drawer/DashboardPane` | `{ onBring(chip) }` | 今日操作 / 账户 / 持仓与计划 / 研究中 / 市场温度五块；今日操作复用两步确认接口和 TradeForm；每个对象行可带进对话 |
+| `drawer/DashboardPane` | `{ onBring(chip) }` | 今日操作 / 账户 / 持仓与计划 / 研究中 / 市场温度五块；今日操作复用两步确认接口和 TradeForm；止损确认保留预览请求的计划、价格与 request_id，独立于成交表单的预填目标；每个对象行可带进对话 |
 | `drawer/MarketPane` | `{ onBring(chip) }` | 共享 MarketCard 的 pane 模式，打开完整行情链接；回调只触发一次 |
 | `drawer/JobsPane` | `{ onBring(chip) }` | 最近 4 次与下次北京时间、研究条件检查、当前纽约日历周一至周五窗口内的周报；同一天多次运行分别展示 |
 | `AccountView` / `MarketView` / `JobsView` | 无 props，自取共享 store | 账户三张流水（20→40→60→80→100，保留已作废行与原因）、行情 full、任务计划与 20 行运行表；任务行分别展开 usage / 耗时 / 模型，链接 `#today?session=日期` |

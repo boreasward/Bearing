@@ -23,31 +23,33 @@
   type Action = TodayData['actions'][number]
   const order: Record<string, number> = { stop_hit_unresolved:0, sell_next_open:1, unchecked:2, stop_order:3, hold:4 }
   const todayActions = $derived([...(today.data?.actions ?? [])].sort((a,b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9)))
-  let target = $state<Action | null>(null)
+  let tradeTarget = $state<Action | null>(null)
+  type StopRequest = Readonly<{ planId: number; price: number | null; requestId: string }>
+  let stopRequest = $state<StopRequest | null>(null)
   let tradeOpen = $state(false)
   let confirmOpen = $state(false)
   let preview = $state('')
-  let requestId = ''
   let busy = $state(false)
   let writing = $state(false)
   function completed(message: string) { invalidateAll(); actionCompleted(message) }
   async function confirmPlaced(action: Action) {
-    if (busy) return
+    if (busy || confirmOpen || writing) return
     busy = true
-    target = action
-    requestId = crypto.randomUUID()
+    const request: StopRequest = { planId: action.plan_id, price: num(action.stop), requestId: crypto.randomUUID() }
     try {
-      const first = await post<WritePreview>(`/api/plans/${action.plan_id}/stop-order`, { price:num(action.stop), request_id:requestId, confirmed:false })
+      const first = await post<WritePreview>(`/api/plans/${request.planId}/stop-order`, { price:request.price, request_id:request.requestId, confirmed:false })
+      stopRequest = request
       preview = first.preview ?? ''; confirmOpen = true
     } catch (cause) { notify.error(errorText(cause)) } finally { busy = false }
   }
   async function writeStop() {
-    if (!target || writing) return
+    const request = stopRequest
+    if (!request || writing) return
     writing = true
     try {
-      await post(`/api/plans/${target.plan_id}/stop-order`, { price:num(target.stop), request_id:requestId, confirmed:true })
+      await post(`/api/plans/${request.planId}/stop-order`, { price:request.price, request_id:request.requestId, confirmed:true })
       confirmOpen = false; notify.success('已确认挂单'); completed('已确认挂单')
-    } catch (cause) { notify.error(errorText(cause)); confirmOpen = false } finally { writing = false }
+    } catch (cause) { notify.error(errorText(cause)); confirmOpen = false } finally { writing = false; stopRequest = null }
   }
 </script>
 <div class="grid gap-5 text-sm">
@@ -59,7 +61,7 @@
           <li class="grid gap-1"><span>{action.ticker} · {action.text}</span>
             <div class="flex flex-wrap gap-1">
               {#if action.kind === 'stop_order' && action.stop != null}<Button size="sm" variant="primary" disabled={busy} onclick={() => confirmPlaced(action)}>确认已挂单</Button>{/if}
-              {#if action.kind === 'stop_hit_unresolved' || action.kind === 'sell_next_open'}<Button size="sm" variant="primary" onclick={() => { target = action; tradeOpen = true }}>记成交</Button>{/if}
+              {#if action.kind === 'stop_hit_unresolved' || action.kind === 'sell_next_open'}<Button size="sm" variant="primary" onclick={() => { tradeTarget = action; tradeOpen = true }}>记成交</Button>{/if}
               <Button size="sm" variant="ghost" onclick={() => onBring({ kind:'plan', ticker:action.ticker, id:action.plan_id })}>带进对话</Button>
             </div>
           </li>
@@ -108,5 +110,5 @@
     </ResourceBlock>
   </Section>
 </div>
-<TradeForm bind:open={tradeOpen} ticker={target?.ticker ?? ''} planId={target?.plan_id ?? null} shares={num(target?.quantity)} onDone={() => completed('已记录成交')} />
-<ConfirmDialog bind:open={confirmOpen} title="确认已挂单" consequence={preview} actionLabel="确认已挂单" busy={writing} onConfirm={writeStop} onCancel={() => { preview = ''; target = null }} />
+<TradeForm bind:open={tradeOpen} ticker={tradeTarget?.ticker ?? ''} planId={tradeTarget?.plan_id ?? null} shares={num(tradeTarget?.quantity)} onDone={() => completed('已记录成交')} />
+<ConfirmDialog bind:open={confirmOpen} title="确认已挂单" consequence={preview} actionLabel="确认已挂单" busy={writing} onConfirm={writeStop} onCancel={() => { preview = ''; stopRequest = null }} />
