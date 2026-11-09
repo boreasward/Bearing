@@ -123,7 +123,7 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
     `confirmed` 为真才写、按 `request_id` 幂等。
 - 交易日与数据截止时点在进程启动时固定，模式与会话编号由宿主传入，模型改不了；每次调用（含出错的）
   写一行 `v3_tool_calls`（`agent_session`、`mode`、参数、结果哈希；v3.2.1 起还保留 `result` 与 `truncated`）。
-  `brief` 与 `chat` 都保留成功 payload（包括列表、null 等 JSON 值）；失败保留 `{"error": …}`，
+  `brief` 与 `chat` 都保留成功 payload（包括列表、null 等 JSON 值；显式 null 保存为 JSONB null，未提供 result 键才是 SQL NULL）；失败保留 `{"error": …}`，
   有 `detail` 时一并保留。按 UTF-8 JSON 字节数判断，超过 `v3.tool_result_max_bytes`（缺省 524288）
   只存 `{"truncated": true, "bytes": n}` 且 `truncated` 为真；agent 仍收到完整信封，
   `result_sha256` 仍按完整成功 payload 算，错误调用哈希仍为空。无法序列化的成功结果沿用
@@ -136,7 +136,7 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 
 `runtime/pi.py` 在 `tool_execution_end.result.content[]` 的文本项中依次查找第一份能解析成 JSON 且带合法 `call:N` 的信封，将引用写入事件 `ref`；非文本、空内容、非 JSON 或缺 ref 都跳过，找不到就留空，后续事件继续。`tool_start` / `tool_end` 的 `toolName` 去掉服务 `ia` 的 `mcp__ia__` 前缀，工具记录、前端注册表与占位卡统一用裸名。
 
-页面以 SSE start 帧的 `agent_session` 与 call:N 读取已保存结果，不按事件顺序猜编号。解析不到显示「调用已完成，结果不可追溯」；迁移前的 NULL 结果显示「这次调用早于 v3.2.1，没有保留结果」。历史卡画调用当时的快照，动作再读对象当前状态。录制事件测试不替代真实客户端验证；真实 Pi 引用与刷新回放要在 [上线冒烟](local-service.md#v321-上线四步待授权未执行) 中核对。
+页面以 SSE start 帧的 `agent_session` 与 call:N 读取已保存结果，不按事件顺序猜编号。解析不到显示「调用已完成，结果不可追溯」；calls 接口的 `result_available` 由 SQL `result IS NOT NULL` 计算，成功 JSON null 为 true、正常呈现查询 empty；迁移前的 SQL NULL 为 false，显示「这次调用早于 v3.2.1，没有保留结果」。历史卡画调用当时的快照，动作再读对象当前状态。录制事件测试不替代真实客户端验证；真实 Pi 引用与刷新回放要在 [上线冒烟](local-service.md#v321-上线四步待授权未执行) 中核对。
 
 实测得到的两条要求：
 

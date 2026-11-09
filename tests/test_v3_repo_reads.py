@@ -13,6 +13,7 @@ NOW = datetime(2026, 11, 9, 12, tzinfo=UTC)
 @pytest.mark.parametrize(
     "result,truncated",
     [
+        (None, False),
         ({"a": 1}, False),
         ([{"a": 1}], False),
         ({"truncated": True, "bytes": 600000}, True),
@@ -31,6 +32,7 @@ def test_insert_tool_call_stores_result_and_truncated(v3_tx, result, truncated):
     }
     saved = repo.insert_tool_call(v3_tx, row)
     assert saved["result"] == result
+    assert saved["result_available"] is True
     assert saved["truncated"] is truncated
     assert repo.tool_call(v3_tx, "call-session", 1) == saved
     row.pop("result")
@@ -40,6 +42,7 @@ def test_insert_tool_call_stores_result_and_truncated(v3_tx, result, truncated):
     old = repo.tool_call(v3_tx, "call-session", 2)
     assert old is not None
     assert old["result"] is None and old["truncated"] is False
+    assert old["result_available"] is False
     assert repo.tool_call(v3_tx, "x", 9) is None
 
 

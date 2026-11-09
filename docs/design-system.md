@@ -247,7 +247,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `ChatList` | `{ chats, currentChatId, onNewChat, onNavigate? }` | 按 `last_message_at` 北京日期分今天 / 本周（周一起）/ 更早；无标题写「新对话」，只读标签；折叠后只剩新开动作 |
 | `TopBar` | `{ title, session, onToggleDrawer(pane, trigger), onOpenNav(trigger), onOpenSettings, drawerHidden? }` | 标题、数据时点与图标面板开关；无运行时写「还没有运行记录」；可选 drawerHidden 使窄屏临时关闭后按钮的 aria-pressed 与高亮反映实际可见状态，桌面偏好不变 |
 | `Drawer` | `{ drawerPane: Snippet<[DrawerPane]> }` | 桌面侧览容器；关闭时 `hidden` |
-| `layout.svelte.ts` | `layout`、`toggleNav()`、`setSegment(segment)`、`toggleDrawer(pane)` | 存 `ws.nav.collapsed`（`1` / 缺省展开）、`ws.nav.segment`（`quick` / `chats`）、`ws.drawer`（`dash` / `market` / `jobs` / `closed`）；缺省 quick、dash，存储禁用仍可用 |
+| `layout.svelte.ts` | `layout`、`toggleNav()`、`setSegment(segment)`、`toggleDrawer(pane)` | 存 `ws.nav.collapsed`（`1` / 缺省展开）、`ws.nav.segment`（`quick` / `chats`）、`ws.drawer`（`dash` / `market` / `jobs` / `closed`）；缺省 quick、dash，存储禁用仍可用；缺省 / 已保存的 quick 分段保持权威，最近对话的高亮只在用户选择 chats 时显示 |
 | `router.ts` | `parseHash(hash): Route`、`hrefOf(route)` | chat / view / gallery；七视图，plans / research 可带数字 id；未知回空 chat；`#_ui` 保持开发画廊 |
 | `resource.svelte.ts` | `createResource<T>(path: string \| (() => string \| null), opts?)` → `{ data, state, error, load(), invalidate() }` | 响应式读取自动订阅与首次加载；写入后失效保留旧数据直至新结果抵达；最后消费者卸载后停止自动重取；重新挂载取脏缓存；空路径 empty，旧请求不覆盖新路径 / 新请求 |
 | `stores/index.ts` | `today`、`market`、`runs`、`ledger`、`ledgerForLimit(limit)`、`account`、`plans(group)`、`research(group)`、`retrospect`、`retrospectFor(week,limit)`、`briefs`、`briefFor(session?)`、`chats`、`invalidateAll()` | 一接口一共享缓存，分组缓存按组复用；写入完成后统一失效 |
@@ -271,11 +271,12 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `cards/LevelsCard` / `TradeCard` / `NoteCard` | `{ data: unknown; meta }` | PlanLevels 与 ATR / 口径；成交、计划变化、止损单、平仓结果；保存的文字与写入徽标 |
 | `cards/AgendaCard` / `BarsTable` | `{ data: unknown; meta }` | facts agenda 四组清单（空组「无」）；日期 / 开高低收 / 量表格，数字右对齐 |
 | `cards/GenericCard` | `{ data: unknown; meta }` | 平面字典键值两列；字典列表取字段并集前 8 列并写剩余列数；其他 JSON 前 40 行可展开；空与缺值有原因 |
+| `views/tool-write.ts` | `isMutatingTool(tool)`、`toolWriteStatus(tool,data,error?)` | 显式写工具集合（含 ensure_data）；共享给终态刷新与 ToolCard。实际错误无徽标、write:false 为待确认、replay:true 为重放、其余成功写为已写入；读工具不显示写入徽标 |
 | `ResourceBlock` / `RunStatus` | `{ resource, emptyMessage, children }` / `{ brief }` | 共享 store 五态与重试，no_run 映射 empty；daily_run 状态，unfinished 额外徽标 |
 | `drawer/DashboardPane` | `{ onBring(chip) }` | 今日操作 / 账户 / 持仓与计划 / 研究中 / 市场温度五块；今日操作复用两步确认接口和 TradeForm；止损确认保留预览请求的计划、价格与 request_id，独立于成交表单的预填目标；每个对象行可带进对话 |
 | `drawer/MarketPane` | `{ onBring(chip) }` | 共享 MarketCard 的 pane 模式，打开完整行情链接；回调只触发一次 |
 | `drawer/JobsPane` | `{ onBring(chip) }` | 最近 4 次与下次北京时间、研究条件检查、当前纽约日历周一至周五窗口内的周报；同一天多次运行分别展示 |
-| `AccountView` / `MarketView` / `JobsView` | 无 props，自取共享 store | 账户三张流水（20→40→60→80→100，保留已作废行与原因）、行情 full、任务计划与 20 行运行表；任务行分别展开 usage / 耗时 / 模型，链接 `#today?session=日期` |
+| `AccountView` / `MarketView` / `JobsView` | 无 props，自取共享 store | 账户三张流水（20→40→60→80→100，保留已作废行与原因）、行情 full、任务计划与 20 行运行表；事实运行 ok 映射 run.success、error 仍为失败；manual_batch 显示手动、scheduled 显示定时。任务行分别展开 usage / 耗时 / 模型，链接 `#today?session=日期` |
 | `views/context.ts` | `ContextChip = { kind: 'ticker' \| 'plan' \| 'research'; ticker; id }`、`bringToChat(chip)`、`actionCompleted(text)` | 浏览器内事件 `workbench:bring` 的 detail 为 ContextChip，`workbench:action` 的 detail 为 `{ text }`；导出事件常量与事件类型；无 window 时不操作 |
 
 `ledgerForLimit(limit)` 校验 1–100 的整数并按 limit 共享缓存；20 复用 `ledger`，其余请求 `/api/ledger?limit=N`。`invalidateAll()` 同时刷新仍挂载的各条数资源；账户显示更多后保持当前条数，任一表达到当前条数时才能继续请求，最高 100。
@@ -286,9 +287,9 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 
 | 组件 / 模块 | API | 职责 |
 | --- | --- | --- |
-| `ChatPanel` | `{ chatId: string \| null, prefillChips?, prefillText?: {text,seq}, onWrote() }`；`focusInput()` / `appendFeedback(text)` / `createChat()` | 按对话保存消息与回合，保持原 SSE 的归属；start 帧保存 agent_session，tool_end 按出现顺序认领同名占位；发送在任何创建请求前同步加锁，创建/发送控件共享状态；Home 的新开对话也委托同一 createChat()，失败释放锁且保留草稿。写工具完成的正常轮 invalidateAll / onWrote 一次，纯文字轮刷新对话标题；取消与只读、忙碌提示保持原文；取消请求未返回前禁止下一轮，防止旧取消误伤新轮 |
+| `ChatPanel` | `{ chatId: string \| null, prefillChips?, prefillText?: {text,seq}, onWrote() }`；`focusInput()` / `appendFeedback(text)` / `createChat()` | 按对话保存消息与回合，保持原 SSE 的归属；start 帧保存 agent_session，tool_end 按出现顺序认领同名占位；发送在任何创建请求前同步加锁，创建/发送控件共享状态；Home 的新开对话也委托同一 createChat()，失败释放锁且保留草稿。观察到写工具完成后，在轮次最终清理中 invalidateAll / onWrote 一次（done、error、cancelled、EOF、用户中止均覆盖，多次写入合并）；只见 tool_start 不声称写入或回滚，纯文字正常轮刷新对话标题；取消与只读、忙碌提示保持原文；取消请求未返回前禁止下一轮，防止旧取消误伤新轮 |
 | `Turn` / `types.ts` | `{ turn: Turn, chatId, history? }`；`Turn` / `Block` | 直播按文字与工具的事件顺序；历史卡在文字之前；文字保持纯文本与换行；call:N 经 RefLink 滚动到本回合的卡片并暂时高亮 |
-| `ToolCard` | `{ block, chatId, agentSession, lazy? }` | loading 占位用 TOOL_LABELS（get_market 为「市场环境」），结果交 registry；历史进入视口才请求，观察器卸载断开；失败可重试且不妨碍文字；空 ref 显示「调用已完成，结果不可追溯」，旧 null 结果显示「这次调用早于 v3.2.1，没有保留结果」，截断结果明确降级；中断时只把尚在调用中的块转 error，取消写「已停止等待，调用结果未确认」、错误或意外断流写「调用未完成」，已完成块保留；无调用编号不提供重试 |
+| `ToolCard` | `{ block（可绑定）, chatId, agentSession, lazy? }` | loading 占位用 TOOL_LABELS（get_market 为「市场环境」），结果交 registry；历史进入视口才请求，观察器卸载断开；失败可重试且不妨碍文字；空 ref 显示「调用已完成，结果不可追溯」，`result_available=false` 的 SQL NULL 历史行显示「这次调用早于 v3.2.1，没有保留结果」empty 态；成功 JSON null（result_available=true）交注册表显示普通 empty；旧服务缺少字段时按 result 非 null 回退，截断结果明确降级；中断时只把尚在调用中的块转 error，取消写「已停止等待，调用结果未确认」、错误或意外断流写「调用未完成」，已完成块保留；无调用编号不提供重试 |
 | `ContextChips` / `context.ts` | `{ chips, onRemove? }`；`formatPrefix` / `parsePrefix` | ticker / plan / research 三种芯片；固定空格分隔前缀，只有开头连续的合法格式会还原；发送清空，可移除，普通方括号保留原文 |
 | `QuickPrompts` / `ChatEmpty` | `{ onSend, onResearch, disabled? }` / `{ onNewChat, disabled? }` | 五句固定快捷入口，发起研究只预填「研究 」；无对话时说明与新建入口，快捷提问可创建对话后发送 |
 | `sse.ts` | `readEvents(response,onEvent,signal?)` | 从 home 迁入；任意字节分片解析，取消时主动结束等待中的 reader，无需等下一帧；读取返回后与 EOF 刷新前重查中止，丢弃所有未交付的缓冲字节 |

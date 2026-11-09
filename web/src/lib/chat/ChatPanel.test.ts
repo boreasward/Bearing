@@ -300,3 +300,33 @@ it('releases the empty-state send guard after a creation failure and preserves t
   expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/messages'))).toHaveLength(1)
   s.emit('done'); s.close()
 })
+
+it.each(['done', 'error', 'cancelled', 'eof', 'abort', 'network'])('refreshes completed writes once after terminal %s', async terminal => {
+ const invalidate = vi.spyOn(stores, 'invalidateAll')
+ const onWrote = vi.fn()
+ const s = setup(); await s.view.rerender({ chatId:'c1', onWrote }); await send()
+ s.emit('start', { agent_session:'chat-c1-1' })
+ for (const [tool, ref] of [['start_research', 'call:1'], ['save_summary', 'call:2']]) {
+  s.emit('tool_start', { tool }); s.emit('tool_end', { tool, ref })
+ }
+ s.emit('text', { text:'两次工具调用已结束' })
+ await screen.findByText('两次工具调用已结束')
+ expect(invalidate).not.toHaveBeenCalled(); expect(onWrote).not.toHaveBeenCalled()
+ if (terminal === 'abort') await fireEvent.click(screen.getByRole('button', { name:'取消' }))
+ else if (terminal === 'network') s.raw('event: text\ndata: not-json\n\n')
+ else { if (terminal !== 'eof') s.emit(terminal); s.close() }
+ await waitFor(() => expect(onWrote).toHaveBeenCalledTimes(1))
+ expect(invalidate).toHaveBeenCalledTimes(1)
+})
+it.each([false, true])('renders a saved JSON null normally in history=%s', async history => {
+ const message = { seq:1, role:'assistant', content:'没有近期财报', tool_refs:['call:1'], agent_session:'chat-c1-1' }
+ const s = setup(history ? { history:{ ...detail, messages:[message] } } : {})
+ const original = s.fetcher.getMockImplementation()!
+ s.fetcher.mockImplementation((url, init) => String(url).includes('/calls?') ? Promise.resolve(json({ ref:'call:1', tool:'get_earnings', result:null, result_available:true, error:null, truncated:false, called_at:'2026-11-06T00:00:00Z' })) : original(url,init))
+ if (!history) {
+  await send(); s.emit('start', { agent_session:'chat-c1-1' }); s.emit('tool_start', { tool:'get_earnings' }); s.emit('tool_end', { tool:'get_earnings', ref:'call:1' }); s.emit('done'); s.close()
+ }
+ expect(await screen.findByText('这次查询没有返回记录')).toBeInTheDocument()
+ expect(screen.queryByText('这次调用早于 v3.2.1，没有保留结果')).not.toBeInTheDocument()
+ if (history) expect(screen.getByText('没有近期财报')).toBeInTheDocument()
+})

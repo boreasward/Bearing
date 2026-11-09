@@ -85,7 +85,7 @@ export interface AccountData {
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 export interface CallData {
   ref: string; tool: string; args: Record<string, JsonValue>; result: JsonValue
-  error: string | null; called_at: string; truncated: boolean
+  error: string | null; called_at: string; truncated: boolean; result_available?: boolean
 }
 // Quantity is serialized as a string by the API; legacy home components require an explicit display conversion.
 export interface PlanCardData extends Omit<LegacyPlanCardData, 'position'> {

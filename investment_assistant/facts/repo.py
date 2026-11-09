@@ -23,7 +23,8 @@ _TRADE_SELECT = (
 _TRADE_VOID_JOIN = " LEFT JOIN v3_voids v ON v.kind = 'trade' AND v.target_id = t.id"
 _EQUITY_COLUMNS = "id, request_id, as_of, equity, note, created_at"
 _TOOL_CALL_COLUMNS = (
-    "id, agent_session, mode, session, seq, tool, args, result_sha256, error, called_at, result, truncated"
+    "id, agent_session, mode, session, seq, tool, args, result_sha256, error, called_at, result, truncated, "
+    "result IS NOT NULL AS result_available"
 )
 _RUN_BRIEF_COLUMNS = (
     "status",
@@ -287,7 +288,8 @@ def insert_tool_call(conn, row: dict) -> dict:
             _plan_json(row.get("args") or {}),
             row.get("result_sha256"),
             row.get("error"),
-            _plan_json(row["result"]) if row.get("result") is not None else None,
+            # Explicit JSON null is a retained result; only a missing key means legacy SQL NULL.
+            _plan_json(row["result"]) if "result" in row else None,
             row.get("truncated", False),
         ],
     )

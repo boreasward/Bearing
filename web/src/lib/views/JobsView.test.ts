@@ -21,3 +21,15 @@ it('expands two runs with the same session separately', async () => {
  await fireEvent.click(toggles[1])
  expect(toggles[0]).toHaveAttribute('aria-expanded','false'); expect(toggles[1]).toHaveAttribute('aria-expanded','true')
 })
+
+it.each([
+ ['ok', 'manual_batch', '成功', 'success', '手动'],
+ ['error', 'scheduled', '失败', 'danger', '定时'],
+])('renders actual facts enums %s / %s', async (status, trigger, label, tone, triggerLabel) => {
+ const { runsData } = await import('./workbench-fixtures')
+ await loadWorkbench({ '/api/runs':{ ...runsData, runs:[{ ...runsData.runs[0], status, trigger }] } })
+ const { container } = render(JobsView)
+ const pill = container.querySelector('[data-domain="run"]')!
+ expect(pill).toHaveTextContent(label); expect(pill).toHaveAttribute('data-tone', tone)
+ expect(within(screen.getByRole('table', { name:'运行记录' })).getByText(triggerLabel)).toBeInTheDocument()
+})

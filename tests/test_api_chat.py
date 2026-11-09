@@ -286,9 +286,10 @@ def test_calls_endpoint_returns_the_stored_result(page):
     response = client.get(f"/api/chats/{chat_id}/calls", params=params)
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"ref", "tool", "args", "result", "error", "called_at", "truncated"}
+    assert set(body) == {"ref", "tool", "args", "result", "error", "called_at", "truncated", "result_available"}
     assert body["ref"] == "call:1" and body["tool"] == "get_market" and body["args"] == {}
     assert body["result"]["session"] == SESSION.isoformat() and body["error"] is None and body["truncated"] is False
+    assert body["result_available"] is True
     assert datetime.fromisoformat(body["called_at"]).utcoffset() is not None
 
 
@@ -338,7 +339,7 @@ def test_calls_endpoint_preserves_legacy_and_truncated_results(page, result, tru
                 "tool": "get_market",
                 "args": {},
                 "called_at": NOW,
-                "result": result,
+                **({"result": result} if result is not None else {}),
                 "truncated": truncated,
             },
         )
@@ -346,6 +347,7 @@ def test_calls_endpoint_preserves_legacy_and_truncated_results(page, result, tru
         f"/api/chats/{chat_id}/calls", params={"agent_session": f"chat-{chat_id}-1", "ref": "call:1"}
     ).json()
     assert body["result"] == result and body["truncated"] is truncated
+    assert body["result_available"] is (result is not None)
 
 
 def test_calls_endpoint_preserves_stored_error(page):
@@ -354,3 +356,22 @@ def test_calls_endpoint_preserves_stored_error(page):
     params = _call_turn(page, chat_id, "get_indicators", {"ticker": "UNKNOWN"})
     body = client.get(f"/api/chats/{chat_id}/calls", params=params).json()
     assert body["error"] == "no_bars" and body["result"]["error"] == "no_bars"
+
+
+def test_calls_endpoint_distinguishes_dispatched_json_null_from_legacy_sql_null(page):
+    import hashlib
+
+    client, _ = page
+    chat_id = _new_chat(page)
+    params = _call_turn(page, chat_id, "get_earnings", {"ticker": "AAPL"})
+    with core_tx._tx() as conn:
+        persisted = conn.execute(
+            "SELECT result IS NOT NULL, result = 'null'::jsonb, result_sha256 "
+            "FROM v3_tool_calls WHERE agent_session = %s AND seq = 1",
+            (params["agent_session"],),
+        ).fetchone()
+    assert persisted == (True, True, hashlib.sha256(b"null").hexdigest())
+    body = client.get(f"/api/chats/{chat_id}/calls", params=params).json()
+    assert body["tool"] == "get_earnings"
+    assert body["result"] is None and body["result_available"] is True
+    assert body["error"] is None and body["truncated"] is False

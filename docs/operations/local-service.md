@@ -30,7 +30,7 @@
   - `POST /api/trades`、`/api/cash-flows`、`/api/reconcile`、`/api/voids`、`GET /api/account`：账本（写入口先复述，`confirmed` 为真才写）。
   - `GET /api/ledger?limit=20`（v3.2.1）：成交、出入金、对账、作废记录四张表各最近 `limit` 行，金额与价格为字符串；成交与出入金带 `voided_by` 和 `void_reason`。空库返回四个空数组；`limit` 为 1–100，否则 400 `invalid_argument`。
   - `GET /api/chats`、`POST /api/chats`、`GET /api/chats/{id}`：对话列表、新建、详情。v3.2.1 列表增加 `last_message_at` 并按它倒序（无消息时等于创建时间），消息增加 `agent_session`；`POST /api/chats/{id}/messages`：一轮提问，响应是 `text/event-stream`（SSE），每个事件一帧 `event: <kind>\ndata: <json>\n\n`。首帧 `event: start` 的数据为 `{"kind":"start","agent_session":"chat-…"}`，其余帧保留原字段，末帧必为 `done`/`error`/`cancelled`；`POST /api/chats/{id}/cancel`：取消当轮。对话轮次与每日简报共用一个运行时锁，简报运行期间提问得到 409 `brief_running`。
-  - `GET /api/chats/{id}/calls?agent_session=chat-…&ref=call:N`（v3.2.1）：读取保存的 `{ ref, tool, args, result, error, called_at, truncated }`；会话必须以该对话的 `chat-{id}-` 开头，非法编号、其他对话或缺行均返回 404 `unknown_call`。旧行 `result` 为 null；截断结果保持存储的占位对象和标记，工具错误来自保存行的 `error`。
+  - `GET /api/chats/{id}/calls?agent_session=chat-…&ref=call:N`（v3.2.1）：读取保存的 `{ ref, tool, args, result, error, called_at, truncated, result_available }`；会话必须以该对话的 `chat-{id}-` 开头，非法编号、其他对话或缺行均返回 404 `unknown_call`。`result_available` 是 `result IS NOT NULL` 的派生布尔值：历史 SQL NULL 为 false，成功 JSON null 为 true（JSON 中两者的 result 都是 null）；不新增数据库列。截断结果保持存储的占位对象和标记，工具错误来自保存行的 `error`。
   - `GET /api/settings`、`GET /api/settings/options`、`PUT /api/settings`：运行时与模型设置。
 - `/` 返回 `web/dist/index.html`（页面构建产物）；`/assets/…` 返回构建产物里的文件。
 - 其余路径，以及未登记的方法，一律 404 `{"error": "not found"}`。
@@ -56,9 +56,9 @@
 
 计划 / 研究列表首屏之外的对象会单独读取。
 
-对话卡片用 SSE 首帧的 agent_session 与 tool_end 的 call:N 调用 calls 接口；历史回放在卡片进入视口时并发取结果，统一放在回答文字之上。旧 null 结果、截断结果与取卡失败都有独立提示，不影响文字阅读。页面对象可带入上下文芯片，芯片按固定前缀随原文存储；快捷入口可直接发送市场 / 今日操作 / 持仓 / 待入场问题，研究入口只预填。切视图、收起侧览与切对话均保留当前 SSE；刷新或关闭页面仍会取消该轮，取消按钮按原对话 id 请求。
+对话卡片用 SSE 首帧的 agent_session 与 tool_end 的 call:N 调用 calls 接口；历史回放在卡片进入视口时并发取结果，统一放在回答文字之上。历史 SQL NULL 的 empty 提示、成功 JSON null 的普通空结果、截断结果与取卡失败都有独立提示，不影响文字阅读。页面对象可带入上下文芯片，芯片按固定前缀随原文存储；快捷入口可直接发送市场 / 今日操作 / 持仓 / 待入场问题，研究入口只预填。切视图、收起侧览与切对话均保留当前 SSE；刷新或关闭页面仍会取消该轮，取消按钮按原对话 id 请求。
 
-所有写入口沿用 preview → 复述确认 → confirmed，完成后共享 store 失效重取并保留简报日期、复盘周与分页。本页操作说明不存消息表。`⌘/Ctrl+K` 在任意完整视图返回最近对话并聚焦提问；设置仍为 Sheet。
+所有写入口沿用 preview → 复述确认 → confirmed，完成后共享 store 失效重取并保留简报日期、复盘周与分页。已观察到写工具完成的轮次即使随后出错、取消或断流，也在最终清理时统一刷新一次；只见调用开始不视为已写入，取消不表示回滚。本页操作说明不存消息表。`⌘/Ctrl+K` 在任意完整视图返回最近对话并聚焦提问；设置仍为 Sheet。
 
 本版收尾执行三套全量检查；没有执行真实库迁移、替换 `web/dist` 或重载服务。构建验证产物只允许写入一次性 scratch 目录；真实上线仍按设计 spec §15 分步授权。
 
@@ -103,7 +103,7 @@
    CHECK
    ```
 
-   另用浏览器 Network 核对 calls 响应 `{ ref, tool, args, result, error, called_at, truncated }` 与卡片一致。完整形状见本页接口清单与 spec §11。若没有成功运行，market 应为 404 `no_run`，runs 仍含 schedule；这只验证空库路径，尚不能通过真实 MarketCard 冒烟，不为此自动触发每日任务。
+   另用浏览器 Network 核对 calls 响应 `{ ref, tool, args, result, error, called_at, truncated, result_available }` 与卡片一致。完整形状见本页接口清单与 spec §11。若没有成功运行，market 应为 404 `no_run`，runs 仍含 schedule；这只验证空库路径，尚不能通过真实 MarketCard 冒烟，不为此自动触发每日任务。
 4. **记录通过并发布**：前三步通过后，把备份校验、036 applied 输出、构建 HEAD、服务 pid、API 与真实 Pi 回放证据补到本文与迁移文档；将 CHANGELOG 的 v3.2.1 未发布段改为实际日期，更新 roadmap 的 v3.2 行。验证：
 
    ```bash

@@ -130,7 +130,7 @@ def tool_call(chat_id: str, agent_session: str, ref: str):
             raise ValueError("unknown_call")
         return {
             "ref": ref,
-            **{field: row[field] for field in ("tool", "args", "result", "error", "called_at", "truncated")},
+            **{field: row[field] for field in ("tool", "args", "result", "error", "called_at", "truncated", "result_available")},
         }
 
     return deps.ok_or_error(lambda: deps.read_tx(_read))

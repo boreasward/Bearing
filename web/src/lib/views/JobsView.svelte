@@ -20,7 +20,7 @@
     return Number.isFinite(seconds) ? seconds : null
   }
 </script>
-{#snippet facts(row: Run)}<StatusPill domain="run" value={row.status} /> <MetricValue value={duration(row)} unit="秒" />{/snippet}
+{#snippet facts(row: Run)}<StatusPill domain="run" value={row.status === 'ok' ? 'success' : row.status} /> <MetricValue value={duration(row)} unit="秒" />{/snippet}
 {#snippet brief(row: Run)}<RunStatus brief={row.brief} />{/snippet}
 {#snippet push(row: Run)}简报：{row.brief?.pushed_final_at ? fmtBeijing(row.brief.pushed_final_at) : '未推送'} · 周报：{row.brief?.weekly.pushed_at ? fmtBeijing(row.brief.weekly.pushed_at) : '未推送'}{/snippet}
 {#snippet openBrief(row: Run)}<a class="underline" href={`${hrefOf({ kind:'view', view:'today', id:null })}?session=${encodeURIComponent(row.session)}`}>打开当天简报</a>{/snippet}
@@ -46,7 +46,7 @@
           <DataTable ariaLabel="运行记录"
             columns={[
               { key:'session', header:'交易日' },
-              { key:'trigger', header:'触发', value:row => row.trigger === 'manual' ? '手动' : '定时' },
+              { key:'trigger', header:'触发', value:row => row.trigger === 'manual_batch' ? '手动' : '定时' },
               { key:'status', header:'事实状态与耗时', cell:facts },
               { key:'brief', header:'简报状态', cell:brief },
               { key:'push', header:'推送', cell:push },

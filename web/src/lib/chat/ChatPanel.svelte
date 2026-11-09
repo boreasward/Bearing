@@ -2,6 +2,7 @@
   import { onDestroy, tick } from 'svelte'
   import { get, post } from '$lib/api'
   import { chats, invalidateAll } from '$lib/stores'
+  import { isMutatingTool } from '$lib/views/tool-write'
   import { Button } from '$lib/ui/button/index'
   import Field from '$lib/ui/field/Field.svelte'
   import Textarea from '$lib/ui/textarea/textarea.svelte'
@@ -35,7 +36,6 @@
   let sendPending = $state(false)
   let creating = $state(false)
   const busy = $derived(sendPending || creating || !!active || cancelPending)
-  const writeTool = /^(?:save_|record_|start_research$|conclude_research$|drop_research$|continue_plan$|revise_plan$|cancel_plan$|raise_stop$|confirm_stop_order$|void_record$|watchlist_add$|watchlist_remove$)/
   $effect(() => { selected = chatId; if (chatId && !conversations[chatId]) void load(chatId) })
   $effect(() => {
     for (const row of chats.data?.chats ?? []) {
@@ -118,7 +118,6 @@
       const controller = new AbortController()
       active = { chatId: id, controller, turn }
       let wrote = false
-      let notified = false
       try {
         const response = await fetch(`/api/chats/${encodeURIComponent(id)}/messages`, { method: 'POST', headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal: controller.signal })
         if (!response.ok) {
@@ -132,8 +131,6 @@
           if (frame.event === 'done') {
             if (turn.finished !== 'running') return
             turn.finished = 'done'
-            if (wrote && !notified) { notified = true; invalidateAll(); onWrote() }
-            else if (!wrote) chats.invalidate()
             return
           }
           const payload = JSON.parse(frame.data) as { kind: string; text?: string; tool?: string; ref?: string | null; agent_session?: string }
@@ -147,7 +144,7 @@
           else if (payload.kind === 'tool_end') {
             // Claim only the first still-running call of this tool; repeated calls have separate refs.
             const block = turn.blocks.find(block => block.kind === 'tool' && block.tool === payload.tool && block.state === 'calling')
-            if (block?.kind === 'tool') { block.ref = payload.ref || null; block.state = block.ref ? 'ready' : 'untraceable'; wrote ||= writeTool.test(block.tool) }
+            if (block?.kind === 'tool') { block.ref = payload.ref || null; block.state = block.ref ? 'ready' : 'untraceable'; wrote ||= isMutatingTool(block.tool) }
           } else if (payload.kind === 'error') { turn.finished = 'error'; conv.error = payload.text ? busyText(payload.text) : '这一轮出错了' }
           else if (payload.kind === 'cancelled') { turn.finished = 'cancelled'; conv.notice = '已取消' }
         }, controller.signal)
@@ -163,6 +160,8 @@
             }
           }
         }
+        if (wrote) { invalidateAll(); onWrote() }
+        else if (turn.finished === 'done') chats.invalidate()
         active = null
       }
     } finally { sendPending = false }
@@ -178,13 +177,13 @@
   async function research() { input = '研究 '; await focusInput() }
 </script>
 <div class="mx-auto flex h-full w-full max-w-[760px] flex-col gap-4 p-4">
-  <div class="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto">
+  <div class="grid min-h-0 flex-1 content-start gap-[14px] overflow-y-auto">
   {#if !selected}<ChatEmpty disabled={busy} onNewChat={() => { void createChat() }} />{/if}
   {#if current?.chat?.read_only}<Alert variant="info"><AlertDescription>该对话在切换运行时后变为只读，可看不可写。</AlertDescription></Alert>{/if}
   {#each current?.items ?? [] as item (item.id)}
     {#if item.role === 'user'}
       {@const parsed = parsePrefix(item.text)}
-      <div class="grid gap-2 justify-self-end rounded-xl bg-muted p-3 text-[13px] leading-[1.55]">
+      <div class="grid gap-2 justify-self-end rounded-2xl bg-muted p-3 text-[13px] leading-[1.55]">
         <ContextChips chips={parsed.chips} /><p class="whitespace-pre-line">{parsed.rest}</p>
       </div>
     {:else}<TurnView turn={item.turn} chatId={selected ?? ''} history={item.history} />{/if}

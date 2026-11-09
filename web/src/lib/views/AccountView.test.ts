@@ -36,9 +36,12 @@ it('stops requesting more at the API cap of one hundred', async () => {
  for (const limit of [40,60,80,100]) ledgerForLimit(limit).invalidate()
  render(AccountView)
  for (const limit of [40,60,80,100]) {
-  await fireEvent.click(screen.getByRole('button', { name:'显示更多' }))
+  // Each row has an action button; scope the lookup before checking its accessible role/name.
+  const more = screen.getByText('显示更多', { selector:'button' })
+  expect(more).toHaveRole('button'); expect(more).toHaveAccessibleName('显示更多'); expect(more).toBeVisible()
+  await fireEvent.click(more)
   await waitFor(() => expect(screen.getByRole('table', { name:'成交流水' }).querySelectorAll('tbody > tr')).toHaveLength(limit))
  }
- expect(screen.queryByRole('button', { name:'显示更多' })).toBeNull()
+ expect(screen.queryByText('显示更多', { selector:'button' })).toBeNull()
  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('limit=120'))).toBe(false)
 })

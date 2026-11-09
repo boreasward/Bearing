@@ -6,9 +6,10 @@
   import { viewFor } from '$lib/views/registry'
   import SourceLine from '$lib/views/cards/SourceLine.svelte'
   import { record } from '$lib/views/data'
+  import { toolWriteStatus } from '$lib/views/tool-write'
   import type { CallData } from '$lib/stores/types'
   import type { Block } from './types'
-  let { block, chatId, agentSession, lazy = false }: {
+  let { block = $bindable(), chatId, agentSession, lazy = false }: {
     block: Extract<Block, { kind: 'tool' }>; chatId: string; agentSession: string | null; lazy?: boolean
   } = $props()
   let root: HTMLDivElement
@@ -17,7 +18,7 @@
   let requestKey = ''
   const entry = $derived(viewFor(block.tool))
   const call = $derived(block.data as CallData | undefined)
-  const noResult = $derived(call !== undefined && call.result === null)
+  const noResult = $derived(call !== undefined && !(call.result_available ?? call.result !== null))
   const data = $derived(call?.error ? { error: call.error } : call?.result)
   const session = $derived(typeof record(call?.result).session === 'string' ? String(record(call?.result).session) : null)
 
@@ -48,14 +49,14 @@
 </script>
 <div bind:this={root} data-call-ref={block.ref}>
   {#if block.state === 'ready' && call && !noResult && !call.truncated}
-    <entry.component {data} meta={{ tool: block.tool, ref: block.ref, session, calledAt: call.called_at }} />
+    <entry.component {data} meta={{ tool: block.tool, ref: block.ref, session, calledAt: call.called_at, write: toolWriteStatus(block.tool, data, call.error) }} />
   {:else}
     <Card.Root size="sm"><Card.Header>
       <Card.Title>{entry.title(undefined)}{block.state === 'calling' ? ' · 调用中' : ''}</Card.Title>
       {#if block.ref || block.state === 'calling'}<SourceLine meta={{ tool: block.tool, ref: block.ref, session, calledAt: call?.called_at ?? null }} />
       {:else}<p class="font-mono text-xs text-muted-foreground">{block.tool}</p>{/if}
     </Card.Header><Card.Content>
-      <DataBlock state={block.state === 'untraceable' || noResult || call?.truncated ? 'degraded' : block.state === 'error' ? 'error' : 'loading'}
+      <DataBlock state={noResult ? 'empty' : block.state === 'untraceable' || call?.truncated ? 'degraded' : block.state === 'error' ? 'error' : 'loading'}
         message={noResult ? '这次调用早于 v3.2.1，没有保留结果' : call?.truncated ? '调用结果过大，只保留了截断记录' : block.state === 'untraceable' ? '调用已完成，结果不可追溯' : block.error}
         onRetry={block.state === 'error' && block.ref && agentSession ? retry : undefined} />
     </Card.Content></Card.Root>
