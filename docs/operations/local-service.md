@@ -21,12 +21,16 @@
 服务处理这些请求：
 
 - **页面接口（v3.1，`investment_assistant/api/routes/`）**，全部 JSON（金额与价位为字符串，日期 `YYYY-MM-DD`），错误一律 `{"error": "<code>[: 说明]"}`，校验错误 400，没有运行记录 404 `no_run`，运行时忙 409：
-  - `GET /api/today`：今日操作与账户条。
+  - `GET /api/today`：今日操作与账户条；v3.2.1 增加 `counts: { actions, holdings, pending, watching }`，分别统计操作、持仓计划、待入场计划与观察中研究；空库四项为 0。
+  - `GET /api/market`（v3.2.1）：最新成功运行的市场快照（含 `session`、`calc_version`）与 `watch[]`。关注表按持仓计划 → 待入场计划 → 观察中研究对股票去重，带计划 / 研究 id；两根最近日线给出收盘价与两位小数百分比字符串，缺一根时三个价格 / 涨跌字段均为 null；没有成功运行返回 404 `no_run`。
+  - `GET /api/runs?limit=20`（v3.2.1）：按交易日倒序的事实运行与对应简报（含未完成、推送、周报状态），以及配置的 `schedule`；`next_at` 是北京时间、ISO 带 `+08:00`。空库仍返回完整计划表与空 `runs`。`limit` 为 1–100，否则 400 `invalid_argument`。
   - `GET /api/briefs`、`GET /api/briefs/latest`、`GET /api/briefs/{session}`：简报列表与单份简报。
   - `GET /api/plans`、`GET /api/plans/{id}`：计划三组卡片与单份计划（含变化记录）；`POST /api/plans/{id}/stop-order`、`/raise-stop`、`/cancel`：计划写入口。
   - `GET /api/research`（v3.2）：研究两组卡片（`group=watching|ended`、`limit`，观察中缺省）；`GET /api/research/{id}`：单份含变化记录时间线；`POST /api/research/{id}/drop`：放弃研究（先复述，`confirmed` 为真才写）；`GET /api/retrospect`（v3.2）：复盘——执行复盘记录（`limit` 阶梯 20 / 50 / 100）、周报（`week` 切换以前的周）与规则检验两张表。
   - `POST /api/trades`、`/api/cash-flows`、`/api/reconcile`、`/api/voids`、`GET /api/account`：账本（写入口先复述，`confirmed` 为真才写）。
-  - `GET /api/chats`、`POST /api/chats`、`GET /api/chats/{id}`：对话列表、新建、详情；`POST /api/chats/{id}/messages`：一轮提问，响应是 `text/event-stream`（SSE），每个事件一帧 `event: <kind>\ndata: <json>\n\n`，末帧必为 `done`/`error`/`cancelled`；`POST /api/chats/{id}/cancel`：取消当轮。对话轮次与每日简报共用一个运行时锁，简报运行期间提问得到 409 `brief_running`。
+  - `GET /api/ledger?limit=20`（v3.2.1）：成交、出入金、对账、作废记录四张表各最近 `limit` 行，金额与价格为字符串；成交与出入金带 `voided_by` 和 `void_reason`。空库返回四个空数组；`limit` 为 1–100，否则 400 `invalid_argument`。
+  - `GET /api/chats`、`POST /api/chats`、`GET /api/chats/{id}`：对话列表、新建、详情。v3.2.1 列表增加 `last_message_at` 并按它倒序（无消息时等于创建时间），消息增加 `agent_session`；`POST /api/chats/{id}/messages`：一轮提问，响应是 `text/event-stream`（SSE），每个事件一帧 `event: <kind>\ndata: <json>\n\n`。首帧 `event: start` 的数据为 `{"kind":"start","agent_session":"chat-…"}`，其余帧保留原字段，末帧必为 `done`/`error`/`cancelled`；`POST /api/chats/{id}/cancel`：取消当轮。对话轮次与每日简报共用一个运行时锁，简报运行期间提问得到 409 `brief_running`。
+  - `GET /api/chats/{id}/calls?agent_session=chat-…&ref=call:N`（v3.2.1）：读取保存的 `{ ref, tool, args, result, error, called_at, truncated }`；会话必须以该对话的 `chat-{id}-` 开头，非法编号、其他对话或缺行均返回 404 `unknown_call`。旧行 `result` 为 null；截断结果保持存储的占位对象和标记，工具错误来自保存行的 `error`。
   - `GET /api/settings`、`GET /api/settings/options`、`PUT /api/settings`：运行时与模型设置。
 - `/` 返回 `web/dist/index.html`（占位页）；`/assets/…` 返回构建产物里的文件。
 - 其余路径，以及未登记的方法，一律 404 `{"error": "not found"}`。

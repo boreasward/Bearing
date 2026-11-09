@@ -128,3 +128,28 @@ def test_today_without_run_is_empty_but_account_present(client, v3_tx):
     body = resp.json()
     assert body["session"] is None and body["actions"] == []
     assert body["account"]["cash"] is None and body["account"]["notes"] == []
+    assert body["counts"] == {"actions": 0, "holdings": 0, "pending": 0, "watching": 0}
+
+
+def test_counts_reflect_actions_plans_and_research(client, v3_tx):
+    from investment_assistant.facts import research_repo
+
+    seed(v3_tx)
+    holding = plan_repo.active_plan(v3_tx, "AAPL")
+    assert holding is not None
+    for ticker in ("MSFT", "NVDA"):
+        plan_repo.insert_plan(v3_tx, {**holding, "ticker": ticker, "status": "pending"})
+    research_repo.insert_research(
+        v3_tx,
+        {
+            "ticker": "MU",
+            "thesis": "观察",
+            "origin": "chat",
+            "created_session": SESSION,
+            "valid_until": SESSION + timedelta(days=7),
+        },
+    )
+    v3_tx.commit()
+    body = client.get("/api/today").json()
+    assert body["counts"] == {"actions": 1, "holdings": 1, "pending": 2, "watching": 1}
+    assert len(body["actions"]) == body["counts"]["actions"]

@@ -1,0 +1,45 @@
+{
+  "candidates": [
+    {
+      "has_active_plan": false,
+      "has_research": false,
+      "in_top_n": true,
+      "industry": "半导体",
+      "industry_tier": "favorable",
+      "plan_id": null,
+      "rank": 1,
+      "reason": "MSFT 的理由行",
+      "rs": 1.5,
+      "screen_group": "trigger",
+      "setup_tier": "favorable",
+      "streak": null,
+      "ticker": "MSFT",
+      "trigger_rules": [
+        "pullback"
+      ],
+      "verdict": null
+    },
+    {
+      "has_active_plan": true,
+      "has_research": false,
+      "in_top_n": true,
+      "industry": "半导体",
+      "industry_tier": "favorable",
+      "plan_id": 2,
+      "rank": 2,
+      "reason": "NVDA 的理由行",
+      "rs": 1.5,
+      "screen_group": "trigger",
+      "setup_tier": "favorable",
+      "streak": null,
+      "ticker": "NVDA",
+      "trigger_rules": [
+        "pullback"
+      ],
+      "verdict": null
+    }
+  ],
+  "dropped": [],
+  "run_id": "fixture-market",
+  "top_n": 5
+}

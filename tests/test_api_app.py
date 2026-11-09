@@ -51,10 +51,14 @@ def test_research_and_retrospect_routes_before_catch_all(client):
 
 
 def test_page_api_paths_exist(client):
-    """契约表的 20 条路径全部注册（openapi 是公开面；不含两个兑底）。"""
+    """页面契约的路径全部注册（openapi 是公开面；不含两个兜底）。"""
     schema = client.app.openapi()
     expected = {
         "/api/today",
+        "/api/market",
+        "/api/runs",
+        "/api/ledger",
+        "/api/chats/{chat_id}/calls",
         "/api/briefs",
         "/api/briefs/latest",
         "/api/briefs/{session}",

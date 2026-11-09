@@ -90,9 +90,9 @@ def test_turn_streams_and_second_turn_sees_the_first(page):
             assert resp.status_code == 200
             assert resp.headers["content-type"].startswith("text/event-stream")
             events = list(_sse_events(resp))
-        assert [kind for kind, _ in events] == ["text", "done"]  # 末事件是 done
-        assert events[0][1]["text"] == "回答：好"
-        assert set(events[0][1]) == {"kind", "text", "tool", "ref", "usage"}
+        assert [kind for kind, _ in events] == ["start", "text", "done"]  # 末事件是 done
+        assert events[1][1]["text"] == "回答：好"
+        assert set(events[1][1]) == {"kind", "text", "tool", "ref", "usage"}
     detail = client.get(f"/api/chats/{chat_id}").json()
     assert [(m["seq"], m["role"], m["status"]) for m in detail["messages"]] == [
         (1, "user", "ok"),
@@ -119,14 +119,15 @@ def test_cancel_ends_stream_and_next_turn_works(page):
         runtime=chats_routes._runtime_for(None),
         now=NOW,
     )
-    assert next(stream).startswith("event: text")  # 首帧文字
+    assert next(stream).startswith("event: start")
+    assert next(stream).startswith("event: text")  # 开始帧之后是文字
     cancelled = client.post(f"/api/chats/{chat_id}/cancel")
     assert cancelled.status_code == 200 and cancelled.json() == {"cancelled": True}
     rest = [frame.split("\n")[0][len("event: ") :] for frame in stream]
     assert rest and rest[-1] == "cancelled"  # 流以 cancelled 收尾，无后续帧
     _fake(chats_routes, lambda prompt: [RuntimeEvent("done")])
     with client.stream("POST", f"/api/chats/{chat_id}/messages", json={"text": "再问"}) as resp:
-        assert [kind for kind, _ in _sse_events(resp)] == ["done"]  # 下一轮照常（验收 19）
+        assert [kind for kind, _ in _sse_events(resp)] == ["start", "done"]  # 下一轮照常（验收 19）
     detail = client.get(f"/api/chats/{chat_id}").json()
     assert [m["status"] for m in detail["messages"]] == ["ok", "cancelled", "ok", "ok"]
 
@@ -147,6 +148,7 @@ def test_client_disconnect_sets_the_cancel_flag(page, monkeypatch):
         runtime=chats_routes._runtime_for(None),
         now=NOW,
     )
+    assert next(stream).startswith("event: start")
     assert next(stream).startswith("event: text")
     stream.close()  # 客户端断开
     assert seen_cancel == [chat_id]
@@ -213,7 +215,7 @@ def test_chats_list_and_detail(page):
     client, _ = page
     chat_id = _new_chat(page)
     listed = client.get("/api/chats").json()["chats"]
-    assert set(listed[0]) == {"chat_id", "title", "created_at", "read_only", "model"}
+    assert set(listed[0]) == {"chat_id", "title", "created_at", "last_message_at", "read_only", "model"}
     assert listed[0]["chat_id"] == chat_id and listed[0]["model"] == "model-x"
     detail = client.get(f"/api/chats/{chat_id}").json()
     assert detail["chat"]["chat_id"] == chat_id and detail["messages"] == []
@@ -254,3 +256,101 @@ def test_switching_runtime_marks_old_chats_read_only(page, tmp_path, monkeypatch
     detail = client.get(f"/api/chats/{new_chat}").json()
     assert detail["chat"]["model"] == "model-a1" and detail["chat"]["runtime"] == "pi"
     assert by_id.get(new_chat) is None or client.get("/api/chats").json()["chats"][0]["read_only"] is False
+
+
+def test_stream_starts_with_a_start_frame(page):
+    client, routes = page
+    chat_id = _new_chat(page)
+    _fake(routes, [RuntimeEvent("done")])
+    with client.stream("POST", f"/api/chats/{chat_id}/messages", json={"text": "你好"}) as response:
+        events = list(_sse_events(response))
+    assert events[0] == ("start", {"kind": "start", "agent_session": f"chat-{chat_id}-1"})
+
+
+def _call_turn(page, chat_id, tool="get_market", args=None):
+    from investment_assistant.toolsurface.env import make_env
+
+    client, routes = page
+    env = make_env(session=SESSION, mode="chat", agent_session=f"chat-{chat_id}-1", cfg=routes._cfg(), now=NOW)
+    _fake(routes, [("call", tool, args or {})], env=env)
+    with client.stream("POST", f"/api/chats/{chat_id}/messages", json={"text": "看一下"}) as response:
+        events = list(_sse_events(response))
+    assert any(payload.get("ref") == "call:1" for _, payload in events)
+    return {"agent_session": env.agent_session, "ref": "call:1"}
+
+
+def test_calls_endpoint_returns_the_stored_result(page):
+    client, _ = page
+    chat_id = _new_chat(page)
+    params = _call_turn(page, chat_id)
+    response = client.get(f"/api/chats/{chat_id}/calls", params=params)
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"ref", "tool", "args", "result", "error", "called_at", "truncated"}
+    assert body["ref"] == "call:1" and body["tool"] == "get_market" and body["args"] == {}
+    assert body["result"]["session"] == SESSION.isoformat() and body["error"] is None and body["truncated"] is False
+    assert datetime.fromisoformat(body["called_at"]).utcoffset() is not None
+
+
+def test_calls_endpoint_rejects_foreign_agent_session(page):
+    client, _ = page
+    own, other = _new_chat(page), _new_chat(page)
+    params = _call_turn(page, other)
+    for bad in (
+        params,
+        {"agent_session": f"chat-{own}-1", "ref": "call:x"},
+        {"agent_session": f"chat-{own}-1", "ref": "call:1"},
+        {"agent_session": f"chat-{own}-1", "ref": "call:1\n"},
+        {"agent_session": f"chat-{own}-1", "ref": "call:9223372036854775808"},
+        {"agent_session": f"chat-{own}-1", "ref": "call:" + "9" * 5000},
+    ):
+        response = client.get(f"/api/chats/{own}/calls", params=bad)
+        assert response.status_code == 404 and response.json() == {"error": "unknown_call"}
+
+
+def test_chat_list_has_last_message_at_and_detail_has_agent_session(page):
+    client, routes = page
+    first = _new_chat(page)
+    second = _new_chat(page)
+    _fake(routes, [RuntimeEvent("done")])
+    with client.stream("POST", f"/api/chats/{first}/messages", json={"text": "最近活跃"}) as response:
+        list(_sse_events(response))
+    chats = client.get("/api/chats").json()["chats"]
+    assert [row["chat_id"] for row in chats] == [first, second]
+    assert chats[1]["last_message_at"] == chats[1]["created_at"]
+    detail = client.get(f"/api/chats/{first}").json()
+    assert [m["agent_session"] for m in detail["messages"]] == [None, f"chat-{first}-1"]
+    assert chats[0]["last_message_at"] == detail["messages"][-1]["created_at"]
+
+
+@pytest.mark.parametrize("result,truncated", [(None, False), ({"truncated": True, "bytes": 600000}, True)])
+def test_calls_endpoint_preserves_legacy_and_truncated_results(page, result, truncated):
+    client, _ = page
+    chat_id = _new_chat(page)
+    with core_tx._tx() as conn:
+        facts_repo.insert_tool_call(
+            conn,
+            {
+                "agent_session": f"chat-{chat_id}-1",
+                "mode": "chat",
+                "session": SESSION,
+                "seq": 1,
+                "tool": "get_market",
+                "args": {},
+                "called_at": NOW,
+                "result": result,
+                "truncated": truncated,
+            },
+        )
+    body = client.get(
+        f"/api/chats/{chat_id}/calls", params={"agent_session": f"chat-{chat_id}-1", "ref": "call:1"}
+    ).json()
+    assert body["result"] == result and body["truncated"] is truncated
+
+
+def test_calls_endpoint_preserves_stored_error(page):
+    client, _ = page
+    chat_id = _new_chat(page)
+    params = _call_turn(page, chat_id, "get_indicators", {"ticker": "UNKNOWN"})
+    body = client.get(f"/api/chats/{chat_id}/calls", params=params).json()
+    assert body["error"] == "no_bars" and body["result"]["error"] == "no_bars"

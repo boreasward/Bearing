@@ -1,0 +1,47 @@
+{
+  "event": {
+    "after": {
+      "status": "dropped"
+    },
+    "before": {
+      "status": "watching"
+    },
+    "created_at": "2026-11-09T16:19:01.159183+08:00",
+    "event": "dropped",
+    "id": 3,
+    "reason": "结束示例",
+    "refs": [
+      "fixture-drop"
+    ],
+    "research_id": 2,
+    "session": "2026-11-04",
+    "source": "user"
+  },
+  "research": {
+    "agent_session": "fixture-export",
+    "checked_through": "2026-11-04",
+    "condition": {
+      "kind": "close_above",
+      "level": "105",
+      "ma": null
+    },
+    "condition_text": "收盘站上 105.00",
+    "counter": "",
+    "created_at": "2026-11-09T16:19:01.156150+08:00",
+    "created_session": "2026-11-04",
+    "end_reason": "结束示例",
+    "ended_session": "2026-11-04",
+    "id": 2,
+    "origin": "chat",
+    "plan_id": null,
+    "reasons": "等待站上关键价位",
+    "refs": [],
+    "status": "dropped",
+    "thesis": "等待突破",
+    "ticker": "AMZN",
+    "triggered_session": null,
+    "updated_at": "2026-11-09T16:19:01.159027+08:00",
+    "valid_until": "2026-12-03",
+    "verdict": "watch"
+  }
+}

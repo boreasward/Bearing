@@ -1,0 +1,58 @@
+{
+  "event": {
+    "after": {
+      "confirmed_stop_order": "96"
+    },
+    "before": {},
+    "created_at": "2026-11-09T16:19:01.144526+08:00",
+    "event": "stop_order_confirmed",
+    "id": 4,
+    "plan_id": 1,
+    "reason": "已确认挂单，价位 96",
+    "refs": [
+      "fixture-stop"
+    ],
+    "session": "2026-11-04",
+    "source": "user"
+  },
+  "plan": {
+    "agent_session": "seed",
+    "atr": "2.000000",
+    "confirmed_stop_order": "96.000000",
+    "counter": "",
+    "created_at": "2026-11-09T16:19:01.028758+08:00",
+    "end_reason": null,
+    "ended_session": null,
+    "entry_high": "101.000000",
+    "entry_low": "99.000000",
+    "entry_type": "zone_limit",
+    "id": 1,
+    "initial_stop": "96.000000",
+    "invalidation": "",
+    "kind": "planned",
+    "levels_source": "host",
+    "max_hold_sessions": 20,
+    "origin": "chat",
+    "outcome": {},
+    "refs": [],
+    "research_id": null,
+    "reviewed_through": null,
+    "sell_instruction": null,
+    "session": "2026-11-04",
+    "shares": 10,
+    "sizing": {},
+    "start_session": "2026-11-04",
+    "status": "open",
+    "stop": "96.000000",
+    "stop_hit_session": null,
+    "target1": "108.000000",
+    "target_hit_session": null,
+    "thesis": "",
+    "ticker": "AAPL",
+    "trailing": false,
+    "updated_at": "2026-11-09T16:19:01.144358+08:00",
+    "valid_from": "2026-11-04",
+    "valid_until": "2026-11-04",
+    "warnings": []
+  }
+}

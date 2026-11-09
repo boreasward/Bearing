@@ -70,6 +70,8 @@ def create_app() -> FastAPI:
         page_routes.settings.router,
         page_routes.research.router,
         page_routes.retrospect.router,
+        page_routes.market.router,
+        page_routes.runs.router,
     ):
         app.include_router(page_router)
 

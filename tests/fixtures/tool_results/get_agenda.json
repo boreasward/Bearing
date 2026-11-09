@@ -1,0 +1,31 @@
+{
+  "complete": false,
+  "confirmations": [
+    {
+      "done": false,
+      "mode": "slot",
+      "rank": 1,
+      "ticker": "MSFT",
+      "victim_plan_id": null
+    }
+  ],
+  "free_slots": 2,
+  "holdings": [
+    {
+      "done": false,
+      "plan_id": 1,
+      "ticker": "AAPL"
+    }
+  ],
+  "relisted": [
+    {
+      "done": false,
+      "plan_id": 2,
+      "rank": 2,
+      "ticker": "NVDA"
+    }
+  ],
+  "replacement": null,
+  "research": [],
+  "summary_done": false
+}

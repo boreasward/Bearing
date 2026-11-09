@@ -1,0 +1,24 @@
+[
+  {
+    "avg_cost": "100.000000",
+    "held_sessions": null,
+    "kind": "planned",
+    "last_close": 100.0,
+    "next_action": {
+      "kind": "stop_order",
+      "reason": null,
+      "stop": "96.00",
+      "text": "未确认止损单"
+    },
+    "plan_id": 1,
+    "pnl_pct": 0.0,
+    "quantity": "10.000000",
+    "review": null,
+    "stop": "96.000000",
+    "stop_order_status": "none",
+    "ticker": "AAPL",
+    "to_stop_pct": 0.04,
+    "trailing": false,
+    "unrealized_pnl": 0.0
+  }
+]

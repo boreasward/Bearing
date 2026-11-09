@@ -1,0 +1,22 @@
+{
+  "agenda": {},
+  "created_at": "2026-11-09T16:19:01.141895+08:00",
+  "draft_md": "",
+  "elapsed_seconds": null,
+  "error": null,
+  "final_md": null,
+  "id": 1,
+  "model": null,
+  "provider": null,
+  "pushed_error_at": null,
+  "pushed_final_at": null,
+  "pushed_weekly_at": null,
+  "run_id": null,
+  "runtime": null,
+  "session": "2026-11-04",
+  "status": "draft",
+  "summary": "已有持仓与待入场计划，等待规则触发。",
+  "updated_at": "2026-11-09T16:19:01.142129+08:00",
+  "usage": {},
+  "weekly_md": null
+}

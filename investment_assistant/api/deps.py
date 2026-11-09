@@ -14,7 +14,9 @@ from investment_assistant.core import tx as core_tx
 from investment_assistant.toolsurface.env import ToolEnv, make_env
 
 # 这些码表示「要读写的对象不存在」，映射 404；其余 ValueError（校验拒绝）一律 400。
-NOT_FOUND_CODES = frozenset({"no_run", "no_brief", "no_chat", "unknown_plan", "unknown_target", "unknown_research"})
+NOT_FOUND_CODES = frozenset(
+    {"no_run", "no_brief", "no_chat", "unknown_plan", "unknown_target", "unknown_research", "unknown_call"}
+)
 
 
 def web_env(*, now: datetime | None = None) -> ToolEnv:

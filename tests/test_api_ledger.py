@@ -199,3 +199,77 @@ def test_ledger_endpoints_need_a_run_record(client, v3_tx):
         },
     )
     assert resp.status_code == 404 and resp.json()["error"] == "no_run"
+
+
+def test_ledger_lists_recent_rows_with_void_info(client, v3_tx):
+    trade = facts_repo.insert_trade(
+        v3_tx,
+        {
+            "request_id": "trade-1",
+            "ticker": "AAPL",
+            "side": "buy",
+            "quantity": D(10),
+            "price": D("100.25"),
+            "fee": D("0.50"),
+            "executed_at": NOW,
+            "note": "成交",
+        },
+    )
+    flow = plan_repo.insert_cash_flow(
+        v3_tx, {"request_id": "flow-1", "kind": "deposit", "amount": D(500), "effective_at": NOW}
+    )
+    facts_repo.insert_equity(v3_tx, {"request_id": "equity-1", "equity": D(10000), "as_of": NOW, "note": "对账"})
+    trade_void = plan_repo.insert_void(
+        v3_tx, {"request_id": "void-trade", "kind": "trade", "target_id": trade["id"], "reason": "录错成交"}
+    )
+    flow_void = plan_repo.insert_void(
+        v3_tx, {"request_id": "void-flow", "kind": "cash_flow", "target_id": flow["id"], "reason": "录错入金"}
+    )
+    v3_tx.commit()
+    response = client.get("/api/ledger")
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"trades", "cash_flows", "equity", "voids"}
+    assert set(body["trades"][0]) == {
+        "id",
+        "ticker",
+        "side",
+        "quantity",
+        "price",
+        "fee",
+        "executed_at",
+        "plan_id",
+        "note",
+        "request_id",
+        "voided_by",
+        "void_reason",
+    }
+    assert body["trades"][0]["voided_by"] == trade_void["id"] and body["trades"][0]["void_reason"] == "录错成交"
+    assert body["cash_flows"][0]["voided_by"] == flow_void["id"] and body["cash_flows"][0]["void_reason"] == "录错入金"
+    assert D(body["trades"][0]["price"]) == D("100.25") and isinstance(body["trades"][0]["fee"], str)
+    assert isinstance(body["cash_flows"][0]["amount"], str) and isinstance(body["equity"][0]["equity"], str)
+    assert [row["id"] for row in body["voids"]] == [flow_void["id"], trade_void["id"]]
+    assert len(client.get("/api/ledger?limit=1").json()["voids"]) == 1
+    for limit in (0, 101):
+        bad = client.get(f"/api/ledger?limit={limit}")
+        assert bad.status_code == 400 and bad.json()["error"] == "invalid_argument"
+
+
+def test_ledger_empty_database(client, v3_tx):
+    response = client.get("/api/ledger")
+    assert response.status_code == 200
+    assert response.json() == {"trades": [], "cash_flows": [], "equity": [], "voids": []}
+
+
+def test_ledger_rejects_invalid_limit_before_reading_database(client, monkeypatch):
+    from investment_assistant.api import deps
+
+    def unexpected_read(fn):
+        raise AssertionError("invalid query must not open the database")
+
+    monkeypatch.setattr(deps, "read_tx", unexpected_read)
+    for limit in ("0", "101", "-1", "oops", "1.5"):
+        response = client.get("/api/ledger", params={"limit": limit})
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error == "invalid_argument" if limit in ("0", "101", "-1") else error.startswith("invalid request:")

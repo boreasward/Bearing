@@ -1,0 +1,41 @@
+{
+  "families": {
+    "bars": {
+      "missing": [],
+      "ok": 1,
+      "skipped": null,
+      "total": 1
+    },
+    "earnings": {
+      "missing": [],
+      "ok": 1,
+      "skipped": null,
+      "total": 1
+    },
+    "fundamentals": {
+      "missing": [],
+      "ok": 1,
+      "skipped": null,
+      "total": 1
+    },
+    "news": {
+      "missing": [],
+      "ok": 1,
+      "skipped": null,
+      "total": 1
+    },
+    "sec_filings": {
+      "missing": [],
+      "ok": 1,
+      "skipped": null,
+      "total": 1
+    }
+  },
+  "lines": [
+    "日线：1/1",
+    "资讯：1/1",
+    "SEC 申报：1/1",
+    "财报日：1/1",
+    "基本面：1/1"
+  ]
+}

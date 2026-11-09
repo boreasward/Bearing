@@ -10,6 +10,7 @@ from fastapi import APIRouter
 
 from investment_assistant.api import deps
 from investment_assistant.core.texts import money_value
+from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts.account import account_view
 from investment_assistant.facts.view import today_actions
 
@@ -37,6 +38,15 @@ def _account_row(conn, *, session: date | None, cutoff_at: datetime) -> dict:
     }
 
 
+def _counts(conn, actions: list) -> dict:
+    return {
+        "actions": len(actions),
+        "holdings": len(plan_repo.plans_by_status(conn, ("open",))),
+        "pending": len(plan_repo.plans_by_status(conn, ("pending",))),
+        "watching": len(research_repo.research_by_status(conn, ("watching",))),
+    }
+
+
 @router.get("/today")
 def get_today():
     now = datetime.now(UTC)
@@ -49,16 +59,19 @@ def get_today():
                     "session": None,
                     "cutoff_at": now,
                     "actions": [],
+                    "counts": _counts(conn, []),
                     "account": _account_row(conn, session=None, cutoff_at=now),
                 }
             )
         )
 
     def _read(conn):
+        actions = today_actions(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg)
         return {
             "session": env.session,
             "cutoff_at": env.cutoff_at,
-            "actions": today_actions(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg),
+            "actions": actions,
+            "counts": _counts(conn, actions),
             "account": _account_row(conn, session=env.session, cutoff_at=env.cutoff_at),
         }
 

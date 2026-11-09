@@ -1,0 +1,216 @@
+{
+  "concepts": [
+    {
+      "group": "indicator",
+      "id": "indicator.atr14",
+      "title": "ATR14"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.breadth",
+      "title": "广度"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.dollar_volume_20",
+      "title": "20 日平均成交额"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.gap",
+      "title": "跳空幅度"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.high_low",
+      "title": "区间高低点"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.hy_oas",
+      "title": "HY 信用利差"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.moving_average",
+      "title": "均线 MA20 / MA50 / MA200"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.regime",
+      "title": "区制"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.registry",
+      "title": "标准指标注册表"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.relative_strength",
+      "title": "相对 SPY 强弱"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.screen_rs",
+      "title": "筛选相对强弱"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.sector_strength",
+      "title": "行业强弱"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.t10y2y",
+      "title": "2s10s 利差"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.volatility_20",
+      "title": "近 20 日波动率"
+    },
+    {
+      "group": "indicator",
+      "id": "indicator.volume_ratio",
+      "title": "量比与均量"
+    },
+    {
+      "group": "rule",
+      "id": "rule.abnormal_move",
+      "title": "异常波动"
+    },
+    {
+      "group": "rule",
+      "id": "rule.earnings_gap_down",
+      "title": "财报跳空向下"
+    },
+    {
+      "group": "rule",
+      "id": "rule.earnings_gap_up",
+      "title": "财报跳空向上"
+    },
+    {
+      "group": "rule",
+      "id": "rule.new_filing",
+      "title": "新财报"
+    },
+    {
+      "group": "rule",
+      "id": "rule.plan_stop",
+      "title": "计划止损"
+    },
+    {
+      "group": "rule",
+      "id": "rule.plan_target",
+      "title": "计划目标"
+    },
+    {
+      "group": "rule",
+      "id": "rule.position_drawdown",
+      "title": "持仓回撤"
+    },
+    {
+      "group": "rule",
+      "id": "rule.trend_break",
+      "title": "跌破 MA50"
+    },
+    {
+      "group": "rule",
+      "id": "rule.trend_reclaim",
+      "title": "趋势回踩修复"
+    },
+    {
+      "group": "rule",
+      "id": "rule.volume_breakout",
+      "title": "放量突破"
+    },
+    {
+      "group": "plan",
+      "id": "plan.context_flags",
+      "title": "市场环境提示"
+    },
+    {
+      "group": "plan",
+      "id": "plan.derivation",
+      "title": "推导与一致性"
+    },
+    {
+      "group": "plan",
+      "id": "plan.earnings",
+      "title": "财报规则与下次财报日"
+    },
+    {
+      "group": "plan",
+      "id": "plan.entry_type",
+      "title": "入场类型"
+    },
+    {
+      "group": "plan",
+      "id": "plan.entry_zone",
+      "title": "入场区间"
+    },
+    {
+      "group": "plan",
+      "id": "plan.max_hold",
+      "title": "最长持有与到期卖出"
+    },
+    {
+      "group": "plan",
+      "id": "plan.open_scenarios",
+      "title": "开盘三种情形"
+    },
+    {
+      "group": "plan",
+      "id": "plan.own",
+      "title": "自定计划"
+    },
+    {
+      "group": "plan",
+      "id": "plan.ref_price",
+      "title": "参考价"
+    },
+    {
+      "group": "plan",
+      "id": "plan.research",
+      "title": "研究与跟踪"
+    },
+    {
+      "group": "plan",
+      "id": "plan.retrospect",
+      "title": "检验与复盘"
+    },
+    {
+      "group": "plan",
+      "id": "plan.sizing",
+      "title": "建议仓位与本金来源"
+    },
+    {
+      "group": "plan",
+      "id": "plan.status",
+      "title": "计划状态与变化记录"
+    },
+    {
+      "group": "plan",
+      "id": "plan.stop",
+      "title": "止损"
+    },
+    {
+      "group": "plan",
+      "id": "plan.target1",
+      "title": "目标 T1"
+    },
+    {
+      "group": "plan",
+      "id": "plan.trailing_stop",
+      "title": "移动止损"
+    },
+    {
+      "group": "plan",
+      "id": "plan.validity",
+      "title": "有效期"
+    }
+  ],
+  "knowledge_version": "knowledge-1",
+  "point_in_time": false
+}

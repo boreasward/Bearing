@@ -8,9 +8,11 @@ from investment_assistant.api.routes import (  # noqa: F401 - create_app 经包�
     briefs,
     chats,
     ledger,
+    market,
     plans,
     research,
     retrospect,
+    runs,
     settings,
     today,
 )

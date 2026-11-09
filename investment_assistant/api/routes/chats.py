@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 from datetime import UTC, datetime
 
@@ -24,8 +25,8 @@ router = APIRouter(prefix="/api/chats")
 
 OPTIONAL_BODY = Body(default=None)  # 模块级单例：可选的空 JSON 请求体（ruff B008）
 REQUIRED_BODY = Body(...)  # 模块级单例：必需的 JSON 请求体
-MESSAGE_FIELDS = ("seq", "role", "content", "status", "session", "tool_refs", "usage", "created_at")
-CHAT_LIST_FIELDS = ("chat_id", "title", "created_at", "read_only", "model")
+MESSAGE_FIELDS = ("seq", "role", "content", "status", "session", "agent_session", "tool_refs", "usage", "created_at")
+CHAT_LIST_FIELDS = ("chat_id", "title", "created_at", "last_message_at", "read_only", "model")
 
 
 def _cfg() -> AssistantConfig:
@@ -44,7 +45,11 @@ def _busy_code(holder_kind: str | None) -> str:
 
 
 def _sse_frame(event: RuntimeEvent) -> str:
-    payload = {"kind": event.kind, "text": event.text, "tool": event.tool, "ref": event.ref, "usage": event.usage}
+    payload = (
+        {"kind": "start", "agent_session": event.text}
+        if event.kind == "start"
+        else {"kind": event.kind, "text": event.text, "tool": event.tool, "ref": event.ref, "usage": event.usage}
+    )
     return f"event: {event.kind}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
@@ -107,6 +112,26 @@ def chat_detail(chat_id: str):
             raise ValueError("no_chat")
         messages = [{field: row[field] for field in MESSAGE_FIELDS} for row in plan_repo.messages(conn, chat_id)]
         return {"chat": row, "messages": messages}
+
+    return deps.ok_or_error(lambda: deps.read_tx(_read))
+
+
+@router.get("/{chat_id}/calls")
+def tool_call(chat_id: str, agent_session: str, ref: str):
+    def _read(conn):
+        if not agent_session.startswith(f"chat-{chat_id}-") or re.fullmatch(r"call:\d+", ref, flags=re.ASCII) is None:
+            raise ValueError("unknown_call")
+        seq_text = ref.partition(":")[2].lstrip("0") or "0"
+        # PostgreSQL sequences are signed BIGINT; reject oversized refs before binding a SQL integer.
+        if len(seq_text) > 19 or int(seq_text) > 9223372036854775807:
+            raise ValueError("unknown_call")
+        row = facts_repo.tool_call(conn, agent_session, int(seq_text))
+        if row is None:
+            raise ValueError("unknown_call")
+        return {
+            "ref": ref,
+            **{field: row[field] for field in ("tool", "args", "result", "error", "called_at", "truncated")},
+        }
 
     return deps.ok_or_error(lambda: deps.read_tx(_read))
 
