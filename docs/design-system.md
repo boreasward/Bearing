@@ -74,7 +74,7 @@
 
 ## 3. 布局
 
-- **应用壳**：`lib/shell/Shell.svelte` 提供三栏：左栏展开 208px / 折叠 56px，右侧抽屉 288px，中心由 `center` snippet 提供（完整视图满宽，对话由消费者限宽 760px）。顶栏切换仪表 / 行情 / 定时任务，当前面板再点一次关闭；桌面 `Esc` 不关抽屉。< 1024px 左栏与抽屉共用一个 `Sheet`，左右切换，始终只有一个面板打开；关闭后焦点回到触发按钮。`Home.svelte` 继续作为工作台根组件；Task 4 提供壳，Task 6 接入根页面，`app.svelte` 的主题、Tooltip 与 Toaster 沿用。
+- **应用壳**：`lib/shell/Shell.svelte` 提供三栏：左栏展开 208px / 折叠 56px，右侧抽屉 288px，中心由 `center` snippet 提供（完整视图满宽，对话由消费者限宽 760px）。顶栏切换仪表 / 行情 / 定时任务，当前面板再点一次关闭；桌面 `Esc` 不关抽屉。< 1024px 左栏与抽屉共用一个 `Sheet`，左右切换，始终只有一个面板打开；关闭后焦点回到触发按钮。`Home.svelte` 继续作为工作台根组件；`app.svelte` 的主题、Tooltip 与 Toaster 沿用。
 - **页头**（每个路由与每个大段落一致）：标题 + 口径 / 时点 / 版本的一行次要文字 + 右侧动作区（**至多一个主按钮**，其余描边或链接）。用 `PageHeader`。
 - **分段**：`Section`（标题 + 可选说明 + 内容），不嵌套超过两层；卡片只给「一个对象」（一份计划、一张复盘卡、一个数据族），列表性内容用表格不用卡片堆。
 - **网格**：桌面 ≥ 1024px 两栏或四栏；768–1023 两栏；< 768 单栏。
@@ -168,7 +168,7 @@
 
 ## 6. 组件清单
 
-通用层在 `web/src/lib/ui/<组件>/`（shadcn-svelte 1.7.2 复制来的，样式已按第 2 节改写；Bits UI 2.20.2），领域层在 `web/src/lib/ui/domain/`（自写）。页面**只组合这两层的原语**（v3.1 的首页例外：它自己的组合件在 `web/src/lib/home/`，见 6.2 末），不自己拼样式。
+通用层在 `web/src/lib/ui/<组件>/`（shadcn-svelte 1.7.2 复制来的，样式已按第 2 节改写；Bits UI 2.20.2），领域层在 `web/src/lib/ui/domain/`（自写）。页面组合这两层的原语与工作台组合件（`home/`、`shell/`、`chat/`、`views/`、`drawer/`，见 6.2 各表），不自己拼样式。
 
 ### 6.1 通用层
 
@@ -342,6 +342,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | 加一个图标 | 在 `web/src/lib/ui/domain/icons.ts` 加 import 与映射一行，画廊「图标」段自动出现；`Icon.test.ts` 里的名字表同步 |
 | 改令牌取值 | 改 `web/src/styles/tokens.css` 两套（浅 / 深）；`tokens.test.ts` 会检查两套令牌集合一致、十六进制、AA 对比度；本文第 2 节取值表同步 |
 | 加一个通用 / 领域组件 | 先查本文第 6 节有没有；没有再加，补 `*.test.ts`、画廊一段、本文第 6 节一行，同一个提交 |
+| 加一个工具视图 | 在 `views/registry.ts` 注册裸工具名与组件、在 `labels.ts` 补中文；快照卡用 `CardFrame` / `SourceLine` 保留真实 CallMeta，复用确认写入流程；补后端导出的共享 fixture、registry 渲染测试、画廊与本文第 6 节 API 表 |
 | 加一个页面 | 只组合第 6 节的原语；数据块用 `DataBlock`，状态用 `StatusPill`，缺值写「没算」；跑 `tests/test_frontend_design_guards.py` |
 
 相关：设计依据见 [v2.10 spec](specs/2026-10-30-v2.10-design-system-and-ui-refactor-design.md)，实施步骤见 [v2.10 plan](plans/2026-10-30-v2.10-design-system-and-ui-refactor.md)。

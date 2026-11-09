@@ -32,7 +32,7 @@
   - `GET /api/chats`、`POST /api/chats`、`GET /api/chats/{id}`：对话列表、新建、详情。v3.2.1 列表增加 `last_message_at` 并按它倒序（无消息时等于创建时间），消息增加 `agent_session`；`POST /api/chats/{id}/messages`：一轮提问，响应是 `text/event-stream`（SSE），每个事件一帧 `event: <kind>\ndata: <json>\n\n`。首帧 `event: start` 的数据为 `{"kind":"start","agent_session":"chat-…"}`，其余帧保留原字段，末帧必为 `done`/`error`/`cancelled`；`POST /api/chats/{id}/cancel`：取消当轮。对话轮次与每日简报共用一个运行时锁，简报运行期间提问得到 409 `brief_running`。
   - `GET /api/chats/{id}/calls?agent_session=chat-…&ref=call:N`（v3.2.1）：读取保存的 `{ ref, tool, args, result, error, called_at, truncated }`；会话必须以该对话的 `chat-{id}-` 开头，非法编号、其他对话或缺行均返回 404 `unknown_call`。旧行 `result` 为 null；截断结果保持存储的占位对象和标记，工具错误来自保存行的 `error`。
   - `GET /api/settings`、`GET /api/settings/options`、`PUT /api/settings`：运行时与模型设置。
-- `/` 返回 `web/dist/index.html`（占位页）；`/assets/…` 返回构建产物里的文件。
+- `/` 返回 `web/dist/index.html`（页面构建产物）；`/assets/…` 返回构建产物里的文件。
 - 其余路径，以及未登记的方法，一律 404 `{"error": "not found"}`。
 - 这两类兜底（`GET` 的静态托管与其他方法的 404）是 `create_app()` 里最后注册的两个路由；新的 `/api/...` 路由必须在它们之前 `include_router`，否则会被拦成 404（有测试守着这个顺序）。
 - 没有 `web/dist` 时 `/` 返回 503 `{"error": "frontend_not_built", …}`。
@@ -40,18 +40,84 @@
 
 ## v3.2.1 工作台前端（代码已更新，尚未部署）
 
-`Home.svelte` 是工作台根组件；hash 路由为最近对话 `#`、`#chat/{id}`，以及 `#today`、`#account`、`#market`、`#plans`、`#research`、`#retrospect`、`#jobs`。计划与研究可追加 `/{id}`，展开对应变化记录，列表首屏之外的对象也会单独读取；`#today?session=YYYY-MM-DD` 选择指定日简报。未知 hash 显示默认对话。`#_ui` 仍只在开发模式提供组件画廊。
+`Home.svelte` 是工作台根组件，浏览器前进 / 后退可用：
+
+| hash | 中间区域 |
+| --- | --- |
+| `#` | 最近对话；没有对话时显示新开空态与五个快捷提问 |
+| `#chat/{chat_id}` | 指定对话 |
+| `#today`、`#today?session=YYYY-MM-DD` | 今日操作与指定日期简报 |
+| `#account`、`#market` | 账户与流水、完整行情 |
+| `#plans`、`#plans/{plan_id}` | 计划与持仓；带 id 时展开变化记录 |
+| `#research`、`#research/{research_id}` | 研究；带 id 时展开变化记录 |
+| `#retrospect`、`#jobs` | 复盘、定时任务 |
+| `#_ui` | 仅开发模式的组件画廊 |
+| 未知 hash | 默认对话 `#` |
+
+计划 / 研究列表首屏之外的对象会单独读取。
 
 对话卡片用 SSE 首帧的 agent_session 与 tool_end 的 call:N 调用 calls 接口；历史回放在卡片进入视口时并发取结果，统一放在回答文字之上。旧 null 结果、截断结果与取卡失败都有独立提示，不影响文字阅读。页面对象可带入上下文芯片，芯片按固定前缀随原文存储；快捷入口可直接发送市场 / 今日操作 / 持仓 / 待入场问题，研究入口只预填。切视图、收起侧览与切对话均保留当前 SSE；刷新或关闭页面仍会取消该轮，取消按钮按原对话 id 请求。
 
 所有写入口沿用 preview → 复述确认 → confirmed，完成后共享 store 失效重取并保留简报日期、复盘周与分页。本页操作说明不存消息表。`⌘/Ctrl+K` 在任意完整视图返回最近对话并聚焦提问；设置仍为 Sheet。
 
-本次任务只修改源文件并做聚焦测试，没有执行真实库迁移、替换 `web/dist` 或重载服务。构建验证产物只允许写入一次性 scratch 目录；真实上线仍按设计 spec §15 分步授权。
+本版收尾执行三套全量检查；没有执行真实库迁移、替换 `web/dist` 或重载服务。构建验证产物只允许写入一次性 scratch 目录；真实上线仍按设计 spec §15 分步授权。
+
+## v3.2.1 上线四步（待授权，未执行）
+
+依据 [设计 spec](../specs/2026-11-09-v3.2.1-workbench-shell-and-data-views-design.md) §15，以下每一步单独取得用户授权；当前只有代码与测试，未产生线上验收记录。
+
+1. **备份真实库并执行 036**：按 [迁移 036 步骤](migrations-and-backup.md#036-与-v321-上线四步待授权未执行) 先确认只待执行 036、留存工具记录行数，`pg_dump -Fc` 后核对 SHA-256 与 `pg_restore --list`，再运行 `migrate`。验证追踪行、新列类型 / 默认值、旧行数与 NULL 结果；此步通过后再重载新代码。
+2. **构建并重载页面服务**（这一步会替换正在服务的前端，收尾测试只用 scratch）：
+
+   ```bash
+   git rev-parse HEAD
+   cd web && npm run build
+   cd ..
+   test -s web/dist/index.html
+   launchctl kickstart -k gui/$(id -u)/local.investment-assistant
+   launchctl print gui/$(id -u)/local.investment-assistant | grep -E 'state|pid'
+   curl --fail --silent --show-error --user '<Basic 用户名>' http://127.0.0.1:8787/ -o .local/v3/workbench-index.html
+   test -s .local/v3/workbench-index.html
+   ```
+
+   未启用 Basic 时去掉 `--user`；启用时交互输入密码，不把密码写进命令或报告。保存构建与重载日志，检查新进程及首页 200；静态资源每次请求从磁盘读取，但本版后端也变了，仍须重载。
+3. **真实 Pi 与页面冒烟**：打开 `http://127.0.0.1:8787/#`，确认最近对话；新开对话问「昨天的市场热度怎么样？」，看到 MarketCard 的 `get_market · call:N · {session}` 来源行；刷新后相同引用与数据仍可回放。逐个打开仪表 / 行情 / 定时任务侧览、七个完整视图，切浅深主题并用窄屏验证 Sheet 互斥。保留对话 id、agent_session、call:N 与界面证据；此步会使用真实运行时并写入对话 / 调用记录。
+
+   ```bash
+   curl --fail --silent --show-error --user '<Basic 用户名>' http://127.0.0.1:8787/api/market -o .local/v3/workbench-market.json
+   curl --fail --silent --show-error --user '<Basic 用户名>' http://127.0.0.1:8787/api/runs -o .local/v3/workbench-runs.json
+   curl --fail --silent --show-error --user '<Basic 用户名>' http://127.0.0.1:8787/api/ledger -o .local/v3/workbench-ledger.json
+   .venv/bin/python - <<'CHECK'
+   import json
+   from pathlib import Path
+   def read(name):
+       return json.loads(Path(f'.local/v3/workbench-{name}.json').read_text())
+   assert {'session', 'calc_version', 'label', 'breadth', 'etf_table', 'watch'} <= read('market').keys()
+   runs = read('runs')
+   assert {'schedule', 'runs'} <= runs.keys()
+   assert {'weekdays', 'hour', 'minute', 'tz', 'next_at'} <= runs['schedule'].keys()
+   assert runs['schedule']['tz'] == 'Asia/Shanghai'
+   assert runs['schedule']['next_at'].endswith('+08:00')
+   assert {'trades', 'cash_flows', 'equity', 'voids'} <= read('ledger').keys()
+   print('workbench API shapes verified')
+   CHECK
+   ```
+
+   另用浏览器 Network 核对 calls 响应 `{ ref, tool, args, result, error, called_at, truncated }` 与卡片一致。完整形状见本页接口清单与 spec §11。若没有成功运行，market 应为 404 `no_run`，runs 仍含 schedule；这只验证空库路径，尚不能通过真实 MarketCard 冒烟，不为此自动触发每日任务。
+4. **记录通过并发布**：前三步通过后，把备份校验、036 applied 输出、构建 HEAD、服务 pid、API 与真实 Pi 回放证据补到本文与迁移文档；将 CHANGELOG 的 v3.2.1 未发布段改为实际日期，更新 roadmap 的 v3.2 行。验证：
+
+   ```bash
+   git diff --check
+   env -u INVESTMENT_ASSISTANT_DATABASE_URL -u INVESTMENT_ASSISTANT_TEST_DATABASE_URL -u TEST_DATABASE_URL .venv/bin/python -m pytest tests/test_docs_links.py -q
+   git diff -- CHANGELOG.md docs/roadmap.md docs/operations/local-service.md docs/operations/migrations-and-backup.md
+   ```
+
+   本轮不执行上述上线步骤；推送与打 tag 仍需各自授权。
 
 ## 常用操作
 
 ```bash
-# 重新加载（服务当前已 bootout；要立刻启动外壳而不是等下次登录时用）
+# 加载（仅在服务未加载时使用；当前服务已运行）
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assistant.plist
 ```
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 TEST_URL = 'postgresql://test@127.0.0.1:55433/workbench_test'
+ALLOWED_TEST_URLS = (TEST_URL, 'postgresql://test@127.0.0.1:55433/workbench_v321_test')
 MIGRATION = Path('migrations/031_five_layers.sql')
 NOW = datetime(2026, 11, 1, 12, tzinfo=UTC)
 DAY = date(2026, 10, 30)
@@ -23,8 +24,8 @@ def migrated_db():
     url = os.environ.get('INVESTMENT_ASSISTANT_TEST_DATABASE_URL')
     if not url:
         pytest.skip('explicit disposable test database URL required')
-    if url != TEST_URL:
-        pytest.fail(f'only the disposable test URL is permitted: {TEST_URL}')
+    if url not in ALLOWED_TEST_URLS:
+        pytest.fail(f'only the disposable test URLs are permitted: {ALLOWED_TEST_URLS}')
     import psycopg
     schema = f'm031_test_{uuid.uuid4().hex}'
     with psycopg.connect(url, connect_timeout=3) as conn:

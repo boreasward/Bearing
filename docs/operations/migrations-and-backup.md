@@ -395,6 +395,43 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
 - 执行：`INVESTMENT_ASSISTANT_ALLOW_DROP_V2_TABLES=1 … migrate` 输出 `{"applied": ["033_drop_v2_tables.sql"], "count": 1}`；不带该变量重跑输出 `{"applied": [], "count": 0}`。
 - 核对：033 删除清单中的 61 张表（57 张业务表加 4 张检查点表）用 `to_regclass` 查全部不存在；`public` 下剩 20 张表（19 张保留表加 `schema_migrations`）；19 张保留表的行数与预检逐张一致；`facts show` 照常打印 2026-11-05 的草稿（退出码 0）。
 
+## 036 与 v3.2.1 上线四步（待授权，未执行）
+
+真实库当前记录到 035；本节是待执行步骤，不是执行记录。与 [本机服务上线步骤](local-service.md#v321-上线四步待授权未执行) 同一套顺序（spec §15），每一步分别取得用户授权。
+
+1. **备份真实库并迁移 036**。先确认没有进行中的 daily / facts / 对话轮次；连接串由授权后的运维环境提供，不在本轮读取 `.env`。确认最新迁移为 `035_v3_2_research_and_retro.sql`、036 尚未记录，保存工具调用总数与旧列状态：
+
+   ```bash
+   mkdir -p .local/v3
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc 'SELECT max(filename) FROM schema_migrations'
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc 'SELECT count(*) FROM v3_tool_calls' > .local/v3/tool-calls-before-036.txt
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='v3_tool_calls' AND column_name IN ('result','truncated') ORDER BY column_name"
+   pg_dump -Fc "$INVESTMENT_ASSISTANT_DATABASE_URL" -f .local/v3/backup-before-036.dump
+   chmod 600 .local/v3/backup-before-036.dump
+   shasum -a 256 .local/v3/backup-before-036.dump
+   pg_restore --list .local/v3/backup-before-036.dump > .local/v3/backup-before-036.list
+   test -s .local/v3/backup-before-036.list
+   .venv/bin/python -m investment_assistant.migrate
+   ```
+
+   首次输出必须恰为 `{"applied": ["036_v3_2_1_tool_results.sql"], "count": 1}`。如果预检有其他待迁移或追踪不一致，先查明再执行。迁移只追加两列，事务失败整体回滚，不回填旧结果。迁移后在恢复写入前核对：
+
+   ```bash
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc 'SELECT max(filename) FROM schema_migrations'
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='v3_tool_calls' AND column_name IN ('result','truncated') ORDER BY column_name"
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc 'SELECT count(*) FROM v3_tool_calls' > .local/v3/tool-calls-after-036.txt
+   cmp .local/v3/tool-calls-before-036.txt .local/v3/tool-calls-after-036.txt
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc 'SELECT count(*) FROM v3_tool_calls WHERE result IS NOT NULL OR truncated'
+   .venv/bin/python -m investment_assistant.migrate
+   ```
+
+   两列应为 `result jsonb` 可空、`truncated boolean` 不可空且默认 false；旧行数相同、最后 count 为 0，重跑输出 `{"applied": [], "count": 0}`。保存验证输出，不把连接串或工具结果内容写进共享记录。迁移前历史行从此显示「这次调用早于 v3.2.1，没有保留结果」。
+2. **构建并重载**：授权后 `cd web && npm run build`，验证 `test -s web/dist/index.html`；`launchctl kickstart -k gui/$(id -u)/local.investment-assistant` 后用 `launchctl print` 核对 pid、`curl` 检查首页 200。完整命令见本机服务上线第 2 步。Task 7 验证构建只用 scratch，没有替换这个目录。
+3. **真实冒烟**：授权后从 `#` 新开对话问「昨天的市场热度怎么样？」，验证真实 Pi 的 MarketCard / call:N、刷新回放、三侧览与七视图；用本机服务上线第 3 步的 curl 与 Python 命令核对 market / runs / ledger JSON，并核对该轮 calls 响应和引用。失败先保留证据并处理，不自动触发每日任务或改真实记录。
+4. **记发布**：冒烟通过后补迁移 / 部署执行记录、CHANGELOG 发布日期与 roadmap v3.2 行；执行 `git diff --check`、`pytest tests/test_docs_links.py -q` 并检查文档 diff（完整隔离命令见本机服务上线第 4 步）。本轮只写未发布说明，尚未发布。
+
+036 只新增列，旧代码可以保留这两列运行；应用回退先另获授权，再按旧版构建与重载。若必须恢复整个备份，另行授权停服务后使用本页的 `pg_restore --clean --if-exists` 流程；恢复会丢失备份后的所有写入。
+
 ## 一次性测试库
 
 数据库测试只在设置了 `INVESTMENT_ASSISTANT_TEST_DATABASE_URL` 时运行，每个测试在独立 schema 中建表、结束后删除。永远不要把它指向真实库。夹具（`tests/conftest.py`）的显式迁移清单按顺序应用到 036 为止，所以保留的数据库测试都在已删掉 v2 表、含 v3.2 研究表与周报列、v3.2.1 工具结果列的 schema 上跑。
@@ -408,3 +445,5 @@ INVESTMENT_ASSISTANT_TEST_DATABASE_URL=postgresql://test@127.0.0.1:55433/workben
 ```
 
 Unix socket 路径太长时启动会失败，所以用 `-k ''` 关掉 socket、只走 TCP；不加 `LC_ALL=C` 时服务会拒绝启动。
+
+迁移 031 及复用它的旧夹具有额外的精确 URL 白名单：上面的 `postgresql://test@127.0.0.1:55433/workbench_test`，以及隔离工作台验证用的 `postgresql://test@127.0.0.1:55433/workbench_v321_test`；主机、端口、用户、数据库名或查询参数不同都会在连接前拒绝。两者都必须先确认是一次性实例；创建 / 复用按本节流程，测试仅在唯一 schema 内建表与清理，不使用真实库。

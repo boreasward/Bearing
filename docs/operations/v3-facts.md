@@ -132,6 +132,12 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
   工具集合、参数与模式划分不变。
 - 提供方与模型 id 只由宿主以命令行参数传入，不进任何仓库文件（做法见 [pi-unattended.md](pi-unattended.md)）。
 
+### Pi 引用与历史回放（v3.2.1）
+
+`runtime/pi.py` 在 `tool_execution_end.result.content[]` 的文本项中依次查找第一份能解析成 JSON 且带合法 `call:N` 的信封，将引用写入事件 `ref`；非文本、空内容、非 JSON 或缺 ref 都跳过，找不到就留空，后续事件继续。`tool_start` / `tool_end` 的 `toolName` 去掉服务 `ia` 的 `mcp__ia__` 前缀，工具记录、前端注册表与占位卡统一用裸名。
+
+页面以 SSE start 帧的 `agent_session` 与 call:N 读取已保存结果，不按事件顺序猜编号。解析不到显示「调用已完成，结果不可追溯」；迁移前的 NULL 结果显示「这次调用早于 v3.2.1，没有保留结果」。历史卡画调用当时的快照，动作再读对象当前状态。录制事件测试不替代真实客户端验证；真实 Pi 引用与刷新回放要在 [上线冒烟](local-service.md#v321-上线四步待授权未执行) 中核对。
+
 实测得到的两条要求：
 
 1. **`.pi/mcp.json` 的服务条目要加 `"cwd": <仓库根目录>`**：服务以 `python -m investment_assistant.toolsurface`

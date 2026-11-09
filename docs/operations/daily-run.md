@@ -72,6 +72,12 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 两边共用其下的 `pi.lock` 做单进程互斥，不同就会各拿一把锁、简报会话与页面对话可能同时起 Pi 进程，简报文件也会分散在两个目录。日志在 `~/Library/Application Support/investment-assistant/logs/daily.stdout.log` 与 `daily.stderr.log`。
 页面服务的重新加载见 [local-service.md](local-service.md)。
 
+## 页面「定时任务」（v3.2.1，待部署）
+
+左栏 `#jobs` 显示周几、时间、`Asia/Shanghai` 时区与下次运行，以及缺省 20 行的事实运行 / 简报状态、推送与错误；展开行可看用量、耗时与模型。「打开当天简报」跳 `#today?session=YYYY-MM-DD`。顶栏的定时任务侧览只列最近 4 次、下次运行、观察中研究的条件与本周周报窗口；它与完整视图共用 `/api/runs` 缓存，不触发任务。交易日按纽约日历，页面时间按北京显示。
+
+修改 `daily_weekdays` / `daily_hour` / `daily_minute` 后，核对已安装 plist 的 `StartCalendarInterval`，并按服务变更流程授权重载对应 LaunchAgent；页面的 `schedule.next_at` 只证明配置推算，不能证明 launchd 已同步。
+
 ## 同一交易日重跑与漏跑补查
 
 - **重跑幂等**：宿主产生的变化记录按（计划、交易日、类型）唯一，同一天重跑不产生重复行；简报行按交易日 upsert，更新为最新一份；该交易日已推送过成功简报就不再推送。
@@ -171,7 +177,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 | B10 | 研究计划不占名额：3 份规则计划满员时照常保存；替换受害者只从规则计划里选；同一股票第二份有效计划仍被拒 | `tests/test_v3_tools_plan.py::test_research_plan_ignores_slots_and_replacement`（满员 + 同日已替换过，研究计划照常保存、没有规则计划被替换、研究记 `planned`——「名额仍 0」由此推出，无单独计数断言）、`test_replacement_skips_watching_ticker_like_agenda`（替换候选跳过观察中研究股票——「只从规则计划里选」的另一面由此覆盖）；一只一份有效计划由 `uq_v3_plans_one_active_per_ticker` 保证（`tests/test_migration_034.py::test_one_active_plan_per_ticker_is_a_db_constraint`） |
 | B11 | 研究计划入场下沿收盘 − 3.5 ATR 通过、− 4.5 ATR 拒；规则名单计划 − 2.5 ATR 仍拒 | `tests/test_v3_tools_plan.py::test_research_plan_entry_floor_relaxed`（三例齐）、纯函数层 `tests/test_v3_tool_validation.py::test_entry_floor_follows_entry_atr` |
 | B12 | 简报：有研究时出现「研究」段与每份一行；条件已到写「条件已到，待复看」；缺日线写「缺日线，未复查」；没有研究时整段不出现；Discord 有研究条件行；页脚含「金额单位美元」 | `tests/test_v3_brief.py::test_research_section_states_and_absent_when_empty`（四种状态文案、排在待入场计划之后、空时不出现）、`test_changes_include_research_lines`、`test_discord_research_triggered_line_after_new_plans`、`test_footer_says_usd` |
-| B13 | 页面：研究卡片两组、放弃两步确认、「发起研究」预填助手输入框；复盘块三部分；记成交日期与时间控件拼带美东偏移的 ISO（夏令时与冬令时各一例）；金额与价格两位小数带 `$` | `web/src/lib/home/ResearchCards.test.ts`（两组、放弃两步确认、「发起研究」回调预填）、`web/src/lib/home/ChatPanel.test.ts`（prefill 预填并聚焦输入框）、`web/src/lib/home/RetrospectPanel.test.ts`（周汇总 / 执行复盘 / 规则检验三部分）、`web/src/lib/home/TradeForm.test.ts`（拼出带美东偏移的 `executed_at`）、`web/src/lib/format.test.ts`（`newYorkIso` 夏令时 / 冬令时 / 切换日七例、`moneyText` 两位小数带 `$`） |
+| B13 | 页面：研究卡片两组、放弃两步确认、「发起研究」预填助手输入框；复盘块三部分；记成交日期与时间控件拼带美东偏移的 ISO（夏令时与冬令时各一例）；金额与价格两位小数带 `$` | `web/src/lib/home/ResearchCards.test.ts`（两组、放弃两步确认、「发起研究」回调预填）、`web/src/lib/chat/ChatPanel.test.ts`（prefill 预填并聚焦输入框）、`web/src/lib/home/RetrospectPanel.test.ts`（周汇总 / 执行复盘 / 规则检验三部分）、`web/src/lib/home/TradeForm.test.ts`（拼出带美东偏移的 `executed_at`）、`web/src/lib/format.test.ts`（`newYorkIso` 夏令时 / 冬令时 / 切换日七例、`moneyText` 两位小数带 `$`） |
 | B14 | `price_value` 取到分三个断言 | `tests/test_workbench_labels.py::test_price_value_two_decimals`（`40.5→40.50`、`98.000000→98.00`、`123.4567→123.46` 逐字）、`tests/test_v3_brief.py::test_price_text_trims_storage_zeros_without_rounding` |
 | B15 | 研究采集：观察中研究的股票进每日采集目标；关注列表与筛选范围不因研究而变 | `tests/test_v3_collect.py::test_target_facts_include_watching_research_not_watchlist`（采集目标含研究股票，关注列表不变） |
 | B16 | 一只股票同时两份观察中研究被数据库约束拒绝 | `tests/test_migration_035.py::test_one_watching_research_per_ticker_is_a_db_constraint` |
@@ -201,9 +207,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 | 11 | 连续 3 个定时交易日无人干预 | **待真实运行**（LaunchAgent 未安装，spec §15 第 6 步） |
 | 12 | 切换模型后简报页脚如实显示、旧对话只读 | 设置读写：`tests/test_api_settings.py::test_put_saves_and_reads_back`、`tests/test_api_chat.py::test_switching_runtime_marks_old_chats_read_only`、`tests/test_v3_brief.py::test_footer_has_disclaimer_and_model`；**真实切换待真实运行** |
 | 13 | 页面读简报 | `tests/test_api_briefs.py::test_latest_brief_prefers_final_markdown`、`test_brief_by_session_draft_is_unfinished`、`web/src/routes/Home.test.ts`（简报块与历史切换） |
-| 14 | 流式对话 | `tests/test_api_chat.py::test_turn_streams_and_second_turn_sees_the_first`、`web/src/lib/home/sse.test.ts`、`web/src/lib/home/ChatPanel.test.ts` |
+| 14 | 流式对话 | `tests/test_api_chat.py::test_turn_streams_and_second_turn_sees_the_first`、`web/src/lib/chat/sse.test.ts`、`web/src/lib/chat/ChatPanel.test.ts` |
 | 15 | 隔离（专用 Pi 目录、自带工具禁用、环境白名单） | `tests/test_runtime_pi.py::test_command_line_and_session_arguments`、`test_env_whitelist_passes_proxy_and_pi_vars_only` |
-| 16 | 简报运行期间提问得到提示 | `tests/test_api_chat.py::test_brief_running_is_409`、`web/src/lib/home/ChatPanel.test.ts`（409 显示「正在生成简报，请稍后再问」） |
+| 16 | 简报运行期间提问得到提示 | `tests/test_api_chat.py::test_brief_running_is_409`、`web/src/lib/chat/ChatPanel.test.ts`（409 显示「正在生成简报，请稍后再问」） |
 | 17 | 换模型（设置面板） | `tests/test_api_settings.py::test_put_saves_and_reads_back`、`test_put_rejects_unavailable_and_keeps_store`、`test_options_lists_runtimes_providers_models`（面板调用的就是这三个接口；面板 UI 本身无专门前端测试） |
 | 18 | 假实现（无 Pi、无网络跑全套） | `tests/test_runtime_fake.py`（全文件）、`tests/test_daily_session.py`（全部用假运行时） |
 | 19 | 超时与取消 | `tests/test_api_chat.py::test_cancel_ends_stream_and_next_turn_works`、`tests/test_runtime_chat.py::test_timeout_marks_the_message_timeout`、`tests/test_runtime_pi.py::test_stalled_stream_times_out_and_kills` |

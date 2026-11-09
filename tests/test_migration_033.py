@@ -4,6 +4,7 @@ import ast
 import os
 import re
 import shutil
+import sys
 import uuid
 from pathlib import Path
 
@@ -178,7 +179,11 @@ def test_fresh_database_builds_through_033(blank_schema):
 
     applied = db.apply_pending_migrations(blank_schema, MIGRATIONS)
     assert applied == [path.name for path in sorted(MIGRATIONS.glob("*.sql"))]
-    assert applied[-3] == "033_drop_v2_tables.sql"  # 033 之后还有后续迁移（034 起）也照常建库
+    migration_033 = "033_drop_v2_tables.sql"
+    position = applied.index(migration_033)
+    assert applied[position + 1 :] == [
+        path.name for path in sorted(MIGRATIONS.glob("*.sql")) if path.name > migration_033
+    ]
     for table in DROPPED:
         assert not _exists(blank_schema, table)
     for table in KEPT_FACT_TABLES:
@@ -190,14 +195,74 @@ def _string_constants(path):
     """String literals in the file's code (docstrings excluded), the places a table name can sit as SQL or as a list."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     docstrings = set()
+    projection_keys = set()
+    if path == ROOT / "investment_assistant/api/routes/ledger.py":
+        queries = {"trades": ("facts_repo", "recent_trades"), "cash_flows": ("plan_repo", "recent_cash_flows")}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values):
+                if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                    continue
+                if key.value not in queries or not isinstance(value, ast.Tuple) or len(value.elts) != 2:
+                    continue
+                query = value.elts[0]
+                if (
+                    isinstance(query, ast.Attribute)
+                    and isinstance(query.value, ast.Name)
+                    and (query.value.id, query.attr) == queries[key.value]
+                ):
+                    # These exact API projection keys name response arrays, not dropped v2 tables.
+                    projection_keys.add(id(key))
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             first = node.body[0] if node.body else None
             if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
                 docstrings.add(id(first.value))
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings | projection_keys
+        ):
             yield node.value
+
+
+@pytest.mark.parametrize(
+    "key, owner, query",
+    [("trades", "facts_repo", "recent_trades"), ("cash_flows", "plan_repo", "recent_cash_flows")],
+)
+def test_string_constants_allow_ledger_response_projection_keys(tmp_path, monkeypatch, key, owner, query):
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+    ledger = tmp_path / "investment_assistant/api/routes/ledger.py"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(f'tables = {{"{key}": ({owner}.{query}, ("id",))}}')
+    assert key not in set(_string_constants(ledger))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'query = "SELECT * FROM trades"',
+        'tables = ["trades", "cash_flows"]',
+        'tables = {"trades": (plan_repo.unrelated, ("id",))}',
+        'tables = {"cash_flows": (plan_repo.recent_trades, ("id",))}',
+        'tables = {"trades": (plan_repo.recent_trades, ("id",))}',
+        'tables = {"cash_flows": (facts_repo.recent_cash_flows, ("id",))}',
+    ],
+)
+def test_string_constants_keep_sql_lists_and_unrelated_mapping_keys(tmp_path, monkeypatch, source):
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+    ledger = tmp_path / "investment_assistant/api/routes/ledger.py"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(source)
+    assert any(re.search(r"\b(trades|cash_flows)\b", text) for text in _string_constants(ledger))
+
+
+def test_string_constants_do_not_exempt_other_files(tmp_path):
+    path = tmp_path / "unrelated.py"
+    path.write_text('tables = {"trades": (facts_repo.recent_trades, ("id",))}')
+    assert "trades" in set(_string_constants(path))
 
 
 def test_no_kept_code_references_a_dropped_table():
