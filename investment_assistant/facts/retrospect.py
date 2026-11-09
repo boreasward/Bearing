@@ -26,11 +26,7 @@ def _attributed_trades(trades: list[dict], plan: dict, events: list[dict]) -> li
     ``refs``（买入 / 加仓 / 卖出推进事件都带）就归那份；两样都对不上（比如晚于该计划
     的手工补录）的不进任何复盘行——它们仍算进账户视图（``_asof_ledger``）。"""
     request_ids = {ref for event in events for ref in (event.get("refs") or [])}
-    return [
-        trade
-        for trade in trades
-        if trade.get("plan_id") == plan["id"] or trade.get("request_id") in request_ids
-    ]
+    return [trade for trade in trades if trade.get("plan_id") == plan["id"] or trade.get("request_id") in request_ids]
 
 
 def _bar_end(plan: dict, session: date) -> date:
@@ -152,7 +148,8 @@ def retrospect_view(
     return {
         "records": all_records if limit is None else all_records[:limit],
         "weekly": weekly_view(
-            conn, week_end=week_end_of(week_end) if week_end is not None else week_bounds(session)[1],
+            conn,
+            week_end=week_end_of(week_end) if week_end is not None else week_bounds(session)[1],
             cutoff_at=cutoff_at,
             cfg=cfg,
         ),

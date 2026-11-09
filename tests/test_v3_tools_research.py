@@ -266,7 +266,9 @@ def test_brief_mode_watch_with_new_condition_is_rejected(v3_tx):
     assert rejected["error"].startswith("condition_needs_user")
 
     ref = call(env, "get_research", {})["ref"]  # F7：保留原条件的 watch 也是 agent 结论，要已知引用
-    empty_refs = call(env, "conclude_research", {"research_id": triggered["id"], "verdict": "watch", "reasons": "继续等"})
+    empty_refs = call(
+        env, "conclude_research", {"research_id": triggered["id"], "verdict": "watch", "reasons": "继续等"}
+    )
     assert empty_refs["error"].startswith("invalid_refs")
     bogus_refs = call(
         env,

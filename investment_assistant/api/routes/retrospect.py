@@ -48,9 +48,7 @@ def get_retrospect(limit: int = 20, week: str | None = None):
                 raise
             # 真正的空库（连运行记录都没有）在这里是合法的空复盘视图（spec §10「还没有已结束
             # 的计划」/B5/RF6）：交易日退到日历上最近一个已收盘的交易日；其他路由维持 no_run 404
-            env = make_env(
-                session=last_completed_trading_day(), mode="chat", agent_session="web", origin="web"
-            )
+            env = make_env(session=last_completed_trading_day(), mode="chat", agent_session="web", origin="web")
         return _read(env)
 
     return deps.ok_or_error(_view)

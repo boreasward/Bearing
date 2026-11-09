@@ -239,7 +239,11 @@ def plan_record(
     假设结果（只对没买的 ``planned`` 计划）/ 分组键（规则名单取候选行，研究记「用户研究」）。"""
     buys, sells = _ordered(trades, "buy"), _ordered(trades, "sell")
     first_buy = (
-        {"price": buys[0]["price"], "session": _ny_date(buys[0]["executed_at"]), "quantity": quantity_value(buys[0]["quantity"])}
+        {
+            "price": buys[0]["price"],
+            "session": _ny_date(buys[0]["executed_at"]),
+            "quantity": quantity_value(buys[0]["quantity"]),
+        }
         if buys
         else None
     )
