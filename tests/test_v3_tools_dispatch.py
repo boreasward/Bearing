@@ -72,7 +72,9 @@ def test_error_detail_is_stored(v3_tx, monkeypatch):
     env = make_tool_env()
     envelope = dispatch.call(env, "get_account", {})
     assert envelope == {
-        "ref": "call:1", "error": "active_plan_exists", "detail": {"plan_id": 17, "session": "2026-11-04"}
+        "ref": "call:1",
+        "error": "active_plan_exists",
+        "detail": {"plan_id": 17, "session": "2026-11-04"},
     }
     row = facts_repo.tool_call(v3_tx, env.agent_session, 1)
     assert row is not None
