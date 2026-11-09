@@ -176,7 +176,7 @@
 
 | 组件 | 路径与 API | 规则 |
 | --- | --- | --- |
-| `Button` | `ui/button/`：`variant`：`primary` / `outline`（默认）/ `ghost` / `link` / `destructive`；`size`：`sm`（28px，表格内）/ `md`（32px，默认）/ `icon`（28px 方形：主题切换、关闭）；`busy`（禁用 + `aria-busy` + 转圈）、`busyText`（忙时替换文案）；传 `href` 渲染成 `<a>` | 一个页头或一段至多一个 `primary`；导航用 `<a href>`，动作类的下划线按钮用 `variant="link"`；`link` 的 `sm` / `md` 都是 `h-auto px-0`，可内嵌在文字里 |
+| `Button` | `ui/button/`：`variant`：`primary` / `outline`（默认）/ `ghost` / `link` / `destructive`；`size`：`sm`（28px，表格内）/ `md`（32px，默认）/ `icon`（28px 方形：主题切换、关闭）；`busy`（禁用 + `aria-busy` + 转圈）、`busyText`（忙时替换文案）；传 `href` 渲染成 `<a>` | 一个页头或一段至多一个 `primary`；`outline` 用 `border-input`（1px `--input`）；导航用 `<a href>`，动作类的下划线按钮用 `variant="link"`；`link` 的 `sm` / `md` 都是 `h-auto px-0`，可内嵌在文字里 |
 | `Badge` | `ui/badge/`：无 `variant`，只有中性底；传 `href` 渲染成 `<a>` | 不直接用；由 `StatusPill` 加语气 |
 | `DataTable`（`Table`） | `ui/data-table/`：`columns: Column<T>[]`（`key`、`header`、`align: 'left' \| 'num' \| 'center'`、`title` 表头提示、`cell` 自定义单元格 snippet、`value` 纯文本取值、`cardLabel`、`hideInCards`）；`rows` 或 `groups: RowGroup<T>[]`（`key`、`label`、`rows`、`muted`、`collapsible`、`open` 初始状态、`onToggle`）；`rowKey`；`caption`；`headerGroups`（分组表头）；`expandable` snippet + `bind:expanded`；`muted(row)`；`cards: 'never' \| 'narrow'`；`ariaLabel`（给 `<table>` 和卡片列表一个可访问名称，不出现可见 caption）；`expandLabel(row, open)`（行展开按钮的可访问名称，默认「展开详情」，例如 `展开 MU` / `收起 MU`）；`pageSize`（默认 50，「显示更多」）；`sticky`（默认 true）。底层 `ui/table/` 的 `Table.Root` 有 `containerClass` | 数字列 `align: 'num'`；状态列用 `StatusPill`；已结束 / 作废 / 被取代的行置灰（`muted`），不删不隐藏；展开按钮可用 `Enter`，名称恒为「展开详情」、状态在 `aria-expanded`；空表接 `DataBlock` |
 | `ConfirmDialog`（`Dialog`） | `ui/confirm-dialog/ConfirmDialog.svelte`：`bind:open`、`title`、`consequence`（后果一句话）、`actionLabel`（动作名，不写「确定」）、`destructive`、`busy`、`onConfirm`、`onCancel`、`confirmDisabled`（只禁用动作按钮，如必填项还没填）、`children`（可选的表单体，渲染在说明与按钮之间，如作废理由） | 不可逆动作必经；**确认后不自动关**，调用方做完事再 `open = false`；`busy` 时 `Esc` / 遮罩 / 取消都不响应；初始焦点在「取消」（`onOpenAutoFocus` 显式落到取消按钮，有表单体时也一样；`busy` 时两个按钮都禁用，交给 Bits 默认处理），关闭后焦点回到打开前的元素；底层 `ui/dialog/` 内容渲染在 Portal |
@@ -184,14 +184,14 @@
 | `Tabs` | `ui/tabs/`（Bits `Tabs`） | 只用于**不改地址**的页内页签；方向键 / `Home` / `End` 由 Bits 负责。本版除画廊外没有页面使用它，保留为备用原语 |
 | `TabNav` | `ui/tab-nav/TabNav.svelte`：`label`、`items: { href, label, current, badge?, badgeLabel? }[]`；`badgeLabel` 写成角标的 `aria-label` 与 `title`（如「待审定 2 张」），没给就保持原样 | 路由级页签（一个分区的子页）是**导航**：链接 + `aria-current="page"`，不是 `tablist`（D12）。已知取舍：角标的 `aria-label` 挂在无角色的 `<span>` 上（为保持旧测试 `getByLabelText('待审定 N 张')`），非 Chrome 的读屏器不一定读出，所以角标的数字旁仍应有可见文字 |
 | `Field` | `ui/field/Field.svelte`：`label`、`id`、`hint`、`error`、`required`；children 得到 `{ id, describedby, invalid }` | 标签在上，说明与错误在下（错误 `role="alert"`，输入框 `aria-describedby`）；必填 `*` 画在标签旁、不在 `<label>` 内；数字字段 `inputmode="decimal"` 右对齐 |
-| `Input` / `Textarea` / `Select` / `Label` | `ui/input/`、`ui/textarea/`、`ui/select/`、`ui/label/`；`Select.Trigger` 的 `size`：`sm` / `md` | 放进 `Field` 使用。新页面优先用 `Select` / `Collapsible` |
+| `Input` / `Textarea` / `Select` / `Label` | `ui/input/`、`ui/textarea/`、`ui/select/`、`ui/label/`；`Select.Trigger` 的 `size`：`sm` / `md` | 放进 `Field` 使用；`Input` 的普通与文件分支都用 `rounded-xl`（12px）。新页面优先用 `Select` / `Collapsible` |
 | `Tooltip` | `ui/tooltip/`；`Tooltip.Provider` 在 `app.svelte` 全局提供，默认延迟 300ms | 图标按钮的标签；表头缩写说明 |
 | `Popover` | `ui/popover/` | 就地展开的小浮层（同一页同时只开一个、`Esc` 收起） |
 | `Collapsible` | `ui/collapsible/` | 折叠段、已结束组。**用法**：`CollapsibleContent` 外面再包 `{#if open}` 时加 `forceMount`（让 `{#if}` 当开关）；Bits 的内容在 jsdom 里挂载即展开时会一直 `hidden`（见 `collapsible.test.ts`）。关闭态的内容留在 DOM 里带 `hidden` |
 | `Alert` | `ui/alert/`：`variant`：`info`（默认，`role="status"`）/ `warn` / `danger`（`role="alert"`）；`role` 可覆盖；配 `AlertTitle`、`AlertDescription`、`AlertAction` | 取代各处 `role="alert"` 的 `<p>` |
 | `Skeleton` | `ui/skeleton/`：一个 `animate-pulse` 的块，用 `class` 定尺寸；行 / 块 / 表三种预设在 `DataBlock` 里 | |
 | `Toast` | `ui/toast.ts`：`notify.success(msg)` / `notify.info(msg)`（3 秒自动消失）、`notify.error(msg)`（不自动消失，带「关闭」按钮）；`Toaster` 在 `app.svelte` 挂载（`ui/sonner/`，主题读 `lib/theme.ts`） | 操作结果；没有 `matchMedia` 时 `Toaster` 不渲染，页面测试里改为断言对 `notify` 的调用 |
-| `Separator`、`Card` | `ui/separator/`、`ui/card/`（`Card.Root`、`Header`、`Title`、`Description`、`Action`、`Content`、`Footer`） | 布局用；卡片只给一个对象 |
+| `Separator`、`Card` | `ui/separator/`、`ui/card/`（`Card.Root`、`Header`、`Title`、`Description`、`Action`、`Content`、`Footer`） | 布局用；卡片只给一个对象，`Card.Root` 用 `rounded-xl`（12px）与 1px `border-border`，无阴影 |
 
 ### 6.2 领域层
 

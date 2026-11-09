@@ -8,7 +8,7 @@
 		variants: {
 			variant: {
 				primary: "bg-primary text-primary-foreground hover:bg-primary/90",
-				outline: "border-border bg-card text-foreground hover:bg-muted",
+				outline: "border-input bg-card text-foreground hover:bg-muted",
 				ghost: "text-foreground hover:bg-muted",
 				link: "text-primary underline underline-offset-4 hover:text-primary/80",
 				destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
