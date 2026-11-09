@@ -122,7 +122,14 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
   - 计划是跨天的一条线：`v3_plan_events` 里每次变化一行；带 `request_id` 的写工具先复述、
     `confirmed` 为真才写、按 `request_id` 幂等。
 - 交易日与数据截止时点在进程启动时固定，模式与会话编号由宿主传入，模型改不了；每次调用（含出错的）
-  写一行 `v3_tool_calls`（`agent_session`、`mode`、参数、结果摘要）。
+  写一行 `v3_tool_calls`（`agent_session`、`mode`、参数、结果哈希；v3.2.1 起还保留 `result` 与 `truncated`）。
+  `brief` 与 `chat` 都保留成功 payload（包括列表、null 等 JSON 值）；失败保留 `{"error": …}`，
+  有 `detail` 时一并保留。按 UTF-8 JSON 字节数判断，超过 `v3.tool_result_max_bytes`（缺省 524288）
+  只存 `{"truncated": true, "bytes": n}` 且 `truncated` 为真；agent 仍收到完整信封，
+  `result_sha256` 仍按完整成功 payload 算，错误调用哈希仍为空。无法序列化的成功结果沿用
+  `invalid_argument` 错误信封并记录该错误，不伪造字节数；记录写失败仍返回工具结果（`call:0`）。
+- v3.2.1 的 `get_market` 追加 `calc_version`（来自运行记录的 `market.calc_version`，缺失为 null），
+  工具集合、参数与模式划分不变。
 - 提供方与模型 id 只由宿主以命令行参数传入，不进任何仓库文件（做法见 [pi-unattended.md](pi-unattended.md)）。
 
 实测得到的两条要求：

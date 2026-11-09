@@ -492,23 +492,28 @@ def _wrong_type(value: Any, expected: str | None) -> bool:
 
 
 def _finish(env: ToolEnv, name: str, args: dict, data: Any, error: str | None, detail: Any = None) -> dict:
-    payload = None if error is not None else _jsonable(data)
-    digest = (
-        None
-        if error is not None
-        else hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
-    )
-    seq = _record(env, name, args, digest, error)
+    if error is not None:
+        result = {"error": error}
+        if detail is not None:
+            result["detail"] = _jsonable(detail)
+        serialized = json.dumps(result, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        digest = None
+    else:
+        result = _jsonable(data)
+        serialized = json.dumps(result, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        digest = hashlib.sha256(serialized).hexdigest()
+    truncated = len(serialized) > env.cfg.v3.tool_result_max_bytes
+    stored_result = {"truncated": True, "bytes": len(serialized)} if truncated else result
+    seq = _record(env, name, args, digest, error, stored_result, truncated)
     ref = f"call:{seq}" if seq is not None else RECORD_FAILURE_REF
     if error is not None:
-        envelope = {"ref": ref, "error": error}
-        if detail is not None:
-            envelope["detail"] = _jsonable(detail)
-        return envelope
-    return {"ref": ref, "data": payload}
+        return {"ref": ref, **result}
+    return {"ref": ref, "data": result}
 
 
-def _record(env: ToolEnv, name: str, args: dict, digest: str | None, error: str | None) -> int | None:
+def _record(
+    env: ToolEnv, name: str, args: dict, digest: str | None, error: str | None, result: Any, truncated: bool
+) -> int | None:
     """每次调用（含出错的）写一行 v3_tool_calls；写记录失败不影响返回。"""
 
     def _work(conn):
@@ -524,6 +529,8 @@ def _record(env: ToolEnv, name: str, args: dict, digest: str | None, error: str 
                 "args": args,
                 "result_sha256": digest,
                 "error": error,
+                "result": result,
+                "truncated": truncated,
             },
         )
         return seq

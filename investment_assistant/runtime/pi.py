@@ -19,8 +19,8 @@ from investment_assistant.runtime.base import RuntimeEvent, RuntimeSpec
 # ~/.pi/agent/install/releases/1.5.0/node_modules/@earendil-works/pi-coding-agent/docs/），并逐字
 # 记录在 tests/fixtures/pi_events/*.jsonl：
 # - 文字增量：message_update.assistantMessageEvent == {'type': 'text_delta', 'delta': <str>}
-# - 工具：tool_execution_start / tool_execution_end 的 toolName（toolCallId 是 Pi 自己的编号，
-#   不是本服务工具面的 call:N，所以 tool_end 的 ref 留空）
+# - 工具：tool_execution_start / tool_execution_end 的 toolName 去掉 MCP 服务前缀；
+#   toolCallId 是 Pi 自己的编号，tool_end 的 call:N 从 result.content 的首个有效信封解析
 # - 一条助手消息完成：message_end.message{role, content[].text, stopReason, errorMessage, usage}
 # - usage 的 input/output/totalTokens 映射为本层事件 usage 的 input/output/total
 TEXT_DELTA_EVENT = "text_delta"  # assistantMessageEvent.type
@@ -35,6 +35,30 @@ REAP_WAIT_SECONDS = 5  # 杀进程后/流关闭后等它退出的上界
 DEFAULT_PI_BIN = "~/.local/bin/pi"
 DEFAULT_PI_DIR = "~/.pi-ia"
 PATH_TEMPLATE = "{home}/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"  # pi-unattended.md 实测够用
+
+
+TOOL_PREFIX = "mcp__ia__"
+
+
+def strip_tool_prefix(name: str) -> str:
+    return name.removeprefix(TOOL_PREFIX)
+
+
+def ref_from_result(result: dict | None) -> str:
+    """Use the first text envelope carrying a call ref; malformed items leave the stream intact."""
+    if not isinstance(result, dict) or not isinstance(result.get("content"), list):
+        return ""
+    for item in result["content"]:
+        if not isinstance(item, dict) or item.get("type") != "text" or not isinstance(item.get("text"), str):
+            continue
+        try:
+            envelope = json.loads(item["text"])
+        except ValueError:
+            continue
+        ref = envelope.get("ref") if isinstance(envelope, dict) else None
+        if isinstance(ref, str) and ref.startswith("call:"):
+            return ref
+    return ""
 
 
 def pi_binary() -> Path:
@@ -209,10 +233,10 @@ class PiRuntime:
                 return "text", RuntimeEvent("text", text=delta_event[TEXT_DELTA_FIELD]), {}
             return None
         if kind in ("tool_execution_start", "tool_execution_end"):
-            tool = str(event.get("toolName") or "")
+            tool = strip_tool_prefix(str(event.get("toolName") or ""))
             if kind == "tool_execution_start":
                 return "tool", RuntimeEvent("tool_start", tool=tool), {}
-            return "tool", RuntimeEvent("tool_end", tool=tool), {}  # ref 见模块头注释：取不到，留空
+            return "tool", RuntimeEvent("tool_end", tool=tool, ref=ref_from_result(event.get("result"))), {}
         if kind == "message_end":
             message = event.get("message") or {}
             if message.get("role") != "assistant":

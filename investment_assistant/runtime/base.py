@@ -26,8 +26,8 @@ def workspace_file(name: str) -> Path:
 
 @dataclass(frozen=True)
 class RuntimeEvent:
-    kind: str  # 'text' | 'tool_start' | 'tool_end' | 'usage' | 'done' | 'error' | 'cancelled'
-    text: str = ""  # text 增量 / error 原因
+    kind: str  # 'start' | 'text' | 'tool_start' | 'tool_end' | 'usage' | 'done' | 'error' | 'cancelled'
+    text: str = ""  # start 的 agent_session / text 增量 / error 原因
     tool: str = ""  # tool_start / tool_end 的工具名
     ref: str = ""  # tool_end 的 call:N（从 MCP 服务的返回里取不到时为空）
     usage: dict = field(default_factory=dict)  # usage / done：input, output, total

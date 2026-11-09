@@ -6,6 +6,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+import pytest
+
 from investment_assistant.runtime.base import RuntimeSpec
 from investment_assistant.runtime.pi import PiRuntime
 
@@ -52,8 +54,11 @@ class FakePopen:
         return self.returncode
 
 
-def install_popen(monkeypatch, fixture: str, *, stall: bool = False, hang_after_eof: bool = False) -> list:
-    lines = (FIXTURES / fixture).read_text(encoding="utf-8").splitlines(keepends=True)
+def install_popen(
+    monkeypatch, fixture: str, *, stall: bool = False, hang_after_eof: bool = False, lines: list[str] | None = None
+) -> list:
+    if lines is None:
+        lines = (FIXTURES / fixture).read_text(encoding="utf-8").splitlines(keepends=True)
     instances = []
     cls = type("FakePopen", (FakePopen,), {"_lines": lines, "_stall": stall, "_hang_after_eof": hang_after_eof})
 
@@ -93,7 +98,7 @@ def test_ok_stream_texts_tools_usage_and_done(monkeypatch):
         "done",
     ]
     assert "".join(e.text for e in events if e.kind == "text") == "今天先看待办。全部待办已完成。"
-    assert events[3].tool == "mcp__ia__get_agenda" and events[4].tool == "mcp__ia__get_agenda"
+    assert events[3].tool == "get_agenda" and events[4].tool == "get_agenda"
     assert events[2].usage == {"input": 10, "output": 5, "total": 15}
     assert events[6].usage == {"input": 40, "output": 20, "total": 60}
     assert events[-1].usage == {"input": 50, "output": 25, "total": 75}  # done 带累加用量
@@ -218,3 +223,72 @@ def test_stream_eof_but_process_hangs_times_out(monkeypatch):
     events = run(PiRuntime(), timeout_seconds=5)
     assert [e.kind for e in events][-1] == "error" and events[-1].text == "timeout"
     assert instances[0].killed
+
+
+def test_tool_names_lose_the_mcp_prefix(monkeypatch):
+    install_popen(monkeypatch, "ok.jsonl")
+    tools = [event for event in run(PiRuntime()) if event.kind in ("tool_start", "tool_end")]
+    assert [event.tool for event in tools] == ["get_agenda", "get_agenda"]
+
+
+def test_tool_end_ref_is_parsed_from_the_envelope_text(monkeypatch):
+    install_popen(monkeypatch, "ok.jsonl")
+    event = next(event for event in run(PiRuntime()) if event.kind == "tool_end")
+    assert event.ref == "call:1"
+
+
+def _tool_result_stream(monkeypatch, result):
+    lines = [json.loads(line) for line in (FIXTURES / "ok.jsonl").read_text(encoding="utf-8").splitlines()]
+    next(event for event in lines if event["type"] == "tool_execution_end")["result"] = result
+    install_popen(monkeypatch, "ok.jsonl", lines=[json.dumps(event) + "\n" for event in lines])
+    return run(PiRuntime())
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        None,
+        {},
+        {"content": []},
+        {"content": [{"type": "text", "text": "not JSON"}]},
+        {"content": [{"type": "text", "text": '{"data":{}}'}]},
+        {"content": [{"type": "text", "text": "[]"}]},
+        {"content": [{"type": "text", "text": '{"ref":7}'}]},
+        {"content": [{"type": "text", "text": '{"ref":"fact:1"}'}]},
+    ],
+)
+def test_tool_end_without_parsable_ref_leaves_it_empty(monkeypatch, result):
+    events = _tool_result_stream(monkeypatch, result)
+    assert next(event for event in events if event.kind == "tool_end").ref == ""
+    assert events[-1].kind == "done"
+
+
+def test_tool_end_uses_first_valid_ref_across_text_items(monkeypatch):
+    result = {
+        "content": [
+            None,
+            {"type": "image", "data": "image"},
+            {"type": "text", "text": "bad JSON"},
+            {"type": "text", "text": '{"ref":"fact:1"}'},
+            {"type": "text", "text": '{"ref":"call:2"}'},
+            {"type": "text", "text": '{"ref":"call:3"}'},
+        ]
+    }
+    events = _tool_result_stream(monkeypatch, result)
+    assert next(event for event in events if event.kind == "tool_end").ref == "call:2"
+    assert events[-1].kind == "done"
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("mcp__ia__get_market", "get_market"),
+        ("get_market", "get_market"),
+        ("other_mcp__ia__get_market", "other_mcp__ia__get_market"),
+    ],
+)
+def test_strip_tool_prefix_only_strips_the_leading_service_prefix(name, expected):
+    from investment_assistant.runtime.pi import TOOL_PREFIX, strip_tool_prefix
+
+    assert TOOL_PREFIX == "mcp__ia__"
+    assert strip_tool_prefix(name) == expected

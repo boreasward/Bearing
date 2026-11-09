@@ -49,6 +49,70 @@ def start_chat(conn, *, spec=SPEC):
     return chat.start_chat(conn, spec=spec)["chat_id"]
 
 
+def test_first_event_is_start_with_the_agent_session(v3_tx, tmp_path):
+    import investment_assistant.core.tx as core_tx
+    from investment_assistant.facts import plan_repo
+
+    cfg = cfg_at(tmp_path)
+    with core_tx._tx() as conn:
+        seed_ok_run(conn)
+        chat_id = start_chat(conn)
+    fake = FakeRuntime([RuntimeEvent("text", text="回答"), RuntimeEvent("done")])
+    stream = chat.turn(chat_id=chat_id, text="问题", cfg=cfg, runtime=fake, now=NOW)
+    assert next(stream) == RuntimeEvent("start", text=f"chat-{chat_id}-1")
+    assert fake.calls == []  # The first frame precedes runtime.run(), after the user row commits.
+    with core_tx.read_only_tx() as conn:
+        assert [row["role"] for row in plan_repo.messages(conn, chat_id)] == ["user"]
+    list(stream)
+    with core_tx.read_only_tx() as conn:
+        assistant = plan_repo.messages(conn, chat_id)[-1]
+    assert assistant["content"] == "回答"
+    assert assistant["tool_refs"] == []
+
+
+def test_first_turn_sets_the_title_and_touches_updated_at(v3_tx, tmp_path):
+    import investment_assistant.core.tx as core_tx
+    from investment_assistant.facts import plan_repo
+
+    cfg = cfg_at(tmp_path)
+    with core_tx._tx() as conn:
+        seed_ok_run(conn)
+        chat_id = start_chat(conn)
+        initial = plan_repo.chat(conn, chat_id)
+    assert initial is not None
+    previous = initial["updated_at"]
+    question = "  " + "问题" * 20 + "  "
+    for text in (question, "第二轮不能改标题"):
+        stream = chat.turn(
+            chat_id=chat_id,
+            text=text,
+            cfg=cfg,
+            runtime=FakeRuntime([RuntimeEvent("text", text="回答"), RuntimeEvent("done")]),
+            now=NOW,
+        )
+        assert next(stream).kind == "start"
+        with core_tx.read_only_tx() as conn:
+            after_user = plan_repo.chat(conn, chat_id)
+        assert after_user is not None
+        assert after_user["title"] == "问题" * 15 + "…"
+        assert after_user["updated_at"] > previous
+        list(stream)
+        with core_tx.read_only_tx() as conn:
+            after_assistant = plan_repo.chat(conn, chat_id)
+        assert after_assistant is not None
+        assert after_assistant["title"] == after_user["title"]
+        assert after_assistant["updated_at"] > after_user["updated_at"]
+        previous = after_assistant["updated_at"]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("  问题  ", "问题"), ("  ", ""), ("字" * 30, "字" * 30), ("字" * 31, "字" * 30 + "…")],
+)
+def test_title_of_trims_and_only_ellipsizes_after_thirty_characters(text, expected):
+    assert chat._title_of(text) == expected
+
+
 def test_two_turns_stream_and_persist_messages(v3_tx, tmp_path):
     import investment_assistant.core.tx as core_tx
     from investment_assistant.facts import plan_repo
@@ -160,6 +224,7 @@ def test_cancel_marks_the_message_cancelled(v3_tx, tmp_path):
         chat_id = start_chat(conn)
     fake = FakeRuntime([RuntimeEvent("text", text="第一段"), RuntimeEvent("text", text="第二段")])
     stream = chat.turn(chat_id=chat_id, text="问", cfg=cfg, runtime=fake, now=NOW)
+    assert next(stream).kind == "start"
     assert next(stream).text == "第一段"
     chat.cancel(chat_id)
     rest = list(stream)
@@ -183,7 +248,7 @@ def test_timeout_marks_the_message_timeout(v3_tx, tmp_path):
     fake = FakeRuntime([RuntimeEvent("text", text="慢"), RuntimeEvent("error", text="timeout")])
     cfg = AssistantConfig(v3=V3Config(briefs_dir=str(tmp_path / "rb" / "briefs"), chat_turn_seconds=30))
     events = list(chat.turn(chat_id=chat_id, text="问", cfg=cfg, runtime=fake, now=NOW))
-    assert [e.kind for e in events] == ["text", "error"] and events[-1].text == "timeout"
+    assert [e.kind for e in events] == ["start", "text", "error"] and events[-1].text == "timeout"
     with core_tx.read_only_tx() as conn:
         rows = plan_repo.messages(conn, chat_id)
     assert rows[-1]["status"] == "timeout" and rows[-1]["error"] == "timeout"
@@ -217,7 +282,7 @@ def test_turn_records_usage_and_tool_refs(v3_tx, tmp_path):
         env=lambda: make_env(session=SESSION, mode="chat", agent_session=f"chat-{chat_id}-1"),
     )
     events = list(chat.turn(chat_id=chat_id, text="问", cfg=cfg, runtime=fake, now=NOW))
-    assert [e.kind for e in events] == ["tool_start", "tool_end", "usage", "text", "done"]
+    assert [e.kind for e in events] == ["start", "tool_start", "tool_end", "usage", "text", "done"]
     with core_tx.read_only_tx() as conn:
         rows = plan_repo.messages(conn, chat_id)
     assistant = rows[-1]

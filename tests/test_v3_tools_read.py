@@ -120,6 +120,15 @@ def env(v3_tx):
     return make_env(session=SESSION, mode="brief", agent_session="t-read", cfg=AssistantConfig(), now=NOW)
 
 
+def test_get_market_carries_calc_version(v3_tx):
+    run = _run_row()
+    run["market"]["calc_version"] = "regime-v3"
+    facts_repo.insert_run(v3_tx, run)
+    v3_tx.commit()
+    env = make_env(session=SESSION, mode="brief", agent_session="t-market-version", cfg=AssistantConfig(), now=NOW)
+    assert call(env, "get_market", {})["data"]["calc_version"] == "regime-v3"
+
+
 def test_read_tools_return_stored_facts(env, v3_tx):
     out = [
         call(env, "get_market", {}),

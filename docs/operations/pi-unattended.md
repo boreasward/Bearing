@@ -71,6 +71,20 @@ launchctl remove local.ia.pi-precheck   # 标记文件到位后清理
 - `tool_execution_start` / `tool_execution_end`：`toolName`（白名单判定，须以 `mcp__ia__` 开头）。
 - MCP 服务端日志：每条请求一行（方法名、工具名、参数），用于确认 `tools/call` 是否真的发生。
 
+## v3.2.1 宿主事件与对话元数据（代码已实现，待上线验证）
+
+`runtime/pi.py` 对外发出的 `tool_start` / `tool_end` 使用去掉 `mcp__ia__` 前缀的裸工具名。
+`tool_end.ref` 从 `result.content` 依序扫描文本项，取第一段能解析成 JSON 对象且 `ref` 为
+`call:` 开头字符串的信封；空内容、非文本、坏 JSON 或无有效引用时留空，后续事件继续处理，
+不使用 Pi 自身的 `toolCallId` 猜编号。`tests/fixtures/pi_events/ok.jsonl` 是手写回放样本，
+已补齐工具面的 `{"ref":"call:1","data":…}` 信封；真实 Pi 链路仍按 v3.2.1 上线步骤验证。
+
+对话宿主 `runtime/chat.py::turn` 在用户消息提交后、调用运行时前先发
+`RuntimeEvent("start", text=agent_session)`；会话编号是 `chat-{chat_id}-{seq}`，其中 `seq`
+是该轮用户消息序号。该帧不进入助手正文或工具引用。首条用户消息去掉首尾空白后取前 30 字
+作标题，超过 30 字加「…」，后续轮次保留标题；每次用户与助手消息写入后刷新对话 `updated_at`。
+运行时协议的 `start.text` 由页面接口编码成 SSE，帧不由 Pi 进程产生。
+
 ## 成败判定信号
 
 - **成功**：退出码 0 ＋ 最后一条 assistant `message_end` 的 `stopReason` 正常（`stop`/`toolUse`）＋

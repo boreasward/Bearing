@@ -94,6 +94,7 @@ def get_market(env: ToolEnv) -> dict:
         market = run["market"] or {}
         return {
             "session": run["session"],
+            "calc_version": market.get("calc_version"),
             "label": market.get("label"),
             "regime_tier": market.get("regime_tier"),
             "breadth": market.get("breadth"),

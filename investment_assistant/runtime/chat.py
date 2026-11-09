@@ -97,6 +97,10 @@ def turn(
                         "status": "ok",
                     },
                 )
+                if seq == 1:
+                    plan_repo.update_chat(conn, chat_id, title=_title_of(text))
+                plan_repo.touch_chat(conn, chat_id)
+            yield RuntimeEvent("start", text=agent_session)
             for event in runtime.run(
                 prompt=prompt,
                 workdir=workdir,
@@ -133,10 +137,16 @@ def turn(
                     "tool_refs": tool_refs,
                 },
             )
+            plan_repo.touch_chat(conn, chat_id)
     finally:
         # 轮次结束即移除该对话的取消事件（含消费方提前关流）：长驻页面服务不因每个对话漏
         # 一个 Event（修复轮 Minor 4）；之后的 cancel 会重建一个，由下一轮清零。
         _cancels.pop(chat_id, None)
+
+
+def _title_of(text: str) -> str:
+    text = text.strip()
+    return text[:30] + ("…" if len(text) > 30 else "")
 
 
 def _status_of(terminal: RuntimeEvent) -> tuple[str, str | None]:
