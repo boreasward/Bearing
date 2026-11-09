@@ -22,6 +22,16 @@ describe('status vocabulary', () => {
       expect(['success', 'warn', 'danger', 'info', 'running', 'neutral']).toContain(info.tone)
     }
   })
+  it('defines workbench statuses verbatim', () => {
+    expect(TONES.regime).toEqual({ risk_on: 'success', neutral: 'neutral', risk_off: 'warn', insufficient: 'warn' })
+    expect(LABELS.regime).toEqual({ risk_on: '进攻', neutral: '中性', risk_off: '防守', insufficient: '样本不足' })
+    expect(TONES.etf_state).toEqual({ strong: 'success', mixed: 'neutral', weak: 'neutral' })
+    expect(LABELS.etf_state).toEqual({ strong: '强', mixed: '混合', weak: '弱' })
+    expect(TONES.write).toEqual({ written: 'success', preview: 'warn', replayed: 'neutral' })
+    expect(LABELS.write).toEqual({ written: '已写入', preview: '待确认', replayed: '重放' })
+    expect(TONES.daily_run).toEqual({ final: 'success', draft: 'warn', error: 'danger', unfinished: 'warn', pending: 'neutral', running: 'running' })
+    expect(LABELS.daily_run).toEqual({ final: '成功', draft: '降级', error: '失败', unfinished: '未做完', pending: '待运行', running: '运行中' })
+  })
   it('every TONES key has a label', () => {
     for (const domain of domains) {
       for (const key of Object.keys(TONES[domain])) {
@@ -32,9 +42,9 @@ describe('status vocabulary', () => {
 
   it('every domain of the type is in TONES and LABELS', () => {
     expect(domains.sort()).toEqual([
-      'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'data_request', 'execution', 'feature_flag', 'fetch', 'instruction',
+      'daily_run', 'etf_state', 'regime', 'write', 'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'data_request', 'execution', 'feature_flag', 'fetch', 'instruction',
       'knowledge', 'node', 'paper_decision', 'paper_order', 'plan', 'plan_action', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research', 'research_request', 'retro', 'retro_tag', 'roadmap_version', 'run', 'stop_order', 'system',
-    ])
+    ].sort())
     expect(Object.keys(LABELS).sort()).toEqual(domains)
   })
 

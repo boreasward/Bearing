@@ -2,16 +2,16 @@
    Light and dark define the same set; every status color passes WCAG AA as text on --card in both. */
 :root {
   color-scheme: light;
-  --radius: 6px;
+  --radius: 8px;
 
   /* surfaces */
-  --background: #f6f8fa; --card: #ffffff; --card-foreground: #111827;
-  --popover: #ffffff; --popover-foreground: #111827;
-  --muted: #f0f3f6; --border: #d9e2ec; --input: #c4cfdb; --ring: #0f766e;
+  --background: #fafafa; --card: #ffffff; --card-foreground: #1a1a1a;
+  --popover: #ffffff; --popover-foreground: #1a1a1a;
+  --muted: #f2f2f2; --border: #ececec; --input: #e0e0e0; --ring: #1a1a1a;
   /* text */
-  --foreground: #111827; --muted-foreground: #6b7280;
+  --foreground: #1a1a1a; --muted-foreground: #6b6b6b;
   /* accent */
-  --primary: #0f766e; --primary-foreground: #ffffff;
+  --primary: #1a1a19; --primary-foreground: #ffffff;
   /* status */
   --success: #15803d; --success-foreground: #ffffff;
   --warn: #b45309; --warn-foreground: #ffffff;
@@ -32,11 +32,11 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --background: #0b0f14; --card: #121822; --card-foreground: #e5e9f0;
-  --popover: #161d29; --popover-foreground: #e5e9f0;
-  --muted: #1a2330; --border: #243040; --input: #34425a; --ring: #2dd4bf;
-  --foreground: #e5e9f0; --muted-foreground: #94a3b8;
-  --primary: #2dd4bf; --primary-foreground: #042f2e;
+  --background: #0f0f0f; --card: #171717; --card-foreground: #ededed;
+  --popover: #171717; --popover-foreground: #ededed;
+  --muted: #222222; --border: #2a2a2a; --input: #3a3a3a; --ring: #ededed;
+  --foreground: #ededed; --muted-foreground: #9a9a9a;
+  --primary: #ededed; --primary-foreground: #111111;
   --success: #22c55e; --success-foreground: #052e16;
   --warn: #f59e0b; --warn-foreground: #1c1002;
   --destructive: #f87171; --destructive-foreground: #2a0a0a;

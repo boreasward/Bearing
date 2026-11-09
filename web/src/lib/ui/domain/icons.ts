@@ -1,3 +1,14 @@
+import LayoutGrid from '@lucide/svelte/icons/layout-grid'
+import MessageCircle from '@lucide/svelte/icons/message-circle'
+import PanelLeft from '@lucide/svelte/icons/panel-left'
+import Wallet from '@lucide/svelte/icons/wallet'
+import TrendingUp from '@lucide/svelte/icons/trending-up'
+import List from '@lucide/svelte/icons/list'
+import History from '@lucide/svelte/icons/history'
+import Clock from '@lucide/svelte/icons/clock'
+import Plus from '@lucide/svelte/icons/plus'
+import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right'
+import CornerDownRight from '@lucide/svelte/icons/corner-down-right'
 import CalendarDays from '@lucide/svelte/icons/calendar-days'
 import Search from '@lucide/svelte/icons/search'
 import ClipboardList from '@lucide/svelte/icons/clipboard-list'
@@ -28,6 +39,18 @@ import MessageSquare from '@lucide/svelte/icons/message-square'
 
 // The explicit icon table: a new icon is one import and one line here (no wildcard import, so the bundle only carries these).
 export const ICONS = {
+  'layout-grid': LayoutGrid,
+  'message-circle': MessageCircle,
+  'panel-left': PanelLeft,
+  'wallet': Wallet,
+  'trending-up': TrendingUp,
+  'list': List,
+  'history': History,
+  'clock': Clock,
+  'plus': Plus,
+  'arrow-up-right': ArrowUpRight,
+  'corner-down-right': CornerDownRight,
+
   microscope: Microscope,
   map: Map,
   'toggle-left': ToggleLeft,

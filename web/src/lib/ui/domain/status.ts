@@ -9,10 +9,14 @@ export type StatusDomain =
   | 'account' | 'paper_order' | 'paper_decision' | 'reconcile'
   | 'research_request' | 'proposal' | 'portfolio_verdict' | 'data_request' | 'feature_flag' | 'roadmap_version'
   | 'plan' | 'plan_action' | 'stop_order'
-  | 'research' | 'retro_tag'
+  | 'research' | 'retro_tag' | 'regime' | 'etf_state' | 'write' | 'daily_run'
 
 // Keep every domain on ONE line, without spreads: status.test.ts reads this block by lines.
 export const TONES = {
+  regime: { risk_on: 'success', neutral: 'neutral', risk_off: 'warn', insufficient: 'warn' },
+  etf_state: { strong: 'success', mixed: 'neutral', weak: 'neutral' },
+  write: { written: 'success', preview: 'warn', replayed: 'neutral' },
+  daily_run: { final: 'success', draft: 'warn', error: 'danger', unfinished: 'warn', pending: 'neutral', running: 'running' },
   // stage_runs.status (+ pending / running derived by the page) and the run overview's missing / not_recorded stage lines
   node: { success: 'success', partial: 'warn', degraded: 'warn', failed: 'danger', skipped: 'neutral', pending: 'neutral', running: 'running', missing: 'warn', not_recorded: 'neutral' },
   // job_reports.status (success / degraded / error) plus the node values
@@ -67,6 +71,10 @@ export const TONES = {
 
 // `execution.adopted` keeps its `{date}` / `{quantity}` placeholders: pass the filled sentence as StatusPill `text`.
 export const LABELS: Record<StatusDomain, Record<string, string>> = {
+  regime: { risk_on: '进攻', neutral: '中性', risk_off: '防守', insufficient: '样本不足' },
+  etf_state: { strong: '强', mixed: '混合', weak: '弱' },
+  write: { written: '已写入', preview: '待确认', replayed: '重放' },
+  daily_run: { final: '成功', draft: '降级', error: '失败', unfinished: '未做完', pending: '待运行', running: '运行中' },
   node: { success: '成功', degraded: '降级', partial: '部分成功', failed: '失败', skipped: '跳过', pending: '未开始', running: '运行中', missing: '缺证据', not_recorded: '未记录' },
   run: { success: '成功', degraded: '降级', partial: '部分成功', failed: '失败', skipped: '跳过', pending: '未开始', running: '运行中', error: '失败' },
   chain: {

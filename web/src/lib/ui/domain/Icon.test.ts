@@ -39,9 +39,10 @@ describe('Icon', () => {
 
   it('the table has exactly the standard names', () => {
     expect(Object.keys(ICONS).sort()).toEqual([
+      'layout-grid', 'message-circle', 'panel-left', 'wallet', 'trending-up', 'list', 'history', 'clock', 'plus', 'arrow-up-right', 'corner-down-right',
       'activity', 'bell', 'book-open', 'calendar-days', 'check', 'chevron-down', 'chevron-right', 'circle-x',
       'clipboard-list', 'database', 'external-link', 'info', 'loader', 'map', 'menu', 'message-square', 'microscope', 'panel-left-close',
       'panel-left-open', 'refresh-cw', 'search', 'settings', 'sun-moon', 'toggle-left', 'triangle-alert', 'wrench', 'x',
-    ])
+    ].sort())
   })
 })

@@ -46,6 +46,10 @@
 }
 
 @theme {
+  --font-serif: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif;
+  --text-chat: 13px;
+  --text-chat--line-height: 1.55;
+
   --font-sans: Inter, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
 
   --text-xs: 12px;
@@ -59,15 +63,15 @@
   --text-xl: 20px;
   --text-xl--line-height: 28px;
 
-  /* One radius for everything; rounded-full is unchanged. */
+  /* Controls, cards and chat bubbles; rounded-full is unchanged. */
   --radius-xs: var(--radius);
   --radius-sm: var(--radius);
   --radius-md: var(--radius);
   --radius-lg: var(--radius);
-  --radius-xl: var(--radius);
-  --radius-2xl: var(--radius);
-  --radius-3xl: var(--radius);
-  --radius-4xl: var(--radius);
+  --radius-xl: 12px;
+  --radius-2xl: 14px;
+  --radius-3xl: 14px;
+  --radius-4xl: 14px;
 
   --default-transition-duration: 150ms;
 

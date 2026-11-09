@@ -12,7 +12,7 @@
 
 1. **先把状态说清，再谈好看。** 每个数据块必须能表达五态之一：加载中 / 无数据 / 没算 / 降级 / 失败（第 5 节）；没有「看起来正常但其实是空」的状态。
 2. **数字可追溯。** 任何统计数字旁边或所在块的页头，能看到口径版本（`calc_version` 之类）、样本量、截止时间或数据时点中的相关项；没有样本量不给均值（沿用 v2.7 规则）。
-3. **密度优先。** 这是一个每天读几分钟的工作台，不是落地页：默认紧凑密度，一屏尽量多放信息，用层级而不是留白分隔。
+3. **视图与抽屉紧凑，对话从容。** 表格、卡片与抽屉保持紧凑密度；对话正文 13px / 行高 1.55，限宽 760px 居中，回合之间 14px。
 4. **一致胜于新颖。** 同一含义全站一个写法、一个颜色、一个组件；新需求先查标准，标准没有再加组件并更新标准。
 5. **可读的中文。** 中文字体栈、中文标点、「」引号、数字与单位之间半角空格、时间标注时区（沿用 `fmtBeijing`）。
 
@@ -24,14 +24,14 @@
 | --- | --- | --- |
 | 表面 | `--background`、`--card`、`--muted`、`--border`、`--ring` | 页面底、卡片 / 表面、次级表面、边框、焦点圈；只这五个层次（另有 `--popover`、`--input` 给浮层与输入框） |
 | 文字 | `--foreground`、`--muted-foreground` | 正文与次要文字两级；不再有第三种灰。注意 `muted` 是次级**表面**，次要**文字**是 `text-muted-foreground` |
-| 强调 | `--primary` / `--primary-foreground` | 唯一的强调色（青绿），用于主按钮、当前导航、链接 |
+| 强调 | `--primary` / `--primary-foreground` | 唯一的强调色（浅色墨黑，深色反色），用于主按钮、当前导航、链接 |
 | 状态 | `--success`、`--warn`、`--destructive`、`--info`、`--running`、`--neutral` 各带 `-foreground` | 对应状态语气（第 4 节）；**页面里不得出现原色类名**（`red-600`、`amber-700`、`sky-500`……） |
 | 涨跌 | `--up`、`--down` | 美股约定绿涨红跌，只用于价格 / 收益数值，不用于状态 |
 | 图表 | `--chart-rule`、`--chart-own`、`--chart-agent`、`--chart-fill`、`--chart-grid` | 规则 / 自定 / Agent 三种来源各一色（图表里的价位线、对比线共用），其余序列用 `--chart-1…5`（色相与三种来源色、涨跌色拉开，K 线上的 MA 线不会与价位线撞色；`tokens.test.ts` 检查） |
-| 字号 | `text-xs` 12 / `text-sm` 13 / `text-base` 14 / `text-lg` 16 / `text-xl` 20，仅五档（行高 16 / 18 / 20 / 24 / 28） | 页面正文 `text-sm`，表格 `text-xs` 或 `text-sm`，页面标题 `text-lg`，不再用 `text-2xl` 以上 |
+| 字号 | `text-xs` 12 / `text-sm` 13 / `text-base` 14 / `text-lg` 16 / `text-xl` 20，五档界面字号（行高 16 / 18 / 20 / 24 / 28）；对话另用 `text-chat` 13px / 1.55 | 页面正文 `text-sm`，表格 `text-xs` 或 `text-sm`，页面标题 `text-lg`，不再用 `text-2xl` 以上 |
 | 间距 | Tailwind 4px 基数，组件内 `1 / 2 / 3`，块间 `4 / 6`，页内分段 `8` | 不用 `.65rem`、`1.2rem` 这类自写值 |
-| 圆角 | `--radius` 一个值（6px），`rounded-full` 只给徽标与头像 | 其余 `rounded-*` 全部映射到同一个值 |
-| 阴影 | `--shadow-1`（表面）、`--shadow-2`（浮层） | 类名 `shadow-1` / `shadow-2` |
+| 圆角 | 控件 `--radius` 8px，卡片 / 输入框 12px，用户气泡 14px | `rounded-xs/sm/md/lg` → 8px，`rounded-xl` → 12px，`rounded-2xl/3xl/4xl` → 14px；`rounded-full` 不变 |
+| 阴影 | `--shadow-1`、`--shadow-2` 只给 Popover / Sheet / Dialog 等浮层 | 卡片、按钮与输入框无阴影 |
 | 动效 | 过渡 150ms，仅颜色与透明度；运行中状态用边框脉冲（`animate-running`，沿用 `NodeGraph`）；不做进场动画 | `prefers-reduced-motion` 时全部关闭 |
 | 深浅色 | `[data-theme]`（`light` / `dark`）两套令牌值；首次打开跟随系统（`prefers-color-scheme`），用户切换后记本地（`lib/theme.ts`） | 两套都要满足 WCAG AA 对比（正文 4.5:1、次要文字 3:1）；每个状态色都在两套里各调一次 |
 
@@ -41,27 +41,29 @@
 
 | 令牌 | 浅色 | 深色 | 浅色对比度 | 深色对比度 |
 | --- | --- | --- | --- | --- |
-| `--background` | `#f6f8fa` | `#0b0f14` | | |
-| `--card` / `--card-foreground` | `#ffffff` / `#111827` | `#121822` / `#e5e9f0` | 17.74 | 14.62 |
-| `--popover` / `--popover-foreground` | `#ffffff` / `#111827` | `#161d29` / `#e5e9f0` | | |
-| `--muted` | `#f0f3f6` | `#1a2330` | | |
-| `--border` / `--input` / `--ring` | `#d9e2ec` / `#c4cfdb` / `#0f766e` | `#243040` / `#34425a` / `#2dd4bf` | | |
-| `--foreground` | `#111827` | `#e5e9f0` | 17.74 | 14.62 |
-| `--muted-foreground` | `#6b7280` | `#94a3b8` | 4.83 | 6.94 |
-| `--primary`（`-foreground`） | `#0f766e`（`#ffffff`） | `#2dd4bf`（`#042f2e`） | 5.47 | 9.56 |
-| `--success`（`-foreground`） | `#15803d`（`#ffffff`） | `#22c55e`（`#052e16`） | 5.02 | 7.81 |
-| `--warn`（`-foreground`） | `#b45309`（`#ffffff`） | `#f59e0b`（`#1c1002`） | 5.02 | 8.29 |
-| `--destructive`（`-foreground`） | `#dc2626`（`#ffffff`） | `#f87171`（`#2a0a0a`） | 4.83 | 6.44 |
-| `--info`（`-foreground`） | `#1d4ed8`（`#ffffff`） | `#60a5fa`（`#0a1a33`） | 6.70 | 7.00 |
-| `--running`（`-foreground`） | `#6d28d9`（`#ffffff`） | `#a78bfa`（`#1e1136`） | 7.10 | 6.54 |
-| `--neutral`（`-foreground`） | `#475569`（`#ffffff`） | `#94a3b8`（`#0b0f14`） | 7.58 | 6.94 |
-| `--up` / `--down` | `#15803d` / `#dc2626` | `#22c55e` / `#f87171` | 5.02 / 4.83 | 7.81 / 6.44 |
-| `--chart-rule` / `-own` / `-agent` | `#2563eb` / `#b45309` / `#7c3aed` | `#60a5fa` / `#f59e0b` / `#a78bfa` | 5.17 / 5.02 / 5.70 | 7.00 / 8.29 / 6.54 |
+| `--background` | `#fafafa` | `#0f0f0f` | | |
+| `--card` / `--card-foreground` | `#ffffff` / `#1a1a1a` | `#171717` / `#ededed` | 17.40 | 15.31 |
+| `--popover` / `--popover-foreground` | `#ffffff` / `#1a1a1a` | `#171717` / `#ededed` | | |
+| `--muted` | `#f2f2f2` | `#222222` | | |
+| `--border` / `--input` / `--ring` | `#ececec` / `#e0e0e0` / `#1a1a1a` | `#2a2a2a` / `#3a3a3a` / `#ededed` | | |
+| `--foreground` | `#1a1a1a` | `#ededed` | 17.40 | 15.31 |
+| `--muted-foreground` | `#6b6b6b` | `#9a9a9a` | 5.33 | 6.37 |
+| `--primary`（`-foreground`） | `#1a1a19`（`#ffffff`） | `#ededed`（`#111111`） | 17.42 | 15.31 |
+| `--success`（`-foreground`） | `#15803d`（`#ffffff`） | `#22c55e`（`#052e16`） | 5.02 | 7.87 |
+| `--warn`（`-foreground`） | `#b45309`（`#ffffff`） | `#f59e0b`（`#1c1002`） | 5.02 | 8.35 |
+| `--destructive`（`-foreground`） | `#dc2626`（`#ffffff`） | `#f87171`（`#2a0a0a`） | 4.83 | 6.48 |
+| `--info`（`-foreground`） | `#1d4ed8`（`#ffffff`） | `#60a5fa`（`#0a1a33`） | 6.70 | 7.05 |
+| `--running`（`-foreground`） | `#6d28d9`（`#ffffff`） | `#a78bfa`（`#1e1136`） | 7.10 | 6.59 |
+| `--neutral`（`-foreground`） | `#475569`（`#ffffff`） | `#94a3b8`（`#0b0f14`） | 7.58 | 6.99 |
+| `--up` / `--down` | `#15803d` / `#dc2626` | `#22c55e` / `#f87171` | 5.02 / 4.83 | 7.87 / 6.48 |
+| `--chart-rule` / `-own` / `-agent` | `#2563eb` / `#b45309` / `#7c3aed` | `#60a5fa` / `#f59e0b` / `#a78bfa` | 5.17 / 5.02 / 5.70 | 7.05 / 8.35 / 6.59 |
 | `--chart-fill` | `#64748b2e` | `#94a3b838` | | |
 | `--chart-grid` | `#e5eaf0` | `#1f2a38` | | |
 | `--chart-1…5` | `#0e7490 #a21caf #475569 #4d7c0f #be185d` | `#22d3ee #e879f9 #94a3b8 #a3e635 #f472b6` | 均 ≥ 4.99 | 均 ≥ 6.7 |
 | `--shadow-1` / `--shadow-2` | `0 1px 2px rgba(15,23,42,.06)` / `0 14px 35px rgba(15,23,42,.08)` | `0 1px 2px rgba(0,0,0,.4)` / `0 14px 35px rgba(0,0,0,.5)` | | |
-| `--radius` | `6px`（只在 `:root`，形状不随主题变） | | | |
+| `--radius` | `8px`（只在 `:root`，形状不随主题变） | | | |
+
+标题（`Card.Title`、`PageHeader`、`Section` 与壳面板标题）统一 `font-serif font-semibold`（600）：`"Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif`；正文保持 Inter 与现有中文系统字体栈，不下载新字体。
 
 要点：
 
@@ -72,7 +74,7 @@
 
 ## 3. 布局
 
-- **应用壳**：`app.svelte` 只做主题初始化、`Tooltip.Provider`、`Toaster` 和 `max-w-[1400px]` 的内容区（空 hash 是 `routes/Home.svelte` 占位页，`#_ui` 是画廊）。v2 的侧栏、顶栏与导航已随 v2 移除，v3 页面做出来时再按需要重新设计。
+- **应用壳**：`lib/shell/Shell.svelte` 提供三栏：左栏展开 208px / 折叠 56px，右侧抽屉 288px，中心由 `center` snippet 提供（完整视图满宽，对话由消费者限宽 760px）。顶栏切换仪表 / 行情 / 定时任务，当前面板再点一次关闭；桌面 `Esc` 不关抽屉。< 1024px 左栏与抽屉共用一个 `Sheet`，左右切换，始终只有一个面板打开；关闭后焦点回到触发按钮。`Home.svelte` 继续作为工作台根组件；Task 4 提供壳，Task 6 接入根页面，`app.svelte` 的主题、Tooltip 与 Toaster 沿用。
 - **页头**（每个路由与每个大段落一致）：标题 + 口径 / 时点 / 版本的一行次要文字 + 右侧动作区（**至多一个主按钮**，其余描边或链接）。用 `PageHeader`。
 - **分段**：`Section`（标题 + 可选说明 + 内容），不嵌套超过两层；卡片只给「一个对象」（一份计划、一张复盘卡、一个数据族），列表性内容用表格不用卡片堆。
 - **网格**：桌面 ≥ 1024px 两栏或四栏；768–1023 两栏；< 768 单栏。
@@ -129,6 +131,10 @@
 | `stop_order` | 持仓的止损挂单状态（`stop_order_status`） | none 中性；needs_raise 警告；confirmed 成功 |
 | `research` | v3.2 研究五态（`GET /api/research` 的 `status`，spec §6.1） | watching（观察中）信息；planned（已转计划）成功；rejected、expired、dropped 三个终态中性 |
 | `retro_tag` | v3.2 复盘偏差标签（`execution.retrospect` 的 `tag.code`）+ `followed`（照做） | followed 成功；not_filled（未买入：价格未进入场区间）中性、不算偏差；七个偏差代码（not_bought_in_zone、entry_out_of_zone、over_bought、stop_order_missing、late_sell_after_stop、late_sell_after_instruction、early_sell）全部警告。带 N 的两个（晚卖 N 个交易日）由组件拼句后经 `StatusPill` 的 `text` 传入，表里存不带数字的文案 |
+| `regime` | 市场热度 | risk_on 进攻成功；neutral 中性；risk_off 防守警告；insufficient 样本不足警告 |
+| `etf_state` | ETF 强弱 | strong 强成功；mixed 混合、weak 弱中性 |
+| `write` | 写入结果 | written 已写入成功；preview 待确认警告；replayed 重放中性 |
+| `daily_run` | 定时任务展示 | final 成功；draft 降级警告；error 失败危险；unfinished 未做完警告；pending 待运行中性；running 运行中 |
 
 ### 合并实施的五组中文（v2.12–v2.15 词表）
 
@@ -207,7 +213,7 @@
 | `Section` | `{ title?: string; level?: 2 \| 3 \| 4; description?: string; actions?: Snippet; children: Snippet }`（`level` 默认 3） | 分段；有标题时是 `aria-labelledby` 命名的 `region`；级别规则同上 |
 | `Icon` | `{ name: IconName; size?: 16 \| 20; label?: string }` | `@lucide/svelte` 的薄包装；无 `label` 时 `aria-hidden="true"`，有则 `role="img"` + `aria-label`。`icons.ts` 是显式映射表（逐个 `import X from '@lucide/svelte/icons/<name>'`），**加图标就是在这张表加一行** |
 
-`icons.ts` 现有图标：`calendar-days`、`search`、`clipboard-list`、`database`、`book-open`、`wrench`、`settings`、`activity`、`bell`、`sun-moon`、`x`、`check`、`chevron-down`、`chevron-right`、`info`、`external-link`、`refresh-cw`、`triangle-alert`、`circle-x`、`loader`、`menu`、`panel-left-close`、`panel-left-open`、`microscope`、`map`、`toggle-left`、`message-square`。
+`icons.ts` 现有图标：`calendar-days`、`search`、`clipboard-list`、`database`、`book-open`、`wrench`、`settings`、`activity`、`bell`、`sun-moon`、`x`、`check`、`chevron-down`、`chevron-right`、`info`、`external-link`、`refresh-cw`、`triangle-alert`、`circle-x`、`loader`、`menu`、`panel-left-close`、`panel-left-open`、`microscope`、`map`、`toggle-left`、`message-square`、`layout-grid`、`message-circle`、`panel-left`、`wallet`、`trending-up`、`list`、`history`、`clock`、`plus`、`arrow-up-right`、`corner-down-right`。
 
 ### 6.2.1 首页组件（`web/src/lib/home/`）
 
@@ -231,6 +237,25 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `ResearchCards.svelte` | `{ version?, onChanged?, onStartResearch? }` | 研究两组（v3.2 spec §10）：观察中、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态；观察中组标题旁「发起研究」按钮调 `onStartResearch('研究 ')`（研究 + 空格，用户补股票与论点；页面打开助手并预填，研究在对话里发起，spec §10「股票留空时预填『研究 』」）；`version` 变化重取 |
 | `ResearchCard.svelte` | `{ card, onChanged? }` | 一张研究卡：股票、`StatusPill`（`research` 域）、第几天、论点、条件与最新收盘（`MetricValue` 的 `currency`）、显示文案（优先级：真触发 `triggered_session` → 无条件 → 缺日线 `missing_bar`（stale 日线上的 condition_met 盖不过它）→ 当日条件已到 → 均线日线不足 → 观察中，从卡片字段推导）、agent 结论一句；三种价位条件的文案由 `condition.kind` + `moneyText(condition.level)` 拼（`收盘站上 $105.00` 等，spec §7），`close_above_ma` 沿用服务端文案；「已转计划 #id」是锚点链接（`#plan-{plan_id}`，指向 `PlanCard` 根节点的 id）；展开拉 `GET /api/research/{id}` 看时间线；观察中的「放弃研究」两步确认（`POST /api/research/{id}/drop`，`confirmed=false` 先拿 preview） |
 | `RetrospectPanel.svelte` | `{ version? }` | 复盘（v3.2 spec §10）：顶部周汇总（`Select` 切周，本周与之前 8 周，值用各周周五；已结束 / 照做 / 有偏差、R 合计、已实现盈亏与周初周末总资产带 `$`）、中间执行复盘 `ui/table`（每份已结束计划一行：股票、起止、计划说的 `PlanLevels`、实际做的、R、偏差标签 `StatusPill`（`retro_tag` 域，带 N 的句子经 `text` 传入）、假设结果一句）、底部规则检验两张表（真实成交 / 假设结果）× 三个分组键，样本不足的组只显示样本数与「样本不足」，表头上方一行接口 `note`；执行复盘记录「可翻」：`limit` 阶梯 20 → 50 → 100（契约上限 100，不扩接口，「显示更多」按钮）。周汇总除数字与金额外还显示接口携带的 §5.4 明细：偏差各出现几次、已平仓各份一行（R 与离场原因、标签）、未买各份一行（结束原因与假设结果）、本周名单（新上榜 / 掉出 / 再次上榜最多）。`empty` 时整块「还没有已结束的计划」（B5）；`version` 变化重取 |
+
+### 6.2.2 工作台壳与取数（`web/src/lib/shell/`、`stores/`）
+
+| 组件 / 模块 | API | 职责 |
+| --- | --- | --- |
+| `Shell` | `{ title, session, counts, chats, currentChatId, onNewChat, onOpenSettings, center: Snippet, drawerPane: Snippet<[DrawerPane]> }` | 三栏与响应式 Sheet；内容由两个 snippet 注入；不取业务数据 |
+| `LeftRail` | `{ counts, chats, currentChatId, route, onNewChat, onNavigate? }` | 左栏宽度、折叠按钮与分段内容 |
+| `SegmentSwitch` | 无 props，消费 `layout` | 快捷入口 / 对话，`aria-pressed`；折叠时竖排图标 |
+| `QuickEntries` | `{ counts, route, onNavigate? }` | 今日、账户、行情、计划与持仓、研究、复盘、定时任务七个 hash 链接与 `aria-current`；折叠时角标改圆点 |
+| `ChatList` | `{ chats, currentChatId, onNewChat, onNavigate? }` | 按 `last_message_at` 北京日期分今天 / 本周（周一起）/ 更早；无标题写「新对话」，只读标签；折叠后只剩新开动作 |
+| `TopBar` | `{ title, session, onToggleDrawer(pane, trigger), onOpenNav(trigger), onOpenSettings }` | 标题、数据时点与图标面板开关；无运行时写「还没有运行记录」 |
+| `Drawer` | `{ drawerPane: Snippet<[DrawerPane]> }` | 桌面侧览容器；关闭时 `hidden` |
+| `layout.svelte.ts` | `layout`、`toggleNav()`、`setSegment(segment)`、`toggleDrawer(pane)` | 存 `ws.nav.collapsed`（`1` / 缺省展开）、`ws.nav.segment`（`quick` / `chats`）、`ws.drawer`（`dash` / `market` / `jobs` / `closed`）；缺省 quick、dash，存储禁用仍可用 |
+| `router.ts` | `parseHash(hash): Route`、`hrefOf(route)` | chat / view / gallery；七视图，plans / research 可带数字 id；未知回空 chat；`#_ui` 保持开发画廊 |
+| `resource.svelte.ts` | `createResource<T>(path: string \| (() => string \| null), opts?)` → `{ data, state, error, load(), invalidate() }` | 响应式读取自动订阅与首次加载；写入后失效保留旧数据直至新结果抵达；最后消费者卸载后停止自动重取；重新挂载取脏缓存；空路径 empty，旧请求不覆盖新路径 / 新请求 |
+| `stores/index.ts` | `today`、`market`、`runs`、`ledger`、`account`、`plans(group)`、`research(group)`、`retrospect`、`chats`、`invalidateAll()` | 一接口一共享缓存，分组缓存按组复用；写入完成后统一失效 |
+| `stores/types.ts` | Task 3 页面契约类型 | 新类型以真实 JSON 为准：金额与数量字符串，Today 账户 cash / equity 可空；旧 home 类型的数字 quantity 在接入旧组件时须显式转换 |
+
+消费者在 Svelte 模板中直接读 `today.state` / `today.data` / `today.error`（或在 effect 中读）即订阅；组件外按需 `await today.load()`，普通非响应式读取不触发网络。动态路径函数可以读响应式状态；返回 null 时清空数据并转 empty。`invalidateAll()` 只立即刷新仍有消费者的资源，其余标脏等下次挂载。`errorDetails` 缺省开启以读取接口错误，错误经中文映射后展示；取数只经 `lib/api.ts`，不新加依赖。
 
 ### 6.3 已知取舍
 

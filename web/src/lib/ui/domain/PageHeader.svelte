@@ -10,7 +10,7 @@
 
 <header class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2" data-slot="page-header">
   <div class="grid min-w-0 gap-1">
-    <svelte:element this={`h${level}`} class="{SIZE[level]} font-medium">{title}</svelte:element>
+    <svelte:element this={`h${level}`} class="{SIZE[level]} font-serif font-semibold">{title}</svelte:element>
     {#if meta}<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground" data-slot="page-header-meta">{@render meta()}</div>{/if}
   </div>
   {#if actions}<div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">{@render actions()}</div>{/if}

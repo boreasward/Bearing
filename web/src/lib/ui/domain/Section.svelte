@@ -13,7 +13,7 @@
   {#if title || actions}
     <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
       <div class="grid gap-0.5">
-        {#if title}<svelte:element this={`h${level}`} id={`${uid}-title`} class="{SIZE[level]} font-medium">{title}</svelte:element>{/if}
+        {#if title}<svelte:element this={`h${level}`} id={`${uid}-title`} class="{SIZE[level]} font-serif font-semibold">{title}</svelte:element>{/if}
         {#if description}<p class="text-xs text-muted-foreground">{description}</p>{/if}
       </div>
       {#if actions}<div class="flex flex-wrap items-center gap-2">{@render actions()}</div>{/if}

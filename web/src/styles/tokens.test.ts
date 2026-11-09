@@ -34,6 +34,14 @@ function contrast(a: string, b: string): number {
 }
 
 describe('design tokens', () => {
+  it('defines serif headings and three radius tiers', () => {
+    expect(appCss).toMatch(/--font-serif:\s*"Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif;/)
+    expect(appCss).toMatch(/--radius-xl:\s*12px;/)
+    expect(appCss).toMatch(/--radius-2xl:\s*14px;/)
+    expect(appCss).toMatch(/--text-chat:\s*13px;/)
+    expect(appCss).toMatch(/--text-chat--line-height:\s*1.55;/)
+  })
+
   it('color tokens are hex literals', () => {
     for (const [name, t] of [['light', light], ['dark', dark]] as const) {
       for (const key of colorKeys(t)) {
@@ -45,7 +53,7 @@ describe('design tokens', () => {
   it('both themes define the same token set', () => {
     // --radius is shape, not theme: it lives in :root only
     expect(Object.keys(dark).sort()).toEqual(Object.keys(light).filter((k) => k !== 'radius').sort())
-    expect(light.radius).toBe('6px')
+    expect(light.radius).toBe('8px')
     expect(Object.keys(light)).toEqual(expect.arrayContaining([
       'background', 'card', 'card-foreground', 'popover', 'popover-foreground', 'muted', 'border', 'input', 'ring',
       'foreground', 'muted-foreground', 'primary', 'primary-foreground',
