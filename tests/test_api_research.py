@@ -264,6 +264,47 @@ def test_card_display_state_boundaries(client, v3_tx):
     assert cards["INTC"]["condition_met_today"] is None
 
 
+def test_rejected_card_carries_the_new_conclusion(client, v3_tx):
+    """F2：reject 后研究行带着新结论——已结束组的卡片显示 verdict=reject 与否决理由，
+    不再是旧的「值得盯」或空白；变化记录里 rejected 事件原样。"""
+    with core_tx._tx() as conn:
+        seed(conn)
+        rejected = research_repo.insert_research(
+            conn,
+            _research(
+                "NVDA",
+                status="rejected",
+                verdict="reject",
+                reasons="行业转弱",
+                counter="转弱早于站稳",
+                refs=["call:1", "call:2"],
+                agent_session="brief",
+                ended_session=SESSION,
+                end_reason="行业转弱",
+            ),
+        )
+        research_repo.insert_research_event(
+            conn,
+            {
+                "research_id": rejected["id"],
+                "session": SESSION,
+                "event": "rejected",
+                "reason": "否决：行业转弱",
+                "before": {"status": "watching", "verdict": "watch"},
+                "after": {"status": "rejected"},
+                "source": "agent",
+                "refs": ["call:1", "call:2"],
+            },
+        )
+    ended = {card["ticker"]: card for card in client.get("/api/research?group=ended").json()["research"]}
+    card = ended["NVDA"]
+    assert card["status"] == "rejected" and card["verdict"] == "reject"  # 新结论在行上，不是旧的「值得盯」
+    assert card["reasons"] == "行业转弱" and card["end_reason"] == "行业转弱"
+    detail = client.get(f"/api/research/{card['research_id']}").json()
+    assert detail["verdict"] == "reject" and detail["reasons"] == "行业转弱"
+    assert [event["event"] for event in detail["events"]] == ["rejected"]  # 事件形状不变（F2 裁定）
+
+
 def test_research_needs_a_run_record(client, v3_tx):
     resp = client.get("/api/research")
     assert resp.status_code == 404 and resp.json()["error"] == "no_run"

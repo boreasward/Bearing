@@ -134,20 +134,32 @@ def conclude_research(
         row = _research_or_error(conn, research_id)
         if row["status"] != "watching":
             raise ValueError("not_watching")
-        if verdict in ("ready", "reject"):
+        if verdict == "watch" and condition is None and not row["condition"]:
+            raise ValueError("condition_required: watch 结论需要一个条件；研究尚无条件时必须带一个")
+        user_watch = verdict == "watch" and normalized is not None  # 带新条件的 watch 是用户写入，不适用 agent 引用要求
+        if not user_watch:  # agent 结论路径一律校验已知引用（spec §6.3/§9，含 watch；F7）
             known = facts_repo.tool_call_refs(conn, env.agent_session)
             if not checked_refs or any(ref not in known for ref in checked_refs):
                 raise ValueError("invalid_refs")
-        if verdict == "watch" and condition is None and not row["condition"]:
-            raise ValueError("condition_required: watch 结论需要一个条件；研究尚无条件时必须带一个")
         event_refs = [*checked_refs, request_id] if request_id is not None else checked_refs
-        if verdict == "watch" and normalized is not None and request_id is not None:
+        if user_watch and request_id is not None:
             replay = _replayed_event(conn, research_id, request_id, "concluded")
             if replay is not None:
                 return {"research": research_repo.research(conn, research_id), "event": replay, "replay": True}
         if verdict == "reject":
+            # reject 也把结论字段写进研究行（spec §10/§11）：卡片读行上的 verdict/reasons/
+            # counter/refs，不写会是「已否决」配着旧的「值得盯」结论；事件不变（F2）
             updated = research_repo.update_research(
-                conn, research_id, status="rejected", ended_session=env.session, end_reason=reasons
+                conn,
+                research_id,
+                status="rejected",
+                ended_session=env.session,
+                end_reason=reasons,
+                verdict="reject",
+                reasons=reasons,
+                counter=counter,
+                refs=checked_refs,
+                agent_session=env.agent_session,
             )
             event = research_repo.insert_research_event(
                 conn,

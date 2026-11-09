@@ -15,6 +15,7 @@ from investment_assistant.facts.retrospect import records, retrospect_view, week
 NY = ZoneInfo("America/New_York")
 SESSION = date(2026, 11, 4)  # 周三；本周 = 11/2–11/4
 D1 = date(2026, 11, 2)
+D2 = date(2026, 11, 3)
 D0 = date(2026, 10, 30)  # 周五：计划保存日
 NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)
 CFG = AssistantConfig()
@@ -192,6 +193,123 @@ def test_weekly_view_equity_and_realized(v3_tx):
     assert weekly["equity_start"] == D(10000)  # 周初快照不含本周的成交
     assert weekly["equity_end"] == D(10100) and weekly["realized_pnl"] == D(100)
     assert weekly["ended"] == 1 and weekly["not_bought"] and weekly["not_bought"][0]["ticker"] == "AAPL"
+
+
+def test_records_attribute_each_plans_own_trades(v3_tx):
+    """F1：同一股票两份已结束计划（老计划过期未买、新计划买入后平仓）——复盘行各用各的
+    成交：带 plan_id 的直连；request_id 写进该计划事件 refs 的归它；两样都对不上（比如
+    晚于计划的手工补录）不进任何行，老计划的行不再被后来的成交污染。"""
+    data_repo.store_bars(v3_tx, "AAPL", bars(), now=NOW)  # 常量日线：low 99 进过 99–101 区间
+    old = plan_repo.insert_plan(v3_tx, plan_row("AAPL"))  # 老计划：expired，ended 11-03，未买
+    new = plan_repo.insert_plan(
+        v3_tx,
+        plan_row(
+            "AAPL",
+            session=D2,
+            valid_from=SESSION,
+            valid_until=date(2026, 11, 10),
+            status="closed",
+            ended_session=SESSION,
+            end_reason="已平仓：持有到期",
+            outcome={
+                "entry_in_zone": True,
+                "exit_reason": "max_hold",
+                "r_multiple": D("1.00"),
+                "r_text": None,
+                "stop_delay_sessions": None,
+            },
+        ),
+    )
+    facts_repo.insert_trade(  # 直连：plan_id 指向新计划，不整事件 refs 也归它
+        v3_tx,
+        {
+            "request_id": "buy-new",
+            "ticker": "AAPL",
+            "side": "buy",
+            "quantity": 10,
+            "price": D(100),
+            "executed_at": datetime(2026, 11, 4, 15, tzinfo=NY),
+            "plan_id": new["id"],
+        },
+    )
+    facts_repo.insert_trade(  # 靠事件 refs 归属：卖出 request_id 写在新计划的 closed 事件里
+        v3_tx,
+        {
+            "request_id": "sell-new",
+            "ticker": "AAPL",
+            "side": "sell",
+            "quantity": 10,
+            "price": D(110),
+            "executed_at": datetime(2026, 11, 4, 16, tzinfo=NY),
+        },
+    )
+    plan_repo.insert_event(
+        v3_tx,
+        {
+            "plan_id": new["id"],
+            "session": SESSION,
+            "event": "closed",
+            "reason": "已平仓",
+            "before": {},
+            "after": {},
+            "source": "user",
+            "refs": ["sell-new"],
+        },
+    )
+    facts_repo.insert_trade(  # 对不上号：不进任何复盘行（账户视图照算它）
+        v3_tx,
+        {
+            "request_id": "stray",
+            "ticker": "AAPL",
+            "side": "buy",
+            "quantity": 5,
+            "price": D(100),
+            "executed_at": datetime(2026, 11, 4, 14, tzinfo=NY),
+        },
+    )
+    v3_tx.commit()
+
+    rows = {row["plan_id"]: row for row in records(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG)}
+
+    old_row = rows[old["id"]]
+    assert old_row["actual"]["first_buy"] is None and old_row["actual"]["quantity"] == 0
+    assert [tag["code"] for tag in old_row["tags"]] == ["not_bought_in_zone"]  # 按它自己的窗口打标签
+    new_row = rows[new["id"]]
+    assert new_row["actual"]["first_buy"]["session"] == SESSION
+    assert new_row["actual"]["first_buy"]["quantity"] == D(10)  # 股数去尾零（M2）
+    assert new_row["actual"]["last_sell"]["price"] == D(110)
+    assert new_row["actual"]["quantity"] == D(10)  # stray 的 5 股不进新计划，也不进老计划
+
+
+def test_old_plan_record_is_stable_as_more_bars_arrive(v3_tx):
+    """F6：老计划的复盘按它自己的有效期窗口读日线——窗口之后又来 400+ 根日线，标签与
+    假设结果既不丢（窗口掉出「今天往前 400 根」的尾部）也不随后续日线漂移。"""
+    save = date(2024, 12, 2)  # 周一：保存日
+    window_start, window_end = date(2024, 12, 3), date(2024, 12, 9)
+    old_end = date(2026, 10, 30)  # 第一批日线的末尾
+    plan_repo.insert_plan(
+        v3_tx,
+        plan_row(
+            "AAPL",
+            session=save,
+            valid_from=window_start,
+            valid_until=window_end,
+            ended_session=window_end,
+        ),
+    )
+    data_repo.store_bars(v3_tx, "AAPL", bars(n=560, end=old_end), now=NOW)  # 窗口之后约 460 个交易日
+    v3_tx.commit()
+
+    first = records(v3_tx, session=old_end, cutoff_at=NOW, cfg=CFG)
+    data_repo.store_bars(v3_tx, "AAPL", bars(n=3, end=SESSION), now=NOW)  # 又来几根更新的日线
+    v3_tx.commit()
+    second = records(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG)
+
+    row = first[0]
+    assert [tag["code"] for tag in row["tags"]] == ["not_bought_in_zone"]  # 窗口内进过区间
+    assert row["hypothetical"]["status"] == "exited" and row["hypothetical"]["fill_session"] == window_start
+    assert row["hypothetical"]["exit_reason"] == "max_hold"  # 常量日线：持到期离场，R = 0
+    assert first == second  # 同一份计划，复盘行不随后续日线漂移
 
 
 def _bar(day, close, *, split=1.0):

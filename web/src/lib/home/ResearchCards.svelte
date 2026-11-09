@@ -43,7 +43,7 @@
     <section class="grid gap-2" aria-label="观察中">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h3 class="text-base font-medium">观察中</h3>
-        <Button size="sm" variant="outline" onclick={() => onStartResearch?.('研究 ：')}>发起研究</Button>
+        <Button size="sm" variant="outline" onclick={() => onStartResearch?.('研究 ')}>发起研究</Button>
       </div>
       <DataBlock
         state={groups.watching.state}

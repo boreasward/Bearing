@@ -164,10 +164,10 @@
                 {#if Object.keys(view.weekly.tag_counts).length}
                   <li>本周偏差：{Object.entries(view.weekly.tag_counts).map(([tag, count]) => `${tag} ×${count}`).join('；')}</li>
                 {/if}
-                {#each view.weekly.closed as row (row.ticker)}
+                {#each view.weekly.closed as row (row.plan_id)}
                   <li>{row.ticker}：R {row.r_multiple}（{EXIT_TEXT[row.exit_reason ?? ''] ?? row.exit_reason}）{row.tags.length ? ` · ${row.tags.join('、')}` : ''}</li>
                 {/each}
-                {#each view.weekly.not_bought as row (row.ticker)}
+                {#each view.weekly.not_bought as row (row.plan_id)}
                   <li>{row.ticker}：{row.end_reason}{row.hypothetical ? `；${hypotheticalText(row.hypothetical)}` : ''}</li>
                 {/each}
                 {#if listingText(view.weekly.listing)}

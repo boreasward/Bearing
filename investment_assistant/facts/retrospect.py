@@ -16,8 +16,29 @@ from investment_assistant.execution.retrospect import NY, plan_record, rule_stat
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
 
-BARS_LIMIT = 400  # 与 facts.review 同窗口：有效期与持有期远小于一年的交易日
+BARS_LIMIT = 400  # 单次读的日线根数上限；按计划各自窗口锚定后，窗口+持有尾巴远小于它（F6）
 RULE_KEYS = ("trigger_rules", "setup_tier", "industry")
+
+
+def _attributed_trades(trades: list[dict], plan: dict, events: list[dict]) -> list[dict]:
+    """该计划自己的成交（spec §2 反目标「复盘每一行必须与该计划记录对得上」）：带
+    ``plan_id`` 的直连那份计划；否则成交的 ``request_id`` 写进了哪份计划事件的
+    ``refs``（买入 / 加仓 / 卖出推进事件都带）就归那份；两样都对不上（比如晚于该计划
+    的手工补录）的不进任何复盘行——它们仍算进账户视图（``_asof_ledger``）。"""
+    request_ids = {ref for event in events for ref in (event.get("refs") or [])}
+    return [
+        trade
+        for trade in trades
+        if trade.get("plan_id") == plan["id"] or trade.get("request_id") in request_ids
+    ]
+
+
+def _bar_end(plan: dict, session: date) -> date:
+    """每份计划的日线读到它自己的有效期末尾加持有尾巴，不晚于复盘锚定的交易日：成交可
+    落在有效期最后一日，最多再持 ``max_hold_sessions`` 个交易日、卖出指令次日开盘离场，
+    再留一天余量。老计划的复盘结果不随后续日线漂移（F6）。"""
+    tail = add_trading_days(plan["valid_until"], int(plan["max_hold_sessions"] or 0) + 2)
+    return min(tail, session)
 
 
 def _decimal_bars(rows: list[dict]) -> list[dict]:
@@ -35,17 +56,24 @@ def _decimal_bars(rows: list[dict]) -> list[dict]:
 
 
 def records(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig, limit: int | None = None) -> list[dict]:
-    """每份已结束计划一行（spec §5.1）：日线读到 session、候选行取保存当天、trail_atr 取配置。"""
+    """每份已结束计划一行（spec §5.1）：日线按各计划自己的窗口读到（F6）、候选行取保存
+    当天、trail_atr 取配置；成交按 F1 的归属规则取各计划自己的。"""
     trail_atr = Decimal(str(cfg.v3.trail_atr))
     out: list[dict] = []
+    trades_by_ticker: dict[str, list[dict]] = {}
     for plan in plan_repo.plans_by_status(conn, ENDED, limit=limit):
         ticker = plan["ticker"]
-        bars = _decimal_bars(data_repo.read_bars(conn, ticker, session, cutoff_at=cutoff_at, limit=BARS_LIMIT))
+        if ticker not in trades_by_ticker:
+            trades_by_ticker[ticker] = facts_repo.list_trades(conn, ticker)
+        events = plan_repo.events(conn, plan["id"])
+        bars = _decimal_bars(
+            data_repo.read_bars(conn, ticker, _bar_end(plan, session), cutoff_at=cutoff_at, limit=BARS_LIMIT)
+        )
         out.append(
             plan_record(
                 plan=plan,
-                events=plan_repo.events(conn, plan["id"]),
-                trades=facts_repo.list_trades(conn, ticker),
+                events=events,
+                trades=_attributed_trades(trades_by_ticker[ticker], plan, events),
                 bars=bars,
                 candidate=facts_repo.candidate_at(conn, plan["session"], ticker),
                 trail_atr=trail_atr,
@@ -103,15 +131,31 @@ def weekly_view(conn, *, week_end: date, cutoff_at: datetime, cfg: AssistantConf
     )
 
 
+def week_end_of(day: date) -> date:
+    """任一日期归一到它所在日历周（ISO 周）的最后一个交易日（F8）：周一休市的周（如
+    总统日）传周一不再空周崩 500；整周没有交易日（现行日历下不会发生）拒
+    ``invalid_argument``，接口映射 400，绝不 500。"""
+    monday = day - timedelta(days=day.weekday())
+    days = trading_days_between(monday, monday + timedelta(days=6))
+    if not days:
+        raise ValueError(f"invalid_argument: {day:%Y-%m-%d} 所在的日历周没有交易日")
+    return days[-1]
+
+
 def retrospect_view(
     conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig, limit: int = 20, week_end: date | None = None
 ) -> dict:
     """页面复盘块的全部输入：最近 ``limit`` 份记录、本周（或 ``week_end`` 所在周）的汇总与
-    规则检验两张表（spec §5.5）。规则检验用全部记录，不受 ``limit``。"""
+    规则检验两张表（spec §5.5）。规则检验用全部记录，不受 ``limit``。显式传的 ``week_end``
+    先经 ``week_end_of`` 归一；缺省周锚定当前交易日（周中即周中，不补到周五）。"""
     all_records = records(conn, session=session, cutoff_at=cutoff_at, cfg=cfg)
     return {
         "records": all_records if limit is None else all_records[:limit],
-        "weekly": weekly_view(conn, week_end=week_end or week_bounds(session)[1], cutoff_at=cutoff_at, cfg=cfg),
+        "weekly": weekly_view(
+            conn, week_end=week_end_of(week_end) if week_end is not None else week_bounds(session)[1],
+            cutoff_at=cutoff_at,
+            cfg=cfg,
+        ),
         "rules": {
             "realized": {
                 key: rule_stats(all_records, key=key, realized=True, min_sample=cfg.v3.retro_min_sample)

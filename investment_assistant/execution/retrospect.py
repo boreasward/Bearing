@@ -14,6 +14,7 @@ from decimal import Decimal
 from itertools import pairwise
 from zoneinfo import ZoneInfo
 
+from investment_assistant.core.texts import quantity_value
 from investment_assistant.data.calendar import add_trading_days, trading_days_between
 from investment_assistant.execution.plan_levels import _cent
 from investment_assistant.execution.plan_line import ENDED, held_sessions, holding_check
@@ -238,7 +239,7 @@ def plan_record(
     假设结果（只对没买的 ``planned`` 计划）/ 分组键（规则名单取候选行，研究记「用户研究」）。"""
     buys, sells = _ordered(trades, "buy"), _ordered(trades, "sell")
     first_buy = (
-        {"price": buys[0]["price"], "session": _ny_date(buys[0]["executed_at"]), "quantity": buys[0]["quantity"]}
+        {"price": buys[0]["price"], "session": _ny_date(buys[0]["executed_at"]), "quantity": quantity_value(buys[0]["quantity"])}
         if buys
         else None
     )
@@ -361,6 +362,7 @@ def weekly_summary(
                 tag_counts[tag["text"]] = tag_counts.get(tag["text"], 0) + 1
     closed = [
         {
+            "plan_id": record["plan_id"],
             "ticker": record["ticker"],
             "r_multiple": record.get("r_multiple"),
             "exit_reason": (record.get("outcome") or {}).get("exit_reason"),
@@ -382,6 +384,7 @@ def weekly_summary(
         "total_r": sum((row["r_multiple"] for row in closed if row["r_multiple"] is not None), Decimal(0)),
         "not_bought": [
             {
+                "plan_id": record["plan_id"],
                 "ticker": record["ticker"],
                 "end_reason": record.get("end_reason"),
                 "hypothetical": record.get("hypothetical"),

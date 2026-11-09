@@ -1,5 +1,5 @@
 """GET /api/retrospect：复盘块的读接口——记录、周报与规则检验一次返回；week 切换周报所在周。
-校验错误 400（week / limit），没有运行记录 404 no_run。"""
+校验错误 400（week / limit）；真正的空库（没有运行记录）是合法的空视图（F5/B5/RF6）。"""
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
@@ -124,8 +124,13 @@ def _seed_one_expired(conn):
 
 
 def test_retrospect_empty_and_with_records(client, v3_tx):
-    missing = client.get("/api/retrospect")  # 没有运行记录 → 404 no_run（与计划接口同一口径）
-    assert missing.status_code == 404 and missing.json()["error"] == "no_run"
+    empty_db = client.get("/api/retrospect")  # 真正的空库（无运行记录）：合法的空视图（F5/B5/RF6）
+    assert empty_db.status_code == 200
+    empty_body = empty_db.json()
+    assert empty_body["empty"] is True and empty_body["records"] == []
+    assert date.fromisoformat(empty_body["weekly"]["week_start"]).weekday() == 0  # 周边界在（ISO 周一）
+    assert empty_body["weekly"]["week_start"] <= empty_body["weekly"]["week_end"]
+    assert empty_body["rules"]["realized"] == {"trigger_rules": [], "setup_tier": [], "industry": []}
 
     with core_tx._tx() as conn:
         _run(conn, "run-0", D0)
@@ -160,6 +165,17 @@ def test_week_parameter_switches_weekly(client, v3_tx):
     prior = client.get("/api/retrospect?week=2026-10-30").json()["weekly"]  # 上一个周五：切到 10/26–10/30
     assert prior["week_start"] == "2026-10-26" and prior["week_end"] == "2026-10-30"
     assert prior["ended"] == 0  # 那一周没有已结束的计划
+
+
+def test_holiday_monday_week_normalizes_to_its_calendar_week(client, v3_tx):
+    """F8：week 落在休市的周一（2026-02-16 总统日）不再 500——归一到该日历周的最后一个
+    交易日（周五 02-20），周界 02-16–02-20；周内任一天都归同一周。"""
+    with core_tx._tx() as conn:
+        seed(conn)
+    weekly = client.get("/api/retrospect?week=2026-02-16").json()["weekly"]
+    assert weekly["week_start"] == "2026-02-16" and weekly["week_end"] == "2026-02-20"
+    midweek = client.get("/api/retrospect?week=2026-02-17").json()["weekly"]
+    assert midweek["week_start"] == "2026-02-16" and midweek["week_end"] == "2026-02-20"
 
 
 def test_bad_week_400(client, v3_tx):

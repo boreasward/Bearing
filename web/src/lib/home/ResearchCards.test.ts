@@ -156,13 +156,13 @@ describe('ResearchCards', () => {
     expect(await screen.findByText('WDC')).toBeInTheDocument()
   })
 
-  it('发起研究 hands 研究 ： to the callback', async () => {
+  it('发起研究 hands 研究 ␣（研究 + 空格，用户补股票与论点） to the callback', async () => {
     stubResearch()
     const onStartResearch = vi.fn()
     render(ResearchCards, { onStartResearch })
     await screen.findByText('SNDK')
     await fireEvent.click(screen.getByRole('button', { name: '发起研究' }))
-    expect(onStartResearch).toHaveBeenCalledWith('研究 ：')
+    expect(onStartResearch).toHaveBeenCalledWith('研究 ')
   })
 
   it('shows the five display states derived from the card fields', async () => {

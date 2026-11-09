@@ -273,7 +273,8 @@ export interface RetroRecord {
     max_hold_sessions: number | null
   }
   actual: {
-    first_buy: { price: string; session: string; quantity: number } | null
+    // quantity 是 NUMERIC 字符串，后端已去尾零（core.texts.quantity_value，M2）
+    first_buy: { price: string; session: string; quantity: string } | null
     last_sell: { price: string; session: string } | null
     quantity: string
   }
@@ -293,9 +294,10 @@ export interface WeeklySummary {
   followed: number
   deviated: number
   tag_counts: Record<string, number>
-  closed: { ticker: string; r_multiple: string | null; exit_reason: string | null; tags: string[] }[]
+  // 每行带 plan_id：同一周同一股票可以有两份已结束的计划（取消后重建），行键不能用 ticker（F3）
+  closed: { plan_id: number; ticker: string; r_multiple: string | null; exit_reason: string | null; tags: string[] }[]
   total_r: string
-  not_bought: { ticker: string; end_reason: string | null; hypothetical: Hypothetical | null }[]
+  not_bought: { plan_id: number; ticker: string; end_reason: string | null; hypothetical: Hypothetical | null }[]
   equity_start: string | null
   equity_end: string | null
   realized_pnl: string

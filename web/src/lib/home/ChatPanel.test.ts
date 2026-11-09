@@ -32,7 +32,7 @@ const DETAIL = {
   messages: [{ seq: 1, role: 'user', content: 'MU 的止损为什么是这个价位？', status: null, session: '2026-11-06', tool_refs: [], usage: null, created_at: '2026-11-06T22:01:00+00:00' }],
 }
 
-function mountWith(messagesResponse: () => Response) {
+function mountWith(messagesResponse: () => Response, props: Record<string, unknown> = {}) {
   const router = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url.startsWith('/api/chats?')) return json(CHATS)
@@ -41,7 +41,7 @@ function mountWith(messagesResponse: () => Response) {
     return json({})
   })
   vi.stubGlobal('fetch', router)
-  render(ChatPanel)
+  render(ChatPanel, props)
   return router
 }
 
@@ -122,6 +122,72 @@ describe('ChatPanel', () => {
     await send('再问一次')
     expect(await screen.findByText('模型调用失败')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByLabelText('提问')).toBeEnabled())
+  })
+
+  it('calls onWrote once after a done round that ran tools, never on error / cancel / text-only rounds', async () => {
+    // F4：一轮里发生过工具调用（可能写入 start_research / conclude / drop 等）且正常结束 →
+    // 回调一次让页面重取；出错轮、取消轮、纯文字轮都不回调
+    const onWrote = vi.fn()
+    mountWith(
+      () =>
+        sse([
+          frame('tool_start', { tool: 'start_research' }),
+          frame('tool_end', { tool: 'start_research', ref: 'call:2' }),
+          frame('text', { text: '已发起。' }),
+          frame('done', {}),
+        ]),
+      { onWrote },
+    )
+    await screen.findByText('MU 的止损为什么是这个价位？')
+    await send('研究 SNDK：跌了很多')
+    expect(await screen.findByText(/已发起。/)).toBeInTheDocument()
+    await waitFor(() => expect(onWrote).toHaveBeenCalledTimes(1))
+
+    cleanup() // 同一用例里多次挂载：先清场，screen 查询才不串
+    mountWith(() => sse([frame('text', { text: '答' }), frame('done', {})]), { onWrote })
+    await screen.findByText('MU 的止损为什么是这个价位？')
+    await send('纯文字的一轮')
+    await waitFor(() => expect(screen.getByLabelText('提问')).toBeEnabled())
+    expect(onWrote).toHaveBeenCalledTimes(1) // 纯文字轮不回调
+
+    cleanup()
+    mountWith(() => sse([frame('text', { text: '半截' }), frame('error', { text: '模型调用失败' })]), { onWrote })
+    await screen.findByText('MU 的止损为什么是这个价位？')
+    await send('会出错的一轮')
+    expect(await screen.findByText('模型调用失败')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('提问')).toBeEnabled())
+    expect(onWrote).toHaveBeenCalledTimes(1) // 出错轮不回调
+
+    cleanup()
+    let timer: ReturnType<typeof setInterval> | undefined
+    mountWith(
+      () => {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            timer = setInterval(() => {
+              try {
+                controller.enqueue(encoder.encode(frame('tool_start', { tool: 'record_trade' })))
+              } catch {
+                if (timer) clearInterval(timer)
+              }
+            }, 5)
+          },
+          cancel() {
+            if (timer) clearInterval(timer)
+          },
+        })
+        return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      },
+      { onWrote },
+    )
+    await screen.findByText('MU 的止损为什么是这个价位？')
+    await send('会取消的一轮')
+    await waitFor(() => expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument())
+    await fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(await screen.findByText('已取消')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByLabelText('提问')).toBeEnabled())
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(onWrote).toHaveBeenCalledTimes(1) // 取消轮不回调
   })
 
   it('prefill sets the draft and focuses the input; an unchanged seq never overwrites it', async () => {

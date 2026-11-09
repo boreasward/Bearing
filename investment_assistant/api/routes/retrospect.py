@@ -9,7 +9,9 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from investment_assistant.api import deps
+from investment_assistant.data.calendar import last_completed_trading_day
 from investment_assistant.facts.retrospect import retrospect_view
+from investment_assistant.toolsurface.env import make_env
 
 router = APIRouter(prefix="/api")
 
@@ -38,4 +40,17 @@ def get_retrospect(limit: int = 20, week: str | None = None):
             )
         )
 
-    return deps.ok_or_error(lambda: _read(deps.web_env()))
+    def _view():
+        try:
+            env = deps.web_env()
+        except ValueError as exc:
+            if str(exc).partition(":")[0].strip() != "no_run":
+                raise
+            # 真正的空库（连运行记录都没有）在这里是合法的空复盘视图（spec §10「还没有已结束
+            # 的计划」/B5/RF6）：交易日退到日历上最近一个已收盘的交易日；其他路由维持 no_run 404
+            env = make_env(
+                session=last_completed_trading_day(), mode="chat", agent_session="web", origin="web"
+            )
+        return _read(env)
+
+    return deps.ok_or_error(_view)

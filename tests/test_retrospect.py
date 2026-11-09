@@ -529,12 +529,13 @@ def test_weekly_summary_counts_and_lists():
     assert weekly["ended"] == 3 and weekly["followed"] == 2 and weekly["deviated"] == 1
     assert weekly["tag_counts"] == {"早卖": 1}  # not_filled 不算偏差标签
     assert weekly["closed"] == [
-        {"ticker": "AAPL", "r_multiple": D("1.25"), "exit_reason": "manual", "tags": ["早卖"]},
-        {"ticker": "MSFT", "r_multiple": D("-0.50"), "exit_reason": "initial_stop", "tags": []},
+        {"plan_id": 1, "ticker": "AAPL", "r_multiple": D("1.25"), "exit_reason": "manual", "tags": ["早卖"]},
+        {"plan_id": 1, "ticker": "MSFT", "r_multiple": D("-0.50"), "exit_reason": "initial_stop", "tags": []},
     ]
     assert weekly["total_r"] == D("0.75")
     assert weekly["not_bought"] == [
         {
+            "plan_id": 1,
             "ticker": "TSLA",
             "end_reason": "5 个交易日未买入",
             "hypothetical": {"status": "not_filled", "reason": "never_in_zone"},

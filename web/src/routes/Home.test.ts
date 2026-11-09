@@ -94,8 +94,10 @@ async function openAssistant() {
   await fireEvent.click(await screen.findByRole('button', { name: '打开助手' }))
 }
 
-function stubHomeApi(overrides: { latestBrief?: () => Response; today?: () => Response } = {}) {
-  const router = vi.fn(async (input: RequestInfo | URL) => {
+function stubHomeApi(
+  overrides: { latestBrief?: () => Response; today?: () => Response; research?: () => Response; messages?: () => Response } = {},
+) {
+  const router = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://local')
     const path = url.pathname
     if (path === '/api/today') return overrides.today ? overrides.today() : json(TODAY)
@@ -108,9 +110,11 @@ function stubHomeApi(overrides: { latestBrief?: () => Response; today?: () => Re
       return json(PLANS[group as keyof typeof PLANS] ?? { plans: [] })
     }
     if (path === '/api/research') {
+      if (overrides.research) return overrides.research()
       const group = url.searchParams.get('group') ?? 'watching'
       return json(RESEARCH[group as keyof typeof RESEARCH] ?? { research: [] })
     }
+    if (path === '/api/chats/c1/messages' && init?.method === 'POST') return overrides.messages ? overrides.messages() : json({})
     if (path === '/api/retrospect') return json(RETROSPECT)
     if (path === '/api/chats') return json(CHATS)
     if (path === '/api/chats/c1') return json(CHAT_DETAIL)
@@ -231,14 +235,51 @@ describe('Home', () => {
     expect(await screen.findByText('还没有已结束的计划')).toBeInTheDocument() // 空库不是错误（B5）
   })
 
-  it('发起研究 opens the assistant with the prefilled draft', async () => {
+  it('发起研究 opens the assistant with the prefilled draft 「研究 」（研究 + 空格，用户补股票与论点）', async () => {
     stubHomeApi()
     render(Home)
     expect(await screen.findByText('SNDK')).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: '发起研究' }))
     const panel = document.querySelector('aside[aria-label="助手"]')!
     expect(panel).not.toHaveAttribute('hidden')
-    await waitFor(() => expect((panel.querySelector('textarea') as HTMLTextAreaElement).value).toBe('研究 ：'))
+    await waitFor(() => expect((panel.querySelector('textarea') as HTMLTextAreaElement).value).toBe('研究 '))
+  })
+
+  it('refreshes the research cards after an assistant round that wrote, without manual refresh (F4)', async () => {
+    // F4：助手一轮里调过写入工具（start_research 等）且正常结束 → 页面重取，新研究卡片
+    // 自己出现；不用手动刷新
+    const encoder = new TextEncoder()
+    const frame = (kind: string, payload: Record<string, unknown>) =>
+      `event: ${kind}\ndata: ${JSON.stringify({ kind, text: '', tool: '', ref: '', usage: {}, ...payload })}\n\n`
+    let watching: unknown[] = [] // 写入前没有研究；这一轮写入后有了
+    const research = () => json({ research: watching })
+    const messages = () => {
+      watching = RESEARCH.watching.research // 这一轮写入 start_research：接口从现在起有这份研究
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(frame('tool_start', { tool: 'start_research' })))
+            controller.enqueue(encoder.encode(frame('tool_end', { tool: 'start_research', ref: 'call:2' })))
+            controller.enqueue(encoder.encode(frame('text', { text: '已发起研究 SNDK。' })))
+            controller.enqueue(encoder.encode(frame('done', {})))
+            controller.close()
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      )
+    }
+    stubHomeApi({ research, messages })
+    render(Home)
+    await screen.findByRole('heading', { name: '研究' })
+    await waitFor(() => expect(screen.getByText('暂无观察中的研究')).toBeInTheDocument())
+    expect(screen.queryByText('SNDK')).toBeNull() // 还没有卡片
+
+    await openAssistant()
+    await fireEvent.input(screen.getByLabelText('提问'), { target: { value: '研究 SNDK：跌了很多，我认为是入场的时间' } })
+    await fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByText(/已发起研究 SNDK。/)).toBeInTheDocument()
+
+    expect(await screen.findByText('SNDK')).toBeInTheDocument() // 卡片自己出现（F4）
   })
 
   it('links to the component gallery in dev', async () => {

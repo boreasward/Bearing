@@ -15,7 +15,9 @@
   // 对话（spec §12 / v3 设计 §15.2）：输入框在简报下方，回答流式出现（sse.ts 读 SSE），
   // 工具调用折叠可展开；可新开对话、回看历史；一轮可取消；简报运行中提问得到固定提示。
   // `prefill`（v3.2 研究块）：seq 变化时把草稿设为 text 并聚焦——研究在对话里发起（spec §4）。
-  let { version = 0, prefill }: { version?: number; prefill?: { text: string; seq: number } } = $props()
+  // `onWrote`（F4）：一轮正常结束且其中发生过工具调用（可能写入：start_research / conclude /
+  // drop / 记成交等）时回调一次——页面据此重取各块；出错与取消不回调，纯文字轮也不回调。
+  let { version = 0, prefill, onWrote }: { version?: number; prefill?: { text: string; seq: number }; onWrote?: () => void } = $props()
 
   interface ToolCall {
     id: number
@@ -155,7 +157,9 @@
         response,
         (frame) => {
           if (frame.event === 'done') {
+            const hadToolCalls = turn?.tools.some((tool) => tool.done) ?? false
             turn = turn && { ...turn, finished: 'done' }
+            if (hadToolCalls) onWrote?.() // 本轮可能写入过：让页面重取（F4）
             return
           }
           const payload = JSON.parse(frame.data) as RuntimeEventPayload

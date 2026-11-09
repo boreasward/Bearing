@@ -74,7 +74,7 @@ const VIEW: Retrospect = {
         max_hold_sessions: 20,
       },
       actual: {
-        first_buy: { price: '96.00', session: '2026-10-21', quantity: 120 },
+        first_buy: { price: '96.00', session: '2026-10-21', quantity: '120' }, // NUMERIC 字符串，后端去尾零（M2）
         last_sell: { price: '104.00', session: '2026-11-02' },
         quantity: '120',
       },
@@ -135,7 +135,7 @@ const VIEW: Retrospect = {
     tag_counts: { '未买入：价格进过入场区间': 1 } as Record<string, number>,
     closed: [],
     total_r: '0',
-    not_bought: [{ ticker: 'AAPL', end_reason: '5 个交易日未买入', hypothetical: null }],
+    not_bought: [{ plan_id: 11, ticker: 'AAPL', end_reason: '5 个交易日未买入', hypothetical: null }],
     equity_start: '34000.00',
     equity_end: '34500.00',
     realized_pnl: '520.00',
@@ -209,6 +209,36 @@ describe('RetrospectPanel', () => {
     expect(within(weekly).getByText(/新上榜 AAPL/)).toBeInTheDocument() // listing.new
   })
 
+  it('weekly lists render two same-ticker ended plans of one week as two rows (F3)', async () => {
+    // F3：同一周同一股票两份已结束的计划（取消后重建）——closed / not_bought 行键是 plan_id，
+    // 不能用 ticker（each_key_duplicate 会让整块崩溃），两行都要渲染出来
+    const view: Retrospect = {
+      ...VIEW,
+      weekly: {
+        ...VIEW.weekly,
+        ended: 3,
+        closed: [
+          { plan_id: 41, ticker: 'MU', r_multiple: '2.10', exit_reason: 'trailing_stop', tags: [] },
+          { plan_id: 45, ticker: 'MU', r_multiple: '-1.00', exit_reason: 'initial_stop', tags: [] },
+        ],
+        total_r: '1.10',
+        not_bought: [
+          { plan_id: 11, ticker: 'AAPL', end_reason: '5 个交易日未买入', hypothetical: null },
+          { plan_id: 14, ticker: 'AAPL', end_reason: '被替换', hypothetical: null },
+        ],
+      },
+    }
+    stubRetrospect(() => view)
+    render(RetrospectPanel)
+    expect(await screen.findByText('AAPL')).toBeInTheDocument()
+    const weekly = screen.getByRole('region', { name: /周汇总/ })
+    expect(within(weekly).getAllByText(/MU：R/).length).toBe(2) // 两份已平仓各一行
+    expect(within(weekly).getAllByText(/AAPL：/).length).toBe(2) // 两份未买各一行
+    expect(within(weekly).getByText(/MU：R 2\.10（移动止损）/)).toBeInTheDocument()
+    expect(within(weekly).getByText(/MU：R -1\.00（初始止损）/)).toBeInTheDocument()
+    expect(within(weekly).getByText(/AAPL：被替换/)).toBeInTheDocument()
+  })
+
   it('switching the week shows that week’s weekly details', async () => {
     // 审查 P1-4：两周的周报不同，切周后显示切过去的明细
     const prior: Retrospect = {
@@ -221,9 +251,9 @@ describe('RetrospectPanel', () => {
         followed: 1,
         deviated: 1,
         tag_counts: { '止损触及后晚卖 1 个交易日': 1 },
-        closed: [{ ticker: 'MU', r_multiple: '2.10', exit_reason: 'trailing_stop', tags: ['止损触及后晚卖 1 个交易日'] }],
+        closed: [{ plan_id: 41, ticker: 'MU', r_multiple: '2.10', exit_reason: 'trailing_stop', tags: ['止损触及后晚卖 1 个交易日'] }],
         total_r: '2.10',
-        not_bought: [{ ticker: 'WDC', end_reason: '被替换', hypothetical: null }],
+        not_bought: [{ plan_id: 42, ticker: 'WDC', end_reason: '被替换', hypothetical: null }],
         listing: { new: [], dropped: ['STX'], most_relisted: 'PGR' },
       },
     }

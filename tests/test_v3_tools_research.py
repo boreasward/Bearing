@@ -228,7 +228,8 @@ def test_conclude_watch_needs_condition_and_user_confirmation(v3_tx):
 
 
 def test_brief_mode_watch_with_new_condition_is_rejected(v3_tx):
-    """Review Focus 3 / B9：简报模式不能改条件（condition_needs_user）；保留原条件的 watch 可以。"""
+    """Review Focus 3 / B9 / F7：简报模式不能改条件（condition_needs_user）；保留原条件的
+    watch 也是 agent 结论——空引用 / 未知引用 invalid_refs，本会话真实调用编号通过。"""
     _seed(v3_tx)
     env = _env(v3_tx, agent="t-brief-watch")
     watching = research_repo.insert_research(
@@ -264,11 +265,23 @@ def test_brief_mode_watch_with_new_condition_is_rejected(v3_tx):
     )
     assert rejected["error"].startswith("condition_needs_user")
 
-    kept = call(env, "conclude_research", {"research_id": triggered["id"], "verdict": "watch", "reasons": "继续等"})[
-        "data"
-    ]
+    ref = call(env, "get_research", {})["ref"]  # F7：保留原条件的 watch 也是 agent 结论，要已知引用
+    empty_refs = call(env, "conclude_research", {"research_id": triggered["id"], "verdict": "watch", "reasons": "继续等"})
+    assert empty_refs["error"].startswith("invalid_refs")
+    bogus_refs = call(
+        env,
+        "conclude_research",
+        {"research_id": triggered["id"], "verdict": "watch", "reasons": "继续等", "refs": ["call:99"]},
+    )
+    assert bogus_refs["error"].startswith("invalid_refs")
+    kept = call(
+        env,
+        "conclude_research",
+        {"research_id": triggered["id"], "verdict": "watch", "reasons": "继续等", "refs": [ref]},
+    )["data"]
     row = kept["research"]
     assert row["condition_text"] == "收盘站上 105.00"  # 原条件保留
+    assert row["verdict"] == "watch" and row["refs"] == [ref]
     assert row["triggered_session"] is None and row["checked_through"] == SESSION.isoformat()
     assert row["valid_until"] == add_trading_days(SESSION, env.cfg.v3.research_sessions).isoformat()
 
@@ -285,19 +298,93 @@ def test_conclude_reject_ends_research(v3_tx):
     saved = call(
         env,
         "conclude_research",
-        {"research_id": created["id"], "verdict": "reject", "reasons": "行业转弱", "refs": [ref]},
+        {
+            "research_id": created["id"],
+            "verdict": "reject",
+            "reasons": "行业转弱",
+            "counter": "转弱早于站稳",
+            "refs": [ref],
+        },
     )["data"]
     row = saved["research"]
     assert (
         row["status"] == "rejected" and row["ended_session"] == SESSION.isoformat() and row["end_reason"] == "行业转弱"
     )
+    # F2：结论字段同时落在研究行上（spec §10/§11），页面卡片读到的是新结论，不是空白或旧值
+    assert row["verdict"] == "reject" and row["reasons"] == "行业转弱"
+    assert row["counter"] == "转弱早于站稳" and row["refs"] == [ref]
+    assert row["agent_session"] == "t-reject"
+    persisted = research_repo.research(v3_tx, created["id"])
+    assert persisted is not None and persisted["verdict"] == "reject" and persisted["reasons"] == "行业转弱"
     assert saved["event"]["event"] == "rejected" and saved["event"]["source"] == "agent"
+    assert saved["event"]["reason"] == "否决：行业转弱"  # 事件形状不变（F2 裁定：事件不动）
     again = call(
         env,
         "conclude_research",
         {"research_id": created["id"], "verdict": "ready", "reasons": "再给结论", "refs": [ref]},
     )
     assert again["error"].startswith("not_watching")
+
+
+def test_watch_then_reject_replaces_conclusion_on_the_row(v3_tx):
+    """F2：watch 之后再 reject，研究行上的结论跟着换——否决的原因 / 反证 / 引用留在行上，
+    页面不再出现「已否决」配着旧「值得盯」的错配。"""
+    _seed(v3_tx)
+    env = _env(v3_tx, mode="chat", agent="t-watch-reject")
+    watching = research_repo.insert_research(
+        v3_tx,
+        _research(
+            "SNDK",
+            condition={"kind": "close_above", "level": 105},
+            condition_text="收盘站上 105.00",
+            checked_through=SESSION,
+        ),
+    )
+    v3_tx.commit()
+    ref = call(env, "get_research", {})["ref"]
+    watched = call(
+        env,
+        "conclude_research",
+        {"research_id": watching["id"], "verdict": "watch", "reasons": "继续等", "refs": [ref]},
+    )["data"]
+    assert watched["research"]["verdict"] == "watch" and watched["research"]["condition_text"] == "收盘站上 105.00"
+
+    rejected = call(
+        env,
+        "conclude_research",
+        {
+            "research_id": watching["id"],
+            "verdict": "reject",
+            "reasons": "行业转弱",
+            "counter": "转弱早于站稳",
+            "refs": [ref],
+        },
+    )["data"]
+    row = rejected["research"]
+    assert row["status"] == "rejected" and row["verdict"] == "reject" and row["reasons"] == "行业转弱"
+    assert row["counter"] == "转弱早于站稳" and row["refs"] == [ref] and row["end_reason"] == "行业转弱"
+    persisted = research_repo.research(v3_tx, watching["id"])
+    assert persisted is not None and persisted["verdict"] == "reject"  # 落库，不只返回值
+
+
+def test_watch_with_new_condition_keeps_user_write_semantics(v3_tx):
+    """F7 对照：chat 里带新条件的 watch 是用户写入（先复述后确认），没有引用要求。"""
+    _seed(v3_tx)
+    env = _env(v3_tx, mode="chat", agent="t-watch-user")
+    created = _start(env, "SNDK", "u0")
+    saved = call(
+        env,
+        "conclude_research",
+        {
+            "research_id": created["id"],
+            "verdict": "watch",
+            "reasons": "等站稳",
+            "condition": {"kind": "close_above", "level": 105},
+            "request_id": "u1",
+            "confirmed": True,
+        },
+    )["data"]
+    assert saved["research"]["verdict"] == "watch" and saved["research"]["condition_text"] == "收盘站上 105.00"
 
 
 def test_ready_then_save_plan_links_research_and_skips_slots(v3_tx):

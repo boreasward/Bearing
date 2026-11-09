@@ -120,7 +120,7 @@
       <Icon name="x" />
     </Button>
   </div>
-  <ChatPanel version={chatsVersion} {prefill} />
+  <ChatPanel version={chatsVersion} {prefill} onWrote={reload} />
 </aside>
 
 <SettingsSheet bind:open={settingsOpen} onSaved={() => (chatsVersion += 1)} />
