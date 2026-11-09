@@ -122,7 +122,7 @@ def _respond(conn, env: ToolEnv, trade: dict, *, transition: bool) -> dict:
     built = build(trades, splits=splits)
     if transition and trade["side"] == "buy":
         if plan is None:
-            plan = _adopt(conn, env, ticker)
+            plan = _adopt(conn, env, ticker, opening_request_id=trade["request_id"])
         elif plan["status"] == "pending":
             sentences = deviations(plan=plan, price=trade["price"], quantity=trade["quantity"])
             started = trade["executed_at"].astimezone(NY).date()
@@ -222,8 +222,10 @@ def _sessions_since_stop_hit(plan: dict, session) -> int | None:
     return len(trading_days_between(plan["stop_hit_session"] + timedelta(days=1), session))
 
 
-def _adopt(conn, env: ToolEnv, ticker: str) -> dict:
-    """没有有效计划的买入：宿主补录一份已买入计划（spec §6.6），价位按最新收盘的规则价位。"""
+def _adopt(conn, env: ToolEnv, ticker: str, opening_request_id: str | None = None) -> dict:
+    """没有有效计划的买入：宿主补录一份已买入计划（spec §6.6），价位按最新收盘的规则价位。
+    ``opening_request_id`` 是触发补录的那笔买入：成交表只增不改（更正走作废），把它写进
+    adopted 事件的 refs，复盘按事件归属时这笔开仓成交才对得上号（F1）。"""
     bars = data_repo.read_bars(conn, ticker, env.session, cutoff_at=env.cutoff_at)
     atr = price_indicators.atr14(bars) if bars else None
     if bars and atr is not None and atr > 0:
@@ -273,7 +275,7 @@ def _adopt(conn, env: ToolEnv, ticker: str) -> dict:
             "before": {},
             "after": {"status": "open"},
             "source": "host",
-            "refs": [],
+            "refs": [opening_request_id] if opening_request_id else [],
         },
     )
     return plan

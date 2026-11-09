@@ -11,6 +11,7 @@ from investment_assistant.data import repo as data_repo
 from investment_assistant.facts import collect as facts_collect
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts.retrospect import records
 from investment_assistant.facts.view import today_actions
 from investment_assistant.toolsurface.dispatch import call
 from investment_assistant.toolsurface.env import make_env
@@ -258,6 +259,38 @@ def test_buy_without_plan_creates_adopted_plan(chat_env, v3_tx):
     assert bare["plan"]["stop"] is None and bare["stop_order"] is None
     assert _events(v3_tx, bare["plan"]["id"]) == ["adopted"]
     assert any(a["ticker"] == "ORCL" and a["text"] == "缺日线，未能给出止损" for a in _actions(chat_env, v3_tx))
+
+
+def test_adopted_plan_keeps_opening_buy_in_retrospect(chat_env, v3_tx):
+    """F1 后续（回归）：无计划买入自动补录——补录事件带上开仓成交的 request_id，
+    卖出平仓后复盘行保留开仓价与股数；修复前 adopted 事件 refs 为空、成交又没有
+    plan_id，开仓买入两头都对不上号，复盘行 first_buy 丢成 None。"""
+    bought = call(chat_env, "record_trade", {**TRADE, "confirmed": True})["data"]
+    assert bought["plan"]["kind"] == "adopted"
+    assert plan_repo.events(v3_tx, bought["plan"]["id"])[0]["refs"] == [TRADE["request_id"]]
+    sold = call(
+        chat_env,
+        "record_trade",
+        {
+            "ticker": "AAPL",
+            "side": "sell",
+            "quantity": 10,
+            "price": 105,
+            "executed_at": "2026-11-05T15:00:00+00:00",
+            "request_id": "s-adopt",
+            "confirmed": True,
+        },
+    )["data"]
+    assert sold["plan"]["status"] == "closed"
+    v3_tx.commit()
+
+    row = records(v3_tx, session=SESSION, cutoff_at=NOW, cfg=AssistantConfig())[0]
+
+    assert row["kind"] == "adopted" and row["status"] == "closed"
+    assert row["actual"]["first_buy"]["price"] == D(100)
+    assert row["actual"]["first_buy"]["quantity"] == D(10)  # 股数去尾零（M2）
+    assert row["actual"]["last_sell"]["price"] == D(105)
+    assert row["actual"]["quantity"] == D(10)
 
 
 def test_raise_stop_only_upward_and_below_close(chat_env, v3_tx):

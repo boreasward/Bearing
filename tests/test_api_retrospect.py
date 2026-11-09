@@ -178,6 +178,16 @@ def test_holiday_monday_week_normalizes_to_its_calendar_week(client, v3_tx):
     assert midweek["week_start"] == "2026-02-16" and midweek["week_end"] == "2026-02-20"
 
 
+def test_week_at_calendar_end_is_400_not_500(client, v3_tx):
+    """F8 残余：week=9999-12-27（格式合法、周一）归一要把周其推到 date.max 之外——
+    修复前 OverflowError 500，现在明确 400。"""
+    with core_tx._tx() as conn:
+        seed(conn)
+    resp = client.get("/api/retrospect?week=9999-12-27")
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_argument"
+
+
 def test_bad_week_400(client, v3_tx):
     assert client.get("/api/retrospect?week=not-a-date").status_code == 400
     assert client.get("/api/retrospect?week=2026-13-99").status_code == 400

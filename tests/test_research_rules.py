@@ -94,11 +94,21 @@ def test_condition_met_each_kind_hit_miss_and_short_history():
     assert research.condition_met(ma20, _bars(*([38.00] * 19))) is None
 
 
-def test_condition_met_empty_bars_is_none_for_all_kinds():
-    """B8 补齐的小矩阵：四种条件在空日线上都判不出（None），不只均线一种。"""
-    assert research.condition_met({"kind": "close_above", "level": D("38.00")}, []) is None
-    assert research.condition_met({"kind": "close_below", "level": D("30.00")}, []) is None
-    assert research.condition_met({"kind": "touch_below", "level": D("35.00")}, []) is None
+@pytest.mark.parametrize(
+    "condition",
+    [
+        {"kind": "close_above", "level": D("38.00")},
+        {"kind": "close_below", "level": D("30.00")},
+        {"kind": "touch_below", "level": D("35.00")},
+    ],
+)
+def test_condition_met_empty_bars_is_none_for_level_kinds(condition):
+    """B8 小矩阵：三种价位条件在空日线上都判不出（None），不只均线一种。"""
+    assert research.condition_met(condition, []) is None
+
+
+def test_condition_met_empty_bars_is_none_for_ma():
+    """B8 小矩阵对照：均线条件空日线同样 None（与历史不足同一个出口）。"""
     assert research.condition_met({"kind": "close_above_ma", "ma": 20}, []) is None
 
 

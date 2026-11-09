@@ -246,8 +246,8 @@ describe('Home', () => {
   })
 
   it('refreshes the research cards after an assistant round that wrote, without manual refresh (F4)', async () => {
-    // F4：助手一轮里调过写入工具（start_research 等）且正常结束 → 页面重取，新研究卡片
-    // 自己出现；不用手动刷新
+    // F4：助手一轮里调过写入工具（start_research 等）且正常结束 → 页面重取（/api/research
+    // 重新发过）新研究卡片自己出现；不用手动刷新
     const encoder = new TextEncoder()
     const frame = (kind: string, payload: Record<string, unknown>) =>
       `event: ${kind}\ndata: ${JSON.stringify({ kind, text: '', tool: '', ref: '', usage: {}, ...payload })}\n\n`
@@ -268,11 +268,14 @@ describe('Home', () => {
         { status: 200, headers: { 'content-type': 'text/event-stream' } },
       )
     }
-    stubHomeApi({ research, messages })
+    const router = stubHomeApi({ research, messages })
+    const researchFetches = () =>
+      router.mock.calls.filter(([u]) => new URL(String(u), 'http://local').pathname === '/api/research').length
     render(Home)
     await screen.findByRole('heading', { name: '研究' })
     await waitFor(() => expect(screen.getByText('暂无观察中的研究')).toBeInTheDocument())
     expect(screen.queryByText('SNDK')).toBeNull() // 还没有卡片
+    const fetchesBefore = researchFetches()
 
     await openAssistant()
     await fireEvent.input(screen.getByLabelText('提问'), { target: { value: '研究 SNDK：跌了很多，我认为是入场的时间' } })
@@ -280,6 +283,7 @@ describe('Home', () => {
     expect(await screen.findByText(/已发起研究 SNDK。/)).toBeInTheDocument()
 
     expect(await screen.findByText('SNDK')).toBeInTheDocument() // 卡片自己出现（F4）
+    await waitFor(() => expect(researchFetches()).toBeGreaterThan(fetchesBefore)) // 且 /api/research 重新发过
   })
 
   it('links to the component gallery in dev', async () => {

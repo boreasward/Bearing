@@ -23,8 +23,9 @@ RULE_KEYS = ("trigger_rules", "setup_tier", "industry")
 def _attributed_trades(trades: list[dict], plan: dict, events: list[dict]) -> list[dict]:
     """该计划自己的成交（spec §2 反目标「复盘每一行必须与该计划记录对得上」）：带
     ``plan_id`` 的直连那份计划；否则成交的 ``request_id`` 写进了哪份计划事件的
-    ``refs``（买入 / 加仓 / 卖出推进事件都带）就归那份；两样都对不上（比如晚于该计划
-    的手工补录）的不进任何复盘行——它们仍算进账户视图（``_asof_ledger``）。"""
+    ``refs``（买入 / 加仓 / 卖出推进、以及补录 adopted 的开仓）就归那份；两样都对
+    不上（比如晚于该计划的手工补录）的不进任何复盘行——它们仍算进账户视图
+    （``_asof_ledger``）。"""
     request_ids = {ref for event in events for ref in (event.get("refs") or [])}
     return [trade for trade in trades if trade.get("plan_id") == plan["id"] or trade.get("request_id") in request_ids]
 
@@ -129,12 +130,15 @@ def weekly_view(conn, *, week_end: date, cutoff_at: datetime, cfg: AssistantConf
 
 def week_end_of(day: date) -> date:
     """任一日期归一到它所在日历周（ISO 周）的最后一个交易日（F8）：周一休市的周（如
-    总统日）传周一不再空周崩 500；整周没有交易日（现行日历下不会发生）拒
-    ``invalid_argument``，接口映射 400，绝不 500。"""
+    总统日）传周一不再空周崩 500；周日本身越出 ``date.max``（如 9999-12-27 起）或整周
+    没有交易日时拒 ``invalid_argument``，接口映射 400，绝不 500。"""
     monday = day - timedelta(days=day.weekday())
-    days = trading_days_between(monday, monday + timedelta(days=6))
+    try:
+        days = trading_days_between(monday, monday + timedelta(days=6))
+    except OverflowError:  # 周日越出 date.max：这一周归不了
+        days = []
     if not days:
-        raise ValueError(f"invalid_argument: {day:%Y-%m-%d} 所在的日历周没有交易日")
+        raise ValueError(f"invalid_argument: {day:%Y-%m-%d} 所在的日历周无法归一（越出日历或没有交易日）")
     return days[-1]
 
 
