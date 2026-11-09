@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
+import { invalidateAll } from '$lib/stores'
 import ResearchCards from './ResearchCards.svelte'
 import type { ResearchCardData } from './types'
+
+beforeEach(() => { invalidateAll() })
 
 afterEach(() => {
   cleanup()
@@ -217,7 +220,7 @@ describe('ResearchCards', () => {
     await screen.findByText('SNDK')
     await fireEvent.click(screen.getByRole('button', { name: '已结束' }))
     const link = await screen.findByRole('link', { name: '已转计划 #41' })
-    expect(link).toHaveAttribute('href', '#plan-41')
+    expect(link).toHaveAttribute('href', '#plans/41')
     expect(screen.getByText(/20 个交易日条件未到/)).toBeInTheDocument()
   })
 
@@ -258,6 +261,16 @@ describe('ResearchCards', () => {
   it('shows the error reason when the fetch fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'no_run' }, 404)))
     render(ResearchCards)
-    expect(await screen.findByText(/no_run/)).toBeInTheDocument()
+    expect(await screen.findByText(/还没有运行记录/)).toBeInTheDocument()
   })
+})
+it('opens an ended research outside the first page and refreshes it after writes', async () => {
+  const { invalidateAll } = await import('$lib/stores')
+  let thesis = '原来的论点'
+  vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => String(url).includes('?') ? json({ research:[] }) : json({ ...card({ research_id:999, status:'dropped', thesis }), events:[{ event:'created', reason:'历史记录' }] })))
+  render(ResearchCards, { id:999 })
+  expect(await screen.findByText('原来的论点')).toBeInTheDocument()
+  expect(await screen.findByText(/历史记录/)).toBeInTheDocument()
+  thesis = '刷新后的论点'; invalidateAll()
+  expect(await screen.findByText('刷新后的论点')).toBeInTheDocument()
 })

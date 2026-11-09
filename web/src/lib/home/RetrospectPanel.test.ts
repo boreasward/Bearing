@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
+import { invalidateAll } from '$lib/stores'
 import RetrospectPanel from './RetrospectPanel.svelte'
 import type { Retrospect } from './types'
+
+beforeEach(() => { invalidateAll() })
 
 afterEach(() => {
   cleanup()
@@ -330,6 +333,20 @@ describe('RetrospectPanel', () => {
   it('shows the error reason when the fetch fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'no_run' }, 404)))
     render(RetrospectPanel)
-    expect(await screen.findByText(/no_run/)).toBeInTheDocument()
+    expect(await screen.findByText(/还没有运行记录/)).toBeInTheDocument()
   })
+})
+it('retains week and expanded limit when a write refreshes the shared resource', async () => {
+  const router = vi.fn(async (_input: RequestInfo | URL) => json({ ...VIEW, records:Array.from({ length:50 }, (_,i) => ({ ...VIEW.records[0], plan_id:1000+i, ticker:`KEEP${i}` })) }))
+  vi.stubGlobal('fetch', router)
+  render(RetrospectPanel)
+  await screen.findByText('KEEP0')
+  await fireEvent.click(screen.getByRole('button', { name:'显示更多' }))
+  await waitFor(() => expect(router.mock.calls.some(([url]) => String(url).includes('limit=50'))).toBe(true))
+  await fireEvent.click(await screen.findByLabelText('选择周'))
+  await fireEvent.pointerUp(await screen.findByRole('option', { name:'2026-10-19–2026-10-23' }))
+  await waitFor(() => expect(router.mock.calls.some(([url]) => String(url).includes('week=2026-10-23'))).toBe(true))
+  router.mockClear(); invalidateAll()
+  await waitFor(() => expect(router).toHaveBeenCalledWith('/api/retrospect?limit=50&week=2026-10-23', expect.anything()))
+  expect(router).toHaveBeenCalledTimes(1)
 })

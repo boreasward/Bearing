@@ -7,39 +7,49 @@
   import ResearchCard from './ResearchCard.svelte'
   import { errorText, type ResearchCardData } from './types'
 
-  // 研究（spec §10 研究块）：两组——观察中、已结束（缺省折叠）。每组一个接口调用；
-  // `version` 变化（页面里任何一处写入完成）时整块重取。「发起研究」把预填句交给页面
-  // 去打开助手面板（研究在对话里发起，spec §4「研究从哪里发起」）。
-  let { version = 0, onChanged, onStartResearch }: {
-    version?: number
-    onChanged?: () => void
-    onStartResearch?: (text: string) => void
-  } = $props()
-
-  type GroupState = { state: 'loading' | 'empty' | 'ready' | 'error'; cards: ResearchCardData[]; error: string }
-  const empty: GroupState = { state: 'loading', cards: [], error: '' }
-  let groups = $state<Record<'watching' | 'ended', GroupState>>({ watching: { ...empty }, ended: { ...empty } })
+  import { research, invalidateAll } from '$lib/stores'
+  import { actionCompleted } from '$lib/views/context'
+  let { id = null, onChanged, onStartResearch }: { id?: number | null; onChanged?: () => void; onStartResearch?: (text: string) => void } = $props()
+  const resources = { watching: research('watching'), ended: research('ended') }
+  const groups = $derived(Object.fromEntries(Object.entries(resources).map(([key, resource]) => {
+    const cards = resource.data?.research ?? []
+    return [key, { state: resource.state === 'ready' && !cards.length ? 'empty' as const : resource.state, cards, error: resource.error }]
+  })))
   let endedOpen = $state(false)
-
-  async function loadGroup(group: 'watching' | 'ended') {
-    groups[group] = { ...empty }
-    try {
-      const data = await get<{ research: ResearchCardData[] }>(`/api/research?group=${group}&limit=20`, { errorDetails: true })
-      groups[group] = { state: data.research.length ? 'ready' : 'empty', cards: data.research, error: '' }
-    } catch (cause) {
-      groups[group] = { state: 'error', cards: [], error: errorText(cause) }
-    }
-  }
-
+  let selected = $state<ResearchCardData | null>(null)
+  const selectedCard = $derived(selected?.research_id === id ? selected : null)
+  let selectedError = $state('')
   $effect(() => {
-    void version
-    loadGroup('watching')
-    loadGroup('ended')
+    const requested = id
+    const snapshots = Object.values(groups)
+    if (requested === null) { selected = null; selectedError = ''; return }
+    if (snapshots.some(group => group.state === 'loading')) return
+    const existing = snapshots.flatMap(group => group.cards).find(card => card.research_id === requested)
+    if (existing) {
+      selected = null
+      const card = existing
+      if (card.status !== 'watching') endedOpen = true
+      return
+    }
+    let alive = true
+    selectedError = ''
+    get<ResearchCardData>(`/api/research/${requested}`, { errorDetails: true }).then(card => {
+      if (!alive) return
+      selected = card
+      if (card.status !== 'watching') endedOpen = true
+    }).catch(cause => { if (alive) selectedError = errorText(cause) })
+    return () => { alive = false }
   })
+  function changed() { invalidateAll(); actionCompleted('已更新研究'); onChanged?.() }
 </script>
 
 <Section title="研究" level={2}>
   <div class="grid gap-4">
+    {#if id !== null && !Object.values(groups).some(group => group.cards.some(card => card.research_id === id))}
+      <DataBlock state={selectedError ? 'error' : selectedCard ? 'ready' : 'loading'} message={selectedError}>
+        {#if selectedCard}{#key selectedCard}<ResearchCard card={selectedCard} expanded onChanged={changed} />{/key}{/if}
+      </DataBlock>
+    {/if}
     <section class="grid gap-2" aria-label="观察中">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h3 class="text-base font-medium">观察中</h3>
@@ -53,7 +63,7 @@
         {#if groups.watching.cards.length}
           <div class="grid gap-3">
             {#each groups.watching.cards as card (card.research_id)}
-              <ResearchCard {card} {onChanged} />
+              <ResearchCard {card} expanded={card.research_id === id} onChanged={changed} />
             {/each}
           </div>
         {/if}
@@ -72,7 +82,7 @@
             {#if groups.ended.cards.length}
               <div class="grid gap-3">
                 {#each groups.ended.cards as card (card.research_id)}
-                  <ResearchCard {card} {onChanged} />
+                  <ResearchCard {card} expanded={card.research_id === id} onChanged={changed} />
                 {/each}
               </div>
             {/if}

@@ -68,3 +68,12 @@ describe('readEvents', () => {
     expect(onEvent).not.toHaveBeenCalled()
   })
 })
+it('aborts an idle reader without waiting for another chunk', async () => {
+  const cancel = vi.fn()
+  const response = new Response(new ReadableStream<Uint8Array>({ cancel }))
+  const controller = new AbortController()
+  const pending = readEvents(response, vi.fn(), controller.signal)
+  controller.abort()
+  await pending
+  expect(cancel).toHaveBeenCalledTimes(1)
+})

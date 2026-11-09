@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { invalidateAll } from '$lib/stores'
 import PlanCards from './PlanCards.svelte'
+
+beforeEach(() => { invalidateAll() })
 
 afterEach(() => {
   cleanup()
@@ -38,4 +41,16 @@ describe('PlanCards', () => {
     expect(bodies[0]).toMatchObject({ ticker: 'NVDA', side: 'buy', quantity: 100, price: 180, confirmed: false })
     expect(bodies[0]).not.toHaveProperty('plan_id')
   })
+})
+it('opens an ended plan outside the first page and refreshes it after writes', async () => {
+  const { plansData } = await import('$lib/views/workbench-fixtures')
+  const { invalidateAll } = await import('$lib/stores')
+  let stop = '96'
+  const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).includes('?') ? json({ plans:[] }) : json({ ...plansData.plans[0], plan_id:999, status:'expired', levels:{ ...plansData.plans[0].levels, stop }, events:[{ event:'created', reason:'历史记录' }] }))
+  vi.stubGlobal('fetch', fetcher)
+  render(PlanCards, { id:999 })
+  expect(await screen.findByText('$96.00')).toBeInTheDocument()
+  expect(await screen.findByText(/历史记录/)).toBeInTheDocument()
+  stop = '97'; invalidateAll()
+  expect(await screen.findByText('$97.00')).toBeInTheDocument()
 })

@@ -21,7 +21,7 @@
 </script>
 
 <Tooltip.Provider>
-  <main class="mx-auto min-h-screen w-full max-w-[1400px] bg-background p-4 text-foreground">
+  <main class="min-h-screen bg-background text-foreground">
     {#if loadGallery && route.kind === 'gallery'}
       {#await loadGallery() then gallery}
         <gallery.default />

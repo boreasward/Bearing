@@ -42,6 +42,11 @@
   import Icon from '$lib/ui/domain/Icon.svelte'
   import { ICONS } from '$lib/ui/domain/icons'
 
+  import { viewFor } from '$lib/views/registry'
+  import { fixture } from '$lib/views/test-fixtures'
+  const galleryTools = ['get_market', 'get_plans', 'compute_plan_levels', 'get_account', 'record_trade', 'get_agenda', 'get_research', 'get_price_bars', 'get_indicators', 'save_summary', 'get_news']
+  const shellStates = ['展开', '折叠', '窄屏']
+
   // ---- tokens ----
   const surfaces = [
     { name: 'background', cls: 'bg-background' }, { name: 'card', cls: 'bg-card' }, { name: 'popover', cls: 'bg-popover' },
@@ -570,3 +575,27 @@
     </div>
   </section>
 </div>
+
+<section class="grid gap-4" aria-labelledby="gallery-views">
+  <h2 id="gallery-views" class="font-serif text-lg font-semibold">视图卡片</h2>
+  <div class="grid gap-4 lg:grid-cols-2">
+    {#each galleryTools as tool, index}
+      {@const entry = viewFor(tool)}
+      <entry.component data={fixture(tool)} meta={{ tool, ref: `call:${index + 1}`, session: '2026-11-06', calledAt: null }} />
+    {/each}
+  </div>
+</section>
+<section class="grid gap-4" aria-labelledby="gallery-shell">
+  <h2 id="gallery-shell" class="font-serif text-lg font-semibold">壳</h2>
+  <div class="grid gap-3 md:grid-cols-3">
+    {#each shellStates as state, index}
+      <figure class="grid gap-2"><figcaption class="text-sm">{state}</figcaption>
+        <div class="flex h-40 overflow-hidden rounded-xl border bg-background" aria-label={`${state}壳缩略`}>
+          {#if index !== 2}<div class={index === 0 ? 'w-16 border-r p-2' : 'w-8 border-r p-2'}><Icon name="layout-grid" size={16} />{#if index === 0}<p class="mt-3 text-xs">今日<br />账户<br />行情</p>{/if}</div>{/if}
+          <div class="min-w-0 flex-1"><div class="flex items-center justify-between border-b p-2">{#if index === 2}<Icon name="menu" size={16} />{/if}<span class="font-serif text-xs">对话</span><Icon name="clock" size={16} /></div><div class="grid gap-3 p-3"><div class="ml-auto h-4 w-2/3 rounded bg-muted"></div><div class="h-6 rounded border"></div><div class="h-4 rounded border border-input"></div></div></div>
+          {#if index !== 2}<div class="w-12 border-l p-2 text-xs">仪表</div>{/if}
+        </div>
+      </figure>
+    {/each}
+  </div>
+</section>

@@ -14,6 +14,7 @@ function errorMessage(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause)
   const chinese = message.match(/^[a-z_]+:\s*(.*[\u3400-\u9fff].*)$/s)
   if (chinese) return chinese[1]
+  if (message === 'no_brief') return '今天还没有简报'
   if (message === 'no_run') return '还没有运行记录'
   if (message === 'unknown_call') return '找不到这次调用记录'
   if (message === 'HTTP 401') return '请先登录后重试'

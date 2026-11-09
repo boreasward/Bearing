@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
   import * as Select from '$lib/ui/select/index'
   import * as Table from '$lib/ui/table/index'
   import Section from '$lib/ui/domain/Section.svelte'
@@ -8,23 +7,24 @@
   import PlanLevels from '$lib/ui/domain/PlanLevels.svelte'
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
   import { Button } from '$lib/ui/button/index'
-  import { get } from '$lib/api'
+  import { bringToChat } from '$lib/views/context'
+  import { retrospectFor } from '$lib/stores'
   import { moneyText } from '$lib/format'
-  import { errorText, type Hypothetical, type Retrospect, type RetroRecord, type RuleKey, type RuleStatRow, type WeeklySummary } from './types'
+  import { type Hypothetical, type RetroRecord, type RuleKey, type RuleStatRow, type WeeklySummary } from './types'
 
   // 复盘（spec §10 复盘块）：顶部周汇总（Select 切周，本周与之前 8 周）、中间执行复盘表
   // （每份已结束计划一行）、底部规则检验两张表（真实成交 / 假设结果）× 三个分组键。
   // 一次 GET /api/retrospect 全部拿到；空库是「还没有已结束的计划」，不是错误。
-  let { version = 0 }: { version?: number } = $props()
-
-  let view = $state<Retrospect | null>(null)
-  let blockState = $state<'loading' | 'ready' | 'empty' | 'error'>('loading')
-  let message = $state('')
   let loadedWeek = $state<string | null>(null) // 最近一次取数的周（null = 本周）
   let selectedWeek = $state('')
   let weeks = $state<{ monday: string; friday: string }[]>([])
   // 「可翻」（spec §10）：记录的 limit 阶梯 20 → 50 → 100（契约上限 100，不扩接口）
   let recordLimit = $state(20)
+
+  const resource = $derived(retrospectFor(loadedWeek, recordLimit))
+  const view = $derived(resource.data)
+  const blockState = $derived(resource.state === 'ready' && view?.empty ? 'empty' : resource.state)
+  const message = $derived(resource.error || (view?.empty ? '还没有已结束的计划' : ''))
 
   const RECORD_LIMIT_STEPS = [20, 50, 100]
   const RECORD_LIMIT_MAX = 100
@@ -35,47 +35,26 @@
     return d.toISOString().slice(0, 10)
   }
 
-  async function load(week: string | null) {
-    loadedWeek = week
-    blockState = 'loading'
-    message = ''
-    try {
-      const data = await get<Retrospect>(`/api/retrospect?limit=${recordLimit}${week ? `&week=${week}` : ''}`, { errorDetails: true })
-      view = data
-      blockState = data.empty ? 'empty' : 'ready'
-      message = data.empty ? '还没有已结束的计划' : ''
-      if (!week) {
-        // 周选项：本周与之前 8 周，值用各周的周五（接口按任意落在该周的日期取周）
-        selectedWeek = shiftDay(data.weekly.week_start, 4)
-        weeks = Array.from({ length: 9 }, (_, i) => {
-          const monday = shiftDay(data.weekly.week_start, -7 * i)
-          return { monday, friday: shiftDay(monday, 4) }
-        })
-      }
-    } catch (cause) {
-      view = null
-      blockState = 'error'
-      message = errorText(cause)
-    }
-  }
-
   $effect(() => {
-    void version
-    untrack(() => load(loadedWeek))
+    if (loadedWeek || !view) return
+    selectedWeek = shiftDay(view.weekly.week_start, 4)
+    weeks = Array.from({ length: 9 }, (_, i) => {
+      const monday = shiftDay(view!.weekly.week_start, -7 * i)
+      return { monday, friday: shiftDay(monday, 4) }
+    })
   })
 
   function switchWeek(value: string) {
     // bits-ui 先写 bind:value 再调 onValueChange，与 selectedWeek 比恒相等（BriefPanel 同坑）：
     // 与最近一次实际取数的周比
     if (!value || value === loadedWeek) return
-    load(value)
+    loadedWeek = value
   }
 
   function showMore() {
     const next = RECORD_LIMIT_STEPS.find((step) => step > recordLimit)
     if (next == null) return
     recordLimit = next
-    load(loadedWeek)
   }
 
   // ---- 执行复盘行 ----
@@ -195,7 +174,7 @@
             <Table.Body>
               {#each view.records as record (record.plan_id)}
                 <Table.Row>
-                  <Table.Cell>{record.ticker}</Table.Cell>
+                  <Table.Cell>{record.ticker} <Button size="sm" variant="ghost" onclick={() => bringToChat({ kind:'plan', ticker:record.ticker, id:record.plan_id })}>带进对话</Button></Table.Cell>
                   <Table.Cell class="whitespace-nowrap text-xs">{record.session}{record.ended_session ? `–${record.ended_session}` : ''}</Table.Cell>
                   <Table.Cell>
                     <PlanLevels

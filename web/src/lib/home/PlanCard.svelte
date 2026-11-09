@@ -16,9 +16,11 @@
   import TradeForm from './TradeForm.svelte'
   import { errorText, type PlanCardData, type PlanDetail, type WritePreview } from './types'
 
+  import { bringToChat } from '$lib/views/context'
+
   // 一张计划卡片（spec §12 计划与持仓块）：股票、状态、价位、股数、下一个交易日的操作；
   // 持仓另有浮动盈亏、已持有天数、止损单状态；已结束显示 §8.4 的平仓结果；可展开变化记录。
-  let { card, onChanged }: { card: PlanCardData; onChanged?: () => void } = $props()
+  let { card, expanded = false, onChanged }: { card: PlanCardData; expanded?: boolean; onChanged?: () => void } = $props()
 
   const KIND_TEXT: Record<string, string> = { planned: '计划', adopted: '补录' }
   const EXIT_TEXT: Record<string, string> = {
@@ -40,6 +42,7 @@
 
   // ---- 变化记录：首次展开时取 GET /api/plans/{id} ----
   let timelineOpen = $state(false)
+  $effect(() => { timelineOpen = expanded })
   let detail = $state<PlanDetail | null>(null)
   let detailError = $state('')
 
@@ -205,6 +208,7 @@
     {/if}
   </Card.Content>
   <Card.Footer class="grid gap-2">
+    <div><Button size="sm" variant="ghost" onclick={() => bringToChat({ kind: 'plan', ticker: card.ticker, id: card.plan_id })}>带进对话</Button></div>
     <div class="flex flex-wrap gap-2">
       {#if card.status === 'pending' || card.status === 'open'}
         <Button size="sm" variant="outline" onclick={() => (tradeOpen = true)}>记成交</Button>

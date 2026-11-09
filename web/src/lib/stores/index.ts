@@ -1,3 +1,4 @@
+import type { Brief, BriefListItem } from '$lib/home/types'
 import { createResource, type Resource } from './resource.svelte'
 import type { TodayData, MarketData, RunsData, LedgerData, AccountData, PlansData, ResearchData, RetrospectData, ChatsData } from './types'
 
@@ -13,6 +14,20 @@ export function ledgerForLimit(limit: number): Resource<LedgerData> {
 }
 export const account = createResource<AccountData>('/api/account')
 export const retrospect = createResource<RetrospectData>('/api/retrospect')
+const retrospectSelections = new Map<string, Resource<RetrospectData>>([['20', retrospect]])
+export function retrospectFor(week: string | null = null, limit = 20): Resource<RetrospectData> {
+  if (![20, 50, 100].includes(limit)) throw new RangeError('复盘条数须为 20、50 或 100')
+  if (week && !/^\d{4}-\d{2}-\d{2}$/.test(week)) throw new RangeError('请选择有效日期')
+  const key = `${limit}${week ? `&week=${week}` : ''}`
+  if (!retrospectSelections.has(key)) retrospectSelections.set(key, createResource<RetrospectData>(`/api/retrospect?limit=${key}`))
+  return retrospectSelections.get(key)!
+}
+export const briefs = createResource<{ briefs: BriefListItem[] }>('/api/briefs?limit=30')
+const briefSessions = new Map<string, Resource<Brief>>()
+export function briefFor(session = 'latest'): Resource<Brief> {
+  if (!briefSessions.has(session)) briefSessions.set(session, createResource<Brief>(`/api/briefs/${encodeURIComponent(session)}`))
+  return briefSessions.get(session)!
+}
 export const chats = createResource<ChatsData>('/api/chats')
 
 const planGroups = new Map<string, Resource<PlansData>>()
@@ -26,7 +41,7 @@ export function research(group: 'watching' | 'ended'): Resource<ResearchData> {
   return researchGroups.get(group)!
 }
 export function invalidateAll(): void {
-  for (const resource of [today, market, runs, ...ledgerLimits.values(), account, retrospect, chats, ...planGroups.values(), ...researchGroups.values()]) {
+  for (const resource of [today, market, runs, ...ledgerLimits.values(), account, ...retrospectSelections.values(), briefs, ...briefSessions.values(), chats, ...planGroups.values(), ...researchGroups.values()]) {
     resource.invalidate()
   }
 }

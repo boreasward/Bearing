@@ -219,24 +219,22 @@
 
 v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域层原语，取数走 `lib/api.ts` 的 `get/post/put`；接口字段见 `types.ts`（照抄 Task 5 的接口契约表，金额与价位是字符串，展示用 `MetricValue` 的 `raw`，不做浮点运算）。所有写入接口先 `confirmed=false` 拿 `preview`，经 `ConfirmDialog` 复述确认后才 `confirmed=true`（A18）。
 
-布局（`Home.svelte`）：宽屏两栏各自纵向堆叠（左栏今日操作、简报、复盘；右栏账户条、计划与持仓、研究），两栏不共用行高；窄屏两栏外壳用 `contents` 摊平成单栏，顺序靠 `order-*`（今日操作 → 账户条 → 计划与持仓 → 研究 → 简报 → 复盘，v3.2 spec §10）。对话不在栏里：右下角悬浮的「助手」按钮（`Icon` `message-square`）打开右侧**非模态**面板（`<aside aria-label="助手">`，窄屏全宽、`sm` 起 28rem），关闭只设 `hidden` 不卸载，流式中的一轮不会因关面板而断；`Esc` 关闭并把焦点还给打开前的元素。
+布局（`Home.svelte`）：v3.2.1 工作台根组件组装三栏 `Shell`；左栏七个完整视图与对话列表，中间按 hash 切换，右侧三种侧览。对话常驻，仅隐藏；切视图与切对话不取消已开始的 SSE，一轮结束后仍在原对话展示。对话正文与输入限宽 760px，正文 13px / 1.55，助手保持纯文本；简报仍用 Markdown。`⌘/Ctrl+K` 在任意视图切回最近对话并聚焦输入。
 
 | 组件 | props | 职责 |
 | --- | --- | --- |
 | `types.ts` | — | 接口契约的类型与 `errorText`（把 `{"error": "code: 说明"}` 的中文部分取出来） |
 | `markdown.ts` + `Markdown.svelte` | `{ source }` | 简报 Markdown 解析成块结构（标题 / 段落 / `-` 列表 / `|` 表格 / `**粗体**`，不认识的行按段落），用 `{#each}` 渲染，表格用 `ui/table`；不输出 HTML 字符串、不用 `{@html}` |
-| `sse.ts` | `readEvents(response, onEvent, signal?)` | 把 SSE 字节流（任意切片边界）还原成 `event:`/`data:` 帧；`AbortController` 中止后不再回调 |
-| `TodayActions.svelte` | `{ actions, onChanged? }` | 今日操作：空列表渲染一张小卡片「今天没有需要操作的事项」（用户 2026-11-07，取代 spec §12「整块不出现」）；`stop_hit_unresolved` 排第一；「确认已挂单」两步确认；卖出类动作带「记成交」 |
-| `BriefPanel.svelte` | — | 今日简报：最终稿 / 草稿（「二次确认未完成」Alert）/ 无简报的原因；`Select` 切历史（`GET /api/briefs`） |
-| `PlanCard.svelte` | `{ card, onChanged? }` | 一份计划卡：状态、价位（`PlanLevels`）、下一个交易日的操作（`plan_action`）；持仓另有浮动盈亏、已持有天数、止损单状态；已结束显示平仓结果；展开拉 `GET /api/plans/{id}` 看变化记录；pending 显示「最新收盘高于入场区间」、可取消计划；open 可调高止损；根节点带 `id="plan-{plan_id}"`（研究卡「已转计划」锚点指向它） |
-| `PlanCards.svelte` | `{ version?, onChanged? }` | 三组：持仓、待入场、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态显示原因；「持仓」组标题旁「补录持仓」打开不带 `plan_id` 的 `TradeForm`（宿主补录计划，spec §6.6）；`version` 变化重取 |
-| `AccountStrip.svelte` | `{ account?, onChanged? }` | 账户条：现金 / 总资产 / 浮动盈亏 / 已实现盈亏；现金为负显示 `notes`；「记出入金」「对账」入口 |
+| `TodayActions.svelte` | `{ actions, onChanged? }` | 今日操作：空列表渲染一张小卡片「今天没有需要操作的事项」（用户 2026-11-07，取代 spec §12「整块不出现」）；`stop_hit_unresolved` 排第一；每行可带进对话；「确认已挂单」两步确认；卖出类动作带「记成交」 |
+| `BriefPanel.svelte` | `{ session? }` | 共享 briefs / briefFor 缓存，session 指定初始日期；手动切换与刷新保留当前选择。今日简报：最终稿 / 草稿（「二次确认未完成」Alert）/ 无简报的原因；`Select` 切历史（`GET /api/briefs`） |
+| `PlanCard.svelte` | `{ card, expanded?, onChanged? }` | 一份计划卡：状态、价位（`PlanLevels`）、下一个交易日的操作（`plan_action`）；持仓另有浮动盈亏、已持有天数、止损单状态；已结束显示平仓结果；展开拉 `GET /api/plans/{id}` 看变化记录；pending 显示「最新收盘高于入场区间」、可取消计划；open 可调高止损；根节点带 `id="plan-{plan_id}"`；研究卡链接使用 `#plans/{id}`；expanded 控制初始展开，仍可手动折叠；「带进对话」走 ContextChip 事件 |
+| `PlanCards.svelte` | `{ id?, onChanged? }` | 三组：持仓、待入场、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态显示原因；「持仓」组标题旁「补录持仓」打开不带 `plan_id` 的 `TradeForm`（宿主补录计划，spec §6.6）；订阅 plans(group)，写入后 invalidateAll；id 自动展开变化记录（含已结束及默认页之外的对象） |
+| `AccountStrip.svelte` | `{ account?, onChanged? }` | 默认读 today store（可显式传 account 快照）；写入后 invalidateAll 并追加本地操作说明。账户条：现金 / 总资产 / 浮动盈亏 / 已实现盈亏；现金为负显示 `notes`；「记出入金」「对账」入口 |
 | `TradeForm.svelte` / `CashFlowForm.svelte` / `ReconcileForm.svelte` | `{ bind:open, onDone? }`（TradeForm 另有 `ticker`/`planId`/`shares` 预填） | 三个写入表单（Dialog）：预填、失败保留草稿与 `request_id`、表单内 `Alert` 显示原因；提交先拿 `preview` 再 `ConfirmDialog` 确认写入。v3.2 spec §7：TradeForm 的「时间」拆成「日期（美东）」「时间（美东）」两个原生控件（`type="date"` / `type="time" step="60"`，默认 `nowInNewYork()`，提交拼 `newYorkIso` 带美东偏移）；出入金与对账的日期也是 `type="date"` 控件，提交口径不变 |
-| `ChatPanel.svelte` | `{ version?, prefill? }`（`prefill: { text, seq }`） | 对话：历史 `Select` +「新开对话」；`sse.ts` 流式渲染（文字逐段、工具调用 `Collapsible` 可展开）；取消发 `…/cancel` 并显示「已取消」；409 `brief_running` 显示「正在生成简报，请稍后再问」；`error` 帧显示原因并恢复输入；`prefill.seq` 变化时把输入框草稿设为 `text` 并聚焦（v3.2 研究块的「发起研究」预填，同一 seq 重渲染不覆盖用户草稿） |
 | `SettingsSheet.svelte` | `{ bind:open, onSaved? }` | 设置（`Sheet`）：运行时 / 提供方 / 模型，选项来自 `GET /api/settings/options`，每项可在 `Select` 与自由 `Input` 间切换；保存 `PUT /api/settings`，错误用 toast 显示原因 |
-| `ResearchCards.svelte` | `{ version?, onChanged?, onStartResearch? }` | 研究两组（v3.2 spec §10）：观察中、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态；观察中组标题旁「发起研究」按钮调 `onStartResearch('研究 ')`（研究 + 空格，用户补股票与论点；页面打开助手并预填，研究在对话里发起，spec §10「股票留空时预填『研究 』」）；`version` 变化重取 |
-| `ResearchCard.svelte` | `{ card, onChanged? }` | 一张研究卡：股票、`StatusPill`（`research` 域）、第几天、论点、条件与最新收盘（`MetricValue` 的 `currency`）、显示文案（优先级：真触发 `triggered_session` → 无条件 → 缺日线 `missing_bar`（stale 日线上的 condition_met 盖不过它）→ 当日条件已到 → 均线日线不足 → 观察中，从卡片字段推导）、agent 结论一句；三种价位条件的文案由 `condition.kind` + `moneyText(condition.level)` 拼（`收盘站上 $105.00` 等，spec §7），`close_above_ma` 沿用服务端文案；「已转计划 #id」是锚点链接（`#plan-{plan_id}`，指向 `PlanCard` 根节点的 id）；展开拉 `GET /api/research/{id}` 看时间线；观察中的「放弃研究」两步确认（`POST /api/research/{id}/drop`，`confirmed=false` 先拿 preview） |
-| `RetrospectPanel.svelte` | `{ version? }` | 复盘（v3.2 spec §10）：顶部周汇总（`Select` 切周，本周与之前 8 周，值用各周周五；已结束 / 照做 / 有偏差、R 合计、已实现盈亏与周初周末总资产带 `$`）、中间执行复盘 `ui/table`（每份已结束计划一行：股票、起止、计划说的 `PlanLevels`、实际做的、R、偏差标签 `StatusPill`（`retro_tag` 域，带 N 的句子经 `text` 传入）、假设结果一句）、底部规则检验两张表（真实成交 / 假设结果）× 三个分组键，样本不足的组只显示样本数与「样本不足」，表头上方一行接口 `note`；执行复盘记录「可翻」：`limit` 阶梯 20 → 50 → 100（契约上限 100，不扩接口，「显示更多」按钮）。周汇总除数字与金额外还显示接口携带的 §5.4 明细：偏差各出现几次、已平仓各份一行（R 与离场原因、标签）、未买各份一行（结束原因与假设结果）、本周名单（新上榜 / 掉出 / 再次上榜最多）。`empty` 时整块「还没有已结束的计划」（B5）；`version` 变化重取 |
+| `ResearchCards.svelte` | `{ id?, onChanged?, onStartResearch? }` | 研究两组（v3.2 spec §10）：观察中、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态；观察中组标题旁「发起研究」按钮调 `onStartResearch('研究 ')`（研究 + 空格，用户补股票与论点；页面打开助手并预填，研究在对话里发起，spec §10「股票留空时预填『研究 』」）；订阅 research(group)，写入后 invalidateAll；id 打开相应对象（含已结束及默认页之外的对象） |
+| `ResearchCard.svelte` | `{ card, expanded?, onChanged? }` | 一张研究卡：股票、`StatusPill`（`research` 域）、第几天、论点、条件与最新收盘（`MetricValue` 的 `currency`）、显示文案（优先级：真触发 `triggered_session` → 无条件 → 缺日线 `missing_bar`（stale 日线上的 condition_met 盖不过它）→ 当日条件已到 → 均线日线不足 → 观察中，从卡片字段推导）、agent 结论一句；三种价位条件的文案由 `condition.kind` + `moneyText(condition.level)` 拼（`收盘站上 $105.00` 等，spec §7），`close_above_ma` 沿用服务端文案；「已转计划 #id」是锚点链接（`#plans/{plan_id}`，打开计划完整视图）；展开拉 `GET /api/research/{id}` 看时间线；观察中的「放弃研究」两步确认（`POST /api/research/{id}/drop`，`confirmed=false` 先拿 preview）；expanded 控制初始展开，仍可手动折叠；「带进对话」走 ContextChip 事件 |
+| `RetrospectPanel.svelte` | `无` | 复盘（v3.2 spec §10）：顶部周汇总（`Select` 切周，本周与之前 8 周，值用各周周五；已结束 / 照做 / 有偏差、R 合计、已实现盈亏与周初周末总资产带 `$`）、中间执行复盘 `ui/table`（每份已结束计划一行：股票、起止、计划说的 `PlanLevels`、实际做的、R、偏差标签 `StatusPill`（`retro_tag` 域，带 N 的句子经 `text` 传入）、假设结果一句）、底部规则检验两张表（真实成交 / 假设结果）× 三个分组键，样本不足的组只显示样本数与「样本不足」，表头上方一行接口 `note`；执行复盘记录「可翻」：`limit` 阶梯 20 → 50 → 100（契约上限 100，不扩接口，「显示更多」按钮）。周汇总除数字与金额外还显示接口携带的 §5.4 明细：偏差各出现几次、已平仓各份一行（R 与离场原因、标签）、未买各份一行（结束原因与假设结果）、本周名单（新上榜 / 掉出 / 再次上榜最多）。`empty` 时整块「还没有已结束的计划」（B5）；共享 retrospectFor(week,limit)，全站写入后重取且保留当前周与条数 |
 
 ### 6.2.2 工作台壳与取数（`web/src/lib/shell/`、`stores/`）
 
@@ -252,7 +250,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `layout.svelte.ts` | `layout`、`toggleNav()`、`setSegment(segment)`、`toggleDrawer(pane)` | 存 `ws.nav.collapsed`（`1` / 缺省展开）、`ws.nav.segment`（`quick` / `chats`）、`ws.drawer`（`dash` / `market` / `jobs` / `closed`）；缺省 quick、dash，存储禁用仍可用 |
 | `router.ts` | `parseHash(hash): Route`、`hrefOf(route)` | chat / view / gallery；七视图，plans / research 可带数字 id；未知回空 chat；`#_ui` 保持开发画廊 |
 | `resource.svelte.ts` | `createResource<T>(path: string \| (() => string \| null), opts?)` → `{ data, state, error, load(), invalidate() }` | 响应式读取自动订阅与首次加载；写入后失效保留旧数据直至新结果抵达；最后消费者卸载后停止自动重取；重新挂载取脏缓存；空路径 empty，旧请求不覆盖新路径 / 新请求 |
-| `stores/index.ts` | `today`、`market`、`runs`、`ledger`、`ledgerForLimit(limit)`、`account`、`plans(group)`、`research(group)`、`retrospect`、`chats`、`invalidateAll()` | 一接口一共享缓存，分组缓存按组复用；写入完成后统一失效 |
+| `stores/index.ts` | `today`、`market`、`runs`、`ledger`、`ledgerForLimit(limit)`、`account`、`plans(group)`、`research(group)`、`retrospect`、`retrospectFor(week,limit)`、`briefs`、`briefFor(session?)`、`chats`、`invalidateAll()` | 一接口一共享缓存，分组缓存按组复用；写入完成后统一失效 |
 | `stores/types.ts` | Task 3 页面契约类型 | 新类型以真实 JSON 为准：金额与数量字符串，Today 账户 cash / equity 可空；旧 home 类型的数字 quantity 在接入旧组件时须显式转换 |
 
 消费者在 Svelte 模板中直接读 `today.state` / `today.data` / `today.error`（或在 effect 中读）即订阅；组件外按需 `await today.load()`，普通非响应式读取不触发网络。动态路径函数可以读响应式状态；返回 null 时清空数据并转 empty。`invalidateAll()` 只立即刷新仍有消费者的资源，其余标脏等下次挂载。`errorDetails` 缺省开启以读取接口错误，错误经中文映射后展示；取数只经 `lib/api.ts`，不新加依赖。
@@ -283,6 +281,22 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 `ledgerForLimit(limit)` 校验 1–100 的整数并按 limit 共享缓存；20 复用 `ledger`，其余请求 `/api/ledger?limit=N`。`invalidateAll()` 同时刷新仍挂载的各条数资源；账户显示更多后保持当前条数，任一表达到当前条数时才能继续请求，最高 100。
 
 动作只有 confirmed=true 成功后才调用一次 `invalidateAll()` 与 `actionCompleted`。复用表单自己的 toast，不重复提示；表单的 onDone 不带提交数据，完成文案只写「已记录成交」「已记录出入金」「已记录对账」等真实概述，不把可能已被编辑的预填值冒充成交结果。Task 6 的 Home 在挂载时监听两个事件、卸载时移除监听：bring 交给对话芯片输入，action 追加到活动 / 最近对话的当前回合，仅本页保留，不持久化。抽屉直接调用 onBring，避免同一动作再发一次全局事件。
+
+### 6.2.4 对话与完整视图组装（`web/src/lib/chat/`）
+
+| 组件 / 模块 | API | 职责 |
+| --- | --- | --- |
+| `ChatPanel` | `{ chatId: string \| null, prefillChips?, prefillText?: {text,seq}, onWrote() }`；`focusInput()` / `appendFeedback(text)` | 按对话保存消息与回合，保持原 SSE 的归属；start 帧保存 agent_session，tool_end 按出现顺序认领同名占位；写工具完成的正常轮 invalidateAll / onWrote 一次，纯文字轮刷新对话标题；取消与只读、忙碌提示保持原文；取消请求未返回前禁止下一轮，防止旧取消误伤新轮 |
+| `Turn` / `types.ts` | `{ turn: Turn, chatId, history? }`；`Turn` / `Block` | 直播按文字与工具的事件顺序；历史卡在文字之前；文字保持纯文本与换行；call:N 经 RefLink 滚动到本回合的卡片并暂时高亮 |
+| `ToolCard` | `{ block, chatId, agentSession, lazy? }` | loading 占位用 TOOL_LABELS（get_market 为「市场环境」），结果交 registry；历史进入视口才请求，观察器卸载断开；失败可重试且不妨碍文字；空 ref 显示「调用已完成，结果不可追溯」，旧 null 结果显示「这次调用早于 v3.2.1，没有保留结果」，截断结果明确降级；中断时只把尚在调用中的块转 error，取消写「已停止等待，调用结果未确认」、错误或意外断流写「调用未完成」，已完成块保留；无调用编号不提供重试 |
+| `ContextChips` / `context.ts` | `{ chips, onRemove? }`；`formatPrefix` / `parsePrefix` | ticker / plan / research 三种芯片；固定空格分隔前缀，只有开头连续的合法格式会还原；发送清空，可移除，普通方括号保留原文 |
+| `QuickPrompts` / `ChatEmpty` | `{ onSend, onResearch, disabled? }` / `{ onNewChat }` | 五句固定快捷入口，发起研究只预填「研究 」；无对话时说明与新建入口，快捷提问可创建对话后发送 |
+| `sse.ts` | `readEvents(response,onEvent,signal?)` | 从 home 迁入；任意字节分片解析，取消时主动结束等待中的 reader，无需等下一帧 |
+| `TodayView` / `PlansView` / `ResearchView` / `RetrospectView` | `{ session? }` / `{ id? }` / `{ id?, onStartResearch }` / 无 | PageHeader + 原有业务组件的薄包装；今日读取 `#today?session=`；计划 / 研究详情支持已结束组及列表之外的 id |
+
+`retrospectFor(null,20)` 复用 `retrospect`；其余缓存按 week 与 limit（20 / 50 / 100）区分。`briefFor()` 与 `briefFor('latest')` 相同，历史按 session 复用；`briefs` 是简报列表。全部纳入 invalidateAll，刷新不重置 UI 日期与分页。页面操作仍先 preview 后 confirmed，复用表单自己的 toast；本地完成说明经 actionCompleted 追加到当前 / 最近对话，不入库。
+
+开发画廊增加「视图卡片」（十一种用途的共用工具 fixtures）与「壳」（展开 / 折叠 / 窄屏三态缩略）；画廊仍只在开发包启用。
 
 ### 6.3 已知取舍
 

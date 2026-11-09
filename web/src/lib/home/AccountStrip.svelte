@@ -6,11 +6,15 @@
   import MetricValue from '$lib/ui/domain/MetricValue.svelte'
   import CashFlowForm from './CashFlowForm.svelte'
   import ReconcileForm from './ReconcileForm.svelte'
-  import type { AccountRow } from './types'
+  import { today, invalidateAll } from '$lib/stores'
+  import type { TodayData } from '$lib/stores/types'
+  import { actionCompleted } from '$lib/views/context'
 
   // 账户条（spec §12）：现金、总资产、浮动盈亏、已实现盈亏；「记出入金」「对账」两个入口。
   // account 为空（页面还在取 /api/today）时显示骨架。
-  let { account = null, onChanged }: { account?: AccountRow | null; onChanged?: () => void } = $props()
+  let { account: supplied, onChanged }: { account?: TodayData['account'] | null; onChanged?: () => void } = $props()
+  const account = $derived(supplied === undefined ? today.data?.account ?? null : supplied)
+  function changed() { invalidateAll(); actionCompleted('已更新账户'); onChanged?.() }
 
   let cashOpen = $state(false)
   let reconcileOpen = $state(false)
@@ -19,7 +23,7 @@
 <Card.Root size="sm">
   <Card.Header><Card.Title>账户</Card.Title></Card.Header>
   <Card.Content class="grid gap-2">
-    <DataBlock state={account ? 'ready' : 'loading'} skeleton="row">
+    <DataBlock state={account ? 'ready' : today.state} message={today.error} skeleton="row">
       {#if account}
         <dl class="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
           {#each [{ label: '现金', value: account.cash, tone: 'none' as const }, { label: '总资产', value: account.equity, tone: 'none' as const }, { label: '浮动盈亏', value: account.unrealized_pnl, tone: 'updown' as const }, { label: '已实现盈亏', value: account.realized_pnl, tone: 'updown' as const }] as metric (metric.label)}
@@ -41,5 +45,5 @@
   </Card.Footer>
 </Card.Root>
 
-<CashFlowForm bind:open={cashOpen} onDone={onChanged} />
-<ReconcileForm bind:open={reconcileOpen} onDone={onChanged} />
+<CashFlowForm bind:open={cashOpen} onDone={changed} />
+<ReconcileForm bind:open={reconcileOpen} onDone={changed} />

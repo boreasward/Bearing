@@ -17,6 +17,8 @@ export async function readEvents(
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  const abort = () => { void reader.cancel().catch(() => {}) }
+  signal?.addEventListener('abort', abort, { once: true })
 
   const dispatch = (block: string) => {
     let event = 'message'
@@ -55,5 +57,8 @@ export async function readEvents(
     // aborting the fetch surfaces here as an AbortError — the caller already knows, just stop
     if ((error as Error)?.name === 'AbortError') return
     throw error
+  } finally {
+    signal?.removeEventListener('abort', abort)
+    reader.releaseLock()
   }
 }

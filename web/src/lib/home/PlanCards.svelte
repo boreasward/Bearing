@@ -8,43 +8,54 @@
   import TradeForm from './TradeForm.svelte'
   import { errorText, type PlanCardData } from './types'
 
-  // 计划与持仓（spec §12）：三组——持仓、待入场、已结束（缺省折叠）。每组一个接口调用；
-  // `version` 变化（页面里任何一处写入完成）时整块重取。
-  let { version = 0, onChanged }: { version?: number; onChanged?: () => void } = $props()
-
-  type GroupState = { state: 'loading' | 'empty' | 'ready' | 'error'; plans: PlanCardData[]; error: string }
-  const empty: GroupState = { state: 'loading', plans: [], error: '' }
-  let groups = $state<Record<'holdings' | 'pending' | 'ended', GroupState>>({
-    holdings: { ...empty },
-    pending: { ...empty },
-    ended: { ...empty },
-  })
+  import { plans, invalidateAll } from '$lib/stores'
+  import type { PlanCardData as StoredPlan } from '$lib/stores/types'
+  import { actionCompleted } from '$lib/views/context'
+  let { id = null, onChanged }: { id?: number | null; onChanged?: () => void } = $props()
+  const resources = { holdings: plans('holdings'), pending: plans('pending'), ended: plans('ended') }
+  const groups = $derived(Object.fromEntries(Object.entries(resources).map(([key, resource]) => {
+    const rows = resource.data?.plans ?? []
+    return [key, { state: resource.state === 'ready' && !rows.length ? 'empty' as const : resource.state, plans: rows.map(displayPlan), error: resource.error }]
+  })))
+  function displayPlan(card: StoredPlan): PlanCardData {
+    return { ...card, position: card.position ? { ...card.position, quantity: Number(card.position.quantity) } : null }
+  }
   let endedOpen = $state(false)
-  // 补录持仓：已有的持仓没有计划，复用记成交表单、不带 plan_id，宿主据此补录一份计划（spec §6.6）
   let adoptOpen = $state(false)
-
-  async function loadGroup(group: 'holdings' | 'pending' | 'ended') {
-    groups[group] = { ...empty }
-    try {
-      const data = await get<{ plans: PlanCardData[] }>(`/api/plans?group=${group}&limit=20`, { errorDetails: true })
-      groups[group] = { state: data.plans.length ? 'ready' : 'empty', plans: data.plans, error: '' }
-    } catch (cause) {
-      groups[group] = { state: 'error', plans: [], error: errorText(cause) }
-    }
-  }
-
-  function load() {
-    for (const group of ['holdings', 'pending', 'ended'] as const) loadGroup(group)
-  }
-
+  let selected = $state<PlanCardData | null>(null)
+  const selectedCard = $derived(selected?.plan_id === id ? selected : null)
+  let selectedError = $state('')
   $effect(() => {
-    void version
-    load()
+    const requested = id
+    const snapshots = Object.values(groups)
+    if (requested === null) { selected = null; selectedError = ''; return }
+    if (snapshots.some(group => group.state === 'loading')) return
+    const existing = snapshots.flatMap(group => group.plans).find(card => card.plan_id === requested)
+    if (existing) {
+      selected = null
+      const card = existing
+      if (!['pending', 'open'].includes(card.status)) endedOpen = true
+      return
+    }
+    let alive = true
+    selectedError = ''
+    get<StoredPlan>(`/api/plans/${requested}`, { errorDetails: true }).then(card => {
+      if (!alive) return
+      selected = displayPlan(card)
+      if (!['pending', 'open'].includes(card.status)) endedOpen = true
+    }).catch(cause => { if (alive) selectedError = errorText(cause) })
+    return () => { alive = false }
   })
+  function changed() { invalidateAll(); actionCompleted('已更新计划与持仓'); onChanged?.() }
 </script>
 
 <Section title="计划与持仓" level={2}>
   <div class="grid gap-4">
+    {#if id !== null && !Object.values(groups).some(group => group.plans.some(card => card.plan_id === id))}
+      <DataBlock state={selectedError ? 'error' : selectedCard ? 'ready' : 'loading'} message={selectedError}>
+        {#if selectedCard}{#key selectedCard}<PlanCard card={selectedCard} expanded onChanged={changed} />{/key}{/if}
+      </DataBlock>
+    {/if}
     {#snippet group(title: string, group: 'holdings' | 'pending' | 'ended', emptyText: string)}
       <section class="grid gap-2" aria-label={title}>
         <div class="flex flex-wrap items-center justify-between gap-2">
@@ -57,7 +68,7 @@
           {#if groups[group].plans.length}
             <div class="grid gap-3">
               {#each groups[group].plans as card (card.plan_id)}
-                <PlanCard {card} {onChanged} />
+                <PlanCard {card} expanded={card.plan_id === id} onChanged={changed} />
               {/each}
             </div>
           {/if}
@@ -76,7 +87,7 @@
             {#if groups.ended.plans.length}
               <div class="grid gap-3">
                 {#each groups.ended.plans as card (card.plan_id)}
-                  <PlanCard {card} {onChanged} />
+                  <PlanCard {card} expanded={card.plan_id === id} onChanged={changed} />
                 {/each}
               </div>
             {/if}
@@ -87,4 +98,4 @@
   </div>
 </Section>
 
-<TradeForm bind:open={adoptOpen} onDone={onChanged} />
+<TradeForm bind:open={adoptOpen} onDone={changed} />

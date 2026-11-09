@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { bringToChat } from '$lib/views/context'
   import Section from '$lib/ui/domain/Section.svelte'
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
   import { Button } from '$lib/ui/button/index'
@@ -85,6 +86,7 @@
           {/if}
           {#if action.reason}<p class="text-xs text-muted-foreground">{action.reason}</p>{/if}
           <div class="flex flex-wrap gap-2">
+            <Button size="sm" variant="ghost" onclick={() => bringToChat({ kind:'plan', ticker:action.ticker, id:action.plan_id })}>带进对话</Button>
             {#if action.kind === 'stop_order' && action.stop != null}
               <Button size="sm" onclick={() => confirmPlaced(action)}>确认已挂单</Button>
             {/if}

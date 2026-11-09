@@ -16,7 +16,7 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   "get_filings": "申报文件",
   "get_fundamentals": "基本面",
   "get_indicators": "技术指标",
-  "get_market": "市场温度",
+  "get_market": "市场环境",
   "get_news": "新闻",
   "get_plans": "计划列表",
   "get_positions": "当前持仓",

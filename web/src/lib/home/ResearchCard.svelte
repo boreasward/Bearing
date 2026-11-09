@@ -11,9 +11,11 @@
   import { notify } from '$lib/ui/toast'
   import { errorText, type ResearchCardData, type ResearchDetail, type WritePreview } from './types'
 
+  import { bringToChat } from '$lib/views/context'
+
   // 一张研究卡片（spec §10 研究块）：股票、状态、第几天、论点、条件与最新收盘、五种显示文案、
   // agent 结论一句、已转计划的关联；展开拉 GET /api/research/{id} 看时间线；观察中的可放弃。
-  let { card, onChanged }: { card: ResearchCardData; onChanged?: () => void } = $props()
+  let { card, expanded = false, onChanged }: { card: ResearchCardData; expanded?: boolean; onChanged?: () => void } = $props()
 
   const VERDICT_TEXT: Record<string, string> = { ready: '可以出计划', watch: '值得盯', reject: '否决' }
 
@@ -48,6 +50,7 @@
 
   // ---- 变化记录：首次展开时取 GET /api/research/{id} ----
   let timelineOpen = $state(false)
+  $effect(() => { timelineOpen = expanded })
   let detail = $state<ResearchDetail | null>(null)
   let detailError = $state('')
 
@@ -118,14 +121,15 @@
       <p class="text-xs text-muted-foreground">结论：{VERDICT_TEXT[card.verdict] ?? card.verdict}{card.reasons ? `：${card.reasons}` : ''}</p>
     {/if}
     {#if card.plan_id != null}
-      <!-- 审查P2-5：导航用锚点链接（design-system §7），指向计划卡根节点的 id -->
-      <a class="text-xs text-muted-foreground underline-offset-2 hover:underline" href={`#plan-${card.plan_id}`}>已转计划 #{card.plan_id}</a>
+      <!-- 跨视图导航由 hash 路由打开计划并展开变化记录。 -->
+      <a class="text-xs text-muted-foreground underline-offset-2 hover:underline" href={`#plans/${card.plan_id}`}>已转计划 #{card.plan_id}</a>
     {/if}
     {#if !watching && card.end_reason}
       <p class="text-xs text-muted-foreground">结束：{card.end_reason}</p>
     {/if}
   </Card.Content>
   <Card.Footer class="grid gap-2">
+    <div><Button size="sm" variant="ghost" onclick={() => bringToChat({ kind: 'research', ticker: card.ticker, id: card.research_id })}>带进对话</Button></div>
     <div class="flex flex-wrap gap-2">
       {#if watching}
         <Button size="sm" variant="outline" onclick={dropResearch}>放弃研究</Button>
