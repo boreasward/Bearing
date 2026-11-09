@@ -186,7 +186,7 @@
       <div class="grid gap-2 justify-self-end rounded-2xl bg-muted p-3 text-[13px] leading-[1.55]">
         <ContextChips chips={parsed.chips} /><p class="whitespace-pre-line">{parsed.rest}</p>
       </div>
-    {:else}<TurnView turn={item.turn} chatId={selected ?? ''} history={item.history} />{/if}
+    {:else}<TurnView bind:turn={item.turn} chatId={selected ?? ''} history={item.history} />{/if}
   {/each}
   {#each current?.feedback ?? [] as text}<p role="status" class="text-xs text-muted-foreground">{text}</p>{/each}
   {#if current?.notice}<p role="status" class="text-sm">{current.notice}</p>{/if}

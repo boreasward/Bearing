@@ -3,6 +3,6 @@
   import ToolCard from './ToolCard.svelte'
   import type { Block } from './types'
   let { block }: { block: Extract<Block, { kind: 'tool' }> } = $props()
-  const state = $state(untrack(() => ({ ...block })))
+  let state = $state(untrack(() => ({ ...block })))
 </script>
-<ToolCard block={state} chatId="c1" agentSession="chat-c1-1" />
+<ToolCard bind:block={state} chatId="c1" agentSession="chat-c1-1" />

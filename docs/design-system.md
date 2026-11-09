@@ -288,7 +288,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | 组件 / 模块 | API | 职责 |
 | --- | --- | --- |
 | `ChatPanel` | `{ chatId: string \| null, prefillChips?, prefillText?: {text,seq}, onWrote() }`；`focusInput()` / `appendFeedback(text)` / `createChat()` | 按对话保存消息与回合，保持原 SSE 的归属；start 帧保存 agent_session，tool_end 按出现顺序认领同名占位；发送在任何创建请求前同步加锁，创建/发送控件共享状态；Home 的新开对话也委托同一 createChat()，失败释放锁且保留草稿。观察到写工具完成后，在轮次最终清理中 invalidateAll / onWrote 一次（done、error、cancelled、EOF、用户中止均覆盖，多次写入合并）；只见 tool_start 不声称写入或回滚，纯文字正常轮刷新对话标题；取消与只读、忙碌提示保持原文；取消请求未返回前禁止下一轮，防止旧取消误伤新轮 |
-| `Turn` / `types.ts` | `{ turn: Turn, chatId, history? }`；`Turn` / `Block` | 直播按文字与工具的事件顺序；历史卡在文字之前；文字保持纯文本与换行；call:N 经 RefLink 滚动到本回合的卡片并暂时高亮 |
+| `Turn` / `types.ts` | `{ turn: Turn（可绑定）, chatId, history? }`；`Turn` / `Block` | 直播按文字与工具的事件顺序；历史卡在文字之前；文字保持纯文本与换行；call:N 经 RefLink 滚动到本回合的卡片并暂时高亮。ChatPanel 绑定 item.turn，Turn 通过逐项 getter/setter 绑定 ToolCard.block，沿完整链共享结果状态与缓存 |
 | `ToolCard` | `{ block（可绑定）, chatId, agentSession, lazy? }` | loading 占位用 TOOL_LABELS（get_market 为「市场环境」），结果交 registry；历史进入视口才请求，观察器卸载断开；失败可重试且不妨碍文字；空 ref 显示「调用已完成，结果不可追溯」，`result_available=false` 的 SQL NULL 历史行显示「这次调用早于 v3.2.1，没有保留结果」empty 态；成功 JSON null（result_available=true）交注册表显示普通 empty；旧服务缺少字段时按 result 非 null 回退，截断结果明确降级；中断时只把尚在调用中的块转 error，取消写「已停止等待，调用结果未确认」、错误或意外断流写「调用未完成」，已完成块保留；无调用编号不提供重试 |
 | `ContextChips` / `context.ts` | `{ chips, onRemove? }`；`formatPrefix` / `parsePrefix` | ticker / plan / research 三种芯片；固定空格分隔前缀，只有开头连续的合法格式会还原；发送清空，可移除，普通方括号保留原文 |
 | `QuickPrompts` / `ChatEmpty` | `{ onSend, onResearch, disabled? }` / `{ onNewChat, disabled? }` | 五句固定快捷入口，发起研究只预填「研究 」；无对话时说明与新建入口，快捷提问可创建对话后发送 |
