@@ -40,7 +40,7 @@
 | 033 | 删除 v2 的业务表：57 张表（账户、成交、计划、Agent 运行与连接、复盘、成长闭环、五层、调度与运行报告、通知设置等）加 LangGraph 的四张检查点表（有就删）；保留 11 张事实表、`feature_flag_changes` 与七张 `v3_` 表。一个事务、全部 `IF EXISTS`、不用 `CASCADE`、可重跑。先在一次性库验证，2026-11-06 经用户授权在真实库执行，步骤与记录见下文 | 删 v2 |
 | 034 | v3.1（spec §13）：`v3_plans` 改造为计划线——新增 `status` / `kind` / `initial_stop` / `atr` / `trailing`（PostgreSQL 保留字，建列时带双引号） / `confirmed_stop_order` / `start_session` / `reviewed_through` / `stop_hit_session` / `target_hit_session` / `sell_instruction` / `ended_session` / `end_reason` / `outcome`，四个价位列转可空，032 时代的行（无 `initial_stop`、未复查过的 `pending`）一律记 `expired` / `migrated_034`；`(session, ticker)` 唯一换成按状态的部分唯一索引 `uq_v3_plans_one_active_per_ticker`（一只股票最多一份有效计划），旧价位约束换成新具名约束 `v3_plans_levels_check`：价位全空或全有，全有时要求 `entry_low <= entry_high` 且 `entry_high < target1`，**不要求止损低于入场**（实施期间 ruling R5 放宽：补录计划的止损以补录时最新收盘为基准，可能高于入场区间；起算日收盘判定的持仓止损同理）；`v3_runs` 加 `dropped`；新建 `v3_plan_events`（变化记录，宿主同计划同交易日同类型唯一）、`v3_holding_reviews`、`v3_cash_flows`、`v3_voids`、`v3_briefs`、`v3_chats`、`v3_chat_messages`、`v3_settings` 八张表（只追加表见 `tests/test_no_update_on_append_only_tables.py`）。可重跑（`IF EXISTS` / `IF NOT EXISTS`，约束先 `DROP ... IF EXISTS` 再建）；不改证据行、不加种子行。**注意（Task 1 审查发现 M4）：手工重跑 034 会把 034 之后无价位（补录缺日线）的 pending 计划误标 expired——`migrate` 不会自动重跑，手工重跑前先核对。**033 已于 2026-11-06、034 已于 2026-11-07 经用户授权在真实库执行，步骤与记录见下文 | v3 |
 | 035 | v3.2（spec §11）：新建 `v3_research`（研究记录：股票、论点、状态五值 CHECK、发起交易日、有效期末日、条件 JSON 与文案、结论与理由与引用、`checked_through` / `triggered_session` / `plan_id` / 结束交易日与原因、来源、agent 会话；部分唯一索引 `uq_v3_research_one_watching_per_ticker`：`status = 'watching'` 时每只股票一份）与 `v3_research_events`（只追加的变化记录，形状同 `v3_plan_events`；宿主事件按（研究、交易日、类型）唯一，已加进 `tests/test_no_update_on_append_only_tables.py` 的清单）；`v3_plans` 加 `research_id`（可空，指向研究；`entry_type` 四种由代码的 `ENTRY_TYPES` 保证，无数据库 CHECK）；`v3_briefs` 加 `weekly_md`、`pushed_weekly_at`。只建对象、不动任何旧行、不加种子，`IF EXISTS` / `IF NOT EXISTS` 可重跑。2026-11-09 已在真实库执行，记录见下文 | v3 |
-| 036 | v3.2.1：`v3_tool_calls` 加 `result JSONB`（可空）与 `truncated BOOLEAN NOT NULL DEFAULT FALSE`。历史行 `result` 为 NULL、`truncated` 为 false，不回填；仍只追加。两列均用 `ADD COLUMN IF NOT EXISTS`，可重跑。真实库尚未执行，须另获授权后按备份与迁移流程执行，且先于使用新列的代码重载 | v3 |
+| 036 | v3.2.1：`v3_tool_calls` 加 `result JSONB`（可空）与 `truncated BOOLEAN NOT NULL DEFAULT FALSE`。历史行 `result` 为 NULL、`truncated` 为 false，不回填；仍只追加。两列均用 `ADD COLUMN IF NOT EXISTS`，可重跑。2026-11-09 已在真实库执行（先于新代码重载），记录见下文 | v3 |
 
 016–031 建出的业务表，除 033 的保留清单外都由 033 删除；033 已于 2026-11-06 在真实库执行，这些表已不在库里。
 
@@ -395,9 +395,9 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
 - 执行：`INVESTMENT_ASSISTANT_ALLOW_DROP_V2_TABLES=1 … migrate` 输出 `{"applied": ["033_drop_v2_tables.sql"], "count": 1}`；不带该变量重跑输出 `{"applied": [], "count": 0}`。
 - 核对：033 删除清单中的 61 张表（57 张业务表加 4 张检查点表）用 `to_regclass` 查全部不存在；`public` 下剩 20 张表（19 张保留表加 `schema_migrations`）；19 张保留表的行数与预检逐张一致；`facts show` 照常打印 2026-11-05 的草稿（退出码 0）。
 
-## 036 与 v3.2.1 上线四步（待授权，未执行）
+## 036 与 v3.2.1 上线四步（2026-11-09 已执行）
 
-真实库当前记录到 035；本节是待执行步骤，不是执行记录。与 [本机服务上线步骤](local-service.md#v321-上线四步待授权未执行) 同一套顺序（spec §15），每一步分别取得用户授权。
+2026-11-09 经用户授权执行，真实库现记录到 036；执行记录在本节末尾。与 [本机服务上线步骤](local-service.md#v321-上线四步2026-11-09-已执行) 同一套顺序（spec §15），每一步分别取得用户授权。
 
 1. **备份真实库并迁移 036**。先确认没有进行中的 daily / facts / 对话轮次；连接串由授权后的运维环境提供，不在本轮读取 `.env`。确认最新迁移为 `035_v3_2_research_and_retro.sql`、036 尚未记录，保存工具调用总数与旧列状态：
 
@@ -426,9 +426,17 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
    ```
 
    两列应为 `result jsonb` 可空、`truncated boolean` 不可空且默认 false；旧行数相同、最后 count 为 0，重跑输出 `{"applied": [], "count": 0}`。保存验证输出，不把连接串或工具结果内容写进共享记录。迁移前历史行从此显示「这次调用早于 v3.2.1，没有保留结果」。
-2. **构建并重载**：授权后 `cd web && npm run build`，验证 `test -s web/dist/index.html`；`launchctl kickstart -k gui/$(id -u)/local.investment-assistant` 后用 `launchctl print` 核对 pid、`curl` 检查首页 200。完整命令见本机服务上线第 2 步。Task 7 验证构建只用 scratch，没有替换这个目录。
+2. **构建并重载**：授权后 `cd web && npm run build`，验证 `test -s web/dist/index.html`；`launchctl kickstart -k gui/$(id -u)/local.investment-assistant` 后用 `launchctl print` 核对 pid、`curl` 检查首页 200。完整命令见本机服务上线第 2 步。2026-11-09 已替换并重载。
 3. **真实冒烟**：授权后从 `#` 新开对话问「昨天的市场热度怎么样？」，验证真实 Pi 的 MarketCard / call:N、刷新回放、三侧览与七视图；用本机服务上线第 3 步的 curl 与 Python 命令核对 market / runs / ledger JSON，并核对该轮 calls 响应和引用。失败先保留证据并处理，不自动触发每日任务或改真实记录。
-4. **记发布**：冒烟通过后补迁移 / 部署执行记录、CHANGELOG 发布日期与 roadmap v3.2 行；执行 `git diff --check`、`pytest tests/test_docs_links.py -q` 并检查文档 diff（完整隔离命令见本机服务上线第 4 步）。本轮只写未发布说明，尚未发布。
+4. **记发布**：冒烟通过后补迁移 / 部署执行记录、CHANGELOG 发布日期与 roadmap v3.2 行；执行 `git diff --check`、`pytest tests/test_docs_links.py -q` 并检查文档 diff（完整隔离命令见本机服务上线第 4 步）。
+
+**执行记录（2026-11-09，真实库，PostgreSQL 17.10）：**
+
+- 预检：没有正在运行的 `facts` / `daily` 进程，库内其他连接空闲；`schema_migrations` 35 行、最新一条 `035_v3_2_research_and_retro.sql`；`v3_tool_calls` 85 行，`result` / `truncated` 两列不存在；各表行数另存 `.local/v3/rowcounts-before-036.txt`。
+- 备份：`.local/v3/backup-before-036.dump`，12,531,978 字节，sha256 `b38f11c206ad72546dc2f3066e14375d0cbadbde2a965f8101ed06b9bb08df6a`，`pg_restore --list` 含 30 条表数据；文件权限 600。
+- 执行：`migrate` 输出 `{"applied": ["036_v3_2_1_tool_results.sql"], "count": 1}`；重跑输出 `{"applied": [], "count": 0}`。
+- 核对：`schema_migrations` 36 行、最新一条 036；`result jsonb` 可空、`truncated boolean` 不可空默认 false；`v3_tool_calls` 前后都是 85 行（`cmp` 一致），`result IS NOT NULL OR truncated` 为 0。之后才重建前端并重载服务（见 [本机服务上线记录](local-service.md#v321-上线四步2026-11-09-已执行)）。
+
 
 036 只新增列，旧代码可以保留这两列运行；应用回退先另获授权，再按旧版构建与重载。若必须恢复整个备份，另行授权停服务后使用本页的 `pg_restore --clean --if-exists` 流程；恢复会丢失备份后的所有写入。
 

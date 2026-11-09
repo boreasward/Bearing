@@ -72,7 +72,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 两边共用其下的 `pi.lock` 做单进程互斥，不同就会各拿一把锁、简报会话与页面对话可能同时起 Pi 进程，简报文件也会分散在两个目录。日志在 `~/Library/Application Support/investment-assistant/logs/daily.stdout.log` 与 `daily.stderr.log`。
 页面服务的重新加载见 [local-service.md](local-service.md)。
 
-## 页面「定时任务」（v3.2.1，待部署）
+## 页面「定时任务」（v3.2.1，2026-11-09 已部署）
 
 左栏 `#jobs` 显示周几、时间、`Asia/Shanghai` 时区与下次运行，以及缺省 20 行的事实运行 / 简报状态、推送与错误；展开行可看用量、耗时与模型。「打开当天简报」跳 `#today?session=YYYY-MM-DD`。顶栏的定时任务侧览只列最近 4 次、下次运行、观察中研究的条件与本周周报窗口；它与完整视图共用 `/api/runs` 缓存，不触发任务。交易日按纽约日历，页面时间按北京显示。
 

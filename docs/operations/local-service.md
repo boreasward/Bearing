@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**服务在运行（v3.2 已上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。
+**服务在运行（v3.2.1 已上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。同日 v3.2.1 上线：迁移 036 执行后重建 `web/dist` 并 `kickstart -k` 重启，首页换成三栏工作台；执行记录见下文 [v3.2.1 上线四步](#v321-上线四步2026-11-09-已执行)。
 每日任务另有一个 LaunchAgent `local.investment-assistant.daily`（同日安装，见 [daily-run.md](daily-run.md)）；两者的 `INVESTMENT_ASSISTANT_RUNTIME_BASE` 都是 `~/Library/Application Support/investment-assistant`，共用其下的 `pi.lock`。
 
 ## 启动链路
@@ -38,7 +38,7 @@
 - 没有 `web/dist` 时 `/` 返回 503 `{"error": "frontend_not_built", …}`。
 - 组件画廊（`#_ui`）只在开发模式（`cd web && npm run dev`）可用，构建产物不含它。
 
-## v3.2.1 工作台前端（代码已更新，尚未部署）
+## v3.2.1 工作台前端（2026-11-09 已部署）
 
 `Home.svelte` 是工作台根组件，浏览器前进 / 后退可用：
 
@@ -60,13 +60,13 @@
 
 所有写入口沿用 preview → 复述确认 → confirmed，完成后共享 store 失效重取并保留简报日期、复盘周与分页。已观察到写工具完成的轮次即使随后出错、取消或断流，也在最终清理时统一刷新一次；只见调用开始不视为已写入，取消不表示回滚。本页操作说明不存消息表。`⌘/Ctrl+K` 在任意完整视图返回最近对话并聚焦提问；设置仍为 Sheet。
 
-本版收尾执行三套全量检查；没有执行真实库迁移、替换 `web/dist` 或重载服务。构建验证产物只允许写入一次性 scratch 目录；真实上线仍按设计 spec §15 分步授权。
+本版收尾执行三套全量检查；2026-11-09 经用户授权按设计 spec §15 完成真实库迁移、重建 `web/dist`、重载服务与真实 Pi 冒烟，记录见下节。
 
-## v3.2.1 上线四步（待授权，未执行）
+## v3.2.1 上线四步（2026-11-09 已执行）
 
-依据 [设计 spec](../specs/2026-11-09-v3.2.1-workbench-shell-and-data-views-design.md) §15，以下每一步单独取得用户授权；当前只有代码与测试，未产生线上验收记录。
+依据 [设计 spec](../specs/2026-11-09-v3.2.1-workbench-shell-and-data-views-design.md) §15，以下四步在 2026-11-09 经用户授权（「验收并完成发布」）依次执行，执行记录在本节末尾。
 
-1. **备份真实库并执行 036**：按 [迁移 036 步骤](migrations-and-backup.md#036-与-v321-上线四步待授权未执行) 先确认只待执行 036、留存工具记录行数，`pg_dump -Fc` 后核对 SHA-256 与 `pg_restore --list`，再运行 `migrate`。验证追踪行、新列类型 / 默认值、旧行数与 NULL 结果；此步通过后再重载新代码。
+1. **备份真实库并执行 036**：按 [迁移 036 步骤](migrations-and-backup.md#036-与-v321-上线四步2026-11-09-已执行) 先确认只待执行 036、留存工具记录行数，`pg_dump -Fc` 后核对 SHA-256 与 `pg_restore --list`，再运行 `migrate`。验证追踪行、新列类型 / 默认值、旧行数与 NULL 结果；此步通过后再重载新代码。
 2. **构建并重载页面服务**（这一步会替换正在服务的前端，收尾测试只用 scratch）：
 
    ```bash
@@ -112,7 +112,17 @@
    git diff -- CHANGELOG.md docs/roadmap.md docs/operations/local-service.md docs/operations/migrations-and-backup.md
    ```
 
-   本轮不执行上述上线步骤；推送与打 tag 仍需各自授权。
+   推送与打 tag 仍需各自授权。
+
+**执行记录（2026-11-09，真实库与本机服务）：**
+
+- 上线前三套全量：离线 910 passed / 412 skipped，一次性库 1322 passed，前端 68 个文件 472 passed；`npm run build` 的 svelte-check 943 个文件 0 错误 0 警告。
+- 第 1 步：迁移 036 已执行，备份与核对见 [迁移文档](migrations-and-backup.md#036-与-v321-上线四步2026-11-09-已执行)。
+- 第 2 步：构建 HEAD `97c5e53`，`web/dist/index.html` 非空；`launchctl kickstart -k` 后服务 pid 70480 → 29603，`state = running`，首页 200（未启用 Basic）。
+- 第 3 步接口：`/api/market` 200（`session` 2026-11-06、`calc_version` `regime-2`、`label` neutral、`watch` 5 只）；`/api/runs` 200（8 次运行，`schedule` 周二至周六 11:30 `Asia/Shanghai`，`next_at` `2026-11-10T11:30:00+08:00`）；`/api/ledger` 200（成交 1、出入金 1、对账 0、作废 0）；`/api/today.counts` 为 `{actions 1, holdings 1, pending 3, watching 1}`；上面的形状校验脚本输出 `workbench API shapes verified`。
+- 第 3 步真实 Pi：`#` 打开最近对话、抽屉缺省「仪表」。新开对话 `f341edc74edf4196a3890b81bedc5536` 点快捷提问「昨天市场热度」，先出现「调用中」占位，随后换成 MarketCard，来源行 `get_market · call:1 · 2026-11-06 · regime-2`；助手消息 `agent_session = chat-f341edc74edf4196a3890b81bedc5536-1`、`tool_refs = ['call:1']`；`v3_tool_calls` 该行工具名为裸名 `get_market`、`result` 2182 字节、`truncated` 为假；calls 接口 200、`result_available` 为真，换成别的对话的 `agent_session` 得到 404 `unknown_call`。对话标题写成「昨天的市场热度怎么样？」并归入「今天」。刷新后回放出同一张卡（同一 `call:1`），在回答文字之上。
+- 第 3 步页面：七个 hash（含 `#plans/1`）都渲染对应标题，未知 hash 回到对话；仪表 / 行情 / 定时任务三个侧览都能打开；深色主题生效；900px 宽度下左栏与侧览变成 Sheet，打开左栏时只有一个对话框；控制台无错误。
+- 已知外观问题（不阻断发布）：288px 侧览里的 ETF 表数字会折行（如 `8.1` / `9%`）；窄屏左栏 Sheet 比栏宽，右侧留白。
 
 ## 常用操作
 

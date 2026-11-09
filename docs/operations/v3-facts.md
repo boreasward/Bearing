@@ -136,7 +136,7 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 
 `runtime/pi.py` 在 `tool_execution_end.result.content[]` 的文本项中依次查找第一份能解析成 JSON 且带合法 `call:N` 的信封，将引用写入事件 `ref`；非文本、空内容、非 JSON 或缺 ref 都跳过，找不到就留空，后续事件继续。`tool_start` / `tool_end` 的 `toolName` 去掉服务 `ia` 的 `mcp__ia__` 前缀，工具记录、前端注册表与占位卡统一用裸名。
 
-页面以 SSE start 帧的 `agent_session` 与 call:N 读取已保存结果，不按事件顺序猜编号。解析不到显示「调用已完成，结果不可追溯」；calls 接口的 `result_available` 由 SQL `result IS NOT NULL` 计算，成功 JSON null 为 true、正常呈现查询 empty；迁移前的 SQL NULL 为 false，显示「这次调用早于 v3.2.1，没有保留结果」。历史卡画调用当时的快照，动作再读对象当前状态。录制事件测试不替代真实客户端验证；真实 Pi 引用与刷新回放要在 [上线冒烟](local-service.md#v321-上线四步待授权未执行) 中核对。
+页面以 SSE start 帧的 `agent_session` 与 call:N 读取已保存结果，不按事件顺序猜编号。解析不到显示「调用已完成，结果不可追溯」；calls 接口的 `result_available` 由 SQL `result IS NOT NULL` 计算，成功 JSON null 为 true、正常呈现查询 empty；迁移前的 SQL NULL 为 false，显示「这次调用早于 v3.2.1，没有保留结果」。历史卡画调用当时的快照，动作再读对象当前状态。录制事件测试不替代真实客户端验证；2026-11-09 真实 Pi 下已核对引用与刷新回放（`get_market · call:1`，工具名无前缀），见 [上线冒烟](local-service.md#v321-上线四步2026-11-09-已执行) 中核对。
 
 实测得到的两条要求：
 

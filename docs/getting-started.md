@@ -74,7 +74,7 @@ v2 的写入实现（`upsert_watchlist_item`、`delete_watchlist_item`）曾随�
 
 ## 建库
 
-迁移文件在 `migrations/`（001–034），`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事：
+迁移文件在 `migrations/`（001–036），`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事：
 
 ```bash
 INVESTMENT_ASSISTANT_DATABASE_URL=postgresql://... .venv/bin/python -m investment_assistant.migrate

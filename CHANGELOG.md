@@ -2,9 +2,9 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/roadmap.md)。
 
-## [3.2.1] - 未发布
+## [3.2.1] - 2026-11-09
 
-工作台壳、纸面视觉与数据视图（[设计 spec](docs/specs/2026-11-09-v3.2.1-workbench-shell-and-data-views-design.md)、[实施 plan](docs/plans/2026-11-09-v3.2.1-workbench-shell-and-data-views.md)）。代码已落地；真实库迁移、替换前端、服务重载与真实 Pi 冒烟待单独授权，尚未发布。
+工作台壳、纸面视觉与数据视图（[设计 spec](docs/specs/2026-11-09-v3.2.1-workbench-shell-and-data-views-design.md)、[实施 plan](docs/plans/2026-11-09-v3.2.1-workbench-shell-and-data-views.md)）。2026-11-09 经用户授权上线：备份后执行迁移 036、重建 `web/dist` 并重载页面服务，真实 Pi 冒烟通过（MarketCard 带 `call:1`、刷新回放、七视图与三侧览）。
 
 - 三栏工作台：左栏七个完整视图与分组对话，中心默认最近对话，右侧仪表 / 行情 / 定时任务侧览；折叠与面板偏好持久化，窄屏用互斥 Sheet。支持对象深链、历史简报日期与 `⌘/Ctrl+K` 返回对话。
 - 纸面视觉：浅 / 深灰阶与墨黑主色，标题衬线，8 / 12 / 14px 三档圆角；卡片无阴影，对话正文 13px / 1.55、限宽 760px。
@@ -12,7 +12,7 @@
 - 四个读接口：`/api/market`、`/api/runs`、`/api/ledger`、`/api/chats/{id}/calls`；today 增 counts，对话增加最后活动时间、首条消息标题、消息 agent_session 与 SSE start 帧。
 - 迁移 036 为 `v3_tool_calls` 追加 `result` / `truncated`，不回填历史；超过缺省 524288 字节只存截断标记，完整成功结果的哈希与 agent 信封保持原行为。Pi 从返回文本提取真实 call:N，事件工具名移除 `mcp__ia__` 前缀；`get_market` 追加 calc_version。
 - 示例配置含 `daily_weekdays=[2, 3, 4, 5, 6]`、`daily_hour=11`、`daily_minute=30`、`tool_result_max_bytes=524288`；日程配置与 LaunchAgent plist 必须同步修改。
-- 部署前依次完成离线、一次性库与前端全量检查；构建验证只写 scratch。[上线四步与验证命令](docs/operations/local-service.md#v321-上线四步待授权未执行)在授权后逐步执行，冒烟通过后再补发布日期与真实执行记录。
+- 上线前三套全量：离线 910 passed / 412 skipped、一次性库 1322 passed、前端 472 passed，svelte-check 0 错误。[上线四步与执行记录](docs/operations/local-service.md#v321-上线四步2026-11-09-已执行)。已知外观问题：288px 侧览里 ETF 表数字折行、窄屏左栏 Sheet 右侧留白。
 
 ## [3.2.0] - 未发布
 
