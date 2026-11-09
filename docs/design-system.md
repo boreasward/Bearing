@@ -240,12 +240,12 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 
 | 组件 / 模块 | API | 职责 |
 | --- | --- | --- |
-| `Shell` | `{ title, session, counts, chats, currentChatId, onNewChat, onOpenSettings, center: Snippet, drawerPane: Snippet<[DrawerPane]> }` | 三栏与响应式 Sheet；内容由两个 snippet 注入；不取业务数据 |
+| `Shell` | `{ title, session, counts, chats, currentChatId, onNewChat, onOpenSettings, center: Snippet, drawerPane: Snippet<[DrawerPane]> }` | 三栏与响应式 Sheet；内容由两个 snippet 注入；不取业务数据。导出 dismissForChat()：窄屏等待 Sheet 关闭完成后交出焦点，临时隐藏侧览但保留桌面抽屉偏好；普通关闭仍恢复触发器焦点 |
 | `LeftRail` | `{ counts, chats, currentChatId, route, onNewChat, onNavigate? }` | 左栏宽度、折叠按钮与分段内容 |
 | `SegmentSwitch` | 无 props，消费 `layout` | 快捷入口 / 对话，`aria-pressed`；折叠时竖排图标 |
 | `QuickEntries` | `{ counts, route, onNavigate? }` | 今日、账户、行情、计划与持仓、研究、复盘、定时任务七个 hash 链接与 `aria-current`；折叠时角标改圆点 |
 | `ChatList` | `{ chats, currentChatId, onNewChat, onNavigate? }` | 按 `last_message_at` 北京日期分今天 / 本周（周一起）/ 更早；无标题写「新对话」，只读标签；折叠后只剩新开动作 |
-| `TopBar` | `{ title, session, onToggleDrawer(pane, trigger), onOpenNav(trigger), onOpenSettings }` | 标题、数据时点与图标面板开关；无运行时写「还没有运行记录」 |
+| `TopBar` | `{ title, session, onToggleDrawer(pane, trigger), onOpenNav(trigger), onOpenSettings, drawerHidden? }` | 标题、数据时点与图标面板开关；无运行时写「还没有运行记录」；可选 drawerHidden 使窄屏临时关闭后按钮的 aria-pressed 与高亮反映实际可见状态，桌面偏好不变 |
 | `Drawer` | `{ drawerPane: Snippet<[DrawerPane]> }` | 桌面侧览容器；关闭时 `hidden` |
 | `layout.svelte.ts` | `layout`、`toggleNav()`、`setSegment(segment)`、`toggleDrawer(pane)` | 存 `ws.nav.collapsed`（`1` / 缺省展开）、`ws.nav.segment`（`quick` / `chats`）、`ws.drawer`（`dash` / `market` / `jobs` / `closed`）；缺省 quick、dash，存储禁用仍可用 |
 | `router.ts` | `parseHash(hash): Route`、`hrefOf(route)` | chat / view / gallery；七视图，plans / research 可带数字 id；未知回空 chat；`#_ui` 保持开发画廊 |
@@ -286,12 +286,12 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 
 | 组件 / 模块 | API | 职责 |
 | --- | --- | --- |
-| `ChatPanel` | `{ chatId: string \| null, prefillChips?, prefillText?: {text,seq}, onWrote() }`；`focusInput()` / `appendFeedback(text)` | 按对话保存消息与回合，保持原 SSE 的归属；start 帧保存 agent_session，tool_end 按出现顺序认领同名占位；写工具完成的正常轮 invalidateAll / onWrote 一次，纯文字轮刷新对话标题；取消与只读、忙碌提示保持原文；取消请求未返回前禁止下一轮，防止旧取消误伤新轮 |
+| `ChatPanel` | `{ chatId: string \| null, prefillChips?, prefillText?: {text,seq}, onWrote() }`；`focusInput()` / `appendFeedback(text)` / `createChat()` | 按对话保存消息与回合，保持原 SSE 的归属；start 帧保存 agent_session，tool_end 按出现顺序认领同名占位；发送在任何创建请求前同步加锁，创建/发送控件共享状态；Home 的新开对话也委托同一 createChat()，失败释放锁且保留草稿。写工具完成的正常轮 invalidateAll / onWrote 一次，纯文字轮刷新对话标题；取消与只读、忙碌提示保持原文；取消请求未返回前禁止下一轮，防止旧取消误伤新轮 |
 | `Turn` / `types.ts` | `{ turn: Turn, chatId, history? }`；`Turn` / `Block` | 直播按文字与工具的事件顺序；历史卡在文字之前；文字保持纯文本与换行；call:N 经 RefLink 滚动到本回合的卡片并暂时高亮 |
 | `ToolCard` | `{ block, chatId, agentSession, lazy? }` | loading 占位用 TOOL_LABELS（get_market 为「市场环境」），结果交 registry；历史进入视口才请求，观察器卸载断开；失败可重试且不妨碍文字；空 ref 显示「调用已完成，结果不可追溯」，旧 null 结果显示「这次调用早于 v3.2.1，没有保留结果」，截断结果明确降级；中断时只把尚在调用中的块转 error，取消写「已停止等待，调用结果未确认」、错误或意外断流写「调用未完成」，已完成块保留；无调用编号不提供重试 |
 | `ContextChips` / `context.ts` | `{ chips, onRemove? }`；`formatPrefix` / `parsePrefix` | ticker / plan / research 三种芯片；固定空格分隔前缀，只有开头连续的合法格式会还原；发送清空，可移除，普通方括号保留原文 |
-| `QuickPrompts` / `ChatEmpty` | `{ onSend, onResearch, disabled? }` / `{ onNewChat }` | 五句固定快捷入口，发起研究只预填「研究 」；无对话时说明与新建入口，快捷提问可创建对话后发送 |
-| `sse.ts` | `readEvents(response,onEvent,signal?)` | 从 home 迁入；任意字节分片解析，取消时主动结束等待中的 reader，无需等下一帧 |
+| `QuickPrompts` / `ChatEmpty` | `{ onSend, onResearch, disabled? }` / `{ onNewChat, disabled? }` | 五句固定快捷入口，发起研究只预填「研究 」；无对话时说明与新建入口，快捷提问可创建对话后发送 |
+| `sse.ts` | `readEvents(response,onEvent,signal?)` | 从 home 迁入；任意字节分片解析，取消时主动结束等待中的 reader，无需等下一帧；读取返回后与 EOF 刷新前重查中止，丢弃所有未交付的缓冲字节 |
 | `TodayView` / `PlansView` / `ResearchView` / `RetrospectView` | `{ session? }` / `{ id? }` / `{ id?, onStartResearch }` / 无 | PageHeader + 原有业务组件的薄包装；今日读取 `#today?session=`；计划 / 研究详情支持已结束组及列表之外的 id |
 
 `retrospectFor(null,20)` 复用 `retrospect`；其余缓存按 week 与 limit（20 / 50 / 100）区分。`briefFor()` 与 `briefFor('latest')` 相同，历史按 session 复用；`briefs` 是简报列表。全部纳入 invalidateAll，刷新不重置 UI 日期与分页。页面操作仍先 preview 后 confirmed，复用表单自己的 toast；本地完成说明经 actionCompleted 追加到当前 / 最近对话，不入库。

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi, type Mock } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { tick } from 'svelte'
+import { layout } from '$lib/shell/layout.svelte'
 import Home from './Home.svelte'
 import * as stores from '$lib/stores'
 import { bringToChat, actionCompleted } from '$lib/views/context'
@@ -28,7 +29,7 @@ function setup(empty = false) {
   })
   vi.stubGlobal('fetch', fetcher)
 }
-beforeEach(() => { location.hash = ''; localStorage.clear(); setup(); stores.invalidateAll() })
+beforeEach(() => { Object.assign(layout, { narrow:false, drawer:'dash', navSegment:'quick', navCollapsed:false }); location.hash = ''; localStorage.clear(); setup(); stores.invalidateAll() })
 afterEach(async () => { cleanup(); await tick(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 it('default_route_opens_latest_chat', async () => {
   render(Home)
@@ -95,4 +96,52 @@ it('page action feedback stays local and follows the most recent conversation', 
   await fireEvent.keyDown(window, { key:'k', metaKey:true })
   expect(await screen.findByText('已记录出入金')).toBeVisible()
   expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/messages'))).toBe(false)
+})
+it('serializes repeated new-chat actions from the left rail', async () => {
+  let settle!: (response: Response) => void
+  const created = new Promise<Response>(resolve => { settle = resolve })
+  const original = fetcher.getMockImplementation()!
+  fetcher.mockImplementation(async (url, init) => {
+    if (url === '/api/chats' && init?.method === 'POST') return created
+    if (url === '/api/chats/new') return json({ chat:{ ...chat, chat_id:'new' }, messages:[] })
+    return original(url, init)
+  })
+  layout.navSegment = 'chats'; render(Home)
+  await screen.findByText('最近一段对话')
+  const button = screen.getByRole('button', { name:'新开对话' })
+  await fireEvent.click(button); await fireEvent.click(button)
+  expect(fetcher.mock.calls.filter(([url, init]) => url === '/api/chats' && init?.method === 'POST')).toHaveLength(1)
+  settle(json({ chat_id:'new' }))
+  await waitFor(() => expect(location.hash).toBe('#chat/new'))
+})
+it.each(['navigation', 'drawer'])('narrow Cmd/Ctrl+K closes the %s Sheet before focusing chat', async (sheet) => {
+  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches:true, addEventListener:vi.fn(), removeEventListener:vi.fn() })))
+  location.hash = '#account'; layout.drawer = 'closed'; render(Home)
+  await screen.findByText('最近一段对话')
+  const opener = await screen.findByRole('button', { name: sheet === 'navigation' ? '打开左栏' : '仪表' })
+  await fireEvent.click(opener)
+  const dialog = await screen.findByRole('dialog', { name:sheet === 'navigation' ? '导航' : '仪表侧览' })
+  await fireEvent.keyDown(dialog, { key:'k', ctrlKey:true })
+  await fireEvent.keyDown(window, { key:'k', metaKey:true })
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  await waitFor(() => expect(screen.getByLabelText('提问')).toHaveFocus())
+  expect(location.hash).toBe('#chat/c1')
+  if (sheet === 'drawer') {
+    expect(layout.drawer).toBe('dash')
+    expect(localStorage.getItem('ws.drawer')).toBe('dash')
+  }
+})
+it('narrow bring-to-chat dismisses the drawer and focuses the visible chip input', async () => {
+  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches:true, addEventListener:vi.fn(), removeEventListener:vi.fn() })))
+  layout.drawer = 'closed'; render(Home)
+  await screen.findByText('最近一段对话')
+  await fireEvent.click(screen.getByRole('button', { name:'行情' }))
+  const dialog = await screen.findByRole('dialog', { name:'行情侧览' })
+  const objectLink = await within(dialog).findByRole('link', { name:'研究 #1' })
+  await fireEvent.click(within(objectLink.closest('tr')!).getByRole('button', { name:'带进对话' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  expect(await screen.findByRole('button', { name:'移除 MU · 研究 #1' })).toBeVisible()
+  await waitFor(() => expect(screen.getByLabelText('提问')).toHaveFocus())
+  expect(layout.drawer).toBe('market')
+  expect(localStorage.getItem('ws.drawer')).toBe('market')
 })

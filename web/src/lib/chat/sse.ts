@@ -37,6 +37,7 @@ export async function readEvents(
         return
       }
       const { done, value } = await reader.read()
+      if (signal?.aborted) return
       if (done) break
       buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
       let index = buffer.indexOf('\n\n')
@@ -51,6 +52,7 @@ export async function readEvents(
         index = buffer.indexOf('\n\n')
       }
     }
+    if (signal?.aborted) return
     buffer += decoder.decode()
     if (buffer.trim()) dispatch(buffer)
   } catch (error) {

@@ -9,7 +9,7 @@ const frame = (kind: string, payload: Record<string, unknown> = {}) => `event: $
 function stream() {
   let controller: ReadableStreamDefaultController<Uint8Array>
   const response = new Response(new ReadableStream<Uint8Array>({ start(c) { controller = c } }), { headers: { 'content-type': 'text/event-stream' } })
-  return { response, emit: (kind: string, payload: Record<string, unknown> = {}) => controller.enqueue(new TextEncoder().encode(frame(kind, payload))), close: () => controller.close() }
+  return { response, raw: (text: string) => controller.enqueue(new TextEncoder().encode(text)), emit: (kind: string, payload: Record<string, unknown> = {}) => controller.enqueue(new TextEncoder().encode(frame(kind, payload))), close: () => controller.close() }
 }
 const detail = { chat: { chat_id: 'c1', title: '问题', read_only: false }, messages: [] }
 function setup(options: { history?: unknown; readOnly?: boolean; chips?: { kind: 'plan'; ticker: string; id: number }[] } = {}) {
@@ -238,4 +238,65 @@ it('cancellation marks unresolved calls and blocks another send until the cancel
   settleCancel(json({}))
   await waitFor(() => expect(screen.getByRole('button', { name:'发送' })).toBeEnabled())
   expect(s.fetcher.mock.calls.filter(([u]) => String(u).endsWith('/messages'))).toHaveLength(1)
+})
+it.each(['{"kind":"text","text":"broken', '{"kind":"text","text":"late text"}'])('cancellation remains cancelled with a buffered frame %s', async (payload) => {
+  const s = setup(); await send()
+  s.emit('tool_start', { tool:'record_trade' })
+  await screen.findByText('记录成交 · 调用中')
+  s.raw(`event: text\ndata: ${payload}`)
+  await Promise.resolve()
+  await fireEvent.click(screen.getByRole('button', { name:'取消' }))
+  expect(await screen.findByText('已停止等待，调用结果未确认')).toBeInTheDocument()
+  expect(screen.queryByText('调用未完成')).not.toBeInTheDocument()
+  expect(screen.queryByText('late text')).not.toBeInTheDocument()
+  expect(screen.getByText('已取消')).toBeInTheDocument()
+})
+
+it.each(['POST', 'GET'])('serializes empty-state sends while creation %s is pending', async (pendingStage) => {
+  let settle!: (response: Response) => void
+  const deferred = new Promise<Response>(resolve => { settle = resolve })
+  const s = stream()
+  const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const path = String(url)
+    if (path === '/api/chats' && init?.method === 'POST') return pendingStage === 'POST' ? deferred : json({ chat_id:'new' })
+    if (path === '/api/chats/new') return pendingStage === 'GET' ? deferred : json({ chat:{ ...detail.chat, chat_id:'new' }, messages:[] })
+    if (path.endsWith('/messages')) return s.response
+    return json({ chats:[] })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  render(ChatPanel, { chatId:null, onWrote:vi.fn() })
+  await fireEvent.input(screen.getByLabelText('提问'), { target:{ value:'第一句' } })
+  const form = screen.getByLabelText('提问').closest('form')!
+  await fireEvent.submit(form)
+  await fireEvent.submit(form)
+  await waitFor(() => expect(fetcher.mock.calls.filter(([url, init]) => url === '/api/chats' && init?.method === 'POST')).toHaveLength(1))
+  expect(screen.getByRole('button', { name:'发送' })).toBeDisabled()
+  expect(screen.getByRole('button', { name:'今日操作' })).toBeDisabled()
+  expect(screen.getByRole('button', { name:'新开对话' })).toBeDisabled()
+  settle(pendingStage === 'POST' ? json({ chat_id:'new' }) : json({ chat:{ ...detail.chat, chat_id:'new' }, messages:[] }))
+  await screen.findByRole('button', { name:'取消' })
+  expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/messages'))).toHaveLength(1)
+  expect(JSON.parse(String(fetcher.mock.calls.find(([url]) => String(url).endsWith('/messages'))![1]?.body))).toEqual({ text:'第一句' })
+  await fireEvent.click(screen.getByRole('button', { name:'取消' }))
+  expect(fetcher.mock.calls.some(([url]) => url === '/api/chats/new/cancel')).toBe(true)
+})
+it('releases the empty-state send guard after a creation failure and preserves the draft for retry', async () => {
+  let attempts = 0
+  const s = stream()
+  const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (url === '/api/chats' && init?.method === 'POST') return ++attempts === 1 ? json({ error:'no_runtime_selected' },503) : json({ chat_id:'new' })
+    if (url === '/api/chats/new') return json({ chat:{ ...detail.chat, chat_id:'new' }, messages:[] })
+    if (String(url).endsWith('/messages')) return s.response
+    return json({ chats:[] })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  render(ChatPanel, { chatId:null, onWrote:vi.fn() })
+  await send('失败后重试')
+  await waitFor(() => expect(screen.getByRole('button', { name:'发送' })).toBeEnabled())
+  expect(screen.getByLabelText('提问')).toHaveValue('失败后重试')
+  await fireEvent.click(screen.getByRole('button', { name:'发送' }))
+  await screen.findByRole('button', { name:'取消' })
+  expect(attempts).toBe(2)
+  expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/messages'))).toHaveLength(1)
+  s.emit('done'); s.close()
 })

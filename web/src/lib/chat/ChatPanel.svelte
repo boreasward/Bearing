@@ -32,7 +32,9 @@
   let sequence = 0
   let active = $state<{ chatId: string; controller: AbortController; turn: Turn } | null>(null)
   let cancelPending = $state(false)
-  const busy = $derived(!!active || cancelPending)
+  let sendPending = $state(false)
+  let creating = $state(false)
+  const busy = $derived(sendPending || creating || !!active || cancelPending)
   const writeTool = /^(?:save_|record_|start_research$|conclude_research$|drop_research$|continue_plan$|revise_plan$|cancel_plan$|raise_stop$|confirm_stop_order$|void_record$|watchlist_add$|watchlist_remove$)/
   $effect(() => { selected = chatId; if (chatId && !conversations[chatId]) void load(chatId) })
   $effect(() => {
@@ -82,7 +84,9 @@
   function busyText(code: string): string {
     return ({ brief_running: '正在生成简报，请稍后再问', chat_running: '上一轮回答还在生成，请稍后再问', no_run: '还没有运行记录，稍后再问', chat_read_only: '该对话已只读' } as Record<string, string>)[code] ?? errorText(code)
   }
-  async function newChat(): Promise<string | null> {
+  export async function createChat(): Promise<string | null> {
+    if (creating) return null
+    creating = true
     try {
       const created = await post<{ chat_id: string }>('/api/chats', {})
       await load(created.chat_id)
@@ -93,72 +97,75 @@
     } catch (cause) {
       notify.error(cause instanceof Error && cause.message === 'no_runtime_selected' ? '还没有选定运行时，请先在设置里选择' : errorText(cause))
       return null
-    }
+    } finally { creating = false }
   }
   async function send(draft = input) {
     if (!draft.trim() || busy || current?.chat?.read_only) return
-    const id = selected ?? await newChat()
-    if (!id) return
-    const conv = conversations[id]
-    if (conv.loading || conv.chat?.read_only) return
-    const text = formatPrefix(chips) + draft.trim()
-    const sentChips = chips
-    input = ''; chips = []; conv.notice = ''; conv.error = ''
-    const userId = ++sequence; const assistantId = ++sequence
-    conv.items.push({ id: userId, role: 'user', text }, { id: assistantId, role: 'assistant', history: false, turn: { text: '', blocks: [], finished: 'running', agentSession: null } })
-    const item = conv.items.at(-1)!
-    if (item.role !== 'assistant') return
-    const turn = item.turn
-    const controller = new AbortController()
-    active = { chatId: id, controller, turn }
-    let wrote = false
-    let notified = false
+    sendPending = true
     try {
-      const response = await fetch(`/api/chats/${encodeURIComponent(id)}/messages`, { method: 'POST', headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal: controller.signal })
-      if (!response.ok) {
-        const data = await response.json().catch(() => null) as { error?: string } | null
-        conv.notice = busyText(data?.error ?? `HTTP ${response.status}`)
-        conv.items = conv.items.filter(item => item.id !== userId && item.id !== assistantId)
-        input = draft; chips = sentChips
-        return
-      }
-      await readEvents(response, frame => {
-        if (frame.event === 'done') {
-          if (turn.finished !== 'running') return
-          turn.finished = 'done'
-          if (wrote && !notified) { notified = true; invalidateAll(); onWrote() }
-          else if (!wrote) chats.invalidate()
+      const id = selected ?? await createChat()
+      if (!id) return
+      const conv = conversations[id]
+      if (conv.loading || conv.chat?.read_only) return
+      const text = formatPrefix(chips) + draft.trim()
+      const sentChips = chips
+      input = ''; chips = []; conv.notice = ''; conv.error = ''
+      const userId = ++sequence; const assistantId = ++sequence
+      conv.items.push({ id: userId, role: 'user', text }, { id: assistantId, role: 'assistant', history: false, turn: { text: '', blocks: [], finished: 'running', agentSession: null } })
+      const item = conv.items.at(-1)!
+      if (item.role !== 'assistant') return
+      const turn = item.turn
+      const controller = new AbortController()
+      active = { chatId: id, controller, turn }
+      let wrote = false
+      let notified = false
+      try {
+        const response = await fetch(`/api/chats/${encodeURIComponent(id)}/messages`, { method: 'POST', headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal: controller.signal })
+        if (!response.ok) {
+          const data = await response.json().catch(() => null) as { error?: string } | null
+          conv.notice = busyText(data?.error ?? `HTTP ${response.status}`)
+          conv.items = conv.items.filter(item => item.id !== userId && item.id !== assistantId)
+          input = draft; chips = sentChips
           return
         }
-        const payload = JSON.parse(frame.data) as { kind: string; text?: string; tool?: string; ref?: string | null; agent_session?: string }
-        if (payload.kind === 'start') turn.agentSession = payload.agent_session ?? null
-        else if (payload.kind === 'text') {
-          const text = payload.text ?? ''; turn.text += text
-          const last = turn.blocks.at(-1)
-          if (last?.kind === 'text') last.text += text
-          else turn.blocks.push({ kind: 'text', text })
-        } else if (payload.kind === 'tool_start') turn.blocks.push({ kind: 'tool', id: ++sequence, tool: payload.tool ?? '', ref: null, state: 'calling' })
-        else if (payload.kind === 'tool_end') {
-          // Claim only the first still-running call of this tool; repeated calls have separate refs.
-          const block = turn.blocks.find(block => block.kind === 'tool' && block.tool === payload.tool && block.state === 'calling')
-          if (block?.kind === 'tool') { block.ref = payload.ref || null; block.state = block.ref ? 'ready' : 'untraceable'; wrote ||= writeTool.test(block.tool) }
-        } else if (payload.kind === 'error') { turn.finished = 'error'; conv.error = payload.text ? busyText(payload.text) : '这一轮出错了' }
-        else if (payload.kind === 'cancelled') { turn.finished = 'cancelled'; conv.notice = '已取消' }
-      }, controller.signal)
-      if (turn.finished === 'running') { turn.finished = 'error'; conv.error = '回答连接已结束，请重试' }
-    } catch (cause) {
-      if ((cause as Error)?.name !== 'AbortError') { conv.error = errorText(cause); turn.finished = 'error' }
-    } finally {
-      if (turn.finished !== 'done') {
-        for (const block of turn.blocks) {
-          if (block.kind === 'tool' && block.state === 'calling') {
-            block.state = 'error'
-            block.error = turn.finished === 'cancelled' ? '已停止等待，调用结果未确认' : '调用未完成'
+        await readEvents(response, frame => {
+          if (frame.event === 'done') {
+            if (turn.finished !== 'running') return
+            turn.finished = 'done'
+            if (wrote && !notified) { notified = true; invalidateAll(); onWrote() }
+            else if (!wrote) chats.invalidate()
+            return
+          }
+          const payload = JSON.parse(frame.data) as { kind: string; text?: string; tool?: string; ref?: string | null; agent_session?: string }
+          if (payload.kind === 'start') turn.agentSession = payload.agent_session ?? null
+          else if (payload.kind === 'text') {
+            const text = payload.text ?? ''; turn.text += text
+            const last = turn.blocks.at(-1)
+            if (last?.kind === 'text') last.text += text
+            else turn.blocks.push({ kind: 'text', text })
+          } else if (payload.kind === 'tool_start') turn.blocks.push({ kind: 'tool', id: ++sequence, tool: payload.tool ?? '', ref: null, state: 'calling' })
+          else if (payload.kind === 'tool_end') {
+            // Claim only the first still-running call of this tool; repeated calls have separate refs.
+            const block = turn.blocks.find(block => block.kind === 'tool' && block.tool === payload.tool && block.state === 'calling')
+            if (block?.kind === 'tool') { block.ref = payload.ref || null; block.state = block.ref ? 'ready' : 'untraceable'; wrote ||= writeTool.test(block.tool) }
+          } else if (payload.kind === 'error') { turn.finished = 'error'; conv.error = payload.text ? busyText(payload.text) : '这一轮出错了' }
+          else if (payload.kind === 'cancelled') { turn.finished = 'cancelled'; conv.notice = '已取消' }
+        }, controller.signal)
+        if (turn.finished === 'running') { turn.finished = 'error'; conv.error = '回答连接已结束，请重试' }
+      } catch (cause) {
+        if ((cause as Error)?.name !== 'AbortError') { conv.error = errorText(cause); turn.finished = 'error' }
+      } finally {
+        if (turn.finished !== 'done') {
+          for (const block of turn.blocks) {
+            if (block.kind === 'tool' && block.state === 'calling') {
+              block.state = 'error'
+              block.error = turn.finished === 'cancelled' ? '已停止等待，调用结果未确认' : '调用未完成'
+            }
           }
         }
+        active = null
       }
-      active = null
-    }
+    } finally { sendPending = false }
   }
   async function cancelTurn() {
     if (!active || cancelPending) return
@@ -172,7 +179,7 @@
 </script>
 <div class="mx-auto flex h-full w-full max-w-[760px] flex-col gap-4 p-4">
   <div class="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto">
-  {#if !selected}<ChatEmpty onNewChat={() => { void newChat() }} />{/if}
+  {#if !selected}<ChatEmpty disabled={busy} onNewChat={() => { void createChat() }} />{/if}
   {#if current?.chat?.read_only}<Alert variant="info"><AlertDescription>该对话在切换运行时后变为只读，可看不可写。</AlertDescription></Alert>{/if}
   {#each current?.items ?? [] as item (item.id)}
     {#if item.role === 'user'}

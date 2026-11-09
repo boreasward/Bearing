@@ -77,3 +77,25 @@ it('aborts an idle reader without waiting for another chunk', async () => {
   await pending
   expect(cancel).toHaveBeenCalledTimes(1)
 })
+it.each([
+  'event: text\ndata: {"kind":"text","text":"unfinished',
+  'event: text\ndata: {"kind":"text","text":"undelimited"}',
+])('discards buffered bytes when abort ends a pending read: %s', async (buffer) => {
+  let waiting!: () => void
+  const nextRead = new Promise<void>(resolve => { waiting = resolve })
+  let pulls = 0
+  const response = new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulls++ === 0) controller.enqueue(encoder.encode(buffer))
+      else waiting()
+    },
+  }))
+  const controller = new AbortController()
+  const onEvent = vi.fn()
+  const pending = readEvents(response, onEvent, controller.signal)
+  await nextRead
+  await Promise.resolve()
+  controller.abort()
+  await pending
+  expect(onEvent).not.toHaveBeenCalled()
+})

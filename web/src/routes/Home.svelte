@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { post } from '$lib/api'
   import { parseHash, type ViewName } from '$lib/router'
   import { today, chats, invalidateAll } from '$lib/stores'
   import { BRING_EVENT, ACTION_EVENT, type BringEvent, type ActionEvent, type ContextChip } from '$lib/views/context'
@@ -17,8 +16,6 @@
   import RetrospectView from '$lib/views/RetrospectView.svelte'
   import JobsView from '$lib/views/JobsView.svelte'
   import SettingsSheet from '$lib/home/SettingsSheet.svelte'
-  import { notify } from '$lib/ui/toast'
-  import { errorText } from '$lib/home/types'
   let hash = $state(location.hash)
   const route = $derived(parseHash(hash))
   const chatRows = $derived(chats.data?.chats ?? [])
@@ -28,6 +25,7 @@
   const titles: Record<ViewName, string> = { today:'今日', account:'账户', market:'行情', plans:'计划与持仓', research:'研究', retrospect:'复盘', jobs:'定时任务' }
   const title = $derived(route.kind === 'view' ? titles[route.view] : chatRows.find(row => row.chat_id === chatId)?.title || '新对话')
   let settingsOpen = $state(false)
+  let shell: Shell | undefined = $state()
   let panel: ChatPanel | undefined = $state()
   let prefillChips = $state<ContextChip[] | undefined>()
   let prefillText = $state<{ text: string; seq: number } | undefined>()
@@ -35,18 +33,15 @@
   $effect(() => { if (route.kind === 'chat' && chatId) recentChatId = chatId })
   function navigate(hashValue: string) { hash = hashValue; location.hash = hashValue }
   async function openChat() {
+    await shell?.dismissForChat()
     navigate(chatId ? `#chat/${encodeURIComponent(chatId)}` : '#')
     await tick(); await panel?.focusInput()
   }
   function bring(chip: ContextChip) { prefillChips = [chip]; void openChat() }
   function startResearch(text: string) { prefillText = { text, seq: ++prefillSeq }; void openChat() }
   async function newChat() {
-    try {
-      const created = await post<{ chat_id: string }>('/api/chats', {})
-      recentChatId = created.chat_id
-      invalidateAll()
-      navigate(`#chat/${encodeURIComponent(created.chat_id)}`)
-    } catch (cause) { notify.error(cause instanceof Error && cause.message === 'no_runtime_selected' ? '还没有选定运行时，请先在设置里选择' : errorText(cause)) }
+    const id = await panel?.createChat()
+    if (id) { recentChatId = id; navigate(`#chat/${encodeURIComponent(id)}`) }
   }
   onMount(() => {
     const hashChanged = () => { hash = location.hash }
@@ -67,7 +62,7 @@
     }
   })
 </script>
-<Shell {title} session={today.data?.session ?? null} counts={today.data?.counts ?? null} chats={chatRows} currentChatId={chatId}
+<Shell bind:this={shell} {title} session={today.data?.session ?? null} counts={today.data?.counts ?? null} chats={chatRows} currentChatId={chatId}
   onNewChat={() => { void newChat() }} onOpenSettings={() => { settingsOpen = true }}>
   {#snippet center()}
     <div class="h-full" hidden={route.kind !== 'chat'}><ChatPanel bind:this={panel} {chatId} {prefillChips} {prefillText} onWrote={() => { recentChatId = chatId }} /></div>
