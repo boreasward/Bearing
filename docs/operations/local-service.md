@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**服务在运行（v3.1 已上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。
+**服务在运行（v3.2 已上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。
 每日任务另有一个 LaunchAgent `local.investment-assistant.daily`（同日安装，见 [daily-run.md](daily-run.md)）；两者的 `INVESTMENT_ASSISTANT_RUNTIME_BASE` 都是 `~/Library/Application Support/investment-assistant`，共用其下的 `pi.lock`。
 
 ## 启动链路

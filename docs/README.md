@@ -4,7 +4,7 @@
 
 ## 系统现在是什么样
 
-v3 重做进行中。旧系统（v2）已在 2026-11-06 移除，仓库里是 v3 的事实层与工具面、数据层与推导层、前端组件层和一个服务外壳；v3.1（开发中）在外壳上加了页面与对话，并新增计划线、止损纪律、账户与每日简报；v3.2（代码与测试已落地，待上线）在 v3.1 之上加检验与复盘、研究与跟踪、页面的时间控件与金额。
+v3 重做进行中。旧系统（v2）已在 2026-11-06 移除，仓库里是 v3 的事实层与工具面、数据层与推导层、前端组件层和一个服务外壳；v3.1（开发中）在外壳上加了页面与对话，并新增计划线、止损纪律、账户与每日简报；v3.2（2026-11-09 已迁移并重载页面服务，待观察真实运行）在 v3.1 之上加检验与复盘、研究与跟踪、页面的时间控件与金额。
 
 | 文档 | 内容 |
 | --- | --- |
@@ -13,7 +13,7 @@ v3 重做进行中。旧系统（v2）已在 2026-11-06 移除，仓库里是 v3
 | [plans/2026-11-05-v3-facts-and-tools.md](plans/2026-11-05-v3-facts-and-tools.md) | v3 第一阶段实施 plan：文档归档、Pi 无人值守可行性验证、事实层与工具面 |
 | [specs/2026-11-06-v2-removal-design.md](specs/2026-11-06-v2-removal-design.md)、[plans/2026-11-06-v2-removal.md](plans/2026-11-06-v2-removal.md) | 提前移除 v2（v3 第 5 步）的设计与实施 plan：保留什么、删什么、迁移 033、与 v3 设计的出入 |
 | [specs/2026-11-06-v3.1-plan-line-account-and-web-design.md](specs/2026-11-06-v3.1-plan-line-account-and-web-design.md)、[plans/2026-11-07-v3.1-plan-line-account-and-web.md](plans/2026-11-07-v3.1-plan-line-account-and-web.md) | v3.1（开发中）：每日简报、计划线、止损纪律、账户、页面与对话的设计与实施 plan（迁移 034） |
-| [specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md](specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md)、[plans/2026-11-08-v3.2-retrospect-research-and-page-polish.md](plans/2026-11-08-v3.2-retrospect-research-and-page-polish.md) | v3.2（代码与测试已落地，待上线）：检验与复盘（执行复盘、规则检验、假设结果、周报）、研究与跟踪、页面的时间控件与金额的设计与实施 plan（迁移 035） |
+| [specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md](specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md)、[plans/2026-11-08-v3.2-retrospect-research-and-page-polish.md](plans/2026-11-08-v3.2-retrospect-research-and-page-polish.md) | v3.2（已迁移与重载，待观察真实运行）：检验与复盘（执行复盘、规则检验、假设结果、周报）、研究与跟踪、页面的时间控件与金额的设计与实施 plan（迁移 035） |
 | [operations/](operations/) | 运维文档：本机服务（外壳与页面接口）、每日任务、迁移与备份、v3 事实任务与工具面、Pi 无人值守 |
 | [design-system.md](design-system.md) | 设计标准：原则、令牌（浅 / 深取值）、布局、状态词汇与语气、数据块五态、组件清单与 API、交互、图标与图表、文案；组件画廊在 `npm run dev` → `#_ui`（v3 保留的组件层仍以它为标准，spec §15.1） |
 | [getting-started.md](getting-started.md) | v3 的上手指南：安装、配置（`.env` 与配置文件）、建库、运行（`facts`、`toolsurface`、`daily`、外壳服务与页面）、三套测试 |
