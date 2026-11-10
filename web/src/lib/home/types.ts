@@ -1,3 +1,5 @@
+import type { MarketData } from '$lib/stores/types'
+
 // Page-API types: the binding contract is Task 5's route table (investment_assistant/api/routes).
 // Field names are copied verbatim from that table; the additions beyond it are
 // `close_above_entry` and `missing_bar` on plan cards (spec §6.3, rulings R7 + final-review F1).
@@ -39,10 +41,17 @@ export interface BriefListItem {
   pushed: boolean
 }
 
+export interface BriefSection { key: string; title: string; markdown: string }
+export type BriefMarket = Omit<MarketData, 'watch'>
+
 export interface Brief {
   session: string
   status: string
   markdown: string | null
+  sections?: BriefSection[]
+  lead?: string | null
+  footer?: string | null
+  market?: BriefMarket | null
   error: string | null
   runtime: string | null
   provider: string | null

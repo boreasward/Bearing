@@ -45,7 +45,6 @@
   })
 
   function switchWeek(value: string) {
-    // bits-ui 先写 bind:value 再调 onValueChange，与 selectedWeek 比恒相等（BriefPanel 同坑）：
     // 与最近一次实际取数的周比
     if (!value || value === loadedWeek) return
     loadedWeek = value

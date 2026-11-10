@@ -12,7 +12,7 @@
 
   // 账户条（spec §12）：现金、总资产、浮动盈亏、已实现盈亏；「记出入金」「对账」两个入口。
   // account 为空（页面还在取 /api/today）时显示骨架。
-  let { account: supplied, onChanged }: { account?: TodayData['account'] | null; onChanged?: () => void } = $props()
+  let { account: supplied, tag, onChanged }: { account?: TodayData['account'] | null; tag?: string; onChanged?: () => void } = $props()
   const account = $derived(supplied === undefined ? today.data?.account ?? null : supplied)
   function changed() { invalidateAll(); actionCompleted('已更新账户'); onChanged?.() }
 
@@ -20,8 +20,8 @@
   let reconcileOpen = $state(false)
 </script>
 
-<Card.Root size="sm">
-  <Card.Header><Card.Title>账户</Card.Title></Card.Header>
+<Card.Root size="sm" role="region" aria-label="账户">
+  <Card.Header><Card.Title>账户{#if tag}<span class="ml-2 text-xs font-normal text-muted-foreground">{tag}</span>{/if}</Card.Title></Card.Header>
   <Card.Content class="grid gap-2">
     <DataBlock state={account ? 'ready' : today.state} message={today.error} skeleton="row">
       {#if account}

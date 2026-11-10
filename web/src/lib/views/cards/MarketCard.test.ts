@@ -23,6 +23,20 @@ it('defaults to six ETFs and omits absent calculation version', () => {
  expect(container.querySelector('[data-slot="source-line"]')).toHaveTextContent('call:7')
  expect(container.querySelector('[data-slot="source-line"]')).not.toHaveTextContent('regime-v3')
 })
+it('brief shows that day\'s snapshot without watch, macro or row actions', () => {
+ const etf_table = Array.from({ length:8 }, (_, index) => ({ ...data.etf_table[0], etf:`ETF${index}`, rs20:(8-index)/100 }))
+ const snapshot = { ...data, watch:undefined, session:'2026-11-06', etf_table }
+ const { container } = render(MarketCard, { data:snapshot, brief:true })
+ expect(screen.getByText('行情')).toBeInTheDocument(); expect(screen.queryByText('市场温度')).toBeNull()
+ expect(container).toHaveTextContent('中性'); expect(container).toHaveTextContent('2026-11-06')
+ expect(container).toHaveTextContent('50 日'); expect(container).toHaveTextContent('200 日'); expect(container).toHaveTextContent('52 周新高 / 新低'); expect(container).toHaveTextContent('SPY 20 日')
+ const rows = Array.from(container.querySelectorAll('[aria-label="板块 ETF"] tbody tr'))
+ expect(rows).toHaveLength(etf_table.length)
+ expect(rows.map(row => row.querySelector('td')?.textContent?.trim())).toEqual(etf_table.map(row => row.etf))
+ expect(container).not.toHaveTextContent('带进对话'); expect(container).not.toHaveTextContent('关注的标的'); expect(container).not.toHaveTextContent('宏观'); expect(container).not.toHaveTextContent('领涨')
+ expect(screen.getByRole('link', { name:'打开完整行情 ›' })).toHaveAttribute('href', '#market')
+ expect(container.querySelector('[data-slot="source-line"]')).toBeNull()
+})
 it('watch percentage points are not multiplied by one hundred', () => {
  const { container } = render(MarketCard, { data:{ ...data, watch:[{ ...data.watch[0], change_pct:'-3.80' }] }, full:true })
  expect(container).toHaveTextContent('-3.80%'); expect(container).not.toHaveTextContent('-380.00%')

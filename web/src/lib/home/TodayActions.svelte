@@ -1,6 +1,6 @@
 <script lang="ts">
   import { bringToChat } from '$lib/views/context'
-  import Section from '$lib/ui/domain/Section.svelte'
+  import PageCard from '$lib/views/PageCard.svelte'
   import StatusPill from '$lib/ui/domain/StatusPill.svelte'
   import { Button } from '$lib/ui/button/index'
   import ConfirmDialog from '$lib/ui/confirm-dialog/ConfirmDialog.svelte'
@@ -71,7 +71,7 @@
 </script>
 
 {#if sorted.length}
-  <Section title="今日操作" level={2}>
+  <PageCard title="今日操作" tag={`${sorted.length} 条`}>
     <ul class="grid gap-2">
       {#each sorted as action (action.plan_id)}
         <li class="grid gap-1.5 rounded-md border border-border bg-card p-3">
@@ -104,12 +104,11 @@
         </li>
       {/each}
     </ul>
-  </Section>
+  </PageCard>
 {:else}
-  <!-- 没有操作时也留一张小卡片（用户 2026-11-07），左栏顶部不再空出一块 -->
-  <Section title="今日操作" level={2}>
-    <p class="rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground">今天没有需要操作的事项</p>
-  </Section>
+  <PageCard title="今日操作">
+    <p class="text-sm text-muted-foreground">今天没有需要操作的事项</p>
+  </PageCard>
 {/if}
 
 <ConfirmDialog
