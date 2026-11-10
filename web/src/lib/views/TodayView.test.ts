@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { tick } from 'svelte'
 import TodayView from './TodayView.svelte'
-import { invalidateAll } from '$lib/stores'
+import { invalidateAll, market } from '$lib/stores'
 import { fixture } from './test-fixtures'
 import type { MarketData } from '$lib/stores/types'
 const marketData = fixture('get_market') as MarketData
@@ -22,7 +22,7 @@ function install(options: { list?: unknown; bySession?: Record<string, unknown>;
   if (path === '/api/today') return json(today)
   if (path === '/api/market') return options.market === 404 ? json({ error:'no_run' },404) : json(options.market ?? marketData)
   const date = path.split('/').at(-1)!
-  const value = options.bySession?.[date] ?? (date === 'latest' ? brief() : brief(date))
+  const value = await (options.bySession?.[date] ?? (date === 'latest' ? brief() : brief(date)))
   if (value === 'no_run') return json({ error:'no_run' },404)
   if (value === 404) return json({ error:'no_brief' },404)
   if (value === 500) return json({ error:'brief_failed' },500)
@@ -75,18 +75,39 @@ it('a dated link with no brief uses live actions and does not mark the account h
  expect(await screen.findByRole('button',{name:'记成交'})).toBeInTheDocument()
  expect(screen.getByRole('region',{name:'账户'})).not.toHaveTextContent('最新')
  expect(screen.getByText('今天还没有简报')).toBeInTheDocument()
+ await waitFor(() => expect(screen.getByRole('region',{name:'行情'})).toHaveTextContent(marketData.session))
 })
 it('a dated link with no run uses live actions and does not mark the account historical', async () => {
  install({ bySession:{'2026-11-04':'no_run'} }); render(TodayView,{session:'2026-11-04'})
  expect(await screen.findByRole('button',{name:'记成交'})).toBeInTheDocument()
  expect(screen.getByRole('region',{name:'账户'})).not.toHaveTextContent('最新')
  expect(screen.getByText('还没有运行记录')).toBeInTheDocument()
+ await waitFor(() => expect(screen.getByRole('region',{name:'行情'})).toHaveTextContent(marketData.session))
 })
 it('a generic dated brief request failure remains historical and has no live actions', async () => {
  install({ bySession:{'2026-11-03':500} }); render(TodayView,{session:'2026-11-03'})
  expect(await screen.findByRole('region',{name:'简报'})).toBeInTheDocument()
  expect(screen.queryByRole('button',{name:'记成交'})).toBeNull()
  expect(screen.getByRole('region',{name:'账户'})).toHaveTextContent('最新')
+ await waitFor(() => expect(market.state).toBe('ready'))
+ const marketCard = screen.getByRole('region',{name:'行情'})
+ expect(marketCard).not.toHaveTextContent(marketData.session)
+ expect(marketCard).toHaveTextContent('服务暂时不可用，请稍后重试')
+})
+it('a pending dated brief request never shows the latest market snapshot', async () => {
+ let resolveBrief!: (response: unknown) => void
+ const pending = new Promise<unknown>(resolve => { resolveBrief = resolve })
+ install({ bySession:{'2026-11-02':pending} }); render(TodayView,{session:'2026-11-02'})
+ try {
+  await waitFor(() => expect(market.state).toBe('ready'))
+  const marketCard = screen.getByRole('region',{name:'行情'})
+  expect(marketCard).not.toHaveTextContent(marketData.session)
+  expect(within(marketCard).getByRole('status',{name:'加载中'})).toBeInTheDocument()
+ } finally {
+  resolveBrief(brief('2026-11-02'))
+ }
+ await waitFor(() => expect(screen.getByRole('region',{name:'行情'})).toHaveTextContent('2026-11-02'))
+ expect(screen.getByRole('region',{name:'行情'})).not.toHaveTextContent(marketData.session)
 })
 it('the date selector sits in the page header and switches every dated card', async () => {
  install(); const { container } = render(TodayView)
@@ -110,6 +131,17 @@ it('draft shows the unfinished alert and an error brief shows one reason only', 
  expect(screen.queryByText('二次确认未完成')).toBeNull(); expect(screen.queryByRole('region',{name:'简报'})).toBeNull()
  expect(screen.getByRole('region',{name:'行情'})).toHaveTextContent('这一天没有市场数据')
 })
+it('a draft with no sections preserves its introductory text alongside the warning', async () => {
+ install({bySession:{latest:brief('2026-11-09',{status:'draft',unfinished:true,lead:'一段草稿说明',sections:[]})}}); render(TodayView)
+ expect(await screen.findByText('二次确认未完成')).toBeInTheDocument()
+ expect(screen.getAllByText('二次确认未完成')).toHaveLength(1)
+ expect(screen.getAllByText('一段草稿说明')).toHaveLength(1)
+})
+it('a nonerror brief preserves introductory text alongside an error notice', async () => {
+ install({bySession:{latest:brief('2026-11-09',{lead:'一段简报说明',error:'部分数据缺失',sections:[]})}}); render(TodayView)
+ expect(await screen.findByText('部分数据缺失')).toBeInTheDocument()
+ expect(screen.getAllByText('一段简报说明')).toHaveLength(1)
+})
 it('market falls back to the section text when snapshot is absent', async () => {
  install({ bySession:{'2026-11-08':brief('2026-11-08',{market:null})} }); render(TodayView,{session:'2026-11-08'})
  expect(await screen.findByText('摘要文字')).toBeInTheDocument()
@@ -129,7 +161,7 @@ it('no brief keeps today\'s actions, the account and the latest market', async (
  install({bySession:{latest:404}}); render(TodayView)
  expect(await screen.findByRole('button',{name:'记成交'})).toBeInTheDocument()
  expect(screen.getByRole('region',{name:'账户'})).toBeInTheDocument(); expect(screen.getByText('今天还没有简报')).toBeInTheDocument()
- expect(screen.getByRole('region',{name:'行情'})).toHaveTextContent(marketData.session)
+ await waitFor(() => expect(screen.getByRole('region',{name:'行情'})).toHaveTextContent(marketData.session))
 })
 it('no brief and no market run show the server reason', async () => {
  install({bySession:{latest:404},market:404}); render(TodayView)

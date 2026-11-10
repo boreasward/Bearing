@@ -68,6 +68,8 @@
           <PageCard title="行情"><Markdown source={marketSection.markdown} /></PageCard>
         {:else if current}
           <PageCard title="行情"><p class="text-sm text-muted-foreground">这一天没有市场数据</p></PageCard>
+        {:else if !absentBrief}
+          <PageCard title="行情"><DataBlock state={resource.state === 'loading' ? 'loading' : resource.state === 'error' ? 'error' : 'empty'} message={resource.error || '这一天没有市场数据'} skeleton="block" /></PageCard>
         {:else if market.state === 'ready' && market.data}
           <MarketCard data={market.data} brief />
         {:else}
@@ -82,11 +84,13 @@
 
           {#if current?.status === 'draft'}
             <Alert variant="warn"><AlertDescription>二次确认未完成</AlertDescription></Alert>
-          {:else if current?.status === 'error'}
+          {/if}
+          {#if current?.status === 'error'}
             <Alert variant="danger"><AlertDescription>{current.lead ?? briefErrorText(current.error)}</AlertDescription></Alert>
           {:else if current?.error}
             <Alert variant="danger"><AlertDescription>{briefErrorText(current.error)}</AlertDescription></Alert>
-          {:else if current?.lead}
+          {/if}
+          {#if current?.status !== 'error' && current?.lead}
             <p class="text-sm text-muted-foreground">{current.lead}</p>
           {/if}
           {#if isLatest}
