@@ -26,6 +26,17 @@ describe('workbench layout state', () => {
     const fresh = await import('./layout.svelte')
     expect(fresh.layout.navSegment).toBe('quick'); expect(fresh.layout.drawer).toBe('dash')
   })
+  it('restores the tools pane', async () => {
+    localStorage.setItem('ws.drawer', 'tools')
+    const { layout } = await import('./layout.svelte')
+    expect(layout.drawer).toBe('tools')
+  })
+  it('toggles the tools pane and persists it', async () => {
+    const { layout, toggleDrawer } = await import('./layout.svelte')
+    toggleDrawer('tools'); expect(layout.drawer).toBe('tools')
+    expect(localStorage.getItem('ws.drawer')).toBe('tools')
+    toggleDrawer('tools'); expect(layout.drawer).toBe('closed')
+  })
   it('survives denied storage reads and writes', async () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied') })
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied') })

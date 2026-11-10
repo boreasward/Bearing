@@ -8,6 +8,7 @@
   import DashboardPane from '$lib/drawer/DashboardPane.svelte'
   import MarketPane from '$lib/drawer/MarketPane.svelte'
   import JobsPane from '$lib/drawer/JobsPane.svelte'
+  import ToolsPane from '$lib/drawer/ToolsPane.svelte'
   import TodayView from '$lib/views/TodayView.svelte'
   import AccountView from '$lib/views/AccountView.svelte'
   import MarketView from '$lib/views/MarketView.svelte'
@@ -79,7 +80,8 @@
   {#snippet drawerPane(pane)}
     {#if pane === 'dash'}<DashboardPane onBring={bring} />
     {:else if pane === 'market'}<MarketPane onBring={bring} />
-    {:else}<JobsPane onBring={bring} />{/if}
+    {:else if pane === 'jobs'}<JobsPane onBring={bring} />
+    {:else}<ToolsPane />{/if}
   {/snippet}
 </Shell>
 <SettingsSheet bind:open={settingsOpen} onSaved={invalidateAll} />

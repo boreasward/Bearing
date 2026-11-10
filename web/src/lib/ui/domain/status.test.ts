@@ -14,6 +14,7 @@ describe('status vocabulary', () => {
       portfolio_verdict: ['ok', 'blocked', 'deferred'], data_request: ['queued', 'fetched', 'failed', 'deferred'],
       feature_flag: ['enabled', 'disabled'],
       roadmap_version: ['planned', 'in_progress', 'engineering_done', 'user_acceptance_pending', 'done', 'dropped'],
+      tool_write: ['direct', 'confirm'],
     }
     for (const [domain, keys] of Object.entries(expected)) for (const key of keys) {
       const info = statusOf(domain as StatusDomain, key)
@@ -31,6 +32,8 @@ describe('status vocabulary', () => {
     expect(LABELS.write).toEqual({ written: '已写入', preview: '待确认', replayed: '重放' })
     expect(TONES.daily_run).toEqual({ final: 'success', draft: 'warn', error: 'danger', unfinished: 'warn', pending: 'neutral', running: 'running' })
     expect(LABELS.daily_run).toEqual({ final: '成功', draft: '降级', error: '失败', unfinished: '未做完', pending: '待运行', running: '运行中' })
+    expect(TONES.tool_write).toEqual({ direct: 'neutral', confirm: 'neutral' })
+    expect(LABELS.tool_write).toEqual({ direct: '写入', confirm: '写入 · 先确认' })
   })
   it('every TONES key has a label', () => {
     for (const domain of domains) {
@@ -43,7 +46,7 @@ describe('status vocabulary', () => {
   it('every domain of the type is in TONES and LABELS', () => {
     expect(domains.sort()).toEqual([
       'daily_run', 'etf_state', 'regime', 'write', 'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'data_request', 'execution', 'feature_flag', 'fetch', 'instruction',
-      'knowledge', 'node', 'paper_decision', 'paper_order', 'plan', 'plan_action', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research', 'research_request', 'retro', 'retro_tag', 'roadmap_version', 'run', 'stop_order', 'system',
+      'knowledge', 'node', 'paper_decision', 'paper_order', 'plan', 'plan_action', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research', 'research_request', 'retro', 'retro_tag', 'roadmap_version', 'run', 'stop_order', 'system', 'tool_write',
     ].sort())
     expect(Object.keys(LABELS).sort()).toEqual(domains)
   })

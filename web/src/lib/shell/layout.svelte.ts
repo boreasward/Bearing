@@ -1,4 +1,4 @@
-export type DrawerPane = 'dash' | 'market' | 'jobs'
+export type DrawerPane = 'dash' | 'market' | 'jobs' | 'tools'
 export type NavSegment = 'quick' | 'chats'
 
 function read(key: string): string | null {
@@ -16,7 +16,7 @@ export const layout = $state<{
 }>({
   navCollapsed: read('ws.nav.collapsed') === '1',
   navSegment: read('ws.nav.segment') === 'chats' ? 'chats' : 'quick',
-  drawer: savedDrawer === 'market' || savedDrawer === 'jobs' || savedDrawer === 'closed' ? savedDrawer : 'dash',
+  drawer: savedDrawer === 'market' || savedDrawer === 'jobs' || savedDrawer === 'tools' || savedDrawer === 'closed' ? savedDrawer : 'dash',
   narrow: false,
 })
 export function toggleNav(): void {

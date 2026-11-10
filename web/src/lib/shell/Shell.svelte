@@ -41,7 +41,7 @@
     if (!chatClose) sheetTrigger?.focus()
   }
   onDestroy(finishChatClose)
-  const titles = { dash: '仪表', market: '行情', jobs: '定时任务' }
+  const titles = { dash: '仪表', market: '行情', jobs: '定时任务', tools: '工具' }
 
   function closeDrawer() {
     if (layout.drawer !== 'closed') toggleDrawer(layout.drawer)

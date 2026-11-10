@@ -10,6 +10,7 @@
     { pane: 'dash', label: '仪表', icon: 'layout-grid' },
     { pane: 'market', label: '行情', icon: 'trending-up' },
     { pane: 'jobs', label: '定时任务', icon: 'clock' },
+    { pane: 'tools', label: '工具', icon: 'wrench' },
   ] as const
 </script>
 <header class="flex flex-wrap items-center justify-between gap-2 border-b bg-background px-3 py-2">
