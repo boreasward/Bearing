@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**服务在运行（v3.2.1 已上线；v3.2.2 代码已落地、未上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。同日 v3.2.1 上线：迁移 036 执行后重建 `web/dist` 并 `kickstart -k` 重启，首页换成三栏工作台；执行记录见下文 [v3.2.1 上线四步](#v321-上线四步2026-11-09-已执行)。v3.2.2 完成页面卡片化与工具面板的代码和测试，尚未重建服务前端或上线。
+**服务在运行（v3.2.2 已上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。同日 v3.2.1 上线：迁移 036 执行后重建 `web/dist` 并 `kickstart -k` 重启，首页换成三栏工作台；执行记录见下文 [v3.2.1 上线四步](#v321-上线四步2026-11-09-已执行)。2026-11-10 v3.2.2 上线：重建 `web/dist` 并 `kickstart -k` 重启，「今日」「账户」换成卡片、抽屉加「工具」面板；执行记录见下文 [v3.2.2 上线两步](#v322-上线两步2026-11-10-已执行)。
 每日任务另有一个 LaunchAgent `local.investment-assistant.daily`（同日安装，见 [daily-run.md](daily-run.md)）；两者的 `INVESTMENT_ASSISTANT_RUNTIME_BASE` 都是 `~/Library/Application Support/investment-assistant`，共用其下的 `pi.lock`。
 
 ## 启动链路
@@ -38,14 +38,32 @@
 - 没有 `web/dist` 时 `/` 返回 503 `{"error": "frontend_not_built", …}`。
 - 组件画廊（`#_ui`）只在开发模式（`cd web && npm run dev`）可用，构建产物不含它。
 
-## v3.2.2 上线两步（每一步需用户单独授权，尚未执行）
+## v3.2.2 上线两步（2026-11-10 已执行）
 
-本版没有数据库迁移。代码已落地，当前服务仍运行 v3.2.1。Task 4 的隔离开发浏览器画廊截图为空白，尺寸 2370×1432，不能作为视觉通过证据。用户已明确「我来完成验收」，视觉与响应式布局验收由用户完成，结果待记录；未做部署。
+依据 [设计 spec](../specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md) §10，以下两步在 2026-11-10 经用户授权（「验收并完成发布」）依次执行。本版没有数据库迁移。
 
 1. **重建 `web/dist` 并重载页面服务**：后端简报接口新增 `sections`、`lead`、`footer`、`market` 字段，部署需同时更新后端代码与前端构建产物，再重载本机页面服务。
+
+   ```bash
+   git rev-parse HEAD
+   cd web && npm run build
+   cd ..
+   test -s web/dist/index.html
+   launchctl kickstart -k gui/$(id -u)/local.investment-assistant
+   launchctl print gui/$(id -u)/local.investment-assistant | grep -E 'state|pid'
+   curl --fail --silent --show-error http://127.0.0.1:8787/api/briefs/latest
+   ```
+
 2. **真实页面核对**：在真实页面上按[设计 spec §12](../specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md#12-验收)核对九项验收，包括今日与账户卡片、抽屉工具清单、深浅主题与响应式布局。
 
-上述每一步都需用户单独授权；目前均未执行。
+**执行记录（2026-11-10，本机服务，未启用 Basic）：**
+
+- 上线前三套全量（HEAD `483d72a`）：离线 919 passed / 416 skipped，一次性库 1335 passed，前端 71 个文件 500 passed（`--maxWorkers=2`），svelte-check 951 个文件 0 错误 0 警告。
+- 第 1 步：构建 HEAD `483d72a`，`web/dist/index.html` 非空；`launchctl kickstart -k` 后服务 pid 29603 → 52065，`state = running`，首页 200。`/api/briefs/latest`（2026-11-09，final）返回十个小节（`actions` … `unresolved`）、`lead` 为 null、`footer` 以「数据截至 2026-11-09 收盘」开头、`market` 为当天快照（`regime-2`、neutral，无 `watch`）；`/api/briefs/2026-11-06` 返回八个小节与 2026-11-06 的快照。
+- 第 2 步核对中发现：页内改 hash（前进 / 后退、`#today` → `#today?session=2026-11-06`）时历史简报一直停在骨架、不发请求（新开页面或用日期下拉切换正常）。修复为 `e235623`（`path` 改为可写 derived，补 `TodayView.test.ts` 用例），定向 20 passed、前端全量 501 passed、svelte-check 0 错误；只重建 `web/dist`（静态资源每次从磁盘读，后端未变，未再重启）。
+- 第 2 步页面（修复后）：1600px 宽两栏，右栏 320px，左栏「今日操作」「一句话」「和昨天比变了什么」「持仓」「待入场计划」「研究」「规则名单」「今天下不了结论的」各一张卡，「市场环境」「账户」小节不重复；页内切到 2026-11-06：行情卡交易日 2026-11-06、账户卡标「最新」、今日操作无按钮，后退回最新正常。「账户」页五张卡，「记成交」「记出入金」「对账」在各自标题行（未提交写入）。「工具」面板五组 35 个、写入标记齐全、行不可点、`ws.drawer = tools`（核对后切回「仪表」）。700px 账户与行情并排、抽屉为右侧 Sheet，420px 单列，均无横向滚动；深色主题卡片边框 `rgb(42, 42, 42)`、12px 圆角、无阴影。对话 `f341edc7…` 的 MarketCard 仍是「市场温度」与 `get_market · call:1` 来源行。控制台无错误。
+- 真实库没有草稿或出错的简报，§12 第 4 项（「二次确认未完成」、出错简报只显示一条原因、没有简报时照常打开）由 `TodayView.test.ts` 覆盖，未在真实页面上看到。
+- 已知外观问题（不阻断发布）：右栏 320px 时行情卡 ETF 表的百分比折行（如 `12.77%`、`-12.98%`）。原因是 `MetricValue` 的 `break-all` 让表格把三列数字压到约 43px 内容宽，不折行需约 340px 的表格宽度；按 plan 把右栏放到 spec 上限 340px 时卡片内容宽只有 314px，仍然折行，所以未改。700px 下账户卡「浮动盈亏」金额也会折行。
 
 ## v3.2.1 工作台前端（2026-11-09 已部署）
 

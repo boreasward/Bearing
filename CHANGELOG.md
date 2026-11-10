@@ -2,9 +2,9 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/roadmap.md)。
 
-## [3.2.2] - 未发布
+## [3.2.2] - 2026-11-10
 
-今日与账户页卡片化、工具面板（[设计 spec](docs/specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md)、[实施 plan](docs/plans/2026-11-10-v3.2.2-page-cards-and-tool-list.md)）。代码与测试已落地，尚未上线；无数据库迁移。
+今日与账户页卡片化、工具面板（[设计 spec](docs/specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md)、[实施 plan](docs/plans/2026-11-10-v3.2.2-page-cards-and-tool-list.md)）。2026-11-10 经用户授权上线：重建 `web/dist` 并重载页面服务，真实页面核对通过；无数据库迁移。
 
 - 今日页将简报小节拆为独立卡片，按文字与数字两栏排布；右侧账户始终显示最新数字，行情显示简报日期的市场快照。
 - 历史简报的今日操作显示当日文字且不提供写入按钮；接口缺少新字段时仍可显示整篇简报。
@@ -13,7 +13,7 @@
 - 两个单份简报接口新增 `sections`、`lead`、`footer`、`market` 字段，不新增接口或迁移。
 - 审查前的三套全量测试：离线 pytest 919 passed / 416 skipped；一次性库 pytest 1335 passed；前端 `npm test -- --maxWorkers=2` 497 passed / 71 files（默认并行首次运行有一项 AccountView 超时，限为两 worker 后通过）；构建成功，svelte-check 0 错误 / 0 警告。
 - 审查后修复历史简报请求失败或等待时误显最新行情、草稿提示遮住导语的问题；定向验证 `TodayView.test.ts` 19 passed，svelte-check 0 错误 / 0 警告，未重复全量测试或构建。
-- 画廊的隔离浏览器截图为空白，不能作为视觉通过证据；用户已明确「我来完成验收」，视觉与响应式布局验收由用户完成，结果待记录。
+- 上线核对时修复页内改 hash（前进 / 后退、深链切换）后历史简报停在骨架的问题；修复后前端全量 501 passed。[上线两步与执行记录](docs/operations/local-service.md#v322-上线两步2026-11-10-已执行)。已知外观问题：320px 右栏里 ETF 表百分比折行，放到 340px 仍折行，未改。
 
 ## [3.2.1] - 2026-11-09
 
