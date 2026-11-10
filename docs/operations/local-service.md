@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**服务在运行（v3.2.1 已上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。同日 v3.2.1 上线：迁移 036 执行后重建 `web/dist` 并 `kickstart -k` 重启，首页换成三栏工作台；执行记录见下文 [v3.2.1 上线四步](#v321-上线四步2026-11-09-已执行)。
+**服务在运行（v3.2.1 已上线；v3.2.2 代码已落地、未上线）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。同日 v3.2.1 上线：迁移 036 执行后重建 `web/dist` 并 `kickstart -k` 重启，首页换成三栏工作台；执行记录见下文 [v3.2.1 上线四步](#v321-上线四步2026-11-09-已执行)。v3.2.2 完成页面卡片化与工具面板的代码和测试，尚未重建服务前端或上线。
 每日任务另有一个 LaunchAgent `local.investment-assistant.daily`（同日安装，见 [daily-run.md](daily-run.md)）；两者的 `INVESTMENT_ASSISTANT_RUNTIME_BASE` 都是 `~/Library/Application Support/investment-assistant`，共用其下的 `pi.lock`。
 
 ## 启动链路
@@ -24,7 +24,7 @@
   - `GET /api/today`：今日操作与账户条；v3.2.1 增加 `counts: { actions, holdings, pending, watching }`，分别统计操作、持仓计划、待入场计划与观察中研究；空库四项为 0。
   - `GET /api/market`（v3.2.1）：最新成功运行的市场快照（含 `session`、`calc_version`）与 `watch[]`。关注表按持仓计划 → 待入场计划 → 观察中研究对股票去重，带计划 / 研究 id；两根最近日线给出收盘价与两位小数百分比字符串，缺一根时三个价格 / 涨跌字段均为 null；没有成功运行返回 404 `no_run`。
   - `GET /api/runs?limit=20`（v3.2.1）：按交易日倒序的事实运行与对应简报（含未完成、推送、周报状态），以及配置的 `schedule`；`next_at` 是北京时间、ISO 带 `+08:00`。空库仍返回完整计划表与空 `runs`。`limit` 为 1–100，否则 400 `invalid_argument`。
-  - `GET /api/briefs`、`GET /api/briefs/latest`、`GET /api/briefs/{session}`：简报列表与单份简报。
+  - `GET /api/briefs`、`GET /api/briefs/latest`、`GET /api/briefs/{session}`：简报列表与单份简报；两个单份简报接口除原字段外还返回 `sections`（按正文顺序的小节，含 `key` / `title` / `markdown`）、`lead`（错误简报提示）、`footer`（页脚）与 `market`（该简报对应运行的市场快照，不含 `watch`，取不到时为 `null`）。
   - `GET /api/plans`、`GET /api/plans/{id}`：计划三组卡片与单份计划（含变化记录）；`POST /api/plans/{id}/stop-order`、`/raise-stop`、`/cancel`：计划写入口。
   - `GET /api/research`（v3.2）：研究两组卡片（`group=watching|ended`、`limit`，观察中缺省）；`GET /api/research/{id}`：单份含变化记录时间线；`POST /api/research/{id}/drop`：放弃研究（先复述，`confirmed` 为真才写）；`GET /api/retrospect`（v3.2）：复盘——执行复盘记录（`limit` 阶梯 20 / 50 / 100）、周报（`week` 切换以前的周）与规则检验两张表。
   - `POST /api/trades`、`/api/cash-flows`、`/api/reconcile`、`/api/voids`、`GET /api/account`：账本（写入口先复述，`confirmed` 为真才写）。
@@ -37,6 +37,15 @@
 - 这两类兜底（`GET` 的静态托管与其他方法的 404）是 `create_app()` 里最后注册的两个路由；新的 `/api/...` 路由必须在它们之前 `include_router`，否则会被拦成 404（有测试守着这个顺序）。
 - 没有 `web/dist` 时 `/` 返回 503 `{"error": "frontend_not_built", …}`。
 - 组件画廊（`#_ui`）只在开发模式（`cd web && npm run dev`）可用，构建产物不含它。
+
+## v3.2.2 上线两步（每一步需用户单独授权，尚未执行）
+
+本版没有数据库迁移。代码已落地，当前服务仍运行 v3.2.1。Task 4 的隔离开发浏览器画廊截图为空白，尺寸 2370×1432，实时布局核对仍待完成；未做部署。
+
+1. **重建 `web/dist` 并重载页面服务**：后端简报接口新增 `sections`、`lead`、`footer`、`market` 字段，部署需同时更新后端代码与前端构建产物，再重载本机页面服务。
+2. **真实页面核对**：在真实页面上按[设计 spec §12](../specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md#12-验收)核对九项验收，包括今日与账户卡片、抽屉工具清单、深浅主题与响应式布局。
+
+上述每一步都需用户单独授权；目前均未执行。
 
 ## v3.2.1 工作台前端（2026-11-09 已部署）
 

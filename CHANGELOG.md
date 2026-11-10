@@ -2,6 +2,17 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/roadmap.md)。
 
+## [3.2.2] - 未发布
+
+今日与账户页卡片化、工具面板（[设计 spec](docs/specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md)、[实施 plan](docs/plans/2026-11-10-v3.2.2-page-cards-and-tool-list.md)）。代码与测试已落地，尚未上线；无数据库迁移。
+
+- 今日页将简报小节拆为独立卡片，按文字与数字两栏排布；右侧账户始终显示最新数字，行情显示简报日期的市场快照。
+- 历史简报的今日操作显示当日文字且不提供写入按钮；接口缺少新字段时仍可显示整篇简报。
+- 账户页拆为概览、持仓、成交、出入金、对账五张卡，操作入口位于所属卡片。
+- 右侧抽屉新增只读工具面板，分五组列出 35 个可调用工具、说明与写入类型。
+- 两个单份简报接口新增 `sections`、`lead`、`footer`、`market` 字段，不新增接口或迁移。
+- 三套全量测试：离线 pytest 919 passed / 416 skipped；一次性库 pytest 1335 passed；前端 `npm test -- --maxWorkers=2` 497 passed / 71 files（默认并行首次运行有一项 AccountView 超时，限为两 worker 后通过）；构建成功，svelte-check 0 错误 / 0 警告。画廊的隔离浏览器截图为空白，视觉布局核对未完成。
+
 ## [3.2.1] - 2026-11-09
 
 工作台壳、纸面视觉与数据视图（[设计 spec](docs/specs/2026-11-09-v3.2.1-workbench-shell-and-data-views-design.md)、[实施 plan](docs/plans/2026-11-09-v3.2.1-workbench-shell-and-data-views.md)）。2026-11-09 经用户授权上线：备份后执行迁移 036、重建 `web/dist` 并重载页面服务，真实 Pi 冒烟通过（MarketCard 带 `call:1`、刷新回放、七视图与三侧览）。

@@ -6,7 +6,7 @@ import { TONES } from '$lib/ui/domain/status'
 afterEach(() => cleanup())
 
 const SECTIONS = [
-  '令牌', '按钮', '徽标', '表格', '确认对话框', '抽屉', '页内页签', '路由页签', '表单', '提示与浮层', '折叠', '提示条', '骨架', '分隔与卡片', '轻提示', '视图卡片', '壳',
+  '令牌', '按钮', '徽标', '表格', '确认对话框', '抽屉', '页内页签', '路由页签', '表单', '提示与浮层', '折叠', '提示条', '骨架', '分隔与卡片', '轻提示', '视图卡片', '壳', '工具面板', '今日布局',
 ]
 
 describe('UiGallery', () => {
@@ -16,6 +16,18 @@ describe('UiGallery', () => {
     for (const name of SECTIONS) {
       expect(screen.getByRole('heading', { name }), name).toBeInTheDocument()
     }
+  })
+
+  it('renders the tools pane and today layouts at three container widths', () => {
+    const { container } = render(UiGallery)
+    expect(screen.getByRole('heading', { name: '工具面板' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '今日布局' })).toBeInTheDocument()
+    const section = screen.getByRole('heading', { name: '今日布局' }).parentElement
+    expect(section?.querySelectorAll('aside[aria-label="账户与行情"]')).toHaveLength(3)
+    expect(section?.querySelectorAll('[aria-label="960px"]')).toHaveLength(1)
+    expect(section?.querySelectorAll('[aria-label="700px"]')).toHaveLength(1)
+    expect(section?.querySelectorAll('[aria-label="420px"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[aria-label="账户与行情"]')).toHaveLength(3)
   })
 
   it('shows every button variant and the busy / disabled states', () => {

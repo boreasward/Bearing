@@ -41,9 +41,14 @@
   import Section from '$lib/ui/domain/Section.svelte'
   import Icon from '$lib/ui/domain/Icon.svelte'
   import { ICONS } from '$lib/ui/domain/icons'
+  import PageCard from '$lib/views/PageCard.svelte'
+  import TodayColumns from '$lib/views/TodayColumns.svelte'
+  import ToolsPane from '$lib/drawer/ToolsPane.svelte'
 
   import { viewFor } from '$lib/views/registry'
   import { fixture } from '$lib/views/test-fixtures'
+  import MarketCard from '$lib/views/cards/MarketCard.svelte'
+  import type { MarketData } from '$lib/stores/types'
   const galleryTools = ['get_market', 'get_plans', 'compute_plan_levels', 'get_account', 'record_trade', 'get_agenda', 'get_research', 'get_price_bars', 'get_indicators', 'save_summary', 'get_news']
   const shellStates = ['展开', '折叠', '窄屏']
 
@@ -576,6 +581,38 @@
   </section>
 </div>
 
+<section class="grid gap-4" aria-labelledby="gallery-tools">
+  <h2 id="gallery-tools" class="font-serif text-lg font-semibold">工具面板</h2>
+  <div class="w-[288px] max-w-full rounded-xl border border-border bg-background p-3">
+    <ToolsPane />
+  </div>
+</section>
+<section class="grid gap-4" aria-labelledby="gallery-today">
+  <h2 id="gallery-today" class="font-serif text-lg font-semibold">今日布局</h2>
+  <div class="grid gap-4">
+    {#each [960, 700, 420] as width (width)}
+      <div class="grid gap-2 overflow-x-auto rounded-xl border border-border p-3" aria-label={`${width}px`}>
+        <p class="text-xs text-muted-foreground">{width}px</p>
+        <div style={`width: ${width}px`} class="max-w-none">
+          <TodayColumns>
+            {#snippet aside()}
+              <PageCard title="账户"><p class="text-sm">现金与总资产占位。</p></PageCard>
+              {#if width === 960}
+                <MarketCard data={fixture('get_market') as MarketData} brief />
+              {:else}
+                <PageCard title="行情"><p class="text-sm">市场环境占位。</p></PageCard>
+              {/if}
+            {/snippet}
+            {#snippet children()}
+              <PageCard title="今日操作"><p class="text-sm">当天事项占位。</p></PageCard>
+              <PageCard title="持仓"><p class="text-sm">持仓摘要占位。</p></PageCard>
+            {/snippet}
+          </TodayColumns>
+        </div>
+      </div>
+    {/each}
+  </div>
+</section>
 <section class="grid gap-4" aria-labelledby="gallery-views">
   <h2 id="gallery-views" class="font-serif text-lg font-semibold">视图卡片</h2>
   <div class="grid gap-4 lg:grid-cols-2">
