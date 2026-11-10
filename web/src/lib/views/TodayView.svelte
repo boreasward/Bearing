@@ -14,9 +14,8 @@
   import type { BriefSection } from '$lib/home/types'
   import { actionCompleted } from './context'
   let { session = null }: { session?: string | null } = $props()
-  let path = $state('latest')
+  let path = $derived(session ?? 'latest')
   let selected = $state('')
-  $effect(() => { path = session ?? 'latest' })
   const resource = $derived(briefFor(path))
   const list = $derived(briefs.state === 'ready' ? briefs.data?.briefs ?? [] : [])
   const current = $derived(resource.state === 'ready' ? resource.data : null)

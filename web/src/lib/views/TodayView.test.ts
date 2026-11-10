@@ -171,3 +171,12 @@ it('falls back to one card when the server sends no sections', async () => {
  install({bySession:{latest:{session:'2026-11-09',status:'final',markdown:'一段旧版简报',error:null,unfinished:false}}}); render(TodayView)
  expect(await screen.findByRole('region',{name:'简报'})).toHaveTextContent('一段旧版简报')
 })
+it('changing the session prop after the latest brief loads fetches and shows that day', async () => {
+ const fetcher = install({ bySession:{ '2026-11-06':brief('2026-11-06',{ sections:[{ key:'summary',title:'一句话',markdown:'十一月六日摘要' }] }) } })
+ const { rerender } = render(TodayView)
+ expect(await screen.findByRole('button',{name:'记成交'})).toBeInTheDocument()
+ await rerender({ session:'2026-11-06' })
+ expect(await screen.findByText('十一月六日摘要')).toBeInTheDocument()
+ expect(fetcher.mock.calls.map(([input]) => String(input))).toContain('/api/briefs/2026-11-06')
+ expect(screen.getByRole('region',{name:'行情'})).toHaveTextContent('2026-11-06')
+})
