@@ -291,7 +291,7 @@ def split_brief(markdown: str) -> dict:
         _, _, text = text.partition("\n")
 
     text = text.rstrip()
-    paragraph_parts = re.split(r"(\n[ \t]*\n)", text) if text else []
+    paragraph_parts = re.split(r"(\n(?:[ \t]*\n)+)", text) if text else []
     footer = None
     if paragraph_parts and paragraph_parts[-1].startswith("数据截至"):
         footer = paragraph_parts.pop()
@@ -308,7 +308,11 @@ def split_brief(markdown: str) -> dict:
     def save_current() -> None:
         if current_key is not None:
             sections.append(
-                {"key": current_key, "title": dict(SECTION_TITLES)[current_key], "markdown": "\n".join(current_lines).strip()}
+                {
+                    "key": current_key,
+                    "title": dict(SECTION_TITLES)[current_key],
+                    "markdown": "\n".join(current_lines).strip(),
+                }
             )
 
     for line in text.split("\n"):

@@ -113,10 +113,7 @@ def test_brief_has_sections_footer_and_that_days_market(client, v3_tx):
         {"label": "neutral", "calc_version": "m1", "etf_table": [], "watch": [{"ticker": "ZZZ"}]},
     )
     _insert_run(v3_tx, "brief-latest", latest_session, {"label": "risk_on", "etf_table": []})
-    original = (
-        "# 简报 · 2026-11-03\n\n## 和昨天比变了什么\n变化\n\n"
-        "## 持仓\n- AAPL\n\n数据截至 2026-11-03 收盘。\n"
-    )
+    original = "# 简报 · 2026-11-03\n\n## 和昨天比变了什么\n变化\n\n## 持仓\n- AAPL\n\n数据截至 2026-11-03 收盘。\n"
     plan_repo.upsert_brief(
         v3_tx,
         {

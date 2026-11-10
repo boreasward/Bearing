@@ -302,6 +302,14 @@ def test_split_brief_ignores_unknown_and_repeated_headings():
     assert parts["footer"] == "数据截至 2026-11-04 收盘。"
 
 
+def test_split_brief_extracts_footer_after_blank_separators():
+    for separator in ("\n\n\n", "\n \n\t\n"):
+        md = f"# 标题\n\n## 持仓\n- A{separator}数据截至 2026-11-04 收盘。\n"
+        parts = brief.split_brief(md)
+        assert parts["footer"] == "数据截至 2026-11-04 收盘。"
+        assert parts["sections"][0]["markdown"] == "- A"
+
+
 def test_split_brief_without_footer_or_body():
     assert brief.split_brief("") == {"lead": None, "sections": [], "footer": None}
     assert brief.split_brief("# 旧草稿") == {"lead": None, "sections": [], "footer": None}
