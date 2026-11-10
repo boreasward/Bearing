@@ -36,6 +36,7 @@ it('brief shows that day\'s snapshot without watch, macro or row actions', () =>
  expect(container).not.toHaveTextContent('带进对话'); expect(container).not.toHaveTextContent('关注的标的'); expect(container).not.toHaveTextContent('宏观'); expect(container).not.toHaveTextContent('领涨')
  expect(screen.getByRole('link', { name:'打开完整行情 ›' })).toHaveAttribute('href', '#market')
  expect(container.querySelector('[data-slot="source-line"]')).toBeNull()
+ expect(container).toHaveTextContent('口径 regime-v3')
 })
 it('watch percentage points are not multiplied by one hundred', () => {
  const { container } = render(MarketCard, { data:{ ...data, watch:[{ ...data.watch[0], change_pct:'-3.80' }] }, full:true })

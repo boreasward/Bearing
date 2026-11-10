@@ -12,6 +12,7 @@
   import type { CallMeta } from '../registry'
   let { data, meta }: { data: unknown; meta?: CallMeta } = $props()
   const row = $derived(record(data))
+  const ledger = $derived(record(row.ledger))
   let cashOpen = $state(false)
   let reconcileOpen = $state(false)
   function completed(message: string) { invalidateAll(); actionCompleted(message) }
@@ -20,7 +21,10 @@
   <AccountMetrics {data} />
   {#if row.amount != null}<p>出入金：<MetricValue value={num(row.amount)} currency /> · {text(row.effective_at)}</p>{/if}
   {#if row.equity != null}<p>对账总资产：<MetricValue value={num(row.equity)} currency /> · {text(row.as_of)}</p>{/if}
+  {#if ledger.cash_negative}<p class="text-sm text-warn">现金为负，请核对账本</p>{/if}
+  {#if Array.isArray(ledger.notes)}{#each ledger.notes as note, index (index)}<p class="text-sm text-muted-foreground">{text(note)}</p>{/each}{/if}
   <AccountPositions {data} />
+  <p class="text-xs text-muted-foreground">仓位快照来源：{text(record(row.sizing_snapshot).source)} · {text(record(row.sizing_snapshot).as_of)}</p>
   <div class="flex flex-wrap gap-2"><Button size="sm" variant="outline" onclick={() => cashOpen = true}>记出入金</Button><Button size="sm" variant="outline" onclick={() => reconcileOpen = true}>对账</Button></div>
 </CardFrame>
 <CashFlowForm bind:open={cashOpen} onDone={() => completed('已记录出入金')} />

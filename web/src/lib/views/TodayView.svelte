@@ -20,7 +20,8 @@
   const resource = $derived(briefFor(path))
   const list = $derived(briefs.state === 'ready' ? briefs.data?.briefs ?? [] : [])
   const current = $derived(resource.state === 'ready' ? resource.data : null)
-  const isLatest = $derived(path === 'latest' || (list.length > 0 && current?.session === list[0].session))
+  const absentBrief = $derived(resource.state === 'error' && ['今天还没有简报', '还没有运行记录'].includes(resource.error))
+  const isLatest = $derived(path === 'latest' || absentBrief || (list.length > 0 && current?.session === list[0].session))
   const sections = $derived(current?.sections ?? [])
   const sectionMap = $derived(new Map(sections.map(section => [section.key, section])))
   const orderedKeys = ['summary', 'changes', 'holdings', 'pending', 'research', 'candidates', 'unresolved']

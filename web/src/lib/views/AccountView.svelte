@@ -12,11 +12,14 @@
   import AccountMetrics from './cards/AccountMetrics.svelte'
   import AccountPositions from './cards/AccountPositions.svelte'
   import { actionCompleted, bringToChat } from './context'
+  import { record, text } from './data'
   import { fmtBeijing } from '$lib/format'
   import type { CashFlowRow, EquityRow, LedgerData } from '$lib/stores/types'
   type Trade = LedgerData['trades'][number]
   let limit = $state(20)
   const ledger = $derived(ledgerForLimit(limit))
+  const snapshot = $derived(record(record(account.data).sizing_snapshot))
+  const accountLedger = $derived(record(record(account.data).ledger))
   const more = $derived(limit < 100 && ledger.data && [ledger.data.trades, ledger.data.cash_flows, ledger.data.equity].some(rows => rows.length >= limit))
   let tradeOpen = $state(false)
   let cashOpen = $state(false)
@@ -31,7 +34,7 @@
 {#snippet equityAmount(row: EquityRow)}<MetricValue value={null} raw={row.equity} currency />{/snippet}
 <div class="grid gap-5">
   <PageHeader title="账户" level={1}>{#snippet meta()}金额为美元 · 页面时间为北京{/snippet}</PageHeader>
-  <PageCard title="概览"><ResourceBlock resource={account} emptyMessage="还没有账户记录">{#if account.data}<AccountMetrics data={account.data} />{/if}</ResourceBlock></PageCard>
+  <PageCard title="概览"><ResourceBlock resource={account} emptyMessage="还没有账户记录">{#if account.data}<AccountMetrics data={account.data} />{#if accountLedger.cash_negative}<p class="text-sm text-warn">现金为负，请核对账本</p>{/if}{#if Array.isArray(accountLedger.notes)}{#each accountLedger.notes as note,index (index)}<p class="text-sm text-muted-foreground">{text(note)}</p>{/each}{/if}<p class="text-xs text-muted-foreground">仓位快照来源：{text(snapshot.source)} · {text(snapshot.as_of)}</p>{/if}</ResourceBlock></PageCard>
   <PageCard title="持仓"><ResourceBlock resource={account} emptyMessage="还没有账户记录">{#if account.data}<AccountPositions data={account.data} />{/if}</ResourceBlock></PageCard>
   <PageCard title="成交" tag={`${ledger.data?.trades.length ?? 0} 条`}>
     {#snippet actions()}<Button size="sm" onclick={() => tradeOpen = true}>记成交</Button>{/snippet}

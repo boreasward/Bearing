@@ -78,7 +78,10 @@
 {/snippet}
 {#if brief}
   <Card.Root size="sm" role="region" aria-label="行情">
-    <Card.Header><Card.Title>行情</Card.Title></Card.Header>
+    <Card.Header>
+      <Card.Title>行情</Card.Title>
+      {#if data.calc_version}<Card.Description>口径 {data.calc_version}</Card.Description>{/if}
+    </Card.Header>
     <Card.Content class="grid gap-3">{@render content()}</Card.Content>
   </Card.Root>
 {:else}

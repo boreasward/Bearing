@@ -23,6 +23,7 @@ function install(options: { list?: unknown; bySession?: Record<string, unknown>;
   if (path === '/api/market') return options.market === 404 ? json({ error:'no_run' },404) : json(options.market ?? marketData)
   const date = path.split('/').at(-1)!
   const value = options.bySession?.[date] ?? (date === 'latest' ? brief() : brief(date))
+  if (value === 'no_run') return json({ error:'no_run' },404)
   if (value === 404) return json({ error:'no_brief' },404)
   if (value === 500) return json({ error:'brief_failed' },500)
   return json(value)
@@ -68,6 +69,24 @@ it('a deep-linked session is historical until the list proves it is the newest',
  cleanup(); invalidateAll(); install(); render(TodayView,{session:'2026-11-09'})
  expect(await screen.findByRole('button',{name:'记成交'})).toBeInTheDocument()
  expect(fetcher).toBeDefined()
+})
+it('a dated link with no brief uses live actions and does not mark the account historical', async () => {
+ install({ bySession:{'2026-11-05':404} }); render(TodayView,{session:'2026-11-05'})
+ expect(await screen.findByRole('button',{name:'记成交'})).toBeInTheDocument()
+ expect(screen.getByRole('region',{name:'账户'})).not.toHaveTextContent('最新')
+ expect(screen.getByText('今天还没有简报')).toBeInTheDocument()
+})
+it('a dated link with no run uses live actions and does not mark the account historical', async () => {
+ install({ bySession:{'2026-11-04':'no_run'} }); render(TodayView,{session:'2026-11-04'})
+ expect(await screen.findByRole('button',{name:'记成交'})).toBeInTheDocument()
+ expect(screen.getByRole('region',{name:'账户'})).not.toHaveTextContent('最新')
+ expect(screen.getByText('还没有运行记录')).toBeInTheDocument()
+})
+it('a generic dated brief request failure remains historical and has no live actions', async () => {
+ install({ bySession:{'2026-11-03':500} }); render(TodayView,{session:'2026-11-03'})
+ expect(await screen.findByRole('region',{name:'简报'})).toBeInTheDocument()
+ expect(screen.queryByRole('button',{name:'记成交'})).toBeNull()
+ expect(screen.getByRole('region',{name:'账户'})).toHaveTextContent('最新')
 })
 it('the date selector sits in the page header and switches every dated card', async () => {
  install(); const { container } = render(TodayView)
