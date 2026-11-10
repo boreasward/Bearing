@@ -271,7 +271,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `AccountView` | 无 props，自取共享 store | 五张卡：概览、持仓、成交、出入金、对账；概览与持仓共用账户数据，三张账本卡共用 ledger；表单动作位于所属卡片 |
 | `PageCard` | `{ title, tag?, actions?, children }` | 完整视图的通用卡片外壳，标题、次要标记、标题行操作与正文；区域以标题命名 |
 | `TodayColumns` | `{ aside, children }` | 今日页按容器宽度排为文字与右侧数字两栏、账户与行情并排或单列；右栏窄时内容在上 |
-| `cards/AccountMetrics` / `cards/AccountPositions` | `{ data: unknown }` | 账户概览指标（含现金提示与仓位快照来源）及账户持仓；供页面与对话账户快照卡复用 |
+| `cards/AccountMetrics` / `cards/AccountPositions` | `{ data: unknown }` | `AccountMetrics` 仅计算与展示账户概览指标，`AccountPositions` 展示账户持仓；供页面与对话账户快照卡复用。现金警告、账本提示与仓位快照来源由父组件 `AccountView` / `AccountCard` 按各自顺序组合 |
 | `cards/AccountCard` | `{ data: unknown; meta? }` | 快照账户卡；组合 `AccountMetrics`、`AccountPositions`、对账差额与写入口。页面接口省略 meta，快照必须提供真实 CallMeta |
 | `cards/LevelsCard` / `TradeCard` / `NoteCard` | `{ data: unknown; meta }` | PlanLevels 与 ATR / 口径；成交、计划变化、止损单、平仓结果；保存的文字与写入徽标 |
 | `cards/AgendaCard` / `BarsTable` | `{ data: unknown; meta }` | facts agenda 四组清单（空组「无」）；日期 / 开高低收 / 量表格，数字右对齐 |

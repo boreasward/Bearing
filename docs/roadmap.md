@@ -21,7 +21,7 @@ v3.1.0 在第 2、3 步之外新增三样 v3 设计里没有的东西（[v3.1 �
 - v3.1：[spec](specs/2026-11-06-v3.1-plan-line-account-and-web-design.md)、[plan](plans/2026-11-07-v3.1-plan-line-account-and-web.md)（第 2、3 步 + 计划线、止损纪律、账户）
 - v3.2：[spec](specs/2026-11-08-v3.2-retrospect-research-and-page-polish-design.md)、[plan](plans/2026-11-08-v3.2-retrospect-research-and-page-polish.md)（第 6 步检验与复盘 + 研究与跟踪 + 页面的时间控件与金额）
 - v3.2.1：[spec](specs/2026-11-09-v3.2.1-workbench-shell-and-data-views-design.md)、[plan](plans/2026-11-09-v3.2.1-workbench-shell-and-data-views.md)（工作台壳、纸面视觉与工具快照；[上线记录](operations/local-service.md#v321-上线四步2026-11-09-已执行)）
-- v3.2.2：[spec](specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md)、[plan](plans/2026-11-10-v3.2.2-page-cards-and-tool-list.md)（今日与账户页卡片化、工具面板；代码已落地，尚未上线）
+- v3.2.2：[spec](specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md)、[plan](plans/2026-11-10-v3.2.2-page-cards-and-tool-list.md)（今日与账户页卡片化、工具面板；代码已落地，尚未上线；视觉与响应式布局验收由用户完成，结果待记录）
 - v2 的路线与验收记录（已归档，只读）：[roadmap](archive/v2/roadmap/roadmap.md)
 
 **顺序为 0 → 1 → 5 → 2 → 3 → 6 → 4。** 第 1 步完成后用户决定以 v3 为主要迭代方向，接受第 2 步完成前没有每日推送和页面，所以第 5 步提前做，让第 2、3 步在只剩 v3 的代码上开工（依据与范围见 [v2 移除设计](specs/2026-11-06-v2-removal-design.md)）。

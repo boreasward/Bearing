@@ -11,7 +11,9 @@
 - 账户页拆为概览、持仓、成交、出入金、对账五张卡，操作入口位于所属卡片。
 - 右侧抽屉新增只读工具面板，分五组列出 35 个可调用工具、说明与写入类型。
 - 两个单份简报接口新增 `sections`、`lead`、`footer`、`market` 字段，不新增接口或迁移。
-- 三套全量测试：离线 pytest 919 passed / 416 skipped；一次性库 pytest 1335 passed；前端 `npm test -- --maxWorkers=2` 497 passed / 71 files（默认并行首次运行有一项 AccountView 超时，限为两 worker 后通过）；构建成功，svelte-check 0 错误 / 0 警告。画廊的隔离浏览器截图为空白，视觉布局核对未完成。
+- 审查前的三套全量测试：离线 pytest 919 passed / 416 skipped；一次性库 pytest 1335 passed；前端 `npm test -- --maxWorkers=2` 497 passed / 71 files（默认并行首次运行有一项 AccountView 超时，限为两 worker 后通过）；构建成功，svelte-check 0 错误 / 0 警告。
+- 审查后修复历史简报请求失败或等待时误显最新行情、草稿提示遮住导语的问题；定向验证 `TodayView.test.ts` 19 passed，svelte-check 0 错误 / 0 警告，未重复全量测试或构建。
+- 画廊的隔离浏览器截图为空白，不能作为视觉通过证据；用户已明确「我来完成验收」，视觉与响应式布局验收由用户完成，结果待记录。
 
 ## [3.2.1] - 2026-11-09
 
