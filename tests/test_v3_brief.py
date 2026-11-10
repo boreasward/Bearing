@@ -1,9 +1,12 @@
 """v3.1 brief rendering (spec §11): ten sections, draft vs final, error brief, Discord lines."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal as D
 
+from investment_assistant.facts import brief
 from investment_assistant.facts.brief import discord_lines, render_brief, render_error_brief, render_weekly
+
+NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)
 
 SESSION = date(2026, 11, 4)
 AS_OF = datetime(2026, 11, 5, 8, 30)
@@ -257,6 +260,59 @@ def test_price_text_trims_storage_zeros_without_rounding():
     assert price_text(D("34.457")) == "34.46"  # 取到分、四舍五入（spec §7 / B14）
     assert price_text(D("100.000000")) == "100.00"
     assert price_text(None) == "—"
+
+
+def _keys(parts):
+    return [section["key"] for section in parts["sections"]]
+
+
+def test_split_brief_final_sections_follow_the_title_table():
+    parts = brief.split_brief(render_brief(view(), final=True))
+    order = [key for key, _ in brief.SECTION_TITLES]
+    assert _keys(parts) == [key for key in order if key in _keys(parts)]
+    assert {"changes", "market", "holdings", "pending", "candidates", "account", "unresolved"} <= set(_keys(parts))
+    titles = dict(brief.SECTION_TITLES)
+    assert all(section["title"] == titles[section["key"]] for section in parts["sections"])
+    assert not any(section["markdown"].startswith("## ") for section in parts["sections"])
+    assert parts["lead"] is None and parts["footer"].startswith("数据截至")
+    assert "数据截至" not in parts["sections"][-1]["markdown"]
+
+
+def test_split_brief_draft_drops_the_unfinished_line():
+    parts = brief.split_brief(render_brief(view(), final=False))
+    assert parts["lead"] is None and "summary" not in _keys(parts)
+
+
+def test_split_brief_error_brief_is_lead_and_footer():
+    md = render_error_brief(session=date(2026, 11, 4), as_of=NOW, error="no_bars", has_holdings=True)
+    parts = brief.split_brief(md)
+    assert parts["lead"] == "今天无法检查止损：no_bars" and parts["sections"] == []
+    assert parts["footer"].startswith("数据截至 2026-11-04")
+
+
+def test_split_brief_ignores_unknown_and_repeated_headings():
+    md = (
+        "# 简报 · 2026-11-04\n\n## 一句话\n第一行\n## 我的小标题\n第二行\n\n"
+        "## 持仓\n- A\n\n## 持仓\n- 重复的标题留在正文\n\n数据截至 2026-11-04 收盘。\n"
+    )
+    parts = brief.split_brief(md)
+    assert _keys(parts) == ["summary", "holdings"]
+    assert parts["sections"][0]["markdown"] == "第一行\n## 我的小标题\n第二行"
+    assert parts["sections"][1]["markdown"] == "- A\n\n## 持仓\n- 重复的标题留在正文"
+    assert parts["footer"] == "数据截至 2026-11-04 收盘。"
+
+
+def test_split_brief_without_footer_or_body():
+    assert brief.split_brief("") == {"lead": None, "sections": [], "footer": None}
+    assert brief.split_brief("# 旧草稿") == {"lead": None, "sections": [], "footer": None}
+    assert brief.split_brief("# 标题\r\n\r\n一段说明\r\n") == {"lead": "一段说明", "sections": [], "footer": None}
+    parts = brief.split_brief("# 标题\n\n## 持仓\n- A\n")
+    assert parts["footer"] is None and parts["sections"][0]["markdown"] == "- A"
+
+
+def test_render_brief_headings_come_from_the_title_table():
+    headings = [line for line in render_brief(view(), final=True).splitlines() if line.startswith("## ")]
+    assert set(headings) <= {f"## {title}" for _, title in brief.SECTION_TITLES}
 
 
 def test_pending_line_formats_prices_and_unsized_shares():

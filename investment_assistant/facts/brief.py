@@ -27,6 +27,7 @@ view keys consumed here:
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 
 from investment_assistant.core.texts import NO_EQUITY_TEXT, REGIME_LABEL_TEXT, money_value, price_text, quantity_value
@@ -263,6 +264,71 @@ def _footer_text(view: dict, *, final: bool) -> str:
     return text + "金额单位美元。"
 
 
+SECTION_TITLES: tuple[tuple[str, str], ...] = (
+    ("actions", "今日操作"),
+    ("summary", "一句话"),
+    ("changes", "和昨天比变了什么"),
+    ("market", "市场环境"),
+    ("holdings", "持仓"),
+    ("pending", "待入场计划"),
+    ("research", "研究"),
+    ("candidates", "适合交易什么（规则名单）"),
+    ("account", "账户"),
+    ("unresolved", "今天下不了结论的"),
+)
+_SECTION_KEYS_BY_TITLE = {title: key for key, title in SECTION_TITLES}
+
+
+def _heading(key: str) -> str:
+    title = dict(SECTION_TITLES)[key]
+    return f"## {title}"
+
+
+def split_brief(markdown: str) -> dict:
+    """Split a rendered brief into its known sections without discarding unknown text."""
+    text = markdown.replace("\r\n", "\n")
+    if text.startswith("# "):
+        _, _, text = text.partition("\n")
+
+    text = text.rstrip()
+    paragraph_parts = re.split(r"(\n[ \t]*\n)", text) if text else []
+    footer = None
+    if paragraph_parts and paragraph_parts[-1].startswith("数据截至"):
+        footer = paragraph_parts.pop()
+        if paragraph_parts:
+            paragraph_parts.pop()
+        text = "".join(paragraph_parts)
+
+    lead_lines: list[str] = []
+    sections: list[dict] = []
+    seen: set[str] = set()
+    current_key: str | None = None
+    current_lines: list[str] = []
+
+    def save_current() -> None:
+        if current_key is not None:
+            sections.append(
+                {"key": current_key, "title": dict(SECTION_TITLES)[current_key], "markdown": "\n".join(current_lines).strip()}
+            )
+
+    for line in text.split("\n"):
+        title = line.rstrip()
+        key = _SECTION_KEYS_BY_TITLE.get(title[3:]) if title.startswith("## ") else None
+        if key is not None and key not in seen:
+            save_current()
+            current_key = key
+            current_lines = []
+            seen.add(key)
+        elif current_key is None:
+            lead_lines.append(line)
+        else:
+            current_lines.append(line)
+    save_current()
+
+    lead = "\n".join(line for line in lead_lines if line.strip() != "二次确认未完成").strip() or None
+    return {"lead": lead, "sections": sections, "footer": footer}
+
+
 def render_brief(view: dict, *, final: bool) -> str:
     """The ten-section brief of spec §11. `final=False` is the draft: the agent parts are
     gone (section 1, the §4 review conclusions, the §6 verdicts) and the title is followed
@@ -273,25 +339,25 @@ def render_brief(view: dict, *, final: bool) -> str:
     sections: list[list[str]] = [head]
     actions = view.get("today_actions") or []
     if actions:
-        sections.append(["## 今日操作", *[f"- {row['ticker']}：{row['text']}" for row in actions]])
+        sections.append([_heading("actions"), *[f"- {row['ticker']}：{row['text']}" for row in actions]])
     if final and view.get("summary"):
-        sections.append(["## 一句话", view["summary"]])
-    sections.append(["## 和昨天比变了什么", *_change_lines(view)])
-    sections.append(["## 市场环境", *_market_lines(view.get("market") or {})])
-    sections.append(["## 持仓", *_holding_lines(view.get("holdings") or [], final=final)])
-    sections.append(["## 待入场计划", *_pending_plan_lines(view.get("pending_plans") or [])])
+        sections.append([_heading("summary"), view["summary"]])
+    sections.append([_heading("changes"), *_change_lines(view)])
+    sections.append([_heading("market"), *_market_lines(view.get("market") or {})])
+    sections.append([_heading("holdings"), *_holding_lines(view.get("holdings") or [], final=final)])
+    sections.append([_heading("pending"), *_pending_plan_lines(view.get("pending_plans") or [])])
     research = view.get("research") or []
     if research:
-        sections.append(["## 研究", *_research_lines(research, final=final)])
+        sections.append([_heading("research"), *_research_lines(research, final=final)])
     sections.append(
         [
-            "## 适合交易什么（规则名单）",
+            _heading("candidates"),
             *_candidate_lines(view.get("candidates") or [], top_n=view.get("top_n", 5), final=final),
             *_dropped_lines(view.get("dropped") or []),
         ]
     )
-    sections.append(["## 账户", *_account_lines(view.get("account"))])
-    sections.append(["## 今天下不了结论的", *_unresolved_lines(view)])
+    sections.append([_heading("account"), *_account_lines(view.get("account"))])
+    sections.append([_heading("unresolved"), *_unresolved_lines(view)])
     sections.append([_footer_text(view, final=final)])
     return "\n\n".join("\n".join(section) for section in sections) + "\n"
 

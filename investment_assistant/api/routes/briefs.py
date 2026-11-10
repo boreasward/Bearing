@@ -8,7 +8,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from investment_assistant.api import deps
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, repo
+from investment_assistant.facts.brief import split_brief
 
 router = APIRouter(prefix="/api/briefs")
 
@@ -19,11 +20,12 @@ def _limit_or_response(limit: int):
     return None
 
 
-def _brief_row(row: dict) -> dict:
+def _brief_row(row: dict, market: dict | None) -> dict:
+    markdown = row["final_md"] if row["final_md"] is not None else row["draft_md"]
     return {
         "session": row["session"],
         "status": row["status"],
-        "markdown": row["final_md"] if row["final_md"] is not None else row["draft_md"],
+        "markdown": markdown,
         "error": row["error"],
         "runtime": row["runtime"],
         "provider": row["provider"],
@@ -31,6 +33,24 @@ def _brief_row(row: dict) -> dict:
         "usage": row["usage"] or {},
         "elapsed_seconds": row["elapsed_seconds"],
         "unfinished": row["status"] != "final",
+        **split_brief(markdown or ""),
+        "market": market,
+    }
+
+
+def _brief_market(conn, row: dict) -> dict | None:
+    if not row.get("run_id"):
+        return None
+    run = repo.run_by_id(conn, row["run_id"])
+    if run is None:
+        return None
+    snapshot = run.get("market")
+    if not snapshot:
+        return None
+    return {
+        **{key: value for key, value in snapshot.items() if key != "watch"},
+        "session": run["session"],
+        "calc_version": snapshot.get("calc_version"),
     }
 
 
@@ -59,7 +79,7 @@ def latest_brief():
         rows = plan_repo.briefs(conn, limit=1)
         if not rows:
             raise ValueError("no_brief")
-        return _brief_row(rows[0])
+        return _brief_row(rows[0], _brief_market(conn, rows[0]))
 
     return deps.ok_or_error(lambda: deps.read_tx(_read))
 
@@ -70,6 +90,6 @@ def brief_by_session(session: date):
         row = plan_repo.brief(conn, session)
         if row is None:
             raise ValueError("no_brief")
-        return _brief_row(row)
+        return _brief_row(row, _brief_market(conn, row))
 
     return deps.ok_or_error(lambda: deps.read_tx(_read))

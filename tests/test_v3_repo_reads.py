@@ -61,6 +61,14 @@ def _run(conn, run_id, session, started_at=NOW):
     )
 
 
+def test_run_by_id_returns_that_run_or_none(v3_tx):
+    first = _run(v3_tx, "first-run", date(2026, 11, 7))
+    _run(v3_tx, "second-run", SESSION, NOW.replace(hour=13))
+    found = repo.run_by_id(v3_tx, first["run_id"])
+    assert found is not None and found["session"] == first["session"]
+    assert repo.run_by_id(v3_tx, "missing") is None
+
+
 def test_runs_with_briefs_left_joins_by_session(v3_tx):
     older = _run(v3_tx, "older", date(2026, 11, 6))
     newer = _run(v3_tx, "newer", SESSION)

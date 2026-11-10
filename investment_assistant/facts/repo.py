@@ -74,6 +74,11 @@ def latest_run(conn, session: date | None = None) -> dict | None:
     return _one(conn, f"SELECT {_RUN_COLUMNS} FROM v3_runs{where} ORDER BY created_at DESC, id DESC LIMIT 1", params)
 
 
+def run_by_id(conn, run_id: str) -> dict | None:
+    """The v3 run whose identifier is stored on a brief, if it still exists."""
+    return _one(conn, f"SELECT {_RUN_COLUMNS} FROM v3_runs WHERE run_id = %s", (run_id,))
+
+
 def latest_ok_run(conn) -> dict | None:
     """The latest run with status='ok' (the trading session the page and chats read)."""
     return _one(
