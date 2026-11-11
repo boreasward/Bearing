@@ -2,6 +2,28 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/roadmap.md)。
 
+## [3.3.0] - 未发布
+
+账户维度：总仓位上限与换仓比较（[设计 spec](docs/specs/2026-11-11-v3.3-account-cap-and-rotation-design.md)、[实施 plan](docs/plans/2026-11-11-v3.3-account-cap-and-rotation.md)，在 v3.1 的计划线、账户与 v3.2 的复盘之上加一层账户判断；每笔风险 1%、单只上限 25%、名额 3 份、有效期 5 天、止损与目标的 ATR 倍数都没动）。按 spec §2 的目标八条：
+
+1. **总仓位上限 60%**：持仓总市值不超过总资产的 60%；仓位占比 = 持仓总市值 ÷ 总资产，剩余额度 = 总资产 × 上限 − 持仓总市值（小于 0 记 0），都由宿主算，账户页、今日页账户条、简报账户段与 `get_account` 都带；仓位高于上限时只显示，不产生任何卖出指令。**`workbench.total_cap` 默认值由 1.0 改为 0.6**（示例配置同步；本机 `config/local.json` 没有设这个键，改默认值即生效，真实库里已有的持仓若超过 60% 也只是显示）。
+2. **钱够直接买，不够才比较**：对通过二次确认的候选 B，宿主用规则价位算「不受总仓位限制的股数」与「额度内的股数」，后者不到前者的 `v3.rotation_min_fill`（缺省 0.5）倍才判「钱不够」；钱够照旧出计划，与持仓无关。`compute_plan_levels` 返回加 `uncapped_shares` 与 `short_of_room`。
+3. **换仓结论三选一**：继续持有 / 半仓换 / 全仓换，由 agent 综合判断，全部可比持仓里最多挑一只 A。新工具 `get_rotation_table`（读，宿主算好的比较表）与 `save_rotation`（两模式；卖出股数、买入股数与价位全由宿主算）；结论、B 的待入场计划、A 的换仓卖出指令在同一个调用、同一个事务里写，中途失败都不落库。
+4. **刚买入的持仓也参与比较**：可比持仓只排除止损已触及、已有卖出指令、缺日线、当天复查为「不成立」、当天还没有复查结论五种；持有天数不设下限，补录持仓可比。
+5. **不让换仓变频繁**：缺省继续持有；简报会话每个交易日最多一行换仓记录；最近 `v3.rotation_cooldown_sessions`（缺省 5）个交易日内有半仓或全仓结论则冷却（「继续持有」不进冷却，对话里的比较不受限但复述里必须说出最近换仓次数）；半仓与全仓必须写出「A 哪里没按预期走」与对手续费估计的回应，引用里要有一次以 A 为参数的单只股票读取；不比较的候选在名单里写明原因并算作已完成。
+6. **agent 不碰数字**：`save_rotation` 的入参没有任何股数、价位、金额字段；换仓的 B 只用宿主规则价位，自报价位与之后修订价位都被拒绝；`agent/instructions.md` 加「换仓结论只能通过 `save_rotation` 给出」，`agent/playbook.md` 加「换仓比较」一节。
+7. **每次结论都留记录并事后对照**：迁移 037 的 `v3_rotations` 只追加，存当时摆出的那张表；复盘页新增「换仓」一块（`/api/retrospect` 加 `rotations`）：每次比较一行、执行情况、结论之后第 5 / 10 / 20 个交易日 A 与 B 的涨跌幅与差（继续持有同样算），汇总里手续费估计合计与 B 跑赢 A 的占比，样本低于 `v3.retro_min_sample` 只给次数；离场原因多一种「换仓」，偏差标签多一个「买入后超出仓位上限」（`over_cap`），周报加「本周换仓」。
+8. **系统支持卖出一部分**：卖出指令第三种来源 `rotation`，带数量与对方股票，可被撤回（B 的计划没买就结束时宿主自动撤回，用户也可在对话与页面撤回：新增 `withdraw_rotation` 工具与 `POST /api/plans/{id}/rotation/withdraw`），止损触及、持有到期、论点失效高于它、会取代它；记成交的卖出推进指令；没卖完的卖出之后剩余持仓的止损价不变，「今日操作」显示「止损单数量需改为 N 股」，再次确认挂单后消失。
+
+- **迁移 037**（可重跑）：新建只追加的 `v3_rotations`（换仓记录；简报来源每个交易日一行的部分唯一索引，已加进 `tests/test_no_update_on_append_only_tables.py` 的清单）；`v3_plans` 加 `sell_quantity`、`rotation_id`、`funded_by_rotation_id`（部分唯一索引：一次换仓只供一份 B 的计划）、`stop_quantity_stale`，`sell_instruction` 约束放开到 `rotation`，三列一致约束；`v3_plan_events` 的事件约束加 `rotation_instruction`、`rotation_withdrawn`、`rotation_superseded`、`stop_quantity_stale`。不改任何旧行、不加种子。**已在一次性库验证；真实库未执行，需用户单独授权**（spec §14 第 1、2 步，见 [docs/operations/migrations-and-backup.md](docs/operations/migrations-and-backup.md#037-与-v33-上线五步未执行)）。
+- **工具面 38 个**（25 个两模式 + 13 个仅对话；35 → 38）：新增 `get_rotation_table`、`save_rotation`（两模式）与 `withdraw_rotation`（仅对话，页面也转发它）；`get_agenda` 的确认项加 `rotation`（`short` / `compare` / `blocked` / `blocked_text`）、顶层加 `rotation`（`compared_today`、`last_session`），`get_account` 加 `exposure`，`compute_plan_levels` 加 `uncapped_shares` 与 `short_of_room`，`save_plan` 在钱不够而没有换仓结论时拒绝（该比较的写 `needs_rotation`，不比较的写 `no_room` 加原因），`record_trade` 返回加 `over_cap` 与 `stop_order_quantity`，`confirm_stop_order` 在变化记录里写下当时的持仓股数并清掉「止损单数量待改」，`get_plans` 的计划行加 `sell_quantity`、`rotation_id`、`funded_by_rotation_id`、`stop_quantity_stale`，`get_positions` 的下一步操作带 `sell_quantity`、`counterpart`、`stale_quantity`；详见 [docs/operations/v3-facts.md](docs/operations/v3-facts.md)。
+- **配置键**：`v3.rotation_cooldown_sessions`（5）、`v3.rotation_min_fill`（0.5）、`v3.rotation_fee_trades`（20）、`v3.rotation_horizons`（`[5, 10, 20]`），示例配置同步；`workbench.total_cap` 缺省 0.6。
+- **简报与推送**：账户段加「仓位占比 X%（上限 60%），剩余额度 $Y」；变化段加当天的换仓结论、撤回与被取代各一行；名单里 B 那一行写换仓结论或不比较的原因；没有 agent 的草稿里「钱不够」的候选写「仓位已到上限，换仓比较未做」；今日操作的换仓卖出一行排在另两种卖出指令之后、缺日线之前；Discord 摘要加「换仓 B：结论（A）」一行。
+- **页面**：`/api/today` 的 `account.exposure`、`/api/account` 的 `exposure`、计划卡片的 `rotation` / `funded_by` / `warnings` / `stop_quantity_stale`、今日操作 `actions[]` 的 `sell_quantity` / `counterpart` / `stale_quantity` 与 `kind = rotation_sell`、`/api/retrospect` 的 `rotations`；前端：今日操作换仓卖出一行（「记成交」预填股票、计划与卖出股数，另有「撤回」）、计划卡片的换仓指令与「资金来自换仓」注记、账户概览的仓位占比与上限、复盘页「换仓」块（`RotationRetro`）、工具面板 38 个。
+- **与 v3.1、v3.2 设计的出入**（spec §16，冲突时以 v3.3 设计为准）：上限 100% → 60%；已买入的股票额度不够时可以被拿来比较；卖出指令第三种来源「换仓」（带数量、可撤回、可被取代）；部分卖出后提示改止损单数量；离场原因加「换仓」；待办的候选项可带一次换仓比较；仓位满时没有换仓结论的保存计划被拒绝；偏差标签加 `over_cap`。
+- 概念卡 `plan.sizing` 口径改为上限 60%（`version` 2 → 3）、`plan.max_hold` 补换仓指令被取代（`version` 2 → 3），新增 `plan.rotation`，共 43 张。
+- 上线前三套全量测试：离线 pytest（待收尾填入）；一次性库 pytest（待收尾填入）；前端 `npm test` 与 `npm run build`、svelte-check（待收尾填入）。
+
 ## [3.2.2] - 2026-11-10
 
 今日与账户页卡片化、工具面板（[设计 spec](docs/specs/2026-11-10-v3.2.2-page-cards-and-tool-list-design.md)、[实施 plan](docs/plans/2026-11-10-v3.2.2-page-cards-and-tool-list.md)）。2026-11-10 经用户授权上线：重建 `web/dist` 并重载页面服务，真实页面核对通过；无数据库迁移。

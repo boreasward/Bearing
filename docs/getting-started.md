@@ -42,8 +42,8 @@ cd web && npm install && npm run build && cd ..
 
 配置文件里不认识的键一律忽略。当前被读取的段落：
 
-- `v3`：事实任务与规则的参数，全部可选，缺省即 spec 冻结值；每个键的含义与默认值见 [operations/v3-facts.md](operations/v3-facts.md)（`top_n`、`collect_workers`、`sec_workers`、`replay_sessions`、`hold_sessions`、`min_triggers`、`win_hi` / `win_lo`、`min_group`、`sector_etfs`、`briefs_dir`）。
-- `workbench`：`risk_pct`（默认 0.01）、`single_cap`（0.25）、`total_cap`（1.0），计算计划股数时的仓位参数。
+- `v3`：事实任务与规则的参数，全部可选，缺省即 spec 冻结值；每个键的含义与默认值见 [operations/v3-facts.md](operations/v3-facts.md)（`top_n`、`collect_workers`、`sec_workers`、`replay_sessions`、`hold_sessions`、`min_triggers`、`win_hi` / `win_lo`、`min_group`、`sector_etfs`、`briefs_dir`）；v3.3 新增四个换仓键：`rotation_cooldown_sessions`（5，换仓冷却的交易日数）、`rotation_min_fill`（0.5，「钱不够」的比例线）、`rotation_fee_trades`（20，手续费估计取最近几笔成交）、`rotation_horizons`（`[5, 10, 20]`，复盘对照的三个时点），取值与范围见 [operations/v3-facts.md](operations/v3-facts.md)。
+- `workbench`：`risk_pct`（默认 0.01）、`single_cap`（0.25）、`total_cap`（**0.6**，v3.3 起由 1.0 改为 0.6：持仓总市值占总资产的上限，同时是换仓比较的触发线；本机 `config/local.json` 没有设这个键，改默认值即生效），计算计划股数时的仓位参数。
 - `filings`：`forms`（默认 10-Q、10-K）、`output_dir`；`sec_monitor`、`notify`：库里保留的 SEC 监控与 Discord 发送通道读取，目前没有入口调用。
 
 采集范围是 `config/universes/nasdaq100.json`（相对运行目录，请在仓库根目录运行命令）；关注列表读数据库表 `watchlist_items`。
@@ -74,13 +74,13 @@ v2 的写入实现（`upsert_watchlist_item`、`delete_watchlist_item`）曾随�
 
 ## 建库
 
-迁移文件在 `migrations/`（001–036），`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事：
+迁移文件在 `migrations/`（001–037），`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事：
 
 ```bash
 INVESTMENT_ASSISTANT_DATABASE_URL=postgresql://... .venv/bin/python -m investment_assistant.migrate
 ```
 
-输出一行 JSON：`{"applied": [...], "count": N}`。新建的空库直接运行上面这条即可，一路应用到 034。
+输出一行 JSON：`{"applied": [...], "count": N}`。新建的空库直接运行上面这条即可，一路应用到 037。**对已在用的真实库，迁移 037（v3.3）尚未执行，需用户单独授权，步骤见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md#037-与-v33-上线五步未执行)；不要用上面这条直接对真实库执行。**
 
 **`migrate` 在已有 v2 数据的库上会拒绝执行**：033 待执行、且它要删的表里有任何一张存在并且有行时，整个 `migrate` 退出、一条迁移都不应用，需要设置 `INVESTMENT_ASSISTANT_ALLOW_DROP_V2_TABLES=1` 确认；见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md)。
 

@@ -41,7 +41,7 @@ REQUIRED_IDS = (
     "rule.abnormal_move",
     "rule.plan_stop",
     "rule.plan_target",
-    # plan (15)
+    # plan (18)
     "plan.ref_price",
     "plan.entry_zone",
     "plan.stop",
@@ -59,6 +59,7 @@ REQUIRED_IDS = (
     "plan.max_hold",
     "plan.research",
     "plan.retrospect",
+    "plan.rotation",
 )
 
 
@@ -72,9 +73,9 @@ def body_of(catalog, card_id: str) -> str:
 
 
 def test_catalog_loads_and_matches_required_ids(catalog):
-    assert len(REQUIRED_IDS) == 42 and len(set(REQUIRED_IDS)) == 42
+    assert len(REQUIRED_IDS) == 43 and len(set(REQUIRED_IDS)) == 43
     assert set(catalog.concepts) == set(REQUIRED_IDS)
-    assert Counter(card.group for card in catalog.concepts.values()) == {"indicator": 15, "rule": 10, "plan": 17}
+    assert Counter(card.group for card in catalog.concepts.values()) == {"indicator": 15, "rule": 10, "plan": 18}
 
 
 def test_rules_have_cards(catalog):

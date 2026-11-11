@@ -253,13 +253,13 @@ class _NoEnv:
         raise AssertionError(f"get_concept must not use env.{name}")
 
 
-def test_get_concept_without_id_lists_the_42_kept_cards():
+def test_get_concept_without_id_lists_the_43_kept_cards():
     from investment_assistant.toolsurface.reads import get_concept
 
     out = get_concept(_NoEnv())  # type: ignore[arg-type]  # 离线测试替身：get_concept 不读 env 的任何字段
     assert out["knowledge_version"] == "knowledge-1" and out["point_in_time"] is False
     ids = [item["id"] for item in out["concepts"]]
-    assert len(ids) == 42 and len(set(ids)) == 42
+    assert len(ids) == 43 and len(set(ids)) == 43
     assert {item["group"] for item in out["concepts"]} == {"indicator", "rule", "plan"}
     assert "plan.stop" in ids and set(out["concepts"][0]) == {"id", "title", "group"}
 

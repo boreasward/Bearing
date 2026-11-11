@@ -2,16 +2,16 @@
 id: plan.sizing
 title: 建议仓位与本金来源
 group: plan
-version: 2
+version: 3
 applies_to: [plan-1]
-summary: "股数取 min(本金 × risk_pct ÷ 每股风险, 单票上限, 总持仓剩余空间)；本金按三级取：期初现金算出的总资产 → 最近一次对账 → 都没有则不算股数并写明。"
-related: [plan.stop, plan.ref_price, plan.status]
-sources: [investment_assistant/execution/account.py]
+summary: "股数取 min(风险, 单票上限, 总持仓剩余空间)，总持仓上限 60%；本金取期初现金算出的总资产，其次最近一次对账，都没有则不算股数。"
+related: [plan.stop, plan.ref_price, plan.status, plan.rotation]
+sources: [investment_assistant/execution/account.py, investment_assistant/execution/plan_levels.py, investment_assistant/execution/rotation.py]
 ---
 
 ## 是什么
 
-建议仓位回答「这笔交易买多少股」：先定好单笔最多愿意亏多少（占总资金的比例），用止损距离反推股数，同时不让单只股票或总持仓超过上限。v3.1 起本金不再是口述的快照，而是从账户的期初现金、出入金与成交算出来。
+建议仓位回答「这笔交易买多少股」：先定好单笔最多愿意亏多少（占总资金的比例），用止损距离反推股数，同时不让单只股票或总持仓超过上限。v3.3 起总持仓上限是总资产的 60%（原为 100%）。v3.1 起本金不再是口述的快照，而是从账户的期初现金、出入金与成交算出来。
 
 ## 怎么算 / 从哪来
 
@@ -27,20 +27,22 @@ sources: [investment_assistant/execution/account.py]
 | --- | --- | --- |
 | 风险 | `risk` | 本金 × `risk_pct` ÷ 每股风险 |
 | 单票 | `single` | （本金 × `single_cap` − 该股现有市值）÷ 入场上沿 |
-| 总持仓 | `total` | （本金 × `total_cap` − 总持仓市值）÷ 入场上沿 |
+| 总持仓 | `total` | （本金 × `total_cap` − 总持仓市值）÷ 入场上沿；总持仓市值取最新收盘，待入场计划不占额度 |
 
 - 每股风险 = 参考价 − [止损](plan.stop.md)（规则计划为 2 个 ATR）。
-- `risk_pct`、`single_cap`、`total_cap` 来自 `workbench` 配置，默认分别为 1%、25%、100%。
+- `risk_pct`、`single_cap`、`total_cap` 来自 `workbench` 配置，默认分别为 1%、25%、**60%**（v3.3 把 `total_cap` 由 100% 改为 60%）。
 - 结果状态：最小的是风险上限为 `sized`，是其余两项为 `capped`；没有本金时只给每股风险、不给股数，标 `no_equity`。
+- v3.3 起同时给出 `uncapped_shares`（不受总持仓限制的股数，即风险与单票两项取小）。额度内的股数不到它的一半（`v3.rotation_min_fill`，缺省 0.5）时判为「钱不够」，进入[换仓比较](plan.rotation.md)；否则照旧出计划，股数取额度内的股数。
+- **仓位占比** = 持仓总市值 ÷ 总资产；**剩余额度** = 总资产 × `total_cap` − 持仓总市值，小于 0 记 0。
 
 ## 在系统里哪里看到
 
-- 页面「计划与持仓」的待入场卡片（股数）、「记成交」表单预填的建议股数。
+- 页面「计划与持仓」的待入场卡片（股数）、「记成交」表单预填的建议股数；账户概览的仓位占比、上限与剩余额度（今日页账户条与简报账户段同样显示）。
 - 账户条的现金、总资产、浮动与已实现盈亏（同一套账本算出）；对话里 `compute_plan_levels` 逐项返回三个上限和采用了哪一个。
 
 ## 注意
 
-- 最小值不大于 0 说明没有空间：记 `no_room`，股数记 0。
+- 最小值不大于 0 说明没有空间：记 `no_room`，股数记 0。v3.3 起，规则判「钱够」的候选若自报价位算出 0 股，保存被拒绝并写「仓位已到上限」，不留 0 股的计划；仓位已高于上限时只显示占比，不产生任何卖出指令。
 - 延续计划时股数按当天的本金与持仓重算（见[有效期](plan.validity.md)）。
 - 现金算出来为负时如实显示，并注明「现金为负，可能漏记入金」；不模拟融资。
 - 这是风险预算的算术结果，不是投资建议，也**未经验证**。

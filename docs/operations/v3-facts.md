@@ -68,6 +68,12 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
 | `daily_weekdays` | `[2, 3, 4, 5, 6]` | v3.2.1：下次运行推算的 ISO 星期（周一为 1），须为 1–7 的非空整数子集；JSON 数组载入后转为 tuple |
 | `daily_hour` / `daily_minute` | 11 / 30 | v3.2.1：`Asia/Shanghai` 时刻；小时 0–23、分钟 0–59；须与 LaunchAgent 同步，见 [daily-run.md](daily-run.md) |
 | `tool_result_max_bytes` | 524288 | v3.2.1：工具结果留存的字节阈值配置；可选范围 65536–8388608；结果写入由工具面完成 |
+| `rotation_cooldown_sessions` | 5 | v3.3：换仓冷却的交易日数（半仓或全仓结论所在日到当天两端都算，不超过它即在冷却期内）；可选范围 1–20；未经验证 |
+| `rotation_min_fill` | 0.5 | v3.3：「钱不够」的比例线（额度内股数不到不受限股数的这个倍数）；可选范围 (0, 1]；未经验证 |
+| `rotation_fee_trades` | 20 | v3.3：手续费估计取最近几笔未作废成交的费用中位数（一来一回乘 2）；可选范围 1–200 |
+| `rotation_horizons` | `[5, 10, 20]` | v3.3：换仓复盘对照的交易日时点；1–5 个递增整数、各在 1–60；JSON 数组载入后转为 tuple |
+
+`workbench.total_cap`（总仓位上限）不在 `v3` 节：v3.3 起缺省 0.6（原 1.0），范围 (0, 1]，见 [getting-started.md](../getting-started.md)。
 
 采集并发的实现是 `data.registry.run_adapter` 新增的 `workers` 参数：缺省 1，与改动前的逐个拉取完全等价，
 旧调用不受影响；只有事实任务按 `collect_workers` / `sec_workers` 传入。
@@ -94,10 +100,11 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
   --session 2026-11-05 --mode brief --agent-session <会话编号> [--env-file .env]
 ```
 
-- 35 个工具：23 个两种模式都有（读、算计划价位、保存结论与计划、计划线的延续 / 修订 / 持仓复查 /
-  一句话总结、研究结论与读研究）；`record_trade`、`record_equity`（对账）、`record_cash_flow`、`confirm_stop_order`、
+- 38 个工具（v3.3 起；v3.2 为 35 个）：25 个两种模式都有（读、算计划价位、保存结论与计划、计划线的延续 / 修订 / 持仓复查 /
+  一句话总结、研究结论与读研究、换仓比较表与换仓结论）；`record_trade`、`record_equity`（对账）、`record_cash_flow`、`confirm_stop_order`、
   `raise_stop`、`cancel_plan`、`void_record`、`watchlist_add`、`watchlist_remove`、`ensure_data`、
-  `start_research`、`drop_research` 十二个只在 `chat` 模式可用（`drop_research` 页面也调它）。
+  `start_research`、`drop_research`、`withdraw_rotation` 十三个只在 `chat` 模式可用（`drop_research` 与 `withdraw_rotation` 页面也调它）。
+  简报模式 25 个、对话模式 38 个（`tests` 里按 `tool_defs(mode)` 数得出）。
   - v3.1 新增：`get_account`（账户视图）、`get_agenda`（当天待办）、`continue_plan`、`revise_plan`、
     `save_holding_review`、`save_summary`、`record_cash_flow`、`confirm_stop_order`、`raise_stop`、
     `cancel_plan`、`void_record`、`watchlist_add`、`watchlist_remove`。
@@ -119,6 +126,29 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
     研究的股票；`get_candidates` 每只加 `has_research`（简报名单据此标「研究中」）；`compute_plan_levels`
     返回的 `entry_types` 四种；简报模式的范围从「名单前 N 只」扩成「名单前 N 只 ∪ 当天待办里的研究股票」
     （`scope_tickers`）。
+  - v3.3 新增（spec §10）：`get_rotation_table`（两模式，读）、`save_rotation`（两模式，写）、`withdraw_rotation`（仅 chat，页面转发）。
+    - `get_rotation_table(ticker)`：宿主算好的换仓比较表（候选 B 的名次、规则价位、计划风险，账户占比，每只可比持仓的占比、盈亏、止损距离、
+      相对强度、行业档位、当天复查结论与半仓 / 全仓各自的账及换仓后 B 能买多少股，被排除的持仓，手续费估计，最近的换仓频率）。
+      只在 B 在范围内、当天结论是确认、闸门判「钱不够」且可比较时给表；额度足够时拒绝并写「额度足够，直接出计划即可」，
+      钱不够而不比较时拒绝并写原因代码与文案（`no_holding`、`compared_today`、`cooldown`、`incomplete`；对话模式不挡后两种）。
+    - `save_rotation(ticker, verdict, reasons, holding_plan_id, weakness, counter, cost_response, refs, thesis, invalidation, entry_type, max_hold_sessions, request_id, confirmed)`：
+      `verdict` 为 `hold` / `half` / `full`；**入参里没有任何股数、价位或金额字段**。继续持有写理由、反证与引用（引用必填）；半仓或全仓要选定一只可比持仓、
+      `weakness` 与 `cost_response` 非空、引用里至少一次以 A 为参数的单只股票读取（`get_price_bars`、`get_indicators`、`get_news`、
+      `get_filings`、`get_earnings`、`get_fundamentals` 任一），并在**同一次调用里**带 B 的 `thesis` 与 `invalidation`；A 只有 1 股时拒绝半仓。
+      宿主算卖出股数（半仓 = 持仓 ÷ 2 向下取整、全仓 = 全部）与 B 的股数（A 按最新收盘卖出后的额度）、过一遍保存计划的拒绝条件，
+      然后一个事务里写换仓记录、B 的待入场计划（`funded_by_rotation_id`）与 A 的换仓卖出指令，中途失败都不落库；
+      B 只用宿主规则价位。简报模式同一交易日最多一行记录；对话模式未确认时返回复述（含「最近 N 个交易日已换仓 K 次」），
+      确认写入必须带 `request_id`，按 `request_id` 幂等（同一 `request_id` 换了结论被拒绝）。
+    - `withdraw_rotation(plan_id, request_id, confirmed, reason)`：撤回 A 上还没执行完的换仓指令，先复述、确认后写，按 `request_id` 幂等，B 的计划不动。
+  - v3.3 改动：`get_agenda` 的确认项加 `rotation`（`short`、`compare`、`blocked`、`blocked_text`）并按它判完成，顶层加 `rotation`
+    （`compared_today`、`last_session`）；`get_account` 加 `exposure`（`pct`、`cap`、`room`、`incomplete`）；`compute_plan_levels` 的 `sizing` 加
+    `uncapped_shares`，返回加 `short_of_room` 与 `exposure`；`save_plan` 在「钱不够」时不再照常保存：该比较而还没有换仓结论 → `needs_rotation`；
+    不比较 → `no_room` 加原因；当天已存「继续持有」→ `no_room: 仓位已到上限，比较后继续持有`；待办判为「钱够」而自报价位算出 0 股也拒绝
+    （`no_room: 仓位已到上限`），不留 0 股的计划；换仓的 B 不接受自报价位；`revise_plan` 对换仓的 B 拒绝改价位（`rotation_levels_fixed`）；`continue_plan` 对换仓的 B 在
+    A 的指令未执行完时仍按「待卖股数已卖出」算额度；`save_holding_review` 与持有到期都能取代换仓指令（记 `rotation_superseded`）；
+    `record_trade` 的卖出推进换仓指令、没卖完时标「止损单数量待改」并返回 `stop_order_quantity`，买入后仓位占比高于上限时记一行偏差并返回
+    `over_cap`；`confirm_stop_order` 在变化记录里写下当时的持仓股数并清掉数量待改标记；`get_plans` 的计划行加 `sell_quantity`、`rotation_id`、
+    `funded_by_rotation_id`、`stop_quantity_stale`；`get_positions` 的下一步操作加 `kind = rotation_sell` 与 `sell_quantity`、`counterpart`、`stale_quantity`。
   - 计划是跨天的一条线：`v3_plan_events` 里每次变化一行；带 `request_id` 的写工具先复述、
     `confirmed` 为真才写、按 `request_id` 幂等。
 - 交易日与数据截止时点在进程启动时固定，模式与会话编号由宿主传入，模型改不了；每次调用（含出错的）

@@ -41,6 +41,7 @@
 | 034 | v3.1（spec §13）：`v3_plans` 改造为计划线——新增 `status` / `kind` / `initial_stop` / `atr` / `trailing`（PostgreSQL 保留字，建列时带双引号） / `confirmed_stop_order` / `start_session` / `reviewed_through` / `stop_hit_session` / `target_hit_session` / `sell_instruction` / `ended_session` / `end_reason` / `outcome`，四个价位列转可空，032 时代的行（无 `initial_stop`、未复查过的 `pending`）一律记 `expired` / `migrated_034`；`(session, ticker)` 唯一换成按状态的部分唯一索引 `uq_v3_plans_one_active_per_ticker`（一只股票最多一份有效计划），旧价位约束换成新具名约束 `v3_plans_levels_check`：价位全空或全有，全有时要求 `entry_low <= entry_high` 且 `entry_high < target1`，**不要求止损低于入场**（实施期间 ruling R5 放宽：补录计划的止损以补录时最新收盘为基准，可能高于入场区间；起算日收盘判定的持仓止损同理）；`v3_runs` 加 `dropped`；新建 `v3_plan_events`（变化记录，宿主同计划同交易日同类型唯一）、`v3_holding_reviews`、`v3_cash_flows`、`v3_voids`、`v3_briefs`、`v3_chats`、`v3_chat_messages`、`v3_settings` 八张表（只追加表见 `tests/test_no_update_on_append_only_tables.py`）。可重跑（`IF EXISTS` / `IF NOT EXISTS`，约束先 `DROP ... IF EXISTS` 再建）；不改证据行、不加种子行。**注意（Task 1 审查发现 M4）：手工重跑 034 会把 034 之后无价位（补录缺日线）的 pending 计划误标 expired——`migrate` 不会自动重跑，手工重跑前先核对。**033 已于 2026-11-06、034 已于 2026-11-07 经用户授权在真实库执行，步骤与记录见下文 | v3 |
 | 035 | v3.2（spec §11）：新建 `v3_research`（研究记录：股票、论点、状态五值 CHECK、发起交易日、有效期末日、条件 JSON 与文案、结论与理由与引用、`checked_through` / `triggered_session` / `plan_id` / 结束交易日与原因、来源、agent 会话；部分唯一索引 `uq_v3_research_one_watching_per_ticker`：`status = 'watching'` 时每只股票一份）与 `v3_research_events`（只追加的变化记录，形状同 `v3_plan_events`；宿主事件按（研究、交易日、类型）唯一，已加进 `tests/test_no_update_on_append_only_tables.py` 的清单）；`v3_plans` 加 `research_id`（可空，指向研究；`entry_type` 四种由代码的 `ENTRY_TYPES` 保证，无数据库 CHECK）；`v3_briefs` 加 `weekly_md`、`pushed_weekly_at`。只建对象、不动任何旧行、不加种子，`IF EXISTS` / `IF NOT EXISTS` 可重跑。2026-11-09 已在真实库执行，记录见下文 | v3 |
 | 036 | v3.2.1：`v3_tool_calls` 加 `result JSONB`（可空）与 `truncated BOOLEAN NOT NULL DEFAULT FALSE`。历史行 `result` 为 NULL、`truncated` 为 false，不回填；仍只追加。两列均用 `ADD COLUMN IF NOT EXISTS`，可重跑。2026-11-09 已在真实库执行（先于新代码重载），记录见下文 | v3 |
+| 037 | v3.3（spec §11）：新建 `v3_rotations`（换仓记录：交易日、来源 `brief` / `chat`、候选、结论 `hold` / `half` / `full`、选定的 A（计划与股票）、理由、A 的问题、反证、对那笔账的回应、引用、当时摆出的整张比较表 `snapshot`、卖出股数与 B 的股数、`request_id` 唯一；半仓或全仓的约束：A、卖出股数、买入股数都有且 `weakness` 与 `cost_response` 非空；部分唯一索引 `uq_v3_rotations_brief_once`：简报来源每个交易日一行；只追加，已加进 `tests/test_no_update_on_append_only_tables.py` 的清单）；`v3_plans` 加 `sell_quantity`、`rotation_id`、`funded_by_rotation_id`、`stop_quantity_stale`，部分唯一索引 `uq_v3_plans_funded_by_rotation`（一次换仓只供一份 B 的计划），`sell_instruction` 约束放开到 `rotation`，新约束 `v3_plans_rotation_check`（`sell_instruction = 'rotation'` ⇔ 有 `rotation_id` ⇔ 有 `sell_quantity`，三列必须同一条 UPDATE 一起改）；`v3_plan_events` 的事件约束加 `rotation_instruction`、`rotation_withdrawn`、`rotation_superseded`、`stop_quantity_stale`。可重跑（`IF NOT EXISTS`，约束先 `DROP ... IF EXISTS` 再建）；不改任何旧行、不加种子行。对 v3.2 代码无害（只新增表 / 列、放宽约束）。**已在一次性库验证（`tests/test_migration_037.py`）；真实库未执行，需用户单独授权，步骤见下文** | v3 |
 
 016–031 建出的业务表，除 033 的保留清单外都由 033 删除；033 已于 2026-11-06 在真实库执行，这些表已不在库里。
 
@@ -52,7 +53,7 @@ LangGraph 的检查点表不是迁移建的（v2 时由 `analysis.agent setup` �
 INVESTMENT_ASSISTANT_DATABASE_URL=... .venv/bin/python -m investment_assistant.migrate
 ```
 
-`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事。新库从 001 一路执行到 036，最终只剩保留的表。`migrate` 不读 `.env`，连接串要在进程环境里给。
+`migrate` 入口按文件名顺序执行未执行过的迁移，并记入 `schema_migrations`，重复运行不做任何事。新库从 001 一路执行到 037，最终只剩保留的表。`migrate` 不读 `.env`，连接串要在进程环境里给。
 
 ## 真实库：备份后单事务执行
 
@@ -440,9 +441,40 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
 
 036 只新增列，旧代码可以保留这两列运行；应用回退先另获授权，再按旧版构建与重载。若必须恢复整个备份，另行授权停服务后使用本页的 `pg_restore --clean --if-exists` 流程；恢复会丢失备份后的所有写入。
 
+## 037 与 v3.3 上线五步（未执行）
+
+**状态：真实库没有执行迁移 037，以下每一步都需用户单独授权，截至本文写成时一步都没有执行。**依据 [v3.3 设计](../specs/2026-11-11-v3.3-account-cap-and-rotation-design.md) §14；v3.2.0 仍在观察期，037 排在 036 之后，只新建一张表、给 `v3_plans` 加四列并放宽两处约束，不动任何旧行，新旧代码混跑时旧代码读不到新列也不受影响，但新代码读新列，所以必须先迁移、后重载。
+
+1. **备份真实库**（需用户单独授权，未执行）。先确认没有进行中的 daily / facts / 对话轮次；连接串由授权后的运维环境提供：
+
+   ```bash
+   mkdir -p .local/v3
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc 'SELECT max(filename) FROM schema_migrations'
+   psql "$INVESTMENT_ASSISTANT_DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc "SELECT to_regclass('v3_rotations'), (SELECT count(*) FROM v3_plans)" > .local/v3/before-037.txt
+   pg_dump -Fc "$INVESTMENT_ASSISTANT_DATABASE_URL" -f .local/v3/backup-before-037.dump
+   chmod 600 .local/v3/backup-before-037.dump
+   shasum -a 256 .local/v3/backup-before-037.dump
+   pg_restore --list .local/v3/backup-before-037.dump > .local/v3/backup-before-037.list
+   test -s .local/v3/backup-before-037.list
+   ```
+
+   预检应见最新一条为 `036_v3_2_1_tool_results.sql`、`v3_rotations` 不存在（`to_regclass` 为空）。
+2. **执行迁移 037**（需用户单独授权，未执行）：
+
+   ```bash
+   INVESTMENT_ASSISTANT_DATABASE_URL=... .venv/bin/python -m investment_assistant.migrate
+   ```
+
+   首次输出必须恰为 `{"applied": ["037_v3_3_rotation.sql"], "count": 1}`，重跑输出 `{"applied": [], "count": 0}`；如果预检有其他待迁移或追踪不一致，先查明再执行。迁移文件在一个事务里，失败整体回滚。核对：`v3_rotations` 为 0 行，索引 `uq_v3_rotations_brief_once`、`uq_v3_plans_funded_by_rotation` 与约束 `v3_rotations_half_full_check`、`v3_plans_rotation_check`、`v3_plans_sell_instruction_check`、`v3_plan_events_event_check` 都在；`v3_plans` 有 `sell_quantity`、`rotation_id`、`funded_by_rotation_id`、`stop_quantity_stale` 四列，`stop_quantity_stale` 不可空默认 false；`v3_plans` 行数与预检一致；`schema_migrations` 多一行；`.venv/bin/python -m investment_assistant.facts show` 照常。
+3. **重建前端并重新加载页面服务**（需用户单独授权，未执行）：命令见 [local-service.md](local-service.md#v33-上线五步未执行)；每日任务随下一次定时运行生效。
+4. **核对账户页的仓位占比与券商一致**（需用户单独授权，未执行）：仓位已高于 60% 时系统只显示，不要求卖出。
+5. **观察并记发布**（需用户单独授权，未执行）：第一次真实的换仓比较，或连续 5 个定时交易日没有触发而简报正常之后，补执行记录、更新 roadmap 与 CHANGELOG；打 tag 与 push 另行授权。
+
+回滚：037 只新增对象，旧代码可以保留新表与新列运行；应用回退先另获授权。若必须恢复整个备份，另行授权停服务后用 `pg_restore --clean --if-exists -d "$INVESTMENT_ASSISTANT_DATABASE_URL" .local/v3/backup-before-037.dump`，恢复会丢失备份后的所有写入。执行后把结果补记到本节。
+
 ## 一次性测试库
 
-数据库测试只在设置了 `INVESTMENT_ASSISTANT_TEST_DATABASE_URL` 时运行，每个测试在独立 schema 中建表、结束后删除。永远不要把它指向真实库。夹具（`tests/conftest.py`）的显式迁移清单按顺序应用到 036 为止，所以保留的数据库测试都在已删掉 v2 表、含 v3.2 研究表与周报列、v3.2.1 工具结果列的 schema 上跑。
+数据库测试只在设置了 `INVESTMENT_ASSISTANT_TEST_DATABASE_URL` 时运行，每个测试在独立 schema 中建表、结束后删除。永远不要把它指向真实库。夹具（`tests/conftest.py`）的显式迁移清单按顺序应用到 037 为止，所以保留的数据库测试都在已删掉 v2 表、含 v3.2 研究表与周报列、v3.2.1 工具结果列、v3.3 换仓记录与计划新列的 schema 上跑。
 
 ```bash
 initdb -D <临时目录>/pg/data -U test -A trust --no-locale -E UTF8
