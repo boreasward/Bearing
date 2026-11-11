@@ -105,6 +105,7 @@ def size(
                 **base,
                 "risk_amount": None,
                 "shares": None,
+                "uncapped_shares": None,
                 "applied_cap": None,
                 "status": "no_equity",
             },
@@ -118,6 +119,7 @@ def size(
         ("total", _floor((equity * _dec(params.total_cap) - total_value) / entry_high)),
     )
     applied_cap, shares = min(caps, key=lambda cap: cap[1])
+    uncapped_shares = min(caps[0][1], caps[1][1])  # v3.3：不受总仓位限制的股数，供「钱不够」判定
     invalid = ["no_room"] if shares <= 0 else []
     status = "no_room" if shares <= 0 else ("sized" if applied_cap == "risk" else "capped")
     return (
@@ -128,6 +130,7 @@ def size(
             **base,
             "risk_amount": risk_amount,
             "shares": shares,
+            "uncapped_shares": uncapped_shares,
             "applied_cap": applied_cap,
             "status": status,
         },

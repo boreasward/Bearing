@@ -30,6 +30,7 @@ KEPT = (
     "investment_assistant.execution.plan_line",
     "investment_assistant.execution.research",
     "investment_assistant.execution.retrospect",
+    "investment_assistant.execution.rotation",
     "investment_assistant.execution.account",
     "investment_assistant.db",
     "investment_assistant.config",
