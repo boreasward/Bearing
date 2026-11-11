@@ -42,7 +42,7 @@
 
 依据 [设计 spec](../specs/2026-11-11-v3.3-account-cap-and-rotation-design.md) §14。**2026-11-11 经用户授权（「备份真实库并执行迁移 037，完成上线」）执行了第 1–4 步**：备份、迁移 037、重载页面服务、核对账户页；每日任务的 LaunchAgent 没有动。v3.2.0 仍在观察期（roadmap 第 6 步），本版的迁移编号 037 排在 036 之后，不改动观察安排。
 
-1. **备份真实库**（已执行）：`pg_dump -Fc` 全库备份到 `.local/v3/backup-before-037.dump`，记大小与 sha256，`pg_restore --list` 核对；命令见 [migrations-and-backup.md](migrations-and-backup.md#037-与-v33-上线五步未执行)。
+1. **备份真实库**（已执行）：`pg_dump -Fc` 全库备份到 `.local/v3/backup-before-037.dump`，记大小与 sha256，`pg_restore --list` 核对；命令见 [migrations-and-backup.md](migrations-and-backup.md#037-与-v33-上线五步第-1-4-步已执行第-5-步观察中)。
 2. **在真实库执行迁移 037**（已执行）：走 `migrate` 入口，预期输出恰为 `{"applied": ["037_v3_3_rotation.sql"], "count": 1}`；只新建一张表、给 `v3_plans` 加四列并放宽两处约束，不改旧行。执行前先确认没有进行中的 daily / facts / 对话轮次。新代码读新列，所以必须先于第 3 步。
 3. **重建前端并重新加载页面服务**（已执行）：每日任务随下一次定时运行生效，不需要另装 LaunchAgent。
 
