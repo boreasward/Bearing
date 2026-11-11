@@ -338,3 +338,21 @@ def test_gate_without_candidate_bars_is_not_short(v3_db, mode):
     seed_c4(v3_db)
     v3_db.commit()
     assert facts_rotation.gate(v3_db, ticker="ZZZ", mode=mode, **KW)["short"] is False
+
+
+@pytest.mark.parametrize(("cost", "close"), [("50", 40.0), ("40", 25.0)], ids=["equity-zero", "equity-negative"])
+def test_gate_with_zero_or_negative_equity_never_short(v3_db, cost, close):
+    """Review Focus 2：总资产为 0 或负时不判钱不够、不比较，闸门与占比都不抛异常。
+    开户 1000，买 100 股：成本 50 收盘 40 → 总资产 0；成本 40 收盘 25 → 总资产 −500。"""
+    seed_run(v3_db)
+    seed_opening(v3_db, 1000)
+    held = add_holding(v3_db, "AAA", 100, cost, close, target1=D(100))
+    holding_review(v3_db, held["id"])
+    v3_db.commit()
+
+    gate = facts_rotation.gate(v3_db, ticker="BBB", mode="brief", **KW)
+
+    assert gate["short"] is False and gate["compare"] is False and gate["blocked"] is None
+    row = facts_rotation.exposure_row(v3_db, **KW)
+    assert row["room"] is None or row["room"] == D("0.00")
+    assert facts_rotation.gate(v3_db, ticker="BBB", mode="chat", **KW)["short"] is False

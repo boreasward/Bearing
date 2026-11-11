@@ -54,6 +54,11 @@ def _reads(env, holding="AAA", candidate="BBB"):
     return [table["ref"], read["ref"]]
 
 
+def _reads_without_table(env, holding="AAA"):
+    """只读 A 的单只数据（冷却期内读表会被拒）：返回一条 ref，后面再补一条市场读取供引用校验。"""
+    return [call(env, "get_price_bars", {"ticker": holding})["ref"]]
+
+
 def _half(env, holding, refs, **over):
     args = {
         "ticker": "BBB",
@@ -492,3 +497,71 @@ def test_tool_availability(v3_tx, mode):
     names = {tool.name for tool in tool_defs(mode)}
     assert {"get_rotation_table", "save_rotation"} <= names
     assert ("withdraw_rotation" in names) is (mode == "chat")
+
+
+def test_brief_cooldown_blocks_save_rotation(v3_tx):
+    """简报会话在冷却期内调 save_rotation：被拒，错误是 cooldown 与上次换仓日期，什么都不写（spec §6.1 条件 5）。"""
+    env, ids = _setup(v3_tx)
+    two_ago = add_trading_days(SESSION, -2)
+    add_rotation(v3_tx, session=two_ago, verdict="half", origin="chat", holding=(ids["a"]["id"], "AAA"))
+    v3_tx.commit()
+    refs = _reads_without_table(env)
+
+    hold = call(env, "save_rotation", {"ticker": "BBB", "verdict": "hold", "reasons": "继续拿着", "refs": refs})
+    half = _half(env, ids["a"], refs)
+
+    expected = f"cooldown: 仓位已到上限，冷却期内（上次换仓 {two_ago:%m-%d}）"
+    assert hold["error"] == expected and half["error"] == expected
+    assert call(env, "get_rotation_table", {"ticker": "BBB"})["error"] == expected
+    assert _count(v3_tx, "v3_rotations") == 1 and _count(v3_tx, "v3_plans") == 2
+    assert plan_repo.plan(v3_tx, ids["a"]["id"])["sell_instruction"] is None
+
+
+def test_chat_save_rotation_rejected_when_room_is_enough(v3_tx):
+    """对话模式「钱够」：save_rotation 与读表一样被拒（room_enough），不写记录（spec §7.3）。"""
+    seed_run(v3_tx, ("BBB",))
+    seed_opening(v3_tx)
+    held = add_holding(v3_tx, "AAA", 300, "40", 40.0)
+    holding_review(v3_tx, held["id"])
+    v3_tx.commit()
+    env = _env("chat", "t-chat-room")
+    _verdict(env, "BBB")
+    ref = call(env, "get_price_bars", {"ticker": "AAA"})["ref"]
+
+    saved = _half(env, held, [ref], request_id="chat-room", confirmed=True)
+
+    assert saved["error"] == "room_enough: 额度足够，直接出计划即可"
+    assert call(env, "get_rotation_table", {"ticker": "BBB"})["error"] == "room_enough: 额度足够，直接出计划即可"
+    assert _count(v3_tx, "v3_rotations") == 0 and _count(v3_tx, "v3_plans") == 1
+
+
+def test_research_candidate_table_record_and_plan_share_one_number(v3_tx):
+    """spec §6.5「同一个口径」：研究来源的 B 在换仓里同样只用宿主规则价位（不是研究入场放宽的价位）——
+    表里的 buy_shares、换仓记录里的 buy_shares、B 的计划股数是同一个数，计划价位就是表里候选的价位。"""
+    ids = seed_c4(v3_tx)
+    data_repo.store_bars(v3_tx, "RRR", seed_bars(close=50.0), now=NOW)
+    v3_tx.commit()
+    env = _env("chat", "t-research-number")
+    started = call(
+        env, "start_research", {"ticker": "RRR", "thesis": "跌很多，可能是入场时机", "request_id": "rs-n", "confirmed": True}
+    )["data"]["research"]
+    ref = call(env, "get_research", {})["ref"]
+    concluded = call(
+        env, "conclude_research", {"research_id": started["id"], "verdict": "ready", "reasons": "可以出计划", "refs": [ref]}
+    )  # fmt: skip
+    assert "data" in concluded, concluded
+    _verdict(env, "RRR")
+    table = call(env, "get_rotation_table", {"ticker": "RRR"})["data"]
+    shown = table["holdings"][0]["half"]["buy_shares"]
+    refs = _reads(env, candidate="RRR")
+
+    saved = _half(env, ids["a"], refs, ticker="RRR", request_id="rr-n", confirmed=True)["data"]
+
+    plan_b, rotation = saved["plan"], saved["rotation"]
+    assert plan_b["research_id"] == started["id"] and plan_b["levels_source"] == "host"
+    assert shown == 217 and rotation["buy_shares"] == "217.000000" and plan_b["shares"] == 217
+    assert rotation["snapshot"]["holdings"][0]["half"]["buy_shares"] == shown
+    levels = table["candidate"]["levels"]
+    assert (str(plan_b["entry_low"]), str(plan_b["entry_high"]), str(plan_b["stop"]), str(plan_b["target1"])) == (
+        f"{D(levels['entry_low']):.6f}", f"{D(levels['entry_high']):.6f}", f"{D(levels['stop']):.6f}", f"{D(levels['target1']):.6f}",
+    )  # fmt: skip
