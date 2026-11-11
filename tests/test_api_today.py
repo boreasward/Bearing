@@ -110,10 +110,22 @@ def test_today_returns_actions_and_account(client, v3_tx):
     # 未确认止损单的持仓进「今日操作」（spec §7.4 第 4 条）
     assert [row["kind"] for row in body["actions"]] == ["stop_order"]
     action = body["actions"][0]
-    assert set(action) == {"plan_id", "ticker", "kind", "text", "stop", "quantity", "reason"}
+    assert set(action) == {
+        "plan_id",
+        "ticker",
+        "kind",
+        "text",
+        "stop",
+        "quantity",
+        "reason",
+        "sell_quantity",
+        "counterpart",
+        "stale_quantity",
+    }
+    assert action["sell_quantity"] is None and action["counterpart"] is None and action["stale_quantity"] is False
     assert action["ticker"] == "AAPL" and action["stop"] is not None
     account = body["account"]
-    assert set(account) == {"cash", "equity", "unrealized_pnl", "realized_pnl", "cash_negative", "notes"}
+    assert set(account) == {"cash", "equity", "unrealized_pnl", "realized_pnl", "cash_negative", "notes", "exposure"}
     assert isinstance(account["cash"], str) and D(account["cash"]) == D(9000)  # 金额是字符串
     # 金额取到分、股数去掉存储尾零：页面原样显示这些字符串（2026-11-07 用户截图）
     assert account["cash"] == "9000.00" and account["equity"] == "10000.00"
@@ -153,3 +165,42 @@ def test_counts_reflect_actions_plans_and_research(client, v3_tx):
     body = client.get("/api/today").json()
     assert body["counts"] == {"actions": 1, "holdings": 1, "pending": 2, "watching": 1}
     assert len(body["actions"]) == body["counts"]["actions"]
+
+
+def test_today_has_exposure_and_rotation_action(client, v3_tx):
+    """C18：account.exposure 的四个键（字符串）；换仓卖出行带 sell_quantity / counterpart。"""
+    from _rotation_seed import instruct, seed_c4
+
+    ids = seed_c4(v3_tx)
+    instruct(v3_tx, ids["a"], candidate="BBB", quantity=150)
+    v3_tx.commit()
+    body = client.get("/api/today").json()
+    exposure = body["account"]["exposure"]
+    assert set(exposure) == {"pct", "cap", "room", "incomplete"}
+    # 总资产 100160.50，持仓市值 301×40 + 1000×42.98 = 55020.00：占比 0.5493，上限 0.6，剩余 100160.50×0.6 − 55020
+    assert exposure == {"pct": "0.5493", "cap": "0.6", "room": "5076.30", "incomplete": False}
+    rotation = next(row for row in body["actions"] if row["kind"] == "rotation_sell")
+    assert rotation["ticker"] == "AAA" and rotation["sell_quantity"] == "150" and rotation["counterpart"] == "BBB"
+    assert rotation["text"] == "下次开盘卖出 150 股（换仓至 BBB）" and rotation["stale_quantity"] is False
+    plain = [row for row in body["actions"] if row["ticker"] == "CCC"]
+    assert plain and plain[0]["sell_quantity"] is None and plain[0]["counterpart"] is None
+
+
+def test_today_stale_stop_quantity_row(client, v3_tx):
+    """C10：止损单数量待改的持仓行 stale_quantity 为真，文字写明新数量。"""
+    from _rotation_seed import add_holding, holding_review, seed_c4
+
+    seed_c4(v3_tx)
+    stale = add_holding(v3_tx, "STL", 151, "40", 40.0, confirmed_stop_order=D(36))
+    plan_repo.update_plan(v3_tx, stale["id"], stop_quantity_stale=True)
+    holding_review(v3_tx, stale["id"], "holds")
+    v3_tx.commit()
+    row = next(row for row in client.get("/api/today").json()["actions"] if row["ticker"] == "STL")
+    assert row["kind"] == "stop_order" and row["stale_quantity"] is True
+    assert row["text"] == "止损单数量需改为 151 股" and row["sell_quantity"] is None
+
+
+def test_today_without_run_has_exposure_without_capital(client, v3_tx):
+    """没有运行记录也没有账户资金：占比与额度为空，上限照给。"""
+    exposure = client.get("/api/today").json()["account"]["exposure"]
+    assert exposure == {"pct": None, "cap": "0.6", "room": None, "incomplete": False}

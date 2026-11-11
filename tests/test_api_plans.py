@@ -38,6 +38,10 @@ CARD_KEYS = {
     "end_reason",
     "close_above_entry",
     "missing_bar",
+    "rotation",
+    "funded_by",
+    "stop_quantity_stale",
+    "warnings",
 }
 
 
@@ -307,3 +311,70 @@ def test_cancel_pending_plan(client, v3_tx):
     assert done.status_code == 200 and done.json()["plan"]["status"] == "cancelled"
     not_pending = client.post(f"/api/plans/{msft['id']}/cancel", json={"request_id": "c-2", "confirmed": True})
     assert not_pending.status_code == 400 and not_pending.json()["error"] == "not_pending"
+
+
+def test_cards_carry_rotation_and_funding(client, v3_tx):
+    """A 的卡片带 rotation 三个键、next_action 为 rotation_sell；B 的卡片带 funded_by 三个键；其余计划两者为 null。"""
+    from _rotation_seed import instruct, seed_c4
+
+    ids = seed_c4(v3_tx)
+    rotation, plan_b = instruct(v3_tx, ids["a"], candidate="BBB", quantity=150)
+    plan_repo.update_plan(v3_tx, plan_b["id"], warnings=["no_room"])
+    v3_tx.commit()
+    holdings = {card["ticker"]: card for card in client.get("/api/plans?group=holdings").json()["plans"]}
+    a_card, c_card = holdings["AAA"], holdings["CCC"]
+    assert a_card["rotation"] == {"rotation_id": rotation["id"], "sell_quantity": "150", "counterpart": "BBB"}
+    assert a_card["funded_by"] is None and a_card["stop_quantity_stale"] is False
+    assert a_card["next_action"]["kind"] == "rotation_sell"
+    assert a_card["next_action"]["text"] == "下次开盘卖出 150 股（换仓至 BBB）"
+    assert a_card["next_action"]["sell_quantity"] == "150" and a_card["next_action"]["counterpart"] == "BBB"
+    assert c_card["rotation"] is None and c_card["funded_by"] is None
+    pending = client.get("/api/plans?group=pending").json()["plans"]
+    assert [card["ticker"] for card in pending] == ["BBB"]
+    b_card = pending[0]
+    assert b_card["funded_by"] == {"rotation_id": rotation["id"], "holding_ticker": "AAA", "sell_quantity": "150"}
+    assert b_card["rotation"] is None and b_card["warnings"] == ["no_room"]
+    detail = client.get(f"/api/plans/{plan_b['id']}").json()
+    assert detail["funded_by"] == b_card["funded_by"] and "events" in detail
+    assert client.get(f"/api/plans/{ids['a']['id']}").json()["rotation"] == a_card["rotation"]
+
+
+def test_card_stale_stop_quantity_and_rotation_exit(client, v3_tx):
+    from _rotation_seed import add_holding, seed_c4
+
+    seed_c4(v3_tx)
+    stale = add_holding(v3_tx, "STL", 151, "40", 40.0, confirmed_stop_order=D(36))
+    plan_repo.update_plan(v3_tx, stale["id"], stop_quantity_stale=True)
+    closed = add_holding(v3_tx, "CLO", 10, "40", 40.0, status="closed", ended_session=SESSION, end_reason="换仓卖出")
+    plan_repo.update_plan(v3_tx, closed["id"], outcome={"realized_pnl": D(5), "exit_reason": "rotation"})
+    v3_tx.commit()
+    card = client.get(f"/api/plans/{stale['id']}").json()
+    assert card["stop_quantity_stale"] is True and card["next_action"]["text"] == "止损单数量需改为 151 股"
+    ended = client.get("/api/plans?group=ended").json()["plans"]
+    assert next(row for row in ended if row["ticker"] == "CLO")["outcome"]["exit_reason"] == "rotation"
+
+
+def test_withdraw_rotation_route(client, v3_tx):
+    """confirmed=false 返回复述；true 清空指令并记一行；没有指令 → 400 与错误码 no_rotation_instruction。"""
+    from _rotation_seed import instruct, seed_c4
+
+    ids = seed_c4(v3_tx)
+    instruct(v3_tx, ids["a"], candidate="BBB", quantity=150)
+    v3_tx.commit()
+    url = f"/api/plans/{ids['a']['id']}/rotation/withdraw"
+    preview = client.post(url, json={"request_id": "w-1", "confirmed": False, "reason": "不换了"})
+    assert preview.status_code == 200 and preview.json()["write"] is False
+    text = preview.json()["preview"]
+    assert "AAA" in text and "150" in text and "BBB" in text
+    assert plan_repo.plan(v3_tx, ids["a"]["id"])["sell_instruction"] == "rotation"  # 复述不写
+    done = client.post(url, json={"request_id": "w-1", "confirmed": True, "reason": "不换了"})
+    assert done.status_code == 200
+    plan = plan_repo.plan(v3_tx, ids["a"]["id"])
+    assert plan["sell_instruction"] is None and plan["sell_quantity"] is None and plan["rotation_id"] is None
+    assert done.json()["event"]["event"] == "rotation_withdrawn"
+    again = client.post(url, json={"request_id": "w-2", "confirmed": True})
+    assert again.status_code == 400 and again.json()["error"] == "no_rotation_instruction"
+    unknown = client.post("/api/plans/99999/rotation/withdraw", json={"request_id": "w-3", "confirmed": True})
+    assert unknown.status_code == 404
+    missing = client.post(url, json={"confirmed": True})
+    assert missing.status_code == 400 and missing.json()["error"] == "missing_argument"

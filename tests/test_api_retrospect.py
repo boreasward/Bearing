@@ -194,3 +194,62 @@ def test_bad_week_400(client, v3_tx):
     assert client.get("/api/retrospect?week=20261104").status_code == 400  # 契约只认 YYYY-MM-DD，基本格式拦掉
     assert client.get("/api/retrospect?limit=0").status_code == 400
     assert client.get("/api/retrospect?limit=101").status_code == 400
+
+
+ROTATION_RECORD_KEYS = {
+    "rotation_id",
+    "session",
+    "origin",
+    "candidate",
+    "verdict",
+    "verdict_text",
+    "holding_ticker",
+    "reasons",
+    "weakness",
+    "sell_quantity",
+    "buy_shares",
+    "fee_estimate",
+    "execution",
+    "compare",
+}
+ROTATION_GROUP_KEYS = {"sample", "enough", "b_win_rate", "mean_diff"}
+
+
+def test_retrospect_has_rotations_block(client, v3_tx):
+    """rotations 的键与接口契约一致；空库 records 为 []；weekly.rotations 逐行带五个键。"""
+    empty = client.get("/api/retrospect").json()
+    assert set(empty["rotations"]) == {"records", "summary", "min_sample"}
+    assert empty["rotations"]["records"] == [] and empty["rotations"]["min_sample"] == 10
+    assert empty["weekly"]["rotations"] == []
+
+    import _rotation_seed as rot
+
+    ids = rot.seed_c4(v3_tx)
+    half = rot.add_rotation(
+        v3_tx, session=D2, verdict="half", origin="brief", holding=(ids["a"]["id"], "AAA"), request_id="r-1"
+    )
+    hold = rot.add_rotation(v3_tx, session=SESSION, verdict="hold", origin="chat", candidate="FFF", request_id="r-2")
+    v3_tx.commit()
+    body = client.get("/api/retrospect").json()
+    block = body["rotations"]
+    assert [row["rotation_id"] for row in block["records"]] == [hold["id"], half["id"]]
+    for row in block["records"]:
+        assert set(row) == ROTATION_RECORD_KEYS
+    held, switched = block["records"]
+    assert held["verdict"] == "hold" and held["verdict_text"] == "继续持有"
+    assert held["execution"] is None and held["compare"] is None and held["holding_ticker"] is None
+    assert held["fee_estimate"] == "0.00" and held["sell_quantity"] is None and held["buy_shares"] is None
+    assert switched["verdict_text"] == "半仓换" and switched["sell_quantity"] == "150"
+    assert switched["execution"]["state"] == "pending" and switched["execution"]["bought"] is False
+    assert set(switched["execution"]) == {"state", "sold_quantity", "sold_session", "bought"}
+    assert switched["fee_estimate"] == "2.00" and switched["buy_shares"] == "217"  # 股数去尾零、手续费取到分
+    assert {item["horizon"] for item in switched["compare"]} == {5, 10, 20}
+    assert set(switched["compare"][0]) == {"horizon", "status", "a_pct", "b_pct", "diff"}
+    summary = block["summary"]
+    assert set(summary) == {"counts", "executed", "fee_total", "switched", "held"}
+    assert summary["fee_total"] == "0.00"  # 还没执行的换仓不计手续费
+    assert summary["counts"] == {"hold": 1, "half": 1, "full": 0} and summary["executed"] == 0
+    assert set(summary["switched"]) == ROTATION_GROUP_KEYS and set(summary["held"]) == ROTATION_GROUP_KEYS
+    assert summary["switched"]["enough"] is False and summary["switched"]["b_win_rate"] is None
+    week = body["weekly"]["rotations"]
+    assert week and set(week[0]) == {"session", "candidate", "verdict", "verdict_text", "holding_ticker"}

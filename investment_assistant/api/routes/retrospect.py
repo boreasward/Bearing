@@ -9,11 +9,23 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from investment_assistant.api import deps
+from investment_assistant.core.texts import money_value, quantity_value
 from investment_assistant.data.calendar import last_completed_trading_day
 from investment_assistant.facts.retrospect import retrospect_view
 from investment_assistant.toolsurface.env import make_env
 
 router = APIRouter(prefix="/api")
+
+
+def _tidy_rotations(view: dict) -> dict:
+    """换仓块的数字取页面口径（与其余接口一致）：股数去存储尾零，手续费取到分（core.texts）。"""
+    block = view["rotations"]
+    for row in block["records"]:
+        row["sell_quantity"] = quantity_value(row["sell_quantity"])
+        row["buy_shares"] = quantity_value(row["buy_shares"])
+        row["fee_estimate"] = money_value(row["fee_estimate"])
+    block["summary"]["fee_total"] = money_value(block["summary"]["fee_total"])
+    return view
 
 
 def _bad(message: str) -> JSONResponse:
@@ -35,8 +47,10 @@ def get_retrospect(limit: int = 20, week: str | None = None):
 
     def _read(env):
         return env.read(
-            lambda conn: retrospect_view(
-                conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg, limit=limit, week_end=week_end
+            lambda conn: _tidy_rotations(
+                retrospect_view(
+                    conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg, limit=limit, week_end=week_end
+                )
             )
         )
 

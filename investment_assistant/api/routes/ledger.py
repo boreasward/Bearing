@@ -9,6 +9,7 @@ from investment_assistant.api import deps
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.account import account_view
+from investment_assistant.facts.rotation import exposure_row
 from investment_assistant.toolsurface import chat as chat_tools
 from investment_assistant.toolsurface import ledger as ledger_tools
 
@@ -40,7 +41,14 @@ def void_record(body: dict = BODY):
 @router.get("/account")
 def account():
     def _read(env):
-        return env.read(lambda conn: account_view(conn, session=env.session, cutoff_at=env.cutoff_at))
+        return env.read(
+            lambda conn: {
+                **account_view(conn, session=env.session, cutoff_at=env.cutoff_at),
+                "exposure": deps.exposure_payload(
+                    exposure_row(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg)
+                ),
+            }
+        )
 
     return deps.ok_or_error(lambda: _read(deps.web_env()))
 

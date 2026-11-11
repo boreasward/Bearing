@@ -58,6 +58,21 @@ def forward(fn: Callable[..., Any], env: ToolEnv, kwargs: dict) -> Any:
     return fn(env, **kwargs)
 
 
+def exposure_payload(row: dict) -> dict:
+    """仓位占比行（facts.rotation.exposure_row）转成接口形状：pct / cap / room 是字符串（占比与额度可能为
+    None），incomplete 是布尔（接口契约表 v3.3）。"""
+
+    def _text(value):
+        return None if value is None else f"{value:f}"
+
+    return {
+        "pct": _text(row["pct"]),
+        "cap": _text(row["cap"]),
+        "room": _text(row["room"]),
+        "incomplete": bool(row["incomplete"]),
+    }
+
+
 def ok(data: Any):
     """成功响应：payload 先过 core_tx._jsonable（datetime→isoformat 的 ISO 8601 T 形式、
     Decimal/UUID→str），再用 CompatJSONResponse；不经过 FastAPI 的 jsonable_encoder（它会把

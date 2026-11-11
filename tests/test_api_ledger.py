@@ -180,9 +180,39 @@ def test_account_view_shape(client, v3_tx):
     resp = client.get("/api/account")
     assert resp.status_code == 200
     account = resp.json()
-    assert set(account) == {"ledger", "latest_equity", "reconciliation", "recent_outcomes", "sizing_snapshot"}
+    assert set(account) == {
+        "ledger",
+        "latest_equity",
+        "reconciliation",
+        "recent_outcomes",
+        "sizing_snapshot",
+        "exposure",
+    }
     assert account["ledger"]["cash"] is None and account["ledger"]["positions"] == []
     assert client.get("/api/account").status_code == 200
+
+
+def test_account_has_exposure(client, v3_tx):
+    """exposure 四个键：占比 / 上限 / 剩余额度是字符串，没有账户资金时占比与额度为空。"""
+    from _rotation_seed import add_holding, seed_opening
+
+    with core_tx._tx() as conn:
+        seed(conn)
+    assert client.get("/api/account").json()["exposure"] == {
+        "pct": None,
+        "cap": "0.6",
+        "room": None,
+        "incomplete": False,
+    }
+    seed_opening(v3_tx)  # 资金 100000，持仓 100 股 × 40：市值 4000
+    add_holding(v3_tx, "AAA", 100, "40", 40.0)
+    v3_tx.commit()
+    assert client.get("/api/account").json()["exposure"] == {
+        "pct": "0.0400",
+        "cap": "0.6",
+        "room": "56000.00",  # 100000 × 0.6 − 4000
+        "incomplete": False,
+    }
 
 
 def test_ledger_endpoints_need_a_run_record(client, v3_tx):

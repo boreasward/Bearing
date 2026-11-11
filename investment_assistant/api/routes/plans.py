@@ -14,10 +14,11 @@ from investment_assistant.execution import plan_line
 from investment_assistant.core.texts import money_value, price_value, quantity_value
 from investment_assistant.execution.plan_levels import cent
 from investment_assistant.execution.positions import PositionError, build
-from investment_assistant.facts import plan_repo
+from investment_assistant.facts import plan_repo, rotation_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.holdings import stop_order_status
 from investment_assistant.toolsurface import plans as plan_tools
+from investment_assistant.toolsurface import rotation as rotation_tools
 
 router = APIRouter(prefix="/api/plans")
 
@@ -35,6 +36,33 @@ def _bad(message: str) -> JSONResponse:
     return JSONResponse({"error": f"invalid_argument: {message}"}, status_code=400)
 
 
+def _rotation_block(conn, plan: dict) -> tuple[dict | None, str | None]:
+    """A 上还在的换仓指令（rotation 三个键，没有指令为 None）与 B 的名字（next_action 用）。"""
+    if plan["sell_instruction"] != "rotation" or plan["rotation_id"] is None:
+        return None, None
+    record = rotation_repo.rotation(conn, plan["rotation_id"])
+    counterpart = record["candidate"] if record is not None else None
+    return {
+        "rotation_id": plan["rotation_id"],
+        "sell_quantity": quantity_value(plan["sell_quantity"]),
+        "counterpart": counterpart,
+    }, counterpart
+
+
+def _funded_by_block(conn, plan: dict) -> dict | None:
+    """这份计划是 B：来自哪次换仓、A 是哪只、计划卖多少（funded_by 三个键）。"""
+    if plan["funded_by_rotation_id"] is None:
+        return None
+    record = rotation_repo.rotation(conn, plan["funded_by_rotation_id"])
+    if record is None:
+        return None
+    return {
+        "rotation_id": record["id"],
+        "holding_ticker": record["holding_ticker"],
+        "sell_quantity": quantity_value(record["sell_quantity"]),
+    }
+
+
 def _card(conn, env, plan: dict) -> dict:
     """一张计划卡片（接口契约表）：价位与金额 Decimal（序列化成字符串），pending 卡片带
     close_above_entry（最新收盘高于入场区间，spec §6.3 第 4 条）与 missing_bar（缺当日日线，
@@ -50,6 +78,7 @@ def _card(conn, env, plan: dict) -> dict:
         position = None
     position_row = None
     next_action = None
+    rotation, counterpart = _rotation_block(conn, plan)
     if plan["status"] == "open" and position is not None:
         position_row = {  # 页面原样显示：股数去尾零、价格去尾零、金额取到分（core.texts）
             "quantity": quantity_value(position["quantity"]),
@@ -66,7 +95,9 @@ def _card(conn, env, plan: dict) -> dict:
         if shown.get("confirmed_stop_order") is not None:
             shown["confirmed_stop_order"] = cent(shown["confirmed_stop_order"])
         unchecked = not bars or bars[-1]["price_date"] != env.session
-        next_action = plan_line.next_action(plan=shown, position=position, unchecked=unchecked)
+        next_action = plan_line.next_action(plan=shown, position=position, unchecked=unchecked, counterpart=counterpart)
+        if next_action["kind"] == "rotation_sell":  # 股数去存储尾零（与今日操作同一口径）
+            next_action["sell_quantity"] = quantity_value(next_action["sell_quantity"])
     return {
         "plan_id": plan["id"],
         "ticker": ticker,
@@ -105,6 +136,11 @@ def _card(conn, env, plan: dict) -> dict:
         ),
         # 待入场计划缺当日日线（spec §6.3 末段，终审 F1）：与 brief_view / today_actions 同一判定
         "missing_bar": bool(plan["status"] == "pending" and (not bars or bars[-1]["price_date"] != env.session)),
+        # v3.3：换仓指令（这份计划是 A 且指令还在）、资金来源（这份计划是 B）、止损单数量待改、保存时的警告
+        "rotation": rotation,
+        "funded_by": _funded_by_block(conn, plan),
+        "stop_quantity_stale": bool(plan["stop_quantity_stale"]),
+        "warnings": list(plan["warnings"] or []),
     }
 
 
@@ -156,3 +192,10 @@ def raise_stop(plan_id: int, body: dict = BODY):
 @router.post("/{plan_id}/cancel")
 def cancel(plan_id: int, body: dict = BODY):
     return deps.ok_or_error(lambda: deps.forward(plan_tools.cancel_plan, deps.web_env(), {**body, "plan_id": plan_id}))
+
+
+@router.post("/{plan_id}/rotation/withdraw")
+def withdraw_rotation(plan_id: int, body: dict = BODY):
+    return deps.ok_or_error(
+        lambda: deps.forward(rotation_tools.withdraw_rotation, deps.web_env(), {**body, "plan_id": plan_id})
+    )

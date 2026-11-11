@@ -9,16 +9,18 @@ from decimal import Decimal
 from fastapi import APIRouter
 
 from investment_assistant.api import deps
+from investment_assistant.config import AssistantConfig, load_config
 from investment_assistant.core.texts import money_value
 from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts.account import account_view
+from investment_assistant.facts.rotation import exposure_row
 from investment_assistant.facts.view import today_actions
 
 router = APIRouter(prefix="/api")
 
 
-def _account_row(conn, *, session: date | None, cutoff_at: datetime) -> dict:
-    """账户条的六个字段（接口契约表）：金额 Decimal，序列化成字符串。没有运行记录时
+def _account_row(conn, *, session: date | None, cutoff_at: datetime, cfg: AssistantConfig) -> dict:
+    """账户条的七个字段（接口契约表，v3.3 加 exposure）：金额 Decimal，序列化成字符串。没有运行记录时
     session 为 None——read_bars 的 end_date 与 NULL 比较恒为假，等于没有收盘价。"""
     ledger = account_view(
         conn,
@@ -35,6 +37,9 @@ def _account_row(conn, *, session: date | None, cutoff_at: datetime) -> dict:
         "realized_pnl": money_value(ledger["realized_pnl"]),
         "cash_negative": ledger["cash_negative"],
         "notes": ledger["notes"],
+        "exposure": deps.exposure_payload(
+            exposure_row(conn, session=session, cutoff_at=cutoff_at, cfg=cfg)  # type: ignore[arg-type]  # None 即“不取日线”
+        ),
     }
 
 
@@ -60,7 +65,7 @@ def get_today():
                     "cutoff_at": now,
                     "actions": [],
                     "counts": _counts(conn, []),
-                    "account": _account_row(conn, session=None, cutoff_at=now),
+                    "account": _account_row(conn, session=None, cutoff_at=now, cfg=load_config()),
                 }
             )
         )
@@ -72,7 +77,7 @@ def get_today():
             "cutoff_at": env.cutoff_at,
             "actions": actions,
             "counts": _counts(conn, actions),
-            "account": _account_row(conn, session=env.session, cutoff_at=env.cutoff_at),
+            "account": _account_row(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg),
         }
 
     return deps.ok(env.read(_read))
