@@ -13,6 +13,14 @@
   import type { CallMeta } from '../registry'
   let { data, meta, full = false, pane = false, brief = false, onBring = bringToChat }: { data: BriefMarket & { watch?: WatchRow[] }; meta?: CallMeta; full?: boolean; pane?: boolean; brief?: boolean; onBring?: (chip: ContextChip) => void } = $props()
   type ETF = MarketData['etf_table'][number]
+  // The today aside is 320px wide (279px for the table with a scrollbar): `MetricValue` breaks anywhere, so the
+  // brief table keeps percentages on one line, uses 12px text, 4px cell padding and no padding at the outer edges.
+  const compactTable = [
+    '[&_[data-slot=table]]:text-xs', '[&_[data-slot=table-head]]:px-1', '[&_[data-slot=table-cell]]:px-1',
+    '[&_[data-slot=table-head]:first-child]:pl-0', '[&_[data-slot=table-cell]:first-child]:pl-0',
+    '[&_[data-slot=table-head]:last-child]:pr-0', '[&_[data-slot=table-cell]:last-child]:pr-0',
+    '[&_td_.tabular-nums]:whitespace-nowrap',
+  ].join(' ')
   const etfs = $derived(pane ? [...(data.etf_table ?? [])].sort((a, b) => (b.rs20 ?? -Infinity) - (a.rs20 ?? -Infinity)) : data.etf_table ?? [])
 </script>
 {#snippet percentage(row: ETF, key: 'ret20' | 'rs20' | 'rs60')}<MetricValue value={row[key]} percent tone="updown" />{/snippet}
@@ -52,11 +60,13 @@
     </div>
   {/if}
   <Section title="板块 ETF" level={4}>
+    <div class={brief ? compactTable : 'contents'} data-density={brief ? 'compact' : undefined}>
     <DataTable ariaLabel="板块 ETF" columns={[
       { key:'etf', header:'ETF', cell:etf }, { key:'ret20', header:'20 日', align:'num', cell:ret20 },
       { key:'rs20', header:'RS20', align:'num', cell:rs20 }, { key:'rs60', header:'RS60', align:'num', cell:rs60 },
       { key:'state', header:'状态', cell:etfState }
     ]} rows={brief ? data.etf_table ?? [] : full || pane ? etfs : etfs.slice(0, 6)} rowKey={row => row.etf} pageSize={0} />
+    </div>
     {#if !etfs.length}<p class="text-sm text-muted-foreground">没有 ETF 数据</p>{/if}
   </Section>
   {#if full && !pane && !brief}

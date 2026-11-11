@@ -264,7 +264,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `labels.ts` | `FIELD_LABELS`、`TOOL_LABELS` | 工具中文标题与接口字段中文，覆盖后端共用 fixtures 的顶层键 |
 | `cards/SourceLine` | `{ meta: CallMeta; calcVersion? }` | 等宽来源行 `{tool} · call:N · {session}`；无 session 用北京时间；无 ref 写 `{tool} · 调用中`；有计算版本才附加 |
 | `cards/CardFrame` | `{ title, data, meta?, calcVersion?, badges?, contextChip?, children, emptyMessage? }` | 所有快照共用卡片标题、写入徽标、来源行、中文错误、空列表 / null 与待确认复述；单一对象在页头「就这个继续问」，多个计划 / 研究各行提供动作；错误 / preview 不显示写入动作；错误信封保留来源和中文原因，并抑制所有写入状态徽标 |
-| `cards/MarketCard` | `{ data: MarketData; meta?; full?; pane?; brief?; onBring?(chip) }` | 缺省四格与前两只领涨、ETF 前 6 行；full 展示 ETF 全表、宏观与关注表；pane 独立启用三行区制与全部 ETF / 关注表，不显示宏观，按 RS20 降序且不改原数据；brief 用于当日简报快照：全部 ETF 原顺序、完整广度与 SPY 20 日，不显示关注、宏观与行操作，并链到完整行情；旧三种形态不变。watch.change_pct 已为百分点，展示前转为 MetricValue 的小数口径 |
+| `cards/MarketCard` | `{ data: MarketData; meta?; full?; pane?; brief?; onBring?(chip) }` | 缺省四格与前两只领涨、ETF 前 6 行；full 展示 ETF 全表、宏观与关注表；pane 独立启用三行区制与全部 ETF / 关注表，不显示宏观，按 RS20 降序且不改原数据；brief 用于当日简报快照：全部 ETF 原顺序、完整广度与 SPY 20 日，不显示关注、宏观与行操作，并链到完整行情；ETF 表为紧凑表格（`data-density="compact"`：12px 字、单元格左右 4px、首尾列贴边、百分比不折行），在 320px 右栏带滚动条时（表格宽 279px）不折行；旧三种形态不变。watch.change_pct 已为百分点，展示前转为 MetricValue 的小数口径 |
 | `cards/PlanSnapshotCard` | `{ data: unknown; meta }` | 原始计划 / 包装行 / 列表及持仓快照；价位用 Number 转成 PlanLevels，缺值写「没算」；打开计划、预填 TradeForm、「就这个继续问」 |
 | `cards/ResearchSnapshotCard` | `{ data: unknown; meta }` | 原始研究的状态、论点、条件、有效期；打开研究与「就这个继续问」 |
 | `TodayView` | `{ session? }` | 今日页按简报小节渲染文字卡片，右侧为始终最新的账户与所选日期行情；日期选择器在页头；操作卡按最新 / 历史切换实时动作与历史文字；缺少 `sections` 时回退到整篇 markdown 卡片 |

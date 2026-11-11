@@ -13,7 +13,7 @@
 - 两个单份简报接口新增 `sections`、`lead`、`footer`、`market` 字段，不新增接口或迁移。
 - 审查前的三套全量测试：离线 pytest 919 passed / 416 skipped；一次性库 pytest 1335 passed；前端 `npm test -- --maxWorkers=2` 497 passed / 71 files（默认并行首次运行有一项 AccountView 超时，限为两 worker 后通过）；构建成功，svelte-check 0 错误 / 0 警告。
 - 审查后修复历史简报请求失败或等待时误显最新行情、草稿提示遮住导语的问题；定向验证 `TodayView.test.ts` 19 passed，svelte-check 0 错误 / 0 警告，未重复全量测试或构建。
-- 上线核对时修复页内改 hash（前进 / 后退、深链切换）后历史简报停在骨架的问题；修复后前端全量 501 passed。[上线两步与执行记录](docs/operations/local-service.md#v322-上线两步2026-11-10-已执行)。已知外观问题：320px 右栏里 ETF 表百分比折行，放到 340px 仍折行，未改。
+- 上线核对时修复页内改 hash（前进 / 后退、深链切换）后历史简报停在骨架的问题；修复后前端全量 501 passed。[上线两步与执行记录](docs/operations/local-service.md#v322-上线两步2026-11-10-已执行)。2026-11-11 收紧今日页行情卡的 ETF 表（12px 字、单元格左右 4px、首尾列贴边、百分比不折行），320px 右栏里不再折行。
 
 ## [3.2.1] - 2026-11-09
 

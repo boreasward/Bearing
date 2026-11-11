@@ -54,3 +54,12 @@ it('pane independently renders all rows and sorts RS20 without mutating snapshot
  await fireEvent.click(within(screen.getByText('MU').closest('tr')!).getByRole('button', { name:'带进对话' }))
  expect(onBring).toHaveBeenCalledOnce(); expect(container).toHaveTextContent('50 日线上方占比')
 })
+it('brief keeps ETF percentages on one line with a compact table, other forms keep the default table', () => {
+ const { container, unmount } = render(MarketCard, { data:{ ...data, watch:undefined }, brief:true })
+ const compact = container.querySelector('[aria-label="板块 ETF"]')!.closest('[data-density="compact"]')
+ expect(compact).not.toBeNull()
+ for (const name of ['[&_[data-slot=table]]:text-xs', '[&_[data-slot=table-cell]]:px-1', '[&_td_.tabular-nums]:whitespace-nowrap']) expect(compact!.className).toContain(name)
+ unmount()
+ const full = render(MarketCard, { data, meta, full:true })
+ expect(full.container.querySelector('[data-density="compact"]')).toBeNull()
+})
