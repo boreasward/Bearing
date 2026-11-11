@@ -111,7 +111,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.investment-assista
 
 ## 换仓比较（v3.3）
 
-v3.3 在当天待办里多一种判断（[spec](../specs/2026-11-11-v3.3-account-cap-and-rotation-design.md) §5–§7；代码已落地，真实库迁移 037 未执行前不会出现，见 [migrations-and-backup.md](migrations-and-backup.md#037-与-v33-上线五步未执行)）：对通过二次确认的候选 B，宿主先用规则价位判「钱够不够」，**钱够照旧出计划，和持仓无关**；钱不够才轮到换仓比较。全部由宿主在 `get_agenda` 里现算，agent 不自己决定。
+v3.3 在当天待办里多一种判断（[spec](../specs/2026-11-11-v3.3-account-cap-and-rotation-design.md) §5–§7；真实库已于 2026-11-11 执行迁移 037，见 [migrations-and-backup.md](migrations-and-backup.md#037-与-v33-上线五步第-1-4-步已执行第-5-步观察中)）：对通过二次确认的候选 B，宿主先用规则价位判「钱够不够」，**钱够照旧出计划，和持仓无关**；钱不够才轮到换仓比较。全部由宿主在 `get_agenda` 里现算，agent 不自己决定。
 
 - **待办里的标记**：每个候选确认项带 `rotation`：`short`（是否钱不够）、`compare`（是否需要比较）、`blocked` 与 `blocked_text`（不比较的原因）。需要比较的项，完成判定是「B 被否决或无法判断」「换仓结论为继续持有」「换仓结论为半仓或全仓且 B 的计划已保存」三者之一；不比较的算作已完成，agent 不必为它做二次确认。研究复看当天得出「可以出计划」的研究项（`research` 类）同样带 `rotation`（另带 `reviewed`，表示研究复看本身已做）并按同一口径判完成：钱不够且需要比较时，换仓比较有了着落才算完成，否则最终简报写「换仓比较未完成：B」。顶层的 `rotation` 给出 `compared_today`（当天简报是否已存过一行换仓记录）与 `last_session`（冷却期内最近一次半仓或全仓的交易日）。
 - **什么时候不比较**（名单里写明原因，计划不出）：`no_holding` 仓位已到上限，没有可比的持仓；`compared_today` 当天已比较过一次（以存下一行记录为准，三种结论都算；B 被否决或无法判断没有记录，不算）；`cooldown` 冷却期内（上次换仓 MM-DD；R 到当天两端都算，不超过 `v3.rotation_cooldown_sessions` 个交易日，缺省 5，所以周一换仓、下周一可以再比）；`incomplete` 有持仓缺日线，仓位占比偏低。「继续持有」不进冷却；对话里用户发起的比较不受后两种限制，但复述里要说出最近换仓次数，结论同样计入冷却。

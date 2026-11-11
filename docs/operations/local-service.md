@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**服务在运行（v3.2.2 已上线；v3.3 代码与测试已落地、待上线，迁移 037 与重载均未执行，见下文 [v3.3 上线五步](#v33-上线五步未执行)）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。同日 v3.2.1 上线：迁移 036 执行后重建 `web/dist` 并 `kickstart -k` 重启，首页换成三栏工作台；执行记录见下文 [v3.2.1 上线四步](#v321-上线四步2026-11-09-已执行)。2026-11-10 v3.2.2 上线：重建 `web/dist` 并 `kickstart -k` 重启，「今日」「账户」换成卡片、抽屉加「工具」面板；执行记录见下文 [v3.2.2 上线两步](#v322-上线两步2026-11-10-已执行)。
+**服务在运行（v3.3 已于 2026-11-11 上线：迁移 037 已执行、页面服务已重载，观察中，见下文 [v3.3 上线五步](#v33-上线五步第-1-4-步已执行第-5-步观察中)）。** 2026-11-06 移除 v2 之前曾 `launchctl bootout` 停掉旧服务；2026-11-07 v3.1 上线时经用户授权重新 `bootstrap`，页面与 `/api/...` 接口在 `http://127.0.0.1:8787/` 对外。2026-11-09 v3.2 上线：迁移 035 执行后 `npm run build` 重建 `web/dist`、`launchctl kickstart -k` 重启服务；冒烟时 `/api/research`（两组）、`/api/research/{id}`（不存在 404 `unknown_research`）、`/api/retrospect`（空库 `empty` 为真、周界 2026-11-02–11-06）与非法参数的 400 都符合契约，首页「研究」「复盘」两块渲染、控制台无错误。同日 v3.2.1 上线：迁移 036 执行后重建 `web/dist` 并 `kickstart -k` 重启，首页换成三栏工作台；执行记录见下文 [v3.2.1 上线四步](#v321-上线四步2026-11-09-已执行)。2026-11-10 v3.2.2 上线：重建 `web/dist` 并 `kickstart -k` 重启，「今日」「账户」换成卡片、抽屉加「工具」面板；执行记录见下文 [v3.2.2 上线两步](#v322-上线两步2026-11-10-已执行)。
 每日任务另有一个 LaunchAgent `local.investment-assistant.daily`（同日安装，见 [daily-run.md](daily-run.md)）；两者的 `INVESTMENT_ASSISTANT_RUNTIME_BASE` 都是 `~/Library/Application Support/investment-assistant`，共用其下的 `pi.lock`。
 
 ## 启动链路
@@ -38,13 +38,13 @@
 - 没有 `web/dist` 时 `/` 返回 503 `{"error": "frontend_not_built", …}`。
 - 组件画廊（`#_ui`）只在开发模式（`cd web && npm run dev`）可用，构建产物不含它。
 
-## v3.3 上线五步（未执行）
+## v3.3 上线五步（第 1–4 步已执行，第 5 步观察中）
 
-依据 [设计 spec](../specs/2026-11-11-v3.3-account-cap-and-rotation-design.md) §14。**以下五步每一步都需用户单独授权；截至本文写成时一步都没有执行**：真实库没有跑迁移 037，页面服务没有重载，每日任务的 LaunchAgent 没有动。v3.2.0 仍在观察期（roadmap 第 6 步），本版的迁移编号 037 排在 036 之后，不改动观察安排。
+依据 [设计 spec](../specs/2026-11-11-v3.3-account-cap-and-rotation-design.md) §14。**2026-11-11 经用户授权（「备份真实库并执行迁移 037，完成上线」）执行了第 1–4 步**：备份、迁移 037、重载页面服务、核对账户页；每日任务的 LaunchAgent 没有动。v3.2.0 仍在观察期（roadmap 第 6 步），本版的迁移编号 037 排在 036 之后，不改动观察安排。
 
-1. **备份真实库**（需用户单独授权，未执行）：`pg_dump -Fc` 全库备份到 `.local/v3/backup-before-037.dump`，记大小与 sha256，`pg_restore --list` 核对；命令见 [migrations-and-backup.md](migrations-and-backup.md#037-与-v33-上线五步未执行)。
-2. **在真实库执行迁移 037**（需用户单独授权，未执行）：走 `migrate` 入口，预期输出恰为 `{"applied": ["037_v3_3_rotation.sql"], "count": 1}`；只新建一张表、给 `v3_plans` 加四列并放宽两处约束，不改旧行。执行前先确认没有进行中的 daily / facts / 对话轮次。新代码读新列，所以必须先于第 3 步。
-3. **重建前端并重新加载页面服务**（需用户单独授权，未执行）：每日任务随下一次定时运行生效，不需要另装 LaunchAgent。
+1. **备份真实库**（已执行）：`pg_dump -Fc` 全库备份到 `.local/v3/backup-before-037.dump`，记大小与 sha256，`pg_restore --list` 核对；命令见 [migrations-and-backup.md](migrations-and-backup.md#037-与-v33-上线五步未执行)。
+2. **在真实库执行迁移 037**（已执行）：走 `migrate` 入口，预期输出恰为 `{"applied": ["037_v3_3_rotation.sql"], "count": 1}`；只新建一张表、给 `v3_plans` 加四列并放宽两处约束，不改旧行。执行前先确认没有进行中的 daily / facts / 对话轮次。新代码读新列，所以必须先于第 3 步。
+3. **重建前端并重新加载页面服务**（已执行）：每日任务随下一次定时运行生效，不需要另装 LaunchAgent。
 
    ```bash
    git rev-parse HEAD
@@ -57,10 +57,16 @@
    ```
 
    重载后 `/api/account` 与 `/api/today` 的 `account.exposure` 应有值；页面的「工具」面板应列出 38 个工具。
-4. **核对账户页的仓位占比与券商一致**（需用户单独授权，未执行）：此时如果仓位已高于 60%，系统只显示，不要求卖出，也不产生任何卖出指令（spec §5.3）；`total_cap` 默认值改为 0.6 随第 3 步生效（本机 `config/local.json` 没有设这个键）。
-5. **观察并记发布**（需用户单独授权，未执行）：观察到第一次真实的换仓比较，或连续 5 个定时交易日没有触发而简报正常之后，把执行记录补到本文与迁移文档、更新 roadmap 第 7 行与 CHANGELOG 的 3.3.0 发布日期；打 tag 与 push 仍需单独授权。
+4. **核对账户页的仓位占比**（接口与页面已核对；与券商对账需用户自己看）：此时如果仓位已高于 60%，系统只显示，不要求卖出，也不产生任何卖出指令（spec §5.3）；`total_cap` 默认值改为 0.6 随第 3 步生效（本机 `config/local.json` 没有设这个键）。
+5. **观察并记发布**（观察中，需用户另行授权）：观察到第一次真实的换仓比较，或连续 5 个定时交易日没有触发而简报正常之后，把执行记录补到本文与迁移文档、更新 roadmap 第 7 行与 CHANGELOG 的 3.3.0 发布日期；打 tag 与 push 仍需单独授权。
 
-**执行记录**：尚无。每步执行后补在本节（备份大小与 sha256、`applied` 输出、构建 HEAD、服务 pid、接口与页面核对结论）。
+**执行记录（2026-11-11）**：
+- 备份与迁移：见 [migrations-and-backup.md](migrations-and-backup.md#037-与-v33-上线五步第-1-4-步已执行第-5-步观察中)（备份 13,948,556 字节，sha256 `d53bd25e…de475e8`；`applied` 恰为 `037_v3_3_rotation.sql`）。
+- 构建：HEAD `b44e60a`，`npm run build` 成功，`web/dist/index.html` 非空。
+- 重载：`launchctl kickstart -k gui/$(id -u)/local.investment-assistant`，服务 pid 892 → 71000，状态 running。
+- 接口：`/api/account` 与 `/api/today` 的 `account.exposure` 都有值（仓位 0.9855、上限 0.6、剩余额度 0.00、`incomplete` 为假）；今日待办仍只有 RKLB 的 `sell_next_open`，没有出现换仓卖出；`/api/plans` 两份计划（FER、RKLB）的 `sell_instruction` 与 `rotation` 都为空；`v3_rotations` 0 行；对话模式工具 38 个（简报模式 25 个）。
+- 页面：首页渲染正常，浏览器控制台无错误。
+- 仓位 98.55% 高于 60%：按 spec §5.3 只显示，不产生卖出指令。
 
 ## v3.2.2 上线两步（2026-11-10 已执行）
 

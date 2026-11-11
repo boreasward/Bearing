@@ -441,11 +441,11 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
 
 036 只新增列，旧代码可以保留这两列运行；应用回退先另获授权，再按旧版构建与重载。若必须恢复整个备份，另行授权停服务后使用本页的 `pg_restore --clean --if-exists` 流程；恢复会丢失备份后的所有写入。
 
-## 037 与 v3.3 上线五步（未执行）
+## 037 与 v3.3 上线五步（第 1–4 步已执行，第 5 步观察中）
 
-**状态：真实库没有执行迁移 037，以下每一步都需用户单独授权，截至本文写成时一步都没有执行。**依据 [v3.3 设计](../specs/2026-11-11-v3.3-account-cap-and-rotation-design.md) §14；v3.2.0 仍在观察期，037 排在 036 之后，只新建一张表、给 `v3_plans` 加四列并放宽两处约束，不动任何旧行，新旧代码混跑时旧代码读不到新列也不受影响，但新代码读新列，所以必须先迁移、后重载。
+**状态：2026-11-11 经用户授权（「备份真实库并执行迁移 037，完成上线」）执行了第 1–4 步，第 5 步观察中；执行记录见本节末。**依据 [v3.3 设计](../specs/2026-11-11-v3.3-account-cap-and-rotation-design.md) §14；v3.2.0 仍在观察期，037 排在 036 之后，只新建一张表、给 `v3_plans` 加四列并放宽两处约束，不动任何旧行，新旧代码混跑时旧代码读不到新列也不受影响，但新代码读新列，所以必须先迁移、后重载。
 
-1. **备份真实库**（需用户单独授权，未执行）。先确认没有进行中的 daily / facts / 对话轮次；连接串由授权后的运维环境提供：
+1. **备份真实库**（2026-11-11 已执行）。先确认没有进行中的 daily / facts / 对话轮次；连接串由授权后的运维环境提供：
 
    ```bash
    mkdir -p .local/v3
@@ -459,18 +459,25 @@ roadmap 待验收天数按版本顺序中的**当前连续 pending 时期**计�
    ```
 
    预检应见最新一条为 `036_v3_2_1_tool_results.sql`、`v3_rotations` 不存在（`to_regclass` 为空）。
-2. **执行迁移 037**（需用户单独授权，未执行）：
+2. **执行迁移 037**（2026-11-11 已执行）：
 
    ```bash
    INVESTMENT_ASSISTANT_DATABASE_URL=... .venv/bin/python -m investment_assistant.migrate
    ```
 
    首次输出必须恰为 `{"applied": ["037_v3_3_rotation.sql"], "count": 1}`，重跑输出 `{"applied": [], "count": 0}`；如果预检有其他待迁移或追踪不一致，先查明再执行。迁移文件在一个事务里，失败整体回滚。核对：`v3_rotations` 为 0 行，索引 `uq_v3_rotations_brief_once`、`uq_v3_plans_funded_by_rotation` 与约束 `v3_rotations_half_full_check`、`v3_plans_rotation_check`、`v3_plans_sell_instruction_check`、`v3_plan_events_event_check` 都在；`v3_plans` 有 `sell_quantity`、`rotation_id`、`funded_by_rotation_id`、`stop_quantity_stale` 四列，`stop_quantity_stale` 不可空默认 false；`v3_plans` 行数与预检一致；`schema_migrations` 多一行；`.venv/bin/python -m investment_assistant.facts show` 照常。
-3. **重建前端并重新加载页面服务**（需用户单独授权，未执行）：命令见 [local-service.md](local-service.md#v33-上线五步未执行)；每日任务随下一次定时运行生效。
-4. **核对账户页的仓位占比与券商一致**（需用户单独授权，未执行）：仓位已高于 60% 时系统只显示，不要求卖出。
-5. **观察并记发布**（需用户单独授权，未执行）：第一次真实的换仓比较，或连续 5 个定时交易日没有触发而简报正常之后，补执行记录、更新 roadmap 与 CHANGELOG；打 tag 与 push 另行授权。
+3. **重建前端并重新加载页面服务**（2026-11-11 已执行）：命令见 [local-service.md](local-service.md#v33-上线五步第-1-4-步已执行第-5-步观察中)；每日任务随下一次定时运行生效。
+4. **核对账户页的仓位占比**（2026-11-11 已执行接口与页面核对；与券商对账需用户自己看）：仓位已高于 60% 时系统只显示，不要求卖出。
+5. **观察并记发布**（观察中，需用户另行授权）：第一次真实的换仓比较，或连续 5 个定时交易日没有触发而简报正常之后，补执行记录、更新 roadmap 与 CHANGELOG；打 tag 与 push 另行授权。
 
 回滚：037 只新增对象，旧代码可以保留新表与新列运行；应用回退先另获授权。若必须恢复整个备份，另行授权停服务后用 `pg_restore --clean --if-exists -d "$INVESTMENT_ASSISTANT_DATABASE_URL" .local/v3/backup-before-037.dump`，恢复会丢失备份后的所有写入。执行后把结果补记到本节。
+
+**执行记录（2026-11-11）**：
+- 预检：`schema_migrations` 最新一条 `036_v3_2_1_tool_results.sql`（共 36 行）；`to_regclass('v3_rotations')` 为空；`v3_plans` 7 行；无进行中的 daily / facts 进程。
+- 备份：`.local/v3/backup-before-037.dump`，13,948,556 字节，sha256 `d53bd25e1082e08fd5cb3f3fa823db1f0b5d91e03b992a6153d039c04de475e8`，权限 600；`pg_restore --list` 可读，30 张表的数据段。
+- 迁移：首次输出 `{"applied": ["037_v3_3_rotation.sql"], "count": 1}`，重跑 `{"applied": [], "count": 0}`。
+- 核对：`v3_rotations` 0 行；索引 `uq_v3_rotations_brief_once`、`uq_v3_plans_funded_by_rotation` 与约束 `v3_rotations_half_full_check`、`v3_plans_rotation_check`、`v3_plans_sell_instruction_check`、`v3_plan_events_event_check` 都在；`v3_plans` 四个新列都在，`stop_quantity_stale` 不可空默认 false；`v3_plans` 仍 7 行；`schema_migrations` 37 行；`facts show` 照常。
+- 回滚点：上面的备份；未使用。
 
 ## 一次性测试库
 

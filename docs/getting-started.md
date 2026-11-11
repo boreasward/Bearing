@@ -80,7 +80,7 @@ v2 的写入实现（`upsert_watchlist_item`、`delete_watchlist_item`）曾随�
 INVESTMENT_ASSISTANT_DATABASE_URL=postgresql://... .venv/bin/python -m investment_assistant.migrate
 ```
 
-输出一行 JSON：`{"applied": [...], "count": N}`。新建的空库直接运行上面这条即可，一路应用到 037。**对已在用的真实库，迁移 037（v3.3）尚未执行，需用户单独授权，步骤见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md#037-与-v33-上线五步未执行)；不要用上面这条直接对真实库执行。**
+输出一行 JSON：`{"applied": [...], "count": N}`。新建的空库直接运行上面这条即可，一路应用到 037。**真实库的迁移 037（v3.3）已于 2026-11-11 经用户授权执行，记录见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md#037-与-v33-上线五步第-1-4-步已执行第-5-步观察中)；今后对真实库的迁移仍须先备份、并取得用户单独授权，不要直接执行上面这条。**
 
 **`migrate` 在已有 v2 数据的库上会拒绝执行**：033 待执行、且它要删的表里有任何一张存在并且有行时，整个 `migrate` 退出、一条迁移都不应用，需要设置 `INVESTMENT_ASSISTANT_ALLOW_DROP_V2_TABLES=1` 确认；见 [operations/migrations-and-backup.md](operations/migrations-and-backup.md)。
 
