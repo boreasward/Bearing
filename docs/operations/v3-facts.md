@@ -140,11 +140,11 @@ v3 第 1 步交付两样东西：每天跑一次的**事实任务**（采集八�
       B 只用宿主规则价位。简报模式同一交易日最多一行记录；对话模式未确认时返回复述（含「最近 N 个交易日已换仓 K 次」），
       确认写入必须带 `request_id`，按 `request_id` 幂等（同一 `request_id` 换了结论被拒绝）。
     - `withdraw_rotation(plan_id, request_id, confirmed, reason)`：撤回 A 上还没执行完的换仓指令，先复述、确认后写，按 `request_id` 幂等，B 的计划不动。
-  - v3.3 改动：`get_agenda` 的确认项加 `rotation`（`short`、`compare`、`blocked`、`blocked_text`）并按它判完成，顶层加 `rotation`
+  - v3.3 改动：`get_agenda` 的确认项加 `rotation`（`short`、`compare`、`blocked`、`blocked_text`）并按它判完成（当天研究复看得出「可以出计划」的 `research` 项同样带 `rotation` 与 `reviewed`，完成判定与确认项一致），顶层加 `rotation`
     （`compared_today`、`last_session`）；`get_account` 加 `exposure`（`pct`、`cap`、`room`、`incomplete`）；`compute_plan_levels` 的 `sizing` 加
     `uncapped_shares`，返回加 `short_of_room` 与 `exposure`；`save_plan` 在「钱不够」时不再照常保存：该比较而还没有换仓结论 → `needs_rotation`；
     不比较 → `no_room` 加原因；当天已存「继续持有」→ `no_room: 仓位已到上限，比较后继续持有`；待办判为「钱够」而自报价位算出 0 股也拒绝
-    （`no_room: 仓位已到上限`），不留 0 股的计划；换仓的 B 不接受自报价位；`revise_plan` 对换仓的 B 拒绝改价位（`rotation_levels_fixed`）；`continue_plan` 对换仓的 B 在
+    （`no_room`，文案看起作用的那一项：总持仓写「仓位已到上限」，风险预算写「按风险预算算出 0 股，止损过宽或资金过小」，单只上限写「按单只上限算出 0 股」），不留 0 股的计划；换仓的 B 不接受自报价位；`revise_plan` 对换仓的 B 拒绝改价位（`rotation_levels_fixed`）；`continue_plan` 对换仓的 B 在
     A 的指令未执行完时仍按「待卖股数已卖出」算额度；`save_holding_review` 与持有到期都能取代换仓指令（记 `rotation_superseded`）；
     `record_trade` 的卖出推进换仓指令、没卖完时标「止损单数量待改」并返回 `stop_order_quantity`，买入后仓位占比高于上限时记一行偏差并返回
     `over_cap`；`confirm_stop_order` 在变化记录里写下当时的持仓股数并清掉数量待改标记；`get_plans` 的计划行加 `sell_quantity`、`rotation_id`、
