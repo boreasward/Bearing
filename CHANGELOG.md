@@ -22,7 +22,7 @@
 - **页面**：`/api/today` 的 `account.exposure`、`/api/account` 的 `exposure`、计划卡片的 `rotation` / `funded_by` / `warnings` / `stop_quantity_stale`、今日操作 `actions[]` 的 `sell_quantity` / `counterpart` / `stale_quantity` 与 `kind = rotation_sell`、`/api/retrospect` 的 `rotations`；前端：今日操作换仓卖出一行（「记成交」预填股票、计划与卖出股数，另有「撤回」）、计划卡片的换仓指令与「资金来自换仓」注记、账户概览的仓位占比与上限、复盘页「换仓」块（`RotationRetro`）、工具面板 38 个。
 - **与 v3.1、v3.2 设计的出入**（spec §16，冲突时以 v3.3 设计为准）：上限 100% → 60%；已买入的股票额度不够时可以被拿来比较；卖出指令第三种来源「换仓」（带数量、可撤回、可被取代）；部分卖出后提示改止损单数量；离场原因加「换仓」；待办的候选项可带一次换仓比较；仓位满时没有换仓结论的保存计划被拒绝；偏差标签加 `over_cap`。
 - 概念卡 `plan.sizing` 口径改为上限 60%（`version` 2 → 3）、`plan.max_hold` 补换仓指令被取代（`version` 2 → 3），新增 `plan.rotation`，共 43 张。
-- 上线前三套全量测试：离线 pytest（待收尾填入）；一次性库 pytest（待收尾填入）；前端 `npm test` 与 `npm run build`、svelte-check（待收尾填入）。
+- 上线前三套全量测试：离线 pytest 953 通过、524 跳过（跳过的是需要库的用例）；一次性库 pytest 1477 通过；前端 `npm test` 72 个文件 537 通过，`npm run build` 成功，svelte-check 954 个文件 0 错误 0 警告。
 
 ## [3.2.2] - 2026-11-10
 
