@@ -22,6 +22,7 @@ from investment_assistant.execution.plan_levels import rule_levels
 from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import rotation as facts_rotation
 
 BARS_LIMIT = 400  # 起算日以来的日线：补查窗口远小于一年的交易日
 
@@ -83,6 +84,8 @@ def review_plans(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConf
             errors.append({"plan_id": plan["id"], "ticker": plan["ticker"], "error": str(exc)[:200]})
         else:
             conn.execute("RELEASE SAVEPOINT v3_review_one_plan")
+    # v3.3：B 的计划没买就结束而 A 的换仓指令还在 → 撤回（spec §6.6）；放在逐份复查之后，当天过期的 B 也算
+    changes.extend(facts_rotation.withdraw_orphans(conn, session=session))
     return {"changes": changes, "unchecked": unchecked, "errors": errors}
 
 
@@ -203,6 +206,10 @@ def _holding_day(
             fields["stop_hit_session"] = day
         elif event["event"] == "target_hit":
             fields["target_hit_session"] = day
+    if result["rotation_superseded"] is not None:
+        # v3.3：换仓指令被止损触及 / 持有到期取代；库约束要求三列一起改（同一条 UPDATE，spec §6.6）
+        fields["sell_quantity"] = None
+        fields["rotation_id"] = None
     plan = plan_repo.update_plan(conn, plan["id"], **fields)
     for event in result["events"]:
         saved = _emit(

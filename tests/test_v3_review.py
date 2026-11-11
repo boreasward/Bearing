@@ -441,3 +441,120 @@ def test_one_plans_failure_does_not_crash_the_run(v3_tx, monkeypatch):
     v3_tx.commit()
     after = plan_repo.plan(v3_tx, poisoned["id"])
     assert after is not None and after["reviewed_through"] == SESSION
+
+
+# ---- v3.3：换仓指令的取代与撤回（spec §6.6；验收 C8、C9、C17）----
+# 库约束 v3_plans_rotation_check：sell_instruction='rotation' ⇔ rotation_id ⇔ sell_quantity，
+# 所以取代 / 撤回时三列必须在同一条 UPDATE 里一起改。
+
+
+def _instructed(conn, *, max_hold=20, bars_override=None):
+    """AAA（open，复查已推进到前一日）带 150 股换仓指令，BBB 的计划待入场；返回 (A, 换仓记录, B)。"""
+    from _rotation_seed import add_holding, instruct, seed_run
+
+    seed_run(conn, ("BBB",))
+    held = add_holding(
+        conn, "AAA", 301, "39.5", 40.0, with_bars=bars_override is None, max_hold_sessions=max_hold,
+        valid_until=date(2026, 11, 20),
+    )  # fmt: skip
+    if bars_override is not None:
+        data_repo.store_bars(conn, "AAA", bars_override, now=NOW)
+    rotation, funded = instruct(conn, held, valid_until=date(2026, 11, 20))
+    conn.commit()
+    return held, rotation, funded
+
+
+def _cleared(plan, instruction):
+    return (plan["sell_instruction"], plan["sell_quantity"], plan["rotation_id"]) == (instruction, None, None)
+
+
+def test_max_hold_supersedes_rotation(v3_tx):
+    """C9：持有到期（起算日 10-28、已持有 5 个交易日、最长持有 3）→ sell_instruction 变 max_hold，
+    sell_quantity / rotation_id 同一条 UPDATE 清空，留 rotation_superseded 一行。"""
+    held, rotation, _ = _instructed(v3_tx, max_hold=3)
+
+    result = review(v3_tx)
+
+    plan = saved_plan(v3_tx, held["id"])
+    assert _cleared(plan, "max_hold")
+    superseded = events_of(v3_tx, held["id"], "rotation_superseded")
+    assert [row["reason"] for row in superseded] == ["换仓指令被取代：持有到期"]
+    assert superseded[0]["before"] == {"rotation_id": rotation["id"], "sell_quantity": "150"}
+    assert [row["reason"] for row in events_of(v3_tx, held["id"], "sell_instruction")] == ["持有到期"]
+    assert {"rotation_superseded", "sell_instruction"} <= {row["event"] for row in result["changes"]}
+    assert events_of(v3_tx, held["id"], "rotation_withdrawn") == []  # 取代了就不再算孤儿
+
+
+def test_stop_hit_supersedes_rotation(v3_tx):
+    """C9：最低价触及止损 → 止损按原规则处理，换仓指令被取代（sell_instruction 清空，没有持有到期）。"""
+    from _rotation_seed import bars as seed_bars
+
+    day = seed_bars(80, end=SESSION, close=40.0)
+    day[-1] = {**day[-1], "low": 35.0}  # 止损 36
+    held, rotation, _ = _instructed(v3_tx, bars_override=day)
+
+    review(v3_tx)
+
+    plan = saved_plan(v3_tx, held["id"])
+    assert plan["stop_hit_session"] == SESSION and _cleared(plan, None)
+    assert [row["reason"] for row in events_of(v3_tx, held["id"], "rotation_superseded")] == [
+        "换仓指令被取代：止损触及"
+    ]
+    assert len(events_of(v3_tx, held["id"], "stop_hit")) == 1
+    assert rotation["id"]
+
+
+def test_stop_hit_and_max_hold_same_day(v3_tx):
+    """止损触及与持有到期同日成立：原因记「止损触及」，sell_instruction 为 max_hold，三列照样清空。"""
+    from _rotation_seed import bars as seed_bars
+
+    day = seed_bars(80, end=SESSION, close=40.0)
+    day[-1] = {**day[-1], "low": 35.0}
+    held, _, _ = _instructed(v3_tx, max_hold=3, bars_override=day)
+
+    review(v3_tx)
+
+    plan = saved_plan(v3_tx, held["id"])
+    assert _cleared(plan, "max_hold")
+    assert [row["reason"] for row in events_of(v3_tx, held["id"], "rotation_superseded")] == [
+        "换仓指令被取代：止损触及"
+    ]
+
+
+def test_review_withdraws_when_candidate_plan_expires(v3_tx):
+    """C8：同一次 review_plans 里 B 的待入场计划过期，A 的换仓指令随即撤回（三列一起清空）。"""
+    from _rotation_seed import add_holding, instruct, seed_run
+
+    seed_run(v3_tx, ("BBB",))
+    held = add_holding(v3_tx, "AAA", 301, "39.5", 40.0)
+    rotation, funded = instruct(v3_tx, held)  # 默认 B：有效期到 11-02，当天早已过期
+    v3_tx.commit()
+
+    result = review(v3_tx)
+
+    assert saved_plan(v3_tx, funded["id"])["status"] == "expired"
+    plan = saved_plan(v3_tx, held["id"])
+    assert _cleared(plan, None) and plan["status"] == "open"
+    withdrawn = events_of(v3_tx, held["id"], "rotation_withdrawn")
+    assert [row["reason"] for row in withdrawn] == ["换仓指令撤回：BBB 的计划已过期"]
+    assert withdrawn[0]["before"] == {"rotation_id": rotation["id"], "sell_quantity": "150"}
+    assert {row["event"] for row in result["changes"]} >= {"expired", "rotation_withdrawn"}
+
+
+def test_rerun_same_session_is_idempotent(v3_tx):
+    """C17：同一个交易日再跑一次复查，不产生第二条撤回 / 取代事件。"""
+    from _rotation_seed import add_holding, instruct, seed_run
+
+    seed_run(v3_tx, ("BBB", "EEE"))
+    stale = add_holding(v3_tx, "AAA", 301, "39.5", 40.0)
+    instruct(v3_tx, stale)  # B 过期 → 撤回
+    superseded = add_holding(v3_tx, "CCC", 100, "39.5", 40.0, max_hold_sessions=3, valid_until=date(2026, 11, 20))
+    instruct(v3_tx, superseded, candidate="EEE", valid_until=date(2026, 11, 20))  # 持有到期 → 取代
+    v3_tx.commit()
+
+    review(v3_tx)
+    second = review(v3_tx)
+
+    assert len(events_of(v3_tx, stale["id"], "rotation_withdrawn")) == 1
+    assert len(events_of(v3_tx, superseded["id"], "rotation_superseded")) == 1
+    assert [row for row in second["changes"] if row["event"].startswith("rotation_")] == []

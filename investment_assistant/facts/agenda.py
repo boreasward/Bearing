@@ -4,18 +4,36 @@ only; the agent works through it, the host judges what belongs on it."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 from investment_assistant.config import AssistantConfig
 from investment_assistant.execution.plan_line import free_slots, replacement
-from investment_assistant.facts import plan_repo, research_repo
+from investment_assistant.facts import plan_repo, research_repo, rotation_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import rotation as facts_rotation
 
 RELISTED_DONE_EVENTS = ("continued", "revised", "invalidated")
 RESEARCH_DONE_EVENTS = ("concluded", "rejected", "planned")
 
 
-def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
+def _rotation_mark(conn, ticker: str, *, session: date, cutoff_at: datetime, cfg: AssistantConfig, verdicts: dict, recorded: set) -> dict:
+    """确认项的换仓标记（spec §6.1）与它的完成判定：钱够照旧（当天有结论）；钱不够而不比较算完成；
+    钱不够且比较：当天结论不是确认，或当天已有这只股票的换仓记录。"""
+    gate = facts_rotation.gate(conn, session=session, cutoff_at=cutoff_at, cfg=cfg, ticker=ticker, mode="brief")
+    mark = {key: gate[key] for key in ("short", "compare", "blocked", "blocked_text")}
+    if not gate["short"]:
+        done = ticker in verdicts
+    elif not gate["compare"]:
+        done = True
+    else:
+        verdict = verdicts.get(ticker)
+        done = (verdict is not None and verdict["verdict"] != "confirm") or ticker in recorded
+    return {"rotation": mark, "done": done}
+
+
+def agenda(conn, *, session: date, cfg: AssistantConfig, cutoff_at: datetime | None = None) -> dict:
+    """``cutoff_at`` 只用来读日线判换仓闸门；缺省取当前时刻（每日会话里与数据入库时点无冲突）。"""
+    cutoff_at = cutoff_at if cutoff_at is not None else datetime.now(UTC)
     run = facts_repo.latest_run(conn, session)
     top_rows = []
     if run is not None:
@@ -46,6 +64,14 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
     free = free_slots(pending_count=len(rule_pending), cap=cfg.v3.pending_cap)
     replacement_pick = None  # 本地名让位：replacement 是从 plan_line 导入的函数
     confirmations: list[dict] = []
+    rotations_today = rotation_repo.rotations_on(conn, session)
+    recorded = {row["candidate"] for row in rotations_today}
+
+    def mark(ticker: str) -> dict:
+        return _rotation_mark(
+            conn, ticker, session=session, cutoff_at=cutoff_at, cfg=cfg, verdicts=verdicts, recorded=recorded
+        )
+
     if free > 0:
         for row in top_rows:
             if row["ticker"] in active_tickers or row["ticker"] in watching:
@@ -57,7 +83,7 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
                     "rank": row["rank"],
                     "mode": "slot",
                     "victim_plan_id": None,
-                    "done": row["ticker"] in verdicts,
+                    **mark(row["ticker"]),
                 }
             )
     else:
@@ -76,7 +102,7 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
                     "rank": rank_by_ticker[candidate],
                     "mode": "replace",
                     "victim_plan_id": replacement_pick["victim_plan_id"],
-                    "done": candidate in verdicts,
+                    **mark(candidate),
                 }
             ]
 
@@ -108,5 +134,9 @@ def agenda(conn, *, session: date, cfg: AssistantConfig) -> dict:
         "summary_done": summary_done,
         "free_slots": free,
         "replacement": replacement_pick,
+        "rotation": {
+            "compared_today": any(row["origin"] == "brief" for row in rotations_today),
+            "last_session": facts_rotation.cooldown_last_session(conn, session=session, cfg=cfg),
+        },
         "complete": complete,
     }

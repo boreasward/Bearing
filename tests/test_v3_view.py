@@ -9,7 +9,7 @@ from investment_assistant.data import repo as data_repo
 from investment_assistant.data.calendar import add_trading_days
 from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
-from investment_assistant.facts.view import brief_view, today_actions
+from investment_assistant.facts.view import actions_by_ticker, brief_view, today_actions
 
 SESSION = date(2026, 11, 4)  # 周三
 PREV = date(2026, 11, 3)
@@ -431,3 +431,128 @@ def test_research_ma_insufficient_state(v3_tx):
     assert row["last_close"] is not None  # 当天有日线
     text = render_brief(view, final=True)
     assert "日线不足，未检查" in text
+
+
+# ---- v3.3：换仓指令、止损单数量、仓位占比与换仓文案（spec §5、§6.6、§8）----
+
+
+def test_today_actions_rotation_row(v3_db):
+    """换仓卖出一行：kind rotation_sell，带 sell_quantity、counterpart；排在 sell_next_open 之后、unchecked 之前；
+    止损单数量待改带 stale_quantity。"""
+    from _rotation_seed import add_holding, holding_review, instruct, seed_c4
+
+    ids = seed_c4(v3_db)
+    sell_open = add_holding(v3_db, "SNO", 10, "40", 40.0, sell_instruction="max_hold")
+    unchecked = add_holding(v3_db, "UNC", 10, "40", 40.0, bars_end=PREV)
+    stale = add_holding(v3_db, "STL", 10, "40", 40.0, confirmed_stop_order=D(36))
+    plan_repo.update_plan(v3_db, stale["id"], stop_quantity_stale=True)
+    for plan_ in (sell_open, unchecked, stale):
+        holding_review(v3_db, plan_["id"], "holds")
+    instruct(v3_db, ids["a"], candidate="BBB", quantity=150)
+    v3_db.commit()
+
+    rows = today_actions(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG)
+
+    kinds = [row["kind"] for row in rows]
+    assert kinds.index("sell_next_open") < kinds.index("rotation_sell") < kinds.index("unchecked")
+    rotation = next(row for row in rows if row["kind"] == "rotation_sell")
+    assert rotation["ticker"] == "AAA" and rotation["sell_quantity"] == D(150) and rotation["counterpart"] == "BBB"
+    assert rotation["text"] == "下次开盘卖出 150 股（换仓至 BBB）" and rotation["stale_quantity"] is False
+    stale_row = next(row for row in rows if row["ticker"] == "STL")
+    assert stale_row["kind"] == "stop_order" and stale_row["stale_quantity"] is True
+    assert stale_row["text"] == "止损单数量需改为 10 股" and stale_row["sell_quantity"] is None
+    plain = next(row for row in rows if row["ticker"] == "CCC")
+    assert plain["sell_quantity"] is None and plain["counterpart"] is None and plain["stale_quantity"] is False
+    by_ticker = actions_by_ticker(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG)
+    assert by_ticker["AAA"]["sell_quantity"] == D(150) and by_ticker["AAA"]["counterpart"] == "BBB"
+    assert by_ticker["STL"]["stale_quantity"] is True and by_ticker["CCC"]["stale_quantity"] is False
+
+
+def test_brief_view_rotation_fields(v3_db):
+    """account.exposure、candidates[].rotation_text 的三种取值、changes.rotations、unresolved.rotation、view.rotations。"""
+    from _rotation_seed import add_rotation, seed_c4
+
+    from investment_assistant.execution.rotation import BLOCKED_TEXT, DRAFT_TEXT
+
+    ids = seed_c4(v3_db, ("BBB", "EEE", "AAA"))
+    for ticker in ("EEE",):
+        facts_repo.upsert_verdict(
+            v3_db,
+            {"session": SESSION, "ticker": ticker, "verdict": "confirm", "reasons": "理由", "counter": "",
+             "refs": [], "origin": "brief", "agent_session": "view-test"},
+        )  # fmt: skip
+    add_rotation(v3_db, verdict="hold", origin="chat", candidate="BBB", holding=(ids["a"]["id"], "AAA"))
+    v3_db.commit()
+    run = {"market": {}, "coverage": {"families": {}, "missing_bars": []}, "dropped": []}
+
+    view = brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run)
+
+    assert view["account"]["exposure"]["pct"] == D("0.5493") and view["account"]["exposure"]["room"] == D("5076.30")
+    texts = {row["ticker"]: row["rotation_text"] for row in view["candidates"]}
+    assert texts["BBB"] == "换仓比较：继续持有（AAA）"  # 当天有记录
+    assert texts["EEE"] == DRAFT_TEXT  # 钱不够、可比较、还没有记录
+    assert texts["AAA"] is None  # 已持有的不在待办里
+    assert view["changes"]["rotations"] == ["换仓比较 BBB：继续持有（AAA）"]
+    assert view["rotations"] == [
+        {"session": SESSION, "candidate": "BBB", "verdict": "hold", "holding_ticker": "AAA"}
+    ]
+    assert view["unresolved"]["rotation"] == ["换仓比较未完成：EEE"]
+
+    # 冷却期内：EEE 不比较，写明原因，不再出现在未完成里；BBB 仍显示当天的记录
+    from investment_assistant.data.calendar import add_trading_days
+
+    two_ago = add_trading_days(SESSION, -2)
+    add_rotation(v3_db, session=two_ago, verdict="half", origin="chat", holding=(ids["a"]["id"], "AAA"))
+    v3_db.commit()
+    cooling = brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run)
+    texts = {row["ticker"]: row["rotation_text"] for row in cooling["candidates"]}
+    assert texts["EEE"] == BLOCKED_TEXT["cooldown"].format(last=two_ago)
+    assert texts["BBB"] == "换仓比较：继续持有（AAA）"
+    assert cooling["unresolved"]["rotation"] == []
+
+
+def test_hold_verdict_without_a_holding_has_no_parentheses(v3_db):
+    from _rotation_seed import add_rotation, seed_c4
+
+    seed_c4(v3_db, ("BBB",))
+    add_rotation(v3_db, verdict="hold", origin="chat", candidate="BBB")
+    v3_db.commit()
+    run = {"market": {}, "coverage": {"families": {}, "missing_bars": []}, "dropped": []}
+
+    view = brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run)
+
+    assert view["changes"]["rotations"] == ["换仓比较 BBB：继续持有"]
+    assert view["candidates"][0]["rotation_text"] == "换仓比较：继续持有"
+
+
+def test_draft_without_model_has_exposure_and_draft_text(v3_db):
+    """C13：没有 agent 的草稿里账户一节有仓位占比与剩余额度，钱不够的候选写「仓位已到上限，换仓比较未做」。"""
+    from _rotation_seed import seed_c4
+
+    from investment_assistant.facts.brief import render_brief
+
+    seed_c4(v3_db, ("BBB",))
+    v3_db.commit()
+    run = {"market": {}, "coverage": {"families": {}, "missing_bars": []}, "dropped": []}
+
+    draft = render_brief(brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run), final=False)
+
+    assert "仓位占比 54.9%（上限 60%），剩余额度 $5076.30" in draft
+    assert "仓位已到上限，换仓比较未做" in draft
+
+
+def test_over_cap_without_candidate_gives_no_sell(v3_db):
+    """C12：仓位 70%、名单为空：今日操作里没有任何卖出，账户行如实显示占比。"""
+    from _rotation_seed import add_holding, holding_review, seed_opening, seed_run
+
+    seed_run(v3_db, ())
+    seed_opening(v3_db)
+    held = add_holding(v3_db, "AAA", 700, "100", 100.0)
+    holding_review(v3_db, held["id"], "holds")
+    v3_db.commit()
+
+    actions = today_actions(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG)
+    assert [row["kind"] for row in actions] == ["stop_order"]  # 只有未确认止损单，没有 sell_next_open / rotation_sell
+    run = {"market": {}, "coverage": {"families": {}, "missing_bars": []}, "dropped": []}
+    view = brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run)
+    assert view["account"]["exposure"]["pct"] == D("0.7000") and view["account"]["exposure"]["room"] == D("0.00")

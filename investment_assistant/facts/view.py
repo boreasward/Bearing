@@ -21,8 +21,10 @@ from investment_assistant.execution.plan_levels import _cent
 from investment_assistant.execution.plan_line import held_sessions, next_action
 from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.execution.research import validate_condition
-from investment_assistant.facts import plan_repo, research_repo
+from investment_assistant.execution.rotation import DRAFT_TEXT, UNFINISHED_TEXT, VERDICT_TEXT
+from investment_assistant.facts import plan_repo, research_repo, rotation_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import rotation as facts_rotation
 from investment_assistant.facts.account import account_view
 from investment_assistant.facts.agenda import agenda
 from investment_assistant.facts.continuity import continuity
@@ -31,9 +33,19 @@ from investment_assistant.facts.holdings import holdings_view
 _BEIJING = ZoneInfo("Asia/Shanghai")
 
 # spec §7.4 的次序：第 1–4 条进「今日操作」，第 5 条（继续持有）不进
-ACTION_ORDER = {"stop_hit_unresolved": 0, "sell_next_open": 1, "unchecked": 2, "stop_order": 3}
+# v3.3：换仓卖出排在另两种卖出指令之后、缺日线之前（spec §8）
+ACTION_ORDER = {"stop_hit_unresolved": 0, "sell_next_open": 1, "rotation_sell": 2, "unchecked": 3, "stop_order": 4}
 ENDED_EVENTS = ("expired", "invalidated", "replaced", "cancelled", "closed")
-HOLDING_EVENTS = ("stop_hit", "target_hit", "stop_raised", "sell_instruction")
+HOLDING_EVENTS = (
+    "stop_hit",
+    "target_hit",
+    "stop_raised",
+    "sell_instruction",
+    "rotation_instruction",
+    "rotation_withdrawn",
+    "rotation_superseded",
+    "stop_quantity_stale",
+)
 RESEARCH_CONCLUSION_EVENTS = ("concluded", "rejected", "planned")  # 当天结论句取它们的 reason（spec §8 第 5a 段）
 NO_STOP_TEXT = "缺日线，未能给出止损"  # 补录计划还没算出止损（spec §6.6）
 
@@ -69,7 +81,11 @@ def plan_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConf
             shown["stop"] = _cent(plan["stop"])
             if shown.get("confirmed_stop_order") is not None:
                 shown["confirmed_stop_order"] = _cent(shown["confirmed_stop_order"])
-            action = next_action(plan=shown, position=position, unchecked=unchecked)
+            counterpart = None
+            if plan["sell_instruction"] == "rotation" and plan["rotation_id"] is not None:
+                record = rotation_repo.rotation(conn, plan["rotation_id"])
+                counterpart = record["candidate"] if record is not None else None
+            action = next_action(plan=shown, position=position, unchecked=unchecked, counterpart=counterpart)
         actions.append(
             {
                 "plan_id": plan["id"],
@@ -79,6 +95,9 @@ def plan_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConf
                 "stop": action["stop"],
                 "quantity": quantity_value(position["quantity"]),
                 "reason": action["reason"],
+                "sell_quantity": quantity_value(plan["sell_quantity"]) if action["kind"] == "rotation_sell" else None,
+                "counterpart": action.get("counterpart"),
+                "stale_quantity": bool(plan["stop_quantity_stale"]),
             }
         )
     actions.sort(key=lambda row: ACTION_ORDER.get(row["kind"], len(ACTION_ORDER)))
@@ -93,9 +112,17 @@ def today_actions(conn, *, session: date, cutoff_at: datetime, cfg: AssistantCon
 
 
 def actions_by_ticker(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig) -> dict[str, dict]:
-    """持仓行的操作表（含「继续持有」）：ticker -> {kind, text, stop, reason}。"""
+    """持仓行的操作表（含「继续持有」）：ticker -> {kind, text, stop, reason, sell_quantity, counterpart, stale_quantity}。"""
     return {
-        row["ticker"]: {"kind": row["kind"], "text": row["text"], "stop": row["stop"], "reason": row["reason"]}
+        row["ticker"]: {
+            "kind": row["kind"],
+            "text": row["text"],
+            "stop": row["stop"],
+            "reason": row["reason"],
+            "sell_quantity": row["sell_quantity"],
+            "counterpart": row["counterpart"],
+            "stale_quantity": row["stale_quantity"],
+        }
         for row in plan_actions(conn, session=session, cutoff_at=cutoff_at, cfg=cfg)
     }
 
@@ -111,6 +138,11 @@ def _changes(conn, session: date) -> dict:
         return plan_tickers[plan_id]
 
     new_plans, ended_plans, holding_changes = [], [], []
+    rotations = [
+        f"换仓比较 {row['candidate']}：{VERDICT_TEXT[row['verdict']]}"
+        + (f"（{row['holding_ticker']}）" if row["holding_ticker"] else "")
+        for row in rotation_repo.rotations_on(conn, session)
+    ]
     for event in plan_repo.events_on(conn, session):
         ticker = ticker_of(event["plan_id"])
         if event["event"] in ("created", "adopted"):
@@ -119,7 +151,12 @@ def _changes(conn, session: date) -> dict:
             ended_plans.append(f"结束 {ticker}：{event['reason']}")
         elif event["event"] in HOLDING_EVENTS:
             holding_changes.append(f"{ticker} {event['reason']}")
-    return {"new_plans": new_plans, "ended_plans": ended_plans, "holding_changes": holding_changes}
+    return {
+        "new_plans": new_plans,
+        "ended_plans": ended_plans,
+        "holding_changes": holding_changes,
+        "rotations": rotations,
+    }
 
 
 def _candidate_rows(
@@ -136,6 +173,8 @@ def _candidate_rows(
 ) -> list[dict]:
     verdicts = day["verdicts"]
     replacement_candidate = (day["agenda"].get("replacement") or {}).get("candidate")
+    marks = {item["ticker"]: item["rotation"] for item in day["agenda"]["confirmations"]}
+    recorded = {row["candidate"]: row for row in day.get("rotations", [])}  # 同一只股票多条时取最后一条
     out = []
     for row in rows:
         ticker = row["ticker"]
@@ -162,9 +201,20 @@ def _candidate_rows(
                 "has_research": has_research,
                 "skip_reason": skip_reason,
                 "held": held,
+                "rotation_text": _rotation_text(recorded.get(ticker), marks.get(ticker)),
             }
         )
     return out
+
+
+def _rotation_text(record: dict | None, mark: dict | None) -> str | None:
+    """名单行的换仓文案（spec §8）：当天有记录 → 结论；待办标记为不比较 → 原因；钱不够、可比较而还没有记录 → 草稿文案。"""
+    if record is not None:
+        text = f"换仓比较：{VERDICT_TEXT[record['verdict']]}"
+        return text + f"（{record['holding_ticker']}）" if record["holding_ticker"] else text
+    if mark is None or not mark["short"]:
+        return None
+    return DRAFT_TEXT if mark["compare"] else mark["blocked_text"]
 
 
 def _ma_history_short(condition: dict | None, bars: list[dict], session: date) -> bool:
@@ -254,12 +304,14 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
             "realized_pnl": ledger["realized_pnl"],
             "cash_negative": ledger["cash_negative"],
             "notes": ledger["notes"],
+            "exposure": facts_rotation.exposure_row(conn, session=session, cutoff_at=cutoff_at, cfg=cfg),
         }
         if has_account
         else None
     )
 
-    day_agenda = agenda(conn, session=session, cfg=cfg)
+    day_agenda = agenda(conn, session=session, cfg=cfg, cutoff_at=cutoff_at)
+    rotations_today = rotation_repo.rotations_on(conn, session)
     watching_research = research_repo.research_by_status(conn, ("watching",))
     watching = {row["ticker"] for row in watching_research}
     research_events_today = research_repo.research_events_on(conn, session)
@@ -271,6 +323,18 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
     unresolved_items += [f"研究复看 {item['ticker']}" for item in day_agenda["research"] if not item["done"]]
     if not day_agenda["summary_done"]:
         unresolved_items.append("一句话总结")
+    # 换仓比较未完成：钱不够、可比较、结论已确认而这只股票当天还没有换仓记录（spec §7.1）
+    recorded_candidates = {row["candidate"] for row in rotations_today}
+    day_verdicts = facts_repo.verdicts(conn, session)
+    unresolved_rotation = [
+        f"{UNFINISHED_TEXT}：{item['ticker']}"
+        for item in day_agenda["confirmations"]
+        if item["rotation"]["short"]
+        and item["rotation"]["compare"]
+        and item["ticker"] in day_verdicts
+        and day_verdicts[item["ticker"]]["verdict"] == "confirm"
+        and item["ticker"] not in recorded_candidates
+    ]
 
     brief_row = plan_repo.brief(conn, session)
     # 待入场计划的当日缺日线标志（spec §6.3 末段）：与 today_actions / 计划卡片同一判定
@@ -369,13 +433,26 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
             streak=cont["streak"],
             new=set(cont["new"]),
             active_by_ticker=active_by_ticker,
-            day={"verdicts": facts_repo.verdicts(conn, session), "agenda": day_agenda},
+            day={"verdicts": day_verdicts, "agenda": day_agenda, "rotations": rotations_today},
             watching=watching,
         ),
         "dropped": dropped,
         "account": account_row,
         "coverage": cov,
-        "unresolved": {"missing_bars": list(cov.get("missing_bars") or []), "agenda": unresolved_items},
+        "unresolved": {
+            "missing_bars": list(cov.get("missing_bars") or []),
+            "agenda": unresolved_items,
+            "rotation": unresolved_rotation,
+        },
+        "rotations": [
+            {
+                "session": row["session"],
+                "candidate": row["candidate"],
+                "verdict": row["verdict"],
+                "holding_ticker": row["holding_ticker"],
+            }
+            for row in rotations_today
+        ],
         "footer": footer,
         "summary": brief_row["summary"] if brief_row is not None else None,
         "first_run": previous_run is None,
