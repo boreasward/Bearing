@@ -556,3 +556,63 @@ def test_over_cap_without_candidate_gives_no_sell(v3_db):
     run = {"market": {}, "coverage": {"families": {}, "missing_bars": []}, "dropped": []}
     view = brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run)
     assert view["account"]["exposure"]["pct"] == D("0.7000") and view["account"]["exposure"]["room"] == D("0.00")
+
+
+def test_ready_research_unfinished_rotation_reaches_unresolved_and_draft(v3_db):
+    """研究复看得出「可以出计划」的 B：确认了而没有换仓记录 → 「换仓比较未完成：RRR」；名单里的 RRR 行写草稿文案；
+    研究复看本身已做，不重复列「研究复看 RRR」。"""
+    from _rotation_seed import add_rotation, seed_c4
+
+    from investment_assistant.execution.rotation import DRAFT_TEXT
+
+    ids = seed_c4(v3_db, ("BBB", "RRR"))
+    research = research_repo.insert_research(
+        v3_db, _research("RRR", triggered_session=SESSION, verdict="ready")
+    )
+    research_repo.insert_research_event(
+        v3_db,
+        {"research_id": research["id"], "session": SESSION, "event": "concluded", "reason": "可以出计划：条件已到",
+         "before": {}, "after": {}, "source": "agent", "refs": []},
+    )  # fmt: skip
+    facts_repo.upsert_verdict(
+        v3_db,
+        {"session": SESSION, "ticker": "RRR", "verdict": "confirm", "reasons": "理由", "counter": "",
+         "refs": [], "origin": "brief", "agent_session": "view-test"},
+    )  # fmt: skip
+    v3_db.commit()
+    run = {"market": {}, "coverage": {"families": {}, "missing_bars": []}, "dropped": []}
+
+    view = brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run)
+
+    assert "换仓比较未完成：RRR" in view["unresolved"]["rotation"]
+    assert "研究复看 RRR" not in view["unresolved"]["agenda"]
+    texts = {row["ticker"]: row["rotation_text"] for row in view["candidates"]}
+    assert texts["RRR"] == DRAFT_TEXT
+
+    add_rotation(v3_db, verdict="hold", origin="brief", candidate="RRR", holding=(ids["a"]["id"], "AAA"))
+    v3_db.commit()
+    done = brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run)
+    assert "换仓比较未完成：RRR" not in done["unresolved"]["rotation"]
+
+
+def test_vetoed_short_candidate_has_no_rotation_draft_text(v3_db):
+    """review 修复：被否决 / 无法判断的「钱不够」候选不再接「换仓比较未做」（不会进二次确认，读成还欠一步）；
+    确认的候选与还没有结论的候选（草稿）照旧写。"""
+    from _rotation_seed import seed_c4
+
+    from investment_assistant.execution.rotation import DRAFT_TEXT
+
+    seed_c4(v3_db, ("BBB", "EEE", "FFF", "GGG"))
+    for ticker, verdict in (("BBB", "veto"), ("EEE", "unknown"), ("FFF", "confirm")):
+        facts_repo.upsert_verdict(
+            v3_db,
+            {"session": SESSION, "ticker": ticker, "verdict": verdict, "reasons": "理由", "counter": "",
+             "refs": [], "origin": "brief", "agent_session": "view-test"},
+        )  # fmt: skip
+    v3_db.commit()
+    run = {"market": {}, "coverage": {"families": {}, "missing_bars": []}, "dropped": []}
+
+    view = brief_view(v3_db, session=SESSION, cutoff_at=NOW, cfg=CFG, run=run)
+
+    texts = {row["ticker"]: row["rotation_text"] for row in view["candidates"]}
+    assert texts == {"BBB": None, "EEE": None, "FFF": DRAFT_TEXT, "GGG": DRAFT_TEXT}

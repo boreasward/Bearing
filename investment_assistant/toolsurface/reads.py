@@ -12,11 +12,9 @@ from investment_assistant.derivation.indicators import price as price_indicators
 from investment_assistant.execution.plan_line import ACTIVE, ENDED
 from investment_assistant.facts import plan_repo, research_repo
 from investment_assistant.facts import repo as facts_repo
-from investment_assistant.facts.account import account_view
 from investment_assistant.facts.agenda import agenda
 from investment_assistant.facts.coverage import coverage_lines
 from investment_assistant.facts.holdings import holdings_view
-from investment_assistant.facts.rotation import exposure_row
 from investment_assistant.facts.view import actions_by_ticker
 from investment_assistant.toolsurface.env import ToolEnv
 from investment_assistant.toolsurface.validation import normalize_ticker
@@ -276,16 +274,6 @@ def get_plans(
         return {"plans": [{**row, "events": plan_repo.events(conn, row["id"])} for row in plans]}
 
     return env.read(_read)
-
-
-def get_account(env: ToolEnv) -> dict:
-    """账户视图：账本、最近对账与差额、最近平仓结果、仓位本金快照（spec §8），v3.3 加仓位占比 ``exposure``。"""
-    return env.read(
-        lambda conn: {
-            **account_view(conn, session=env.session, cutoff_at=env.cutoff_at),
-            "exposure": exposure_row(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg),
-        }
-    )
 
 
 def get_agenda(env: ToolEnv) -> dict:

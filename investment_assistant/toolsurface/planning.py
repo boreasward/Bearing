@@ -19,7 +19,7 @@ from investment_assistant.execution.plan_levels import (
     validity,
 )
 from investment_assistant.execution.plan_line import free_slots, replacement
-from investment_assistant.execution.rotation import HOLD_REJECT_TEXT, NO_ROOM_TEXT, short_of_room
+from investment_assistant.execution.rotation import HOLD_REJECT_TEXT, NO_ROOM_TEXT, ZERO_SHARES_TEXT, short_of_room
 from investment_assistant.facts import plan_repo, research_repo, rotation_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts import rotation as facts_rotation
@@ -311,7 +311,7 @@ def _prepare_plan(
         if sizing["shares"] is None or sizing["shares"] < 1:
             raise ValueError("no_room_after_rotation: 换仓之后额度仍不够买 1 股，换仓结论不成立")
     elif sizing["shares"] == 0:  # 待办判为「钱够」而自报价位算出 0 股：不留 0 股的计划（spec §5.2）
-        raise ToolError(f"no_room: {NO_ROOM_TEXT}")
+        raise ToolError(f"no_room: {ZERO_SHARES_TEXT.get(sizing.get('applied_cap'), NO_ROOM_TEXT)}")
     plan_warnings = [*warnings, *size_invalid]
     if sizing["status"] == "no_equity":
         plan_warnings.append(NO_EQUITY_TEXT)

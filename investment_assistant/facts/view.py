@@ -173,7 +173,10 @@ def _candidate_rows(
 ) -> list[dict]:
     verdicts = day["verdicts"]
     replacement_candidate = (day["agenda"].get("replacement") or {}).get("candidate")
-    marks = {item["ticker"]: item["rotation"] for item in day["agenda"]["confirmations"]}
+    marks = {
+        item["ticker"]: item["rotation"]
+        for item in [*day["agenda"]["confirmations"], *(row for row in day["agenda"]["research"] if "rotation" in row)]
+    }
     recorded = {row["candidate"]: row for row in day.get("rotations", [])}  # 同一只股票多条时取最后一条
     out = []
     for row in rows:
@@ -201,20 +204,27 @@ def _candidate_rows(
                 "has_research": has_research,
                 "skip_reason": skip_reason,
                 "held": held,
-                "rotation_text": _rotation_text(recorded.get(ticker), marks.get(ticker)),
+                "rotation_text": _rotation_text(
+                    recorded.get(ticker),
+                    marks.get(ticker),
+                    verdicts[ticker]["verdict"] if ticker in verdicts else None,
+                ),
             }
         )
     return out
 
 
-def _rotation_text(record: dict | None, mark: dict | None) -> str | None:
-    """名单行的换仓文案（spec §8）：当天有记录 → 结论；待办标记为不比较 → 原因；钱不够、可比较而还没有记录 → 草稿文案。"""
+def _rotation_text(record: dict | None, mark: dict | None, verdict: str | None = None) -> str | None:
+    """名单行的换仓文案（spec §8）：当天有记录 → 结论；待办标记为不比较 → 原因；钱不够、可比较而还没有记录 → 草稿文案。
+    草稿文案只给确认或还没有结论的候选：被否决 / 无法判断的不会进二次确认，不写「换仓比较未做」。"""
     if record is not None:
         text = f"换仓比较：{VERDICT_TEXT[record['verdict']]}"
         return text + f"（{record['holding_ticker']}）" if record["holding_ticker"] else text
     if mark is None or not mark["short"]:
         return None
-    return DRAFT_TEXT if mark["compare"] else mark["blocked_text"]
+    if not mark["compare"]:
+        return mark["blocked_text"]
+    return None if verdict in ("veto", "unknown") else DRAFT_TEXT
 
 
 def _ma_history_short(condition: dict | None, bars: list[dict], session: date) -> bool:
@@ -320,7 +330,9 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
     unresolved_items += [f"再次上榜计划 {item['ticker']} 的结论" for item in day_agenda["relisted"] if not item["done"]]
     unresolved_items += [f"二次确认 {item['ticker']}" for item in day_agenda["confirmations"] if not item["done"]]
     unresolved_items += [f"研究 {row['ticker']} 尚无条件" for row in watching_research if not row["condition"]]
-    unresolved_items += [f"研究复看 {item['ticker']}" for item in day_agenda["research"] if not item["done"]]
+    unresolved_items += [
+        f"研究复看 {item['ticker']}" for item in day_agenda["research"] if not item["done"] and not item.get("reviewed")
+    ]
     if not day_agenda["summary_done"]:
         unresolved_items.append("一句话总结")
     # 换仓比较未完成：钱不够、可比较、结论已确认而这只股票当天还没有换仓记录（spec §7.1）
@@ -328,7 +340,7 @@ def brief_view(conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig
     day_verdicts = facts_repo.verdicts(conn, session)
     unresolved_rotation = [
         f"{UNFINISHED_TEXT}：{item['ticker']}"
-        for item in day_agenda["confirmations"]
+        for item in [*day_agenda["confirmations"], *(row for row in day_agenda["research"] if "rotation" in row)]
         if item["rotation"]["short"]
         and item["rotation"]["compare"]
         and item["ticker"] in day_verdicts

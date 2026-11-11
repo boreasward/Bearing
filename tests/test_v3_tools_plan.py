@@ -904,3 +904,80 @@ def test_ending_a_candidate_plan_withdraws_on_replacement(v3_tx):
     assert "data" in saved, saved
     assert plan_repo.plan(v3_tx, funded["id"])["status"] == "replaced"
     assert _withdrawn(v3_tx, held["id"]) == "换仓指令撤回：BBB 的计划被替换"
+
+
+def test_voiding_the_buy_of_a_candidate_withdraws_the_rotation_instruction(v3_tx):
+    """review 修复：B 已买入后作废其买入 → B 的计划变 cancelled，A 的换仓指令当场撤回（三列一并清空，记 rotation_withdrawn）。"""
+    import _rotation_seed as rot
+
+    rot.seed_run(v3_tx, ("BBB",))
+    rot.seed_opening(v3_tx)
+    held = rot.add_holding(v3_tx, "AAA", 100, "40", 40.0)
+    rot.holding_review(v3_tx, held["id"])
+    _, funded = rot.instruct(v3_tx, held, quantity=50, funded_status="open", start_session=rot.SESSION)
+    bought = facts_repo.insert_trade(
+        v3_tx,
+        {
+            "request_id": "seed-buy-BBB",
+            "ticker": "BBB",
+            "side": "buy",
+            "quantity": D(10),
+            "price": D(50),
+            "fee": D(0),
+            "executed_at": datetime(2026, 11, 4, 15, tzinfo=UTC),
+        },
+    )
+    v3_tx.commit()
+    env = _rot_env("chat", "t-void")
+
+    voided = call(
+        env, "void_record", {"kind": "trade", "target_id": bought["id"], "request_id": "v-b", "confirmed": True}
+    )
+
+    assert "data" in voided, voided
+    assert plan_repo.plan(v3_tx, funded["id"])["status"] == "cancelled"
+    assert _withdrawn(v3_tx, held["id"]) == "换仓指令撤回：BBB 的计划已取消"
+
+
+def test_save_plan_zero_shares_text_follows_the_binding_cap(v3_tx):
+    """review 修复：0 股的拒绝文案看真正起作用的那一项——风险预算 / 单只上限买不起 1 股时不写「仓位已到上限」，
+    错误码仍是 no_room，不留 0 股计划。"""
+    import _rotation_seed as rot
+
+    rot.seed_run(v3_tx, ("BBB",))
+    rot.seed_opening(v3_tx, 100)  # 风险预算 1 元，规则价位每股风险 4 元：0 股
+    v3_tx.commit()
+    env = _rot_env()
+    confirm(env, "BBB")
+
+    risk = call(env, "save_plan", {"ticker": "BBB", **TEXTS})
+
+    assert risk["error"] == "no_room: 按风险预算算出 0 股，止损过宽或资金过小"
+    assert _count_plans(v3_tx) == 0
+
+
+def test_save_plan_zero_shares_text_for_the_single_cap(v3_tx):
+    import _rotation_seed as rot
+
+    rot.seed_run(v3_tx, ("BBB",))
+    rot.seed_opening(v3_tx, 1000)
+    facts_repo.insert_trade(
+        v3_tx,
+        {
+            "request_id": "seed-buy-BBB-single",
+            "ticker": "BBB",
+            "side": "buy",
+            "quantity": D(5),
+            "price": D(50),
+            "fee": D(0),
+            "executed_at": datetime(2026, 11, 4, 15, tzinfo=UTC),
+        },
+    )  # 已持 BBB 5 股 = 250 = 单只上限 25%：单只一项 0 股；风险项 2 股、总仓位项 6 股
+    v3_tx.commit()
+    env = _rot_env()
+    confirm(env, "BBB")
+
+    single = call(env, "save_plan", {"ticker": "BBB", **TEXTS})
+
+    assert single["error"] == "no_room: 按单只上限算出 0 股"
+    assert _count_plans(v3_tx) == 0

@@ -469,3 +469,99 @@ def test_second_short_candidate_after_a_comparison(v3_tx):
     assert second["rotation"]["blocked_text"] == BLOCKED_TEXT["compared_today"] and second["done"] is True
     assert _item(compared, "BBB")["done"] is True
     assert compared["rotation"]["compared_today"] is True
+
+
+# ---- v3.3 review fix：研究复看得出「可以出计划」的 B 也带换仓标记（spec §6.1 条件 1、§7.1）----
+
+
+def _ready_research(conn, ticker="RRR", *, verdict="ready"):
+    """观察中且当天已触发的研究，当天 agent 已给出结论事件（verdict 写在研究行上）；日线是平的，收盘 50。"""
+    from _rotation_seed import NOW as SEED_NOW
+    from _rotation_seed import bars as seed_bars
+
+    from investment_assistant.data import repo as data_repo
+
+    data_repo.store_bars(conn, ticker, seed_bars(close=50.0), now=SEED_NOW)
+    research = research_repo.insert_research(conn, _research(ticker, triggered_session=SESSION, verdict=verdict))
+    research_repo.insert_research_event(
+        conn,
+        {
+            "research_id": research["id"],
+            "session": SESSION,
+            "event": "concluded",
+            "reason": "可以出计划：条件已到",
+            "before": {},
+            "after": {},
+            "source": "agent",
+            "refs": [],
+        },
+    )
+    return research
+
+
+def _research_item(result, ticker="RRR"):
+    return next(item for item in result["research"] if item["ticker"] == ticker)
+
+
+def test_ready_research_gets_a_rotation_mark_and_waits_for_the_comparison(v3_tx):
+    """研究结论 ready、B 钱不够且可比较：研究项带 rotation 标记，保存换仓记录之前不算完成。"""
+    from _rotation_seed import add_rotation, seed_c4
+
+    ids = seed_c4(v3_tx, ("BBB",))
+    _ready_research(v3_tx)
+    v3_tx.commit()
+
+    item = _research_item(_rotation_agenda(v3_tx))
+    assert item["rotation"] == {"short": True, "compare": True, "blocked": None, "blocked_text": None}
+    assert item["done"] is False  # 研究结论有了，换仓比较还没做
+
+    _confirm(v3_tx, "RRR", "confirm")
+    assert _research_item(_rotation_agenda(v3_tx))["done"] is False  # 确认了但还没有换仓记录
+
+    add_rotation(v3_tx, verdict="hold", origin="brief", holding=(ids["a"]["id"], "AAA"), candidate="RRR")
+    assert _research_item(_rotation_agenda(v3_tx))["done"] is True
+
+
+def test_ready_research_vetoed_or_blocked_counts_as_done(v3_tx):
+    """与确认项同一判定：B 被否决、或不比较（冷却期内）都算完成；钱够时只看研究结论。"""
+    from _rotation_seed import add_rotation, seed_c4
+
+    ids = seed_c4(v3_tx, ("BBB",))
+    _ready_research(v3_tx)
+    v3_tx.commit()
+    _confirm(v3_tx, "RRR", "veto")
+    assert _research_item(_rotation_agenda(v3_tx))["done"] is True
+
+    _confirm(v3_tx, "RRR", "confirm")
+    assert _research_item(_rotation_agenda(v3_tx))["done"] is False
+    add_rotation(
+        v3_tx, session=add_trading_days(SESSION, -2), verdict="half", origin="chat", holding=(ids["a"]["id"], "AAA")
+    )
+    blocked = _research_item(_rotation_agenda(v3_tx))
+    assert blocked["rotation"]["compare"] is False and blocked["rotation"]["blocked"] == "cooldown"
+    assert blocked["done"] is True
+
+
+def test_ready_research_with_enough_room_keeps_the_old_done_rule(v3_tx):
+    from _rotation_seed import add_holding, seed_opening, seed_run
+
+    seed_run(v3_tx, ("BBB",))
+    seed_opening(v3_tx)
+    add_holding(v3_tx, "AAA", 300, "40", 40.0)  # 市值 12000：额度充足
+    _ready_research(v3_tx)
+    v3_tx.commit()
+
+    item = _research_item(_rotation_agenda(v3_tx))
+    assert item["rotation"]["short"] is False and item["done"] is True
+
+
+def test_research_without_a_ready_conclusion_has_no_rotation_mark(v3_tx):
+    """只有当天结论为「可以出计划」的研究才带标记；值得盯的研究项形状不变。"""
+    from _rotation_seed import seed_c4
+
+    seed_c4(v3_tx, ("BBB",))
+    _ready_research(v3_tx, verdict="watch")
+    v3_tx.commit()
+
+    item = _research_item(_rotation_agenda(v3_tx))
+    assert "rotation" not in item and item["done"] is True

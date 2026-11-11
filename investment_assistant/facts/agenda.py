@@ -111,11 +111,22 @@ def agenda(conn, *, session: date, cfg: AssistantConfig, cutoff_at: datetime | N
         for row in research_repo.research_events_on(conn, session)
         if row["source"] == "agent" and row["event"] in RESEARCH_DONE_EVENTS
     }
-    research = [
-        {"research_id": row["id"], "ticker": row["ticker"], "done": row["id"] in research_done}
-        for row in research_repo.research_by_status(conn, ("watching",))
-        if row["triggered_session"] is not None
-    ]
+    research = []
+    for row in research_repo.research_by_status(conn, ("watching",)):
+        if row["triggered_session"] is None:
+            continue
+        item = {"research_id": row["id"], "ticker": row["ticker"], "done": row["id"] in research_done}
+        if item["done"] and row["verdict"] == "ready":
+            # 当天得出「可以出计划」的研究 B 与确认项同样要过换仓闸门（spec §6.1 条件 1、§7.1）：
+            # 钱不够且可比较时，完成要等到换仓比较有了着落；其余情况研究结论就是完成
+            marked = mark(row["ticker"])
+            needs_comparison = marked["rotation"]["short"] and marked["rotation"]["compare"]
+            item.update(
+                rotation=marked["rotation"],
+                reviewed=True,  # 研究复看本身已做：未完成只欠换仓比较，不再算「研究复看」未做
+                done=marked["done"] if needs_comparison else True,
+            )
+        research.append(item)
 
     brief_row = plan_repo.brief(conn, session)
     summary_done = brief_row is not None and bool(brief_row["summary"])

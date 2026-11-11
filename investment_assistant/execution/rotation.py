@@ -21,6 +21,12 @@ NY = ZoneInfo("America/New_York")
 VERDICTS = ("hold", "half", "full")
 VERDICT_TEXT = {"hold": "继续持有", "half": "半仓换", "full": "全仓换"}
 NO_ROOM_TEXT = "仓位已到上限"
+# 算出 0 股的拒绝文案按真正起作用的那一项（size 的 applied_cap）：只有总仓位一项才是「仓位已到上限」
+ZERO_SHARES_TEXT = {
+    "total": NO_ROOM_TEXT,
+    "risk": "按风险预算算出 0 股，止损过宽或资金过小",
+    "single": "按单只上限算出 0 股",
+}
 HOLD_REJECT_TEXT = "仓位已到上限，比较后继续持有"
 DRAFT_TEXT = "仓位已到上限，换仓比较未做"
 UNFINISHED_TEXT = "换仓比较未完成"

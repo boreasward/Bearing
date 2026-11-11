@@ -12,6 +12,7 @@ from investment_assistant.execution.plan_line import close_outcome
 from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import rotation as facts_rotation
 from investment_assistant.facts.account import account_view
 from investment_assistant.facts.rotation import exposure_row
 from investment_assistant.toolsurface.env import ToolEnv
@@ -208,4 +209,6 @@ def _void_trade(conn, env: ToolEnv, target_id: int, request_id: str, reason_valu
                     "refs": [request_id],
                 },
             )
+    # B 的买入被作废使 B 的计划取消：撤回 A 的换仓指令，不等下一次每日复查（spec §6.6）
+    facts_rotation.withdraw_orphans(conn, session=env.session)
     return {"void": void, "plan": plan}
