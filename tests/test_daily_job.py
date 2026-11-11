@@ -350,3 +350,28 @@ def test_midweek_has_no_weekly(v3_tx, tmp_path):
         row = plan_repo.brief(conn, SESSION)
     assert row is not None and row["weekly_md"] is None and row["pushed_weekly_at"] is None
     assert len(client.sent) == 1
+
+
+def test_weekly_includes_rotation_section(v3_tx, tmp_path):
+    """v3.3：周报多一段「本周换仓」：本周的换仓结论各一行（含继续持有），不含别的周。"""
+    import _rotation_seed as rot
+
+    import investment_assistant.core.tx as core_tx
+
+    cfg = cfg_at(tmp_path)
+    seed_bars(v3_tx, market_ticklers(cfg), end=FRIDAY)
+    rot.add_rotation(v3_tx, session=FRIDAY, verdict="hold", origin="chat", candidate="AAPL", request_id="wk-1")
+    rot.add_rotation(
+        v3_tx, session=FRIDAY - timedelta(days=7), verdict="hold", origin="chat", candidate="MSFT", request_id="wk-2"
+    )
+    v3_tx.commit()
+    client = Recorder()
+
+    result = run_daily(cfg=cfg, spec=None, client=client, now=NOW_FRIDAY)
+
+    assert result["weekly_pushed"] is True
+    with core_tx.read_only_tx() as conn:
+        row = plan_repo.brief(conn, FRIDAY)
+    assert row is not None
+    assert "## 本周换仓" in row["weekly_md"] and f"- {FRIDAY:%Y-%m-%d} AAPL：继续持有" in row["weekly_md"]
+    assert "MSFT：继续持有" not in row["weekly_md"]

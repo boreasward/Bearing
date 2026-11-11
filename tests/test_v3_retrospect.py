@@ -399,3 +399,188 @@ def test_weekly_start_snapshot_includes_holiday_monday_flow(v3_tx):
     assert weekly["week_start"] == HOLIDAY_MON and weekly["week_end"] == WED  # 日历周边界不变
     assert weekly["equity_start"] == D(10000)  # 休市周一的入金进周初快照（修复前 through=周日会漏掉）
     assert weekly["equity_end"] == D(10000)  # 9000 现金 + 10 股 × 100
+
+
+# ---- v3.3：换仓复盘（spec §9；验收 C15）----
+# 三条记录：R1 半仓换（10-05，已执行）、R2 全仓换（10-20，指令被撤回）、R3 继续持有（10-28，没指明 A）。
+
+
+def _after_bars(ticker, start, n, *, open_, step):
+    """``start`` 的下一个交易日起 n 根日线：开盘恒为 open_，第 k 根收盘 = open_ + step × k（= 复权收盘）。"""
+    rows = []
+    for k in range(1, n + 1):
+        close = float(D(str(open_)) + D(str(step)) * k)
+        rows.append(
+            {
+                "price_date": add_trading_days(start, k),
+                "open": float(open_),
+                "high": close + 1,
+                "low": close - 1,
+                "close": close,
+                "adj_close": close,
+                "volume": 1000,
+                "split_factor": 1.0,
+            }
+        )
+    return rows
+
+
+def _sell_trade(conn, ticker, quantity, request_id, day):
+    facts_repo.insert_trade(
+        conn,
+        {
+            "request_id": request_id,
+            "ticker": ticker,
+            "side": "sell",
+            "quantity": D(quantity),
+            "price": D(40),
+            "fee": D(0),
+            "executed_at": datetime(day.year, day.month, day.day, 15, tzinfo=UTC),
+        },
+    )
+
+
+def _rotation_world(conn):
+    import _rotation_seed as rot
+
+    s1, s2, s3 = date(2026, 10, 5), date(2026, 10, 20), date(2026, 10, 28)
+    a = plan_repo.insert_plan(conn, rot.plan_row("AAA", status="open", kind="planned", start_session=date(2026, 10, 1)))
+    c = plan_repo.insert_plan(conn, rot.plan_row("CCC", status="open", kind="planned", start_session=date(2026, 10, 1)))
+    r1 = rot.add_rotation(conn, session=s1, verdict="half", origin="brief", holding=(a["id"], "AAA"),
+                          candidate="BBB", sell_quantity=150, buy_shares=217)  # fmt: skip
+    r2 = rot.add_rotation(conn, session=s2, verdict="full", origin="chat", holding=(c["id"], "CCC"),
+                          candidate="EEE", sell_quantity=100, buy_shares=90, request_id="r2")  # fmt: skip
+    r3 = rot.add_rotation(conn, session=s3, verdict="hold", origin="chat", candidate="FFF", request_id="r3")
+    plan_repo.insert_plan(conn, rot.plan_row("BBB", status="open", funded_by_rotation_id=r1["id"]))
+    plan_repo.insert_plan(
+        conn,
+        rot.plan_row("EEE", status="cancelled", funded_by_rotation_id=r2["id"], ended_session=s2, end_reason="x"),
+    )
+    _sell_trade(conn, "AAA", 100, "w-s1", date(2026, 10, 7))
+    _sell_trade(conn, "AAA", 50, "w-s2", date(2026, 10, 8))
+    plan_repo.insert_event(
+        conn,
+        {"plan_id": c["id"], "session": date(2026, 10, 21), "event": "rotation_withdrawn", "reason": "换仓指令撤回：用户撤回",
+         "before": {"rotation_id": r2["id"], "sell_quantity": D(100)}, "after": {}, "source": "user", "refs": ["w-1"]},
+    )  # fmt: skip
+    data_repo.store_bars(conn, "AAA", _after_bars("AAA", s1, 30, open_=40, step="0.2"), now=NOW)
+    data_repo.store_bars(conn, "BBB", _after_bars("BBB", s1, 30, open_=50, step="0.5"), now=NOW)
+    data_repo.store_bars(conn, "CCC", _after_bars("CCC", s2, 7, open_=40, step="-0.4"), now=NOW)
+    data_repo.store_bars(conn, "EEE", _after_bars("EEE", s2, 7, open_=20, step="0.2"), now=NOW)
+    conn.commit()
+    return r1, r2, r3
+
+
+def test_rotation_view_matches_hand_calculation(v3_tx):
+    """C15：half 已执行、full 被撤回、hold 三条记录，对照、执行情况、汇总逐项手算（最新的在前）。"""
+    from investment_assistant.facts.rotation import rotation_view
+
+    r1, r2, r3 = _rotation_world(v3_tx)
+
+    view = rotation_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG)
+
+    assert view["min_sample"] == 10
+    hold, full, half = view["records"]
+    assert [row["rotation_id"] for row in view["records"]] == [r3["id"], r2["id"], r1["id"]]
+    assert (half["verdict"], half["verdict_text"], half["holding_ticker"], half["candidate"]) == (
+        "half", "半仓换", "AAA", "BBB")  # fmt: skip
+    assert half["sell_quantity"] == D(150) and half["buy_shares"] == D(217) and half["fee_estimate"] == D("2.00")
+    assert half["origin"] == "brief" and half["reasons"] == "理由" and half["weakness"] == "A 没按预期走"
+    assert half["execution"] == {
+        "state": "done",
+        "sold_quantity": D(150),
+        "sold_session": date(2026, 10, 8),
+        "bought": True,
+    }
+    # 对照：AAA 开 40、第 k 根收 40 + 0.2k；BBB 开 50、收 50 + 0.5k → 5 日 2.5% / 5.0%、10 日 5% / 10%、20 日 10% / 20%
+    assert half["compare"] == [
+        {"horizon": 5, "status": "done", "a_pct": D("0.0250"), "b_pct": D("0.0500"), "diff": D("0.0250")},
+        {"horizon": 10, "status": "done", "a_pct": D("0.0500"), "b_pct": D("0.1000"), "diff": D("0.0500")},
+        {"horizon": 20, "status": "done", "a_pct": D("0.1000"), "b_pct": D("0.2000"), "diff": D("0.1000")},
+    ]
+    assert full["execution"] == {"state": "withdrawn", "sold_quantity": D(0), "sold_session": None, "bought": False}
+    assert full["fee_estimate"] == D("2.00") and full["verdict_text"] == "全仓换"
+    # 只有 7 根日线：5 日有结果（CCC −5%、EEE +5%），10、20 日进行中
+    assert full["compare"][0] == {
+        "horizon": 5, "status": "done", "a_pct": D("-0.0500"), "b_pct": D("0.0500"), "diff": D("0.1000")}  # fmt: skip
+    assert [row["status"] for row in full["compare"]] == ["done", "unfinished", "unfinished"]
+    assert hold["verdict"] == "hold" and hold["execution"] is None and hold["fee_estimate"] == D(0)
+    summary = view["summary"]
+    assert summary["counts"] == {"hold": 1, "half": 1, "full": 1}
+    assert summary["executed"] == 1 and summary["fee_total"] == D("2.00")  # 手续费只算执行了的
+    assert summary["switched"] == {"sample": 1, "enough": False, "b_win_rate": None, "mean_diff": None}
+    assert summary["held"] == {"sample": 0, "enough": False, "b_win_rate": None, "mean_diff": None}
+
+
+def test_rotation_view_sample_gate(v3_tx):
+    """C15：样本不足（缺省 10）不给占比与平均；样本线放到 1 时 20 日后 B 跑赢 A 的占比与差值的平均给出。"""
+    from investment_assistant.config import V3Config
+    from investment_assistant.facts.rotation import rotation_view
+
+    _rotation_world(v3_tx)
+
+    short = rotation_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG)["summary"]["switched"]
+    assert short["enough"] is False and short["b_win_rate"] is None and short["mean_diff"] is None
+
+    loose = AssistantConfig(v3=V3Config(retro_min_sample=1))
+    view = rotation_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=loose)
+    assert view["min_sample"] == 1
+    assert view["summary"]["switched"] == {"sample": 1, "enough": True, "b_win_rate": D("1.0000"), "mean_diff": D("0.1000")}
+    assert view["summary"]["held"]["enough"] is False  # 继续持有没指明 A：不算对照
+    assert len(rotation_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG, limit=2)["records"]) == 2
+
+
+def test_hold_without_holding_has_no_compare(v3_tx):
+    """继续持有而没指明 A：没有对照（compare 为 None）；指明 A 的照样算。"""
+    import _rotation_seed as rot
+
+    from investment_assistant.facts.rotation import rotation_view
+
+    a = plan_repo.insert_plan(v3_tx, rot.plan_row("AAA", status="open", start_session=date(2026, 10, 1)))
+    rot.add_rotation(v3_tx, session=date(2026, 10, 28), verdict="hold", origin="chat", candidate="FFF", request_id="h-1")
+    rot.add_rotation(
+        v3_tx, session=date(2026, 10, 28), verdict="hold", origin="chat", candidate="GGG", request_id="h-2",
+        holding=(a["id"], "AAA"),
+    )  # fmt: skip
+    data_repo.store_bars(v3_tx, "AAA", _after_bars("AAA", date(2026, 10, 28), 5, open_=40, step="0.2"), now=NOW)
+    data_repo.store_bars(v3_tx, "GGG", _after_bars("GGG", date(2026, 10, 28), 5, open_=20, step="-0.2"), now=NOW)
+    v3_tx.commit()
+
+    with_holding, nameless = rotation_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG)["records"]  # 同日按编号倒序
+
+    assert with_holding["candidate"] == "GGG" and with_holding["holding_ticker"] == "AAA"
+    # AAA 开 40、第 5 根收 41（+2.5%）；GGG 开 20、第 5 根收 19（−5%）→ 差 −7.5%；日线不够 10 根：进行中
+    assert with_holding["compare"][0] == {
+        "horizon": 5, "status": "done", "a_pct": D("0.0250"), "b_pct": D("-0.0500"), "diff": D("-0.0750")}  # fmt: skip
+    assert with_holding["compare"][1]["status"] == "unfinished" and with_holding["execution"] is None
+    assert nameless["candidate"] == "FFF" and nameless["holding_ticker"] is None
+    assert nameless["compare"] is None and nameless["execution"] is None
+
+
+def test_weekly_view_lists_the_week_rotations(v3_tx):
+    """周报：该周的换仓记录各一行（含 verdict_text），别的周不进。"""
+    import _rotation_seed as rot
+
+    a = plan_repo.insert_plan(v3_tx, rot.plan_row("AAA", status="open", start_session=date(2026, 10, 1)))
+    rot.add_rotation(v3_tx, session=D2, verdict="hold", origin="chat", candidate="BBB", holding=(a["id"], "AAA"), request_id="k-1")
+    rot.add_rotation(v3_tx, session=D0, verdict="hold", origin="chat", candidate="FFF", request_id="k-2")  # 上周
+    v3_tx.commit()
+
+    weekly = weekly_view(v3_tx, week_end=SESSION, cutoff_at=NOW, cfg=CFG)
+
+    assert weekly["rotations"] == [
+        {"session": D2, "candidate": "BBB", "verdict": "hold", "verdict_text": "继续持有", "holding_ticker": "AAA"}
+    ]
+    assert retrospect_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG)["weekly"]["rotations"] == weekly["rotations"]
+
+
+def test_empty_database_has_empty_rotations(v3_tx):
+    """没有任何换仓记录：records 为空，counts 全 0，汇总两组都是样本 0。"""
+    view = retrospect_view(v3_tx, session=SESSION, cutoff_at=NOW, cfg=CFG)
+
+    assert view["rotations"]["records"] == [] and view["rotations"]["min_sample"] == 10
+    summary = view["rotations"]["summary"]
+    assert summary["counts"] == {"hold": 0, "half": 0, "full": 0} and summary["executed"] == 0
+    assert summary["fee_total"] == D(0)
+    assert summary["switched"]["sample"] == 0 and summary["held"]["sample"] == 0
+    assert view["weekly"]["rotations"] == []

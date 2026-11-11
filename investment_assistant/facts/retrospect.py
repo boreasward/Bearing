@@ -15,6 +15,7 @@ from investment_assistant.execution.plan_line import ENDED
 from investment_assistant.execution.retrospect import NY, plan_record, rule_stats, week_bounds, weekly_summary
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import rotation as facts_rotation
 
 BARS_LIMIT = 400  # 单次读的日线根数上限；按计划各自窗口锚定后，窗口+持有尾巴远小于它（F6）
 RULE_KEYS = ("trigger_rules", "setup_tier", "industry")
@@ -117,7 +118,7 @@ def weekly_view(conn, *, week_end: date, cutoff_at: datetime, cfg: AssistantConf
         run = facts_repo.previous_ok_run(conn, before=add_trading_days(day, 1))
         if run is not None and run["session"] == day:  # 当天有 ok 运行才取它的名单
             candidates_week.extend(facts_repo.candidates(conn, run["run_id"]))
-    return weekly_summary(
+    summary = weekly_summary(
         records=all_records,
         week_start=week_start,
         week_end=week_end,
@@ -126,6 +127,8 @@ def weekly_view(conn, *, week_end: date, cutoff_at: datetime, cfg: AssistantConf
         realized_pnl=end_ledger["realized_pnl"] - start_ledger["realized_pnl"],
         candidates_week=candidates_week,
     )
+    summary["rotations"] = facts_rotation.week_rotations(conn, week_start=week_start, week_end=week_end)  # v3.3
+    return summary
 
 
 def week_end_of(day: date) -> date:
@@ -167,6 +170,7 @@ def retrospect_view(
                 for key in RULE_KEYS
             },
         },
+        "rotations": facts_rotation.rotation_view(conn, session=session, cutoff_at=cutoff_at, cfg=cfg, limit=limit),
         "empty": not all_records,
         "min_sample": cfg.v3.retro_min_sample,
         "note": "规则未经验证；样本不足的组不给数",
