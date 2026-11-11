@@ -3,8 +3,15 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal as D
 
+from investment_assistant.execution import rotation
 from investment_assistant.facts import brief
-from investment_assistant.facts.brief import discord_lines, render_brief, render_error_brief, render_weekly
+from investment_assistant.facts.brief import (
+    discord_lines,
+    render_brief,
+    render_error_brief,
+    render_weekly,
+    split_brief,
+)
 
 NOW = datetime(2026, 11, 5, 3, 30, tzinfo=UTC)
 
@@ -558,3 +565,126 @@ def test_weekly_lists_closed_and_not_bought():
     assert "- 周初总资产 12000.00，周末总资产 12500.50，本周已实现盈亏 300.00。" in md
     assert "- 新上榜：MSFT；掉出：NVDA；再次上榜最多：ORCL。" in md
     assert md.strip().endswith("金额单位美元。")
+
+
+# ---- v3.3：仓位占比与换仓（spec §5、§6、§8、§9） ----
+
+
+def _exposure_row(**over):
+    row = rotation.exposure(equity=D(100000), market_value=D(55000), cap=D("0.6"))
+    row.update(over)
+    return row
+
+
+def _section(text, title):
+    return next(s["markdown"] for s in split_brief(text)["sections"] if s["title"] == title)
+
+
+def test_account_section_shows_exposure():
+    row = _exposure_row()
+    account = {"cash": D(9398), "equity": D(12698), "unrealized_pnl": D("299.4"), "realized_pnl": D("398.6")}
+    text = render_brief(view(account={**account, "exposure": row}), final=True)
+    lines = _section(text, "账户").splitlines()
+    assert lines[0].startswith("- 现金 9398")
+    assert lines[1] == "- 仓位占比 55.0%（上限 60%），剩余额度 $5000.00"
+    assert lines[1] == f"- {rotation.exposure_text(row)}"
+    assert len(lines) == 2
+    # 占比偏低的提示进同一行；没有 exposure 键时账户段保持原样
+    incomplete = render_brief(view(account={**account, "exposure": _exposure_row(incomplete=True)}), final=True)
+    assert "（有持仓缺日线，占比偏低）" in _section(incomplete, "账户").splitlines()[1]
+    assert len(_section(render_brief(view(), final=True), "账户").splitlines()) == 1
+
+
+def _candidate_rows(**over):
+    row = {
+        "ticker": "BBB",
+        "rank": 1,
+        "reason": "理由 1",
+        "streak": 2,
+        "new": False,
+        "verdict": "confirm",
+        "skip_reason": None,
+        "held": False,
+    }
+    row.update(over)
+    return [row]
+
+
+def test_candidate_line_carries_rotation_text():
+    final = render_brief(view(candidates=_candidate_rows(rotation_text="换仓比较：半仓换（AAA）")), final=True)
+    assert "1. BBB · 理由 1 · 连续第 2 天 → 确认 · 换仓比较：半仓换（AAA）" in final.splitlines()
+    draft = render_brief(
+        view(candidates=_candidate_rows(verdict=None, rotation_text="仓位已到上限，换仓比较未做")), final=False
+    )
+    assert any(line.startswith("1. BBB") and line.endswith(" · 仓位已到上限，换仓比较未做") for line in draft.splitlines())
+    # 已持有的行、前 N 之外的行不带换仓文案
+    held = render_brief(view(candidates=_candidate_rows(held=True, rotation_text="换仓比较：半仓换（AAA）")), final=True)
+    assert "换仓比较" not in held
+    beyond = render_brief(
+        view(candidates=_candidate_rows(rank=7, rotation_text="换仓比较：半仓换（AAA）")), final=True
+    )
+    assert "换仓比较" not in beyond
+    # 没有值时与原来一致
+    assert "换仓" not in render_brief(view(), final=True)
+
+
+def test_changes_and_unresolved_show_rotation():
+    changes = {
+        "new_plans": ["新计划 MSFT：放量突破"],
+        "ended_plans": [],
+        "holding_changes": ["AAPL 止损上调至 130"],
+        "rotations": ["换仓指令：AAA 卖出 150 股，换至 BBB"],
+        "research": ["研究 SNDK：条件已到"],
+        "new_count": 0,
+        "dropped_count": 0,
+    }
+    unresolved = {"missing_bars": [], "agenda": [], "rotation": ["换仓比较未完成：BBB"]}
+    text = render_brief(view(changes=changes, unresolved=unresolved), final=True)
+    lines = _section(text, "和昨天比变了什么").splitlines()
+    assert lines == ["新计划 MSFT：放量突破", "AAPL 止损上调至 130", "换仓指令：AAA 卖出 150 股，换至 BBB", "研究 SNDK：条件已到"]
+    assert "- 换仓比较未完成：BBB" in _section(text, "今天下不了结论的").splitlines()
+    # 只有换仓变化时也不写「没有变化」
+    only = render_brief(view(changes={"rotations": ["换仓指令：AAA 卖出 150 股，换至 BBB"]}), final=True)
+    assert "没有变化" not in only
+
+
+def _rotation_rows():
+    return [
+        {"session": date(2026, 11, 3), "candidate": "BBB", "verdict": "half", "holding_ticker": "AAA"},
+        {"session": date(2026, 11, 5), "candidate": "CCC", "verdict": "hold", "holding_ticker": "DDD"},
+        {"session": date(2026, 11, 6), "candidate": "EEE", "verdict": "hold", "holding_ticker": None},
+    ]
+
+
+def test_weekly_rotation_section():
+    md = render_weekly(_weekly(rotations=_rotation_rows()), as_of=AS_OF)
+    assert "## 本周换仓" in md
+    assert "- 2026-11-03 BBB：半仓换（AAA）" in md
+    assert "- 2026-11-05 CCC：继续持有（DDD）" in md
+    assert "- 2026-11-06 EEE：继续持有" in md.splitlines()
+    # 位置：在「没买的计划」之后、「账户」之前
+    not_bought = _weekly(
+        ended=1,
+        not_bought=[{"ticker": "TSLA", "end_reason": "5 个交易日未买入", "hypothetical": {"status": "not_filled"}}],
+        rotations=_rotation_rows(),
+    )
+    ordered = [line for line in render_weekly(not_bought, as_of=AS_OF).splitlines() if line.startswith("## ")]
+    assert ordered.index("## 本周换仓") == ordered.index("## 没买的计划") + 1
+    assert ordered.index("## 本周换仓") < ordered.index("## 账户")
+    # 没有记录（或没有这个键）时整段不出现
+    assert "本周换仓" not in render_weekly(_weekly(rotations=[]), as_of=AS_OF)
+    assert "本周换仓" not in render_weekly(_weekly(), as_of=AS_OF)
+    assert brief.WEEKLY_EXIT_TEXT["rotation"] == "换仓"
+
+
+def test_discord_has_rotation_line():
+    rows = _rotation_rows()[:2]
+    lines = discord_lines(view(rotations=rows), brief_path="/tmp/briefs/2026-11-04.md")
+    # 持仓操作之后、新计划之前：当天的换仓结论各一行
+    assert lines[2] == "AAPL：继续持有"
+    assert lines[3] == "换仓 BBB：半仓换（AAA）"
+    assert lines[4] == "换仓 CCC：继续持有（DDD）"
+    assert lines[5] == "新计划：新计划 MSFT：放量突破"
+    assert lines[-1] == "简报文件：/tmp/briefs/2026-11-04.md"
+    assert len(lines) == 8
+    assert len(discord_lines(view(), brief_path="/tmp/x.md")) == 6  # 没有换仓结论时不多一行

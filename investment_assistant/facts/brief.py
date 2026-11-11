@@ -19,8 +19,13 @@ view keys consumed here:
   conclusion 只进最终稿；空列表 -> 整段不出现
 - candidates: [{'ticker', 'rank', 'reason', 'streak', 'new', 'verdict', 'skip_reason', 'held'}]
 - dropped: [{'ticker', 'reasons': [code|str]}]
-- account: {'cash', 'equity', 'unrealized_pnl', 'realized_pnl'} | None
-- coverage: the facts.coverage dict; unresolved: {'missing_bars': [ticker], 'agenda': [str]}
+- account: {'cash', 'equity', 'unrealized_pnl', 'realized_pnl', 'exposure'?} | None — v3.3：'exposure' 是
+  execution.rotation.exposure 的结果，存在时账户段多一行仓位占比
+- coverage: the facts.coverage dict; unresolved: {'missing_bars': [ticker], 'agenda': [str], 'rotation'?: [str]}
+  （v3.3：'rotation' 是已拼好的句子「换仓比较未完成：{股票}」，各占一行）
+- v3.3：changes 多 'rotations': [str]（已拼好的句子，接在 holding_changes 之后）；candidates 的行可带
+  'rotation_text'（前 N 只、未持有的行接在结论之后）；view['rotations']: [{'session', 'candidate', 'verdict',
+  'holding_ticker'}] 是当天的换仓结论（Discord 各一行）
 - footer: {'runtime', 'provider', 'model', 'usage': {'input','output'} | None,
            'elapsed_seconds', 'note'} — model empty -> 「未选定模型，二次确认未做」
 """
@@ -31,6 +36,7 @@ import re
 from datetime import date, datetime
 
 from investment_assistant.core.texts import NO_EQUITY_TEXT, REGIME_LABEL_TEXT, money_value, price_text, quantity_value
+from investment_assistant.execution.rotation import VERDICT_TEXT, exposure_text
 from investment_assistant.facts.coverage import coverage_lines
 from investment_assistant.facts.ranking import TIER_TEXT
 
@@ -56,6 +62,7 @@ WEEKLY_EXIT_TEXT = {
     "max_hold": "持有到期",
     "thesis_broken": "论点失效",
     "manual": "用户自行卖出",
+    "rotation": "换仓",
 }
 
 
@@ -105,6 +112,7 @@ def _change_lines(view: dict) -> list[str]:
         *(changes.get("new_plans") or []),
         *(changes.get("ended_plans") or []),
         *(changes.get("holding_changes") or []),
+        *(changes.get("rotations") or []),
         *(changes.get("research") or []),
     ]
     new_count = changes.get("new_count") or 0
@@ -198,6 +206,8 @@ def _candidate_lines(candidates: list[dict], *, top_n: int, final: bool) -> list
                 line += f" · {row['skip_reason']}"
             elif not final:
                 line += " → 进入二次确认"
+            if row.get("rotation_text") and not row.get("held"):
+                line += f" · {row['rotation_text']}"
         lines.append(line)
     return lines
 
@@ -218,12 +228,15 @@ def _account_lines(account: dict | None) -> list[str]:
     def show(value) -> str:
         return "—" if value is None else f"{value}"
 
-    return [
+    lines = [
         (
             f"- 现金 {show(account.get('cash'))}，总资产 {show(account.get('equity'))}，"
             f"浮动盈亏 {show(account.get('unrealized_pnl'))}，已实现盈亏 {show(account.get('realized_pnl'))}"
         )
     ]
+    if account.get("exposure"):
+        lines.append(f"- {exposure_text(account['exposure'])}")
+    return lines
 
 
 def _unresolved_lines(view: dict) -> list[str]:
@@ -237,6 +250,8 @@ def _unresolved_lines(view: dict) -> list[str]:
         lines.append(f"- {ticker}：缺日线")
     for item in unresolved.get("agenda") or []:
         lines.append(f"- 未完成：{item}")
+    for sentence in unresolved.get("rotation") or []:
+        lines.append(f"- {sentence}")
     return lines
 
 
@@ -376,9 +391,15 @@ def render_error_brief(*, session: date, as_of: datetime, error: str, has_holdin
     return f"# 简报 · {session:%Y-%m-%d}\n\n{lead}\n\n{footer}\n"
 
 
+def _rotation_sentence(row: dict) -> str:
+    """「{B}：{结论}（{A}）」；继续持有没有指明 A 时不带括号。"""
+    text = f"{row['candidate']}：{VERDICT_TEXT.get(row['verdict'], row['verdict'])}"
+    return text + f"（{row['holding_ticker']}）" if row.get("holding_ticker") else text
+
+
 def discord_lines(view: dict, *, brief_path: str) -> list[str]:
-    """The Discord summary (spec §11)：今日操作、一句话、持仓操作、新计划、条件已到的研究各一行、
-    结束的计划，最后是简报文件。"""
+    """The Discord summary (spec §11)：今日操作、一句话、持仓操作、当天的换仓结论各一行（v3.3）、
+    新计划、条件已到的研究各一行、结束的计划，最后是简报文件。"""
     lines: list[str] = []
     for row in view.get("today_actions") or []:
         lines.append(f"{row['ticker']}：{row['text']}")
@@ -388,6 +409,8 @@ def discord_lines(view: dict, *, brief_path: str) -> list[str]:
         action = row.get("next_action")
         if action and action.get("text"):
             lines.append(f"{row['ticker']}：{action['text']}")
+    for row in view.get("rotations") or []:
+        lines.append(f"换仓 {_rotation_sentence(row)}")
     changes = view.get("changes") or {}
     if changes.get("new_plans"):
         lines.append("新计划：" + "；".join(changes["new_plans"]))
@@ -459,6 +482,11 @@ def render_weekly(weekly: dict, *, as_of: datetime) -> str:
         f"- 周初总资产 {show(weekly.get('equity_start'))}，周末总资产 {show(weekly.get('equity_end'))}，"
         f"本周已实现盈亏 {show(weekly.get('realized_pnl'))}。"
     )
+    rotations = weekly.get("rotations") or []
+    if rotations:
+        sections.append(
+            ["## 本周换仓", *[f"- {row['session']:%Y-%m-%d} {_rotation_sentence(row)}" for row in rotations]]
+        )
     sections.append(["## 账户", account_line])
     listing = weekly.get("listing") or {}
     parts = []
