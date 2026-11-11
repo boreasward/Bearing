@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
 
 import investment_assistant.core.tx as core_tx
+from investment_assistant.config import load_config
 from investment_assistant.data import repo as data_repo
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
@@ -178,7 +179,8 @@ def test_today_has_exposure_and_rotation_action(client, v3_tx):
     exposure = body["account"]["exposure"]
     assert set(exposure) == {"pct", "cap", "room", "incomplete"}
     # 总资产 100160.50，持仓市值 301×40 + 1000×42.98 = 55020.00：占比 0.5493，上限 0.6，剩余 100160.50×0.6 − 55020
-    assert exposure == {"pct": "0.5493", "cap": "0.6", "room": "5076.30", "incomplete": False}
+    cap = f"{D(str(load_config().workbench.total_cap)):f}"  # 不依赖本机默认配置
+    assert exposure == {"pct": "0.5493", "cap": cap, "room": "5076.30", "incomplete": False}
     rotation = next(row for row in body["actions"] if row["kind"] == "rotation_sell")
     assert rotation["ticker"] == "AAA" and rotation["sell_quantity"] == "150" and rotation["counterpart"] == "BBB"
     assert rotation["text"] == "下次开盘卖出 150 股（换仓至 BBB）" and rotation["stale_quantity"] is False
@@ -203,4 +205,5 @@ def test_today_stale_stop_quantity_row(client, v3_tx):
 def test_today_without_run_has_exposure_without_capital(client, v3_tx):
     """没有运行记录也没有账户资金：占比与额度为空，上限照给。"""
     exposure = client.get("/api/today").json()["account"]["exposure"]
-    assert exposure == {"pct": None, "cap": "0.6", "room": None, "incomplete": False}
+    cap = f"{D(str(load_config().workbench.total_cap)):f}"
+    assert exposure == {"pct": None, "cap": cap, "room": None, "incomplete": False}

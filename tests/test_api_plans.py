@@ -340,18 +340,35 @@ def test_cards_carry_rotation_and_funding(client, v3_tx):
 
 
 def test_card_stale_stop_quantity_and_rotation_exit(client, v3_tx):
-    from _rotation_seed import add_holding, seed_c4
+    """止损单数量待改；换仓卖光平仓的 A：三列保留、exit_reason 为 rotation，但卡片 rotation 为 null（指令不再有效）。"""
+    from _rotation_seed import add_holding, instruct, seed_c4
 
-    seed_c4(v3_tx)
+    ids = seed_c4(v3_tx)
     stale = add_holding(v3_tx, "STL", 151, "40", 40.0, confirmed_stop_order=D(36))
     plan_repo.update_plan(v3_tx, stale["id"], stop_quantity_stale=True)
-    closed = add_holding(v3_tx, "CLO", 10, "40", 40.0, status="closed", ended_session=SESSION, end_reason="换仓卖出")
-    plan_repo.update_plan(v3_tx, closed["id"], outcome={"realized_pnl": D(5), "exit_reason": "rotation"})
+    instruct(v3_tx, ids["a"], candidate="BBB", quantity=150)
     v3_tx.commit()
     card = client.get(f"/api/plans/{stale['id']}").json()
     assert card["stop_quantity_stale"] is True and card["next_action"]["text"] == "止损单数量需改为 151 股"
-    ended = client.get("/api/plans?group=ended").json()["plans"]
-    assert next(row for row in ended if row["ticker"] == "CLO")["outcome"]["exit_reason"] == "rotation"
+    assert card["rotation"] is None
+    a_url = f"/api/plans/{ids['a']['id']}"
+    assert client.get(a_url).json()["rotation"]["sell_quantity"] == "150"  # open：指令还在
+
+    # 卖光后 A 平仓：sell_instruction / sell_quantity / rotation_id 三列保留，outcome.exit_reason 为 rotation
+    plan_repo.update_plan(
+        v3_tx,
+        ids["a"]["id"],
+        status="closed",
+        ended_session=SESSION,
+        end_reason="换仓卖出",
+        outcome={"realized_pnl": D(5), "exit_reason": "rotation"},
+    )
+    v3_tx.commit()
+    ended_plan = plan_repo.plan(v3_tx, ids["a"]["id"])
+    assert ended_plan["sell_instruction"] == "rotation" and ended_plan["rotation_id"] is not None
+    ended = {row["ticker"]: row for row in client.get("/api/plans?group=ended").json()["plans"]}
+    assert ended["AAA"]["outcome"]["exit_reason"] == "rotation" and ended["AAA"]["rotation"] is None
+    assert client.get(a_url).json()["rotation"] is None
 
 
 def test_withdraw_rotation_route(client, v3_tx):

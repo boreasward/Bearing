@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
 
 import investment_assistant.core.tx as core_tx
+from investment_assistant.config import load_config
 from investment_assistant.data import repo as data_repo
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
@@ -192,6 +193,9 @@ def test_account_view_shape(client, v3_tx):
     assert client.get("/api/account").status_code == 200
 
 
+CAP = f"{D(str(load_config().workbench.total_cap)):f}"  # 不依赖本机默认配置
+
+
 def test_account_has_exposure(client, v3_tx):
     """exposure 四个键：占比 / 上限 / 剩余额度是字符串，没有账户资金时占比与额度为空。"""
     from _rotation_seed import add_holding, seed_opening
@@ -200,7 +204,7 @@ def test_account_has_exposure(client, v3_tx):
         seed(conn)
     assert client.get("/api/account").json()["exposure"] == {
         "pct": None,
-        "cap": "0.6",
+        "cap": CAP,
         "room": None,
         "incomplete": False,
     }
@@ -209,7 +213,7 @@ def test_account_has_exposure(client, v3_tx):
     v3_tx.commit()
     assert client.get("/api/account").json()["exposure"] == {
         "pct": "0.0400",
-        "cap": "0.6",
+        "cap": CAP,
         "room": "56000.00",  # 100000 × 0.6 − 4000
         "incomplete": False,
     }

@@ -37,8 +37,9 @@ def _bad(message: str) -> JSONResponse:
 
 
 def _rotation_block(conn, plan: dict) -> tuple[dict | None, str | None]:
-    """A 上还在的换仓指令（rotation 三个键，没有指令为 None）与 B 的名字（next_action 用）。"""
-    if plan["sell_instruction"] != "rotation" or plan["rotation_id"] is None:
+    """A 上还在的换仓指令（rotation 三个键，没有指令为 None）与 B 的名字（next_action 用）。A 卖光平仓后三列
+    仍保留（算 exit_reason 用），但指令已执行完，只有 open 的计划才算「指令还在」（与 withdraw_rotation 的守卫一致）。"""
+    if plan["status"] != "open" or plan["sell_instruction"] != "rotation" or plan["rotation_id"] is None:
         return None, None
     record = rotation_repo.rotation(conn, plan["rotation_id"])
     counterpart = record["candidate"] if record is not None else None
