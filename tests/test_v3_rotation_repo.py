@@ -106,3 +106,4 @@ def test_rotation_by_request(v3_db):
     assert rotation_repo.rotation_by_request(conn, "req-1") == saved
     assert rotation_repo.rotation_by_request(conn, "req-2") is None
     assert plain["request_id"] is None  # None 不命中任何请求
+    assert rotation_repo.rotation_by_request(conn, None) is None

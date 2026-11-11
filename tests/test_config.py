@@ -43,7 +43,7 @@ def test_workbench_defaults(tmp_path, monkeypatch):
 
     assert cfg.workbench.risk_pct == 0.01
     assert cfg.workbench.single_cap == 0.25
-    assert cfg.workbench.total_cap == 1.0
+    assert cfg.workbench.total_cap == 0.6
 
 
 def test_workbench_section_overrides(tmp_path):
