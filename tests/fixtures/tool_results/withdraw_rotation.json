@@ -1,0 +1,63 @@
+{
+  "event": {
+    "after": {},
+    "before": {
+      "rotation_id": 3,
+      "sell_quantity": "150.000000"
+    },
+    "created_at": "2026-11-11T17:30:00.000000+08:00",
+    "event": "rotation_withdrawn",
+    "id": 41,
+    "plan_id": 11,
+    "reason": "换仓指令撤回：用户撤回",
+    "refs": [
+      "fixture-rotation-withdraw"
+    ],
+    "session": "2026-11-05",
+    "source": "user"
+  },
+  "plan": {
+    "agent_session": "brief-2026-11-04-1",
+    "atr": "2.000000",
+    "confirmed_stop_order": null,
+    "counter": "",
+    "created_at": "2026-11-11T17:30:00.000000+08:00",
+    "end_reason": null,
+    "ended_session": null,
+    "entry_high": "41.000000",
+    "entry_low": "39.000000",
+    "entry_type": "zone_limit",
+    "funded_by_rotation_id": null,
+    "id": 11,
+    "initial_stop": "36.000000",
+    "invalidation": "跌破 36 止损",
+    "kind": "planned",
+    "levels_source": "host",
+    "max_hold_sessions": 20,
+    "origin": "brief",
+    "outcome": {},
+    "refs": [],
+    "research_id": null,
+    "reviewed_through": "2026-11-04",
+    "rotation_id": null,
+    "sell_instruction": null,
+    "sell_quantity": null,
+    "session": "2026-11-04",
+    "shares": 300,
+    "sizing": {},
+    "start_session": "2026-11-02",
+    "status": "open",
+    "stop": "36.000000",
+    "stop_hit_session": null,
+    "stop_quantity_stale": false,
+    "target1": "46.000000",
+    "target_hit_session": null,
+    "thesis": "回调到 39 附近买入",
+    "ticker": "AAA",
+    "trailing": false,
+    "updated_at": "2026-11-11T17:30:00.000000+08:00",
+    "valid_from": "2026-11-05",
+    "valid_until": "2026-11-11",
+    "warnings": []
+  }
+}

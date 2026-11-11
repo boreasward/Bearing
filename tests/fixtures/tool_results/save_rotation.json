@@ -1,0 +1,259 @@
+{
+  "holding": {
+    "agent_session": "brief-2026-11-04-1",
+    "atr": "2.000000",
+    "confirmed_stop_order": null,
+    "counter": "",
+    "created_at": "2026-11-11T17:30:00.000000+08:00",
+    "end_reason": null,
+    "ended_session": null,
+    "entry_high": "41.000000",
+    "entry_low": "39.000000",
+    "entry_type": "zone_limit",
+    "funded_by_rotation_id": null,
+    "id": 11,
+    "initial_stop": "36.000000",
+    "invalidation": "跌破 36 止损",
+    "kind": "planned",
+    "levels_source": "host",
+    "max_hold_sessions": 20,
+    "origin": "brief",
+    "outcome": {},
+    "refs": [],
+    "research_id": null,
+    "reviewed_through": "2026-11-04",
+    "rotation_id": 3,
+    "sell_instruction": "rotation",
+    "sell_quantity": "150.000000",
+    "session": "2026-11-04",
+    "shares": 300,
+    "sizing": {},
+    "start_session": "2026-11-02",
+    "status": "open",
+    "stop": "36.000000",
+    "stop_hit_session": null,
+    "stop_quantity_stale": false,
+    "target1": "46.000000",
+    "target_hit_session": null,
+    "thesis": "回调到 39 附近买入",
+    "ticker": "AAA",
+    "trailing": false,
+    "updated_at": "2026-11-11T17:30:00.000000+08:00",
+    "valid_from": "2026-11-05",
+    "valid_until": "2026-11-11",
+    "warnings": []
+  },
+  "plan": {
+    "agent_session": "brief-2026-11-04-1",
+    "atr": "2.000000",
+    "confirmed_stop_order": null,
+    "counter": "",
+    "created_at": "2026-11-11T17:30:00.000000+08:00",
+    "end_reason": null,
+    "ended_session": null,
+    "entry_high": "51.000000",
+    "entry_low": "49.000000",
+    "entry_type": "zone_limit",
+    "funded_by_rotation_id": 3,
+    "id": 21,
+    "initial_stop": "46.000000",
+    "invalidation": "跌破 46 止损",
+    "kind": "planned",
+    "levels_source": "host",
+    "max_hold_sessions": 20,
+    "origin": "brief",
+    "outcome": {},
+    "refs": [
+      "call:4"
+    ],
+    "research_id": null,
+    "reviewed_through": null,
+    "rotation_id": null,
+    "sell_instruction": null,
+    "sell_quantity": null,
+    "session": "2026-11-04",
+    "shares": 217,
+    "sizing": {
+      "applied_cap": "total",
+      "equity": "100160.5",
+      "funded": {
+        "holding_ticker": "AAA",
+        "rotation_id": 3,
+        "sell_quantity": "150"
+      },
+      "per_share_risk": "4",
+      "risk_amount": "1001.605",
+      "risk_pct": 0.01,
+      "shares": 217,
+      "single_cap": 0.25,
+      "snapshot_as_of": "2026-11-04",
+      "snapshot_id": null,
+      "status": "capped",
+      "total_cap": 0.6,
+      "uncapped_shares": 250
+    },
+    "start_session": null,
+    "status": "pending",
+    "stop": "46.000000",
+    "stop_hit_session": null,
+    "stop_quantity_stale": false,
+    "target1": "58.000000",
+    "target_hit_session": null,
+    "thesis": "放量突破后回踩入场，行业与相对强度都强于 AAA",
+    "ticker": "BBB",
+    "trailing": false,
+    "updated_at": "2026-11-11T17:30:00.000000+08:00",
+    "valid_from": "2026-11-05",
+    "valid_until": "2026-11-11",
+    "warnings": [
+      "earnings_unknown"
+    ]
+  },
+  "rotation": {
+    "agent_session": "brief-2026-11-04-1",
+    "buy_shares": "217.000000",
+    "candidate": "BBB",
+    "cost_response": "两笔手续费合计约 2 美元，相对 150 股的换仓规模可以接受",
+    "counter": "AAA 的行业近期偏弱，但没有跌破 MA50",
+    "created_at": "2026-11-11T17:30:00.000000+08:00",
+    "holding_plan_id": 11,
+    "holding_ticker": "AAA",
+    "id": 3,
+    "origin": "brief",
+    "reasons": "BBB 的相对强度与行业都更强，且在入场区间附近",
+    "refs": [
+      "call:4",
+      "call:6"
+    ],
+    "request_id": null,
+    "sell_quantity": "150.000000",
+    "session": "2026-11-04",
+    "snapshot": {
+      "account": {
+        "cap": "0.6",
+        "equity": "100160.50",
+        "market_value": "55020.00",
+        "pct": "0.5493",
+        "room": "5076.30"
+      },
+      "candidate": {
+        "industry": "半导体",
+        "industry_tier": "有利",
+        "levels": {
+          "entry_high": "51.00",
+          "entry_low": "49.00",
+          "stop": "46.00",
+          "target1": "58.00"
+        },
+        "rank": 1,
+        "reason": "BBB：放量突破，行业有利，形态近期有利",
+        "risk_amount": "1001.605",
+        "room_shares": 99,
+        "rs": "0.1840",
+        "setup_tier": "有利",
+        "ticker": "BBB",
+        "uncapped_shares": 250
+      },
+      "excluded": [
+        {
+          "plan_id": 13,
+          "reason": "stop_hit",
+          "text": "止损已触及",
+          "ticker": "DDD"
+        }
+      ],
+      "fees": {
+        "note": null,
+        "per_trade": "1.00",
+        "sample": 6,
+        "total": "2.00"
+      },
+      "history": {
+        "last_session": "2026-10-27",
+        "recent_count": 1,
+        "window_sessions": 20
+      },
+      "holdings": [
+        {
+          "avg_cost": "39.50",
+          "full": {
+            "buy_shares": 250,
+            "proceeds": "12040.00",
+            "realized_pnl": "150.50",
+            "sell_quantity": "301"
+          },
+          "half": {
+            "buy_shares": 217,
+            "proceeds": "6000.00",
+            "realized_pnl": "75.00",
+            "sell_quantity": "150"
+          },
+          "held_sessions": 3,
+          "industry": "软件",
+          "industry_tier": "中性",
+          "kind": "planned",
+          "last_close": "40.00",
+          "market_value": "12040.00",
+          "plan_id": 11,
+          "quantity": "301",
+          "r_multiple": "0.13",
+          "r_text": null,
+          "review": {
+            "reasons": "论点仍成立，量能没有放大",
+            "verdict": "holds"
+          },
+          "rs": "0.0210",
+          "sessions_left": 17,
+          "stop": "36.00",
+          "ticker": "AAA",
+          "to_stop_pct": "0.1000",
+          "trailing": false,
+          "unrealized_pct": "0.0127",
+          "unrealized_pnl": "150.50",
+          "weight_pct": "0.1202"
+        },
+        {
+          "avg_cost": "42.97",
+          "full": {
+            "buy_shares": 250,
+            "proceeds": "42980.00",
+            "realized_pnl": "10.00",
+            "sell_quantity": "1000"
+          },
+          "half": {
+            "buy_shares": 250,
+            "proceeds": "21490.00",
+            "realized_pnl": "5.00",
+            "sell_quantity": "500"
+          },
+          "held_sessions": 8,
+          "industry": "未归类",
+          "industry_tier": "样本不足",
+          "kind": "adopted",
+          "last_close": "42.98",
+          "market_value": "42980.00",
+          "plan_id": 12,
+          "quantity": "1000",
+          "r_multiple": null,
+          "r_text": "补录，不计",
+          "review": {
+            "reasons": "没有入场论点，无法判断",
+            "verdict": "unknown"
+          },
+          "rs": null,
+          "sessions_left": 12,
+          "stop": "39.00",
+          "ticker": "CCC",
+          "to_stop_pct": "0.0925",
+          "trailing": false,
+          "unrealized_pct": "0.0002",
+          "unrealized_pnl": "10.00",
+          "weight_pct": "0.4291"
+        }
+      ],
+      "session": "2026-11-04"
+    },
+    "verdict": "half",
+    "weakness": "AAA 持有三天没有走出入场区间上方，放量不足，和入场论点预期的放量突破不符"
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "account": {
+    "cap": "0.6",
+    "equity": "100160.50",
+    "market_value": "55020.00",
+    "pct": "0.5493",
+    "room": "5076.30"
+  },
+  "candidate": {
+    "industry": "半导体",
+    "industry_tier": "有利",
+    "levels": {
+      "entry_high": "51.00",
+      "entry_low": "49.00",
+      "stop": "46.00",
+      "target1": "58.00"
+    },
+    "rank": 1,
+    "reason": "BBB：放量突破，行业有利，形态近期有利",
+    "risk_amount": "1001.605",
+    "room_shares": 99,
+    "rs": "0.1840",
+    "setup_tier": "有利",
+    "ticker": "BBB",
+    "uncapped_shares": 250
+  },
+  "excluded": [
+    {
+      "plan_id": 13,
+      "reason": "stop_hit",
+      "text": "止损已触及",
+      "ticker": "DDD"
+    }
+  ],
+  "fees": {
+    "note": null,
+    "per_trade": "1.00",
+    "sample": 6,
+    "total": "2.00"
+  },
+  "history": {
+    "last_session": "2026-10-27",
+    "recent_count": 1,
+    "window_sessions": 20
+  },
+  "holdings": [
+    {
+      "avg_cost": "39.50",
+      "full": {
+        "buy_shares": 250,
+        "proceeds": "12040.00",
+        "realized_pnl": "150.50",
+        "sell_quantity": "301"
+      },
+      "half": {
+        "buy_shares": 217,
+        "proceeds": "6000.00",
+        "realized_pnl": "75.00",
+        "sell_quantity": "150"
+      },
+      "held_sessions": 3,
+      "industry": "软件",
+      "industry_tier": "中性",
+      "kind": "planned",
+      "last_close": "40.00",
+      "market_value": "12040.00",
+      "plan_id": 11,
+      "quantity": "301",
+      "r_multiple": "0.13",
+      "r_text": null,
+      "review": {
+        "reasons": "论点仍成立，量能没有放大",
+        "verdict": "holds"
+      },
+      "rs": "0.0210",
+      "sessions_left": 17,
+      "stop": "36.00",
+      "ticker": "AAA",
+      "to_stop_pct": "0.1000",
+      "trailing": false,
+      "unrealized_pct": "0.0127",
+      "unrealized_pnl": "150.50",
+      "weight_pct": "0.1202"
+    },
+    {
+      "avg_cost": "42.97",
+      "full": {
+        "buy_shares": 250,
+        "proceeds": "42980.00",
+        "realized_pnl": "10.00",
+        "sell_quantity": "1000"
+      },
+      "half": {
+        "buy_shares": 250,
+        "proceeds": "21490.00",
+        "realized_pnl": "5.00",
+        "sell_quantity": "500"
+      },
+      "held_sessions": 8,
+      "industry": "未归类",
+      "industry_tier": "样本不足",
+      "kind": "adopted",
+      "last_close": "42.98",
+      "market_value": "42980.00",
+      "plan_id": 12,
+      "quantity": "1000",
+      "r_multiple": null,
+      "r_text": "补录，不计",
+      "review": {
+        "reasons": "没有入场论点，无法判断",
+        "verdict": "unknown"
+      },
+      "rs": null,
+      "sessions_left": 12,
+      "stop": "39.00",
+      "ticker": "CCC",
+      "to_stop_pct": "0.0925",
+      "trailing": false,
+      "unrealized_pct": "0.0002",
+      "unrealized_pnl": "10.00",
+      "weight_pct": "0.4291"
+    }
+  ],
+  "session": "2026-11-04"
+}
