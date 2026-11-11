@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from investment_assistant.core.texts import price_text
+from investment_assistant.core.texts import price_text, quantity_value
 from investment_assistant.data import repo as data_repo
 from investment_assistant.derivation.indicators import price as price_indicators
 from investment_assistant.execution.plan_levels import (
@@ -16,8 +16,10 @@ from investment_assistant.execution.plan_levels import (
     validate_levels,
     validity,
 )
-from investment_assistant.facts import plan_repo
+from investment_assistant.execution.positions import PositionError, build
+from investment_assistant.facts import plan_repo, rotation_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import rotation as facts_rotation
 from investment_assistant.toolsurface.env import ToolEnv
 from investment_assistant.toolsurface.planning import NO_EQUITY_TEXT, _exposure, _sized
 from investment_assistant.toolsurface.reads import session_bars
@@ -74,6 +76,36 @@ def _refresh_sizing_warnings(old: list, sizing: dict, invalid: list) -> list:
     return refreshed
 
 
+def _funded_basis(conn, env: ToolEnv, plan: dict) -> dict | None:
+    """换仓的 B 的额度口径（spec §6.5 / R2）：资金来源那条换仓指令还挂在 A（仍开着）身上时，返回
+    ``{rotation_id, holding_ticker, sell_quantity, sold_value}``（待卖股数 × A 的最新收盘）；已执行完、
+    被撤回、被取代、A 已平仓或这份计划不是换仓的 B 时为 ``None``，回到普通口径。"""
+    rotation_id = plan.get("funded_by_rotation_id")
+    if rotation_id is None:
+        return None
+    record = rotation_repo.rotation(conn, rotation_id)
+    if record is None or record["holding_plan_id"] is None:
+        return None
+    holding = plan_repo.plan(conn, record["holding_plan_id"])
+    if (
+        holding is None
+        or holding["status"] != "open"
+        or holding["rotation_id"] != rotation_id
+        or holding["sell_quantity"] is None
+    ):
+        return None
+    bars = data_repo.read_bars(conn, holding["ticker"], env.session, cutoff_at=env.cutoff_at)
+    if not bars:
+        return None
+    quantity = Decimal(holding["sell_quantity"])
+    return {
+        "rotation_id": rotation_id,
+        "holding_ticker": holding["ticker"],
+        "sell_quantity": quantity,
+        "sold_value": quantity * Decimal(str(bars[-1]["close"])),
+    }
+
+
 def continue_plan(env: ToolEnv, *, plan_id, refs: list | None = None) -> dict:
     """再次上榜且确认：数字不变，有效期从今天重算，股数按当天总资产重算（spec §6.4）。"""
 
@@ -92,16 +124,19 @@ def continue_plan(env: ToolEnv, *, plan_id, refs: list | None = None) -> dict:
         snapshot = account_view(conn, session=env.session, cutoff_at=env.cutoff_at)["sizing_snapshot"]
         ticker_value, total_value = _exposure(conn, env, plan["ticker"])
         ref_price = (plan["entry_low"] + plan["entry_high"]) / 2 if plan["entry_low"] is not None else plan["stop"]
+        funded = _funded_basis(conn, env, plan)  # 换仓的 B：A 的指令没执行完时仍按「待卖股数已卖出」算（spec §6.5）
         sizing, invalid = size(
             snapshot=snapshot,
             ref_price=ref_price,
             stop=plan["stop"],
             entry_high=plan["entry_high"],
             ticker_value=ticker_value,
-            total_value=total_value,
+            total_value=total_value - (funded["sold_value"] if funded is not None else Decimal(0)),
             params=env.cfg.workbench,
         )
         sizing = _sized(sizing)
+        if funded is not None:
+            sizing = {**sizing, "funded": {key: value for key, value in funded.items() if key != "sold_value"}}
         warnings = _refresh_sizing_warnings(plan["warnings"] or [], sizing, invalid)
         before = {"valid_from": plan["valid_from"], "valid_until": plan["valid_until"], "shares": plan["shares"]}
         plan = plan_repo.update_plan(
@@ -157,6 +192,8 @@ def revise_plan(
         _require_today_confirm(conn, env, plan["ticker"])
         fields: dict = {}
         if levels is not None:
+            if plan["funded_by_rotation_id"] is not None:
+                raise ValueError("rotation_levels_fixed: 换仓的计划只用宿主规则价位")
             if not isinstance(levels, dict):
                 raise ValueError("invalid_argument: levels 必须是对象")
             bars = session_bars(conn, env, plan["ticker"])
@@ -247,8 +284,13 @@ def save_holding_review(
                 "agent_session": env.agent_session,
             },
         )
-        if verdict == "broken" and plan["sell_instruction"] is None:
-            plan = plan_repo.update_plan(conn, plan_id, sell_instruction="thesis_broken")
+        if verdict == "broken" and plan["sell_instruction"] in (None, "rotation"):
+            superseded = plan["sell_instruction"] == "rotation"
+            before = {"rotation_id": plan["rotation_id"], "sell_quantity": plan["sell_quantity"]}
+            fields = {"sell_instruction": "thesis_broken"}
+            if superseded:  # 换仓指令被取代：三列同一条 UPDATE 清空（库约束，spec §6.6）
+                fields.update(sell_quantity=None, rotation_id=None)
+            plan = plan_repo.update_plan(conn, plan_id, **fields)
             plan_repo.insert_event(
                 conn,
                 {
@@ -262,6 +304,20 @@ def save_holding_review(
                     "refs": checked,
                 },
             )
+            if superseded:
+                plan_repo.insert_event(
+                    conn,
+                    {
+                        "plan_id": plan_id,
+                        "session": env.session,
+                        "event": "rotation_superseded",
+                        "reason": "换仓指令被取代：论点失效",
+                        "before": before,
+                        "after": {},
+                        "source": "agent",
+                        "refs": checked,
+                    },
+                )
         return {"review": review, "plan": plan}
 
     return env.write(_work)
@@ -280,17 +336,29 @@ def save_summary(env: ToolEnv, *, text: str) -> dict:
     return env.write(_work)
 
 
+def _held_quantity(conn, env: ToolEnv, ticker: str) -> Decimal | None:
+    """当前持仓股数（FIFO 之后）；没有持仓或无法核算时为 None。"""
+    trades = facts_repo.list_trades(conn, ticker)
+    try:
+        position = build(trades, splits=data_repo.split_events(conn, ticker, cutoff_at=env.cutoff_at))["position"]
+    except PositionError:
+        return None
+    return None if position is None else position["quantity"]
+
+
 def confirm_stop_order(env: ToolEnv, *, plan_id, price, request_id, confirmed) -> dict:
-    """确认已挂止损单（spec §7.2）：挂单价必须等于计划当前止损。"""
+    """确认已挂止损单（spec §7.2）：挂单价必须等于计划当前止损；v3.3 起同时记下当前持仓股数，
+    并清掉「止损单数量待改」标记（部分卖出之后，spec §6.6）。"""
     request_id = text_arg(request_id, "request_id")
     if not confirmed_flag(confirmed):
 
         def _peek(conn):
             plan = _plan_or_error(conn, plan_id)
-            return plan
+            return plan, _held_quantity(conn, env, plan["ticker"])
 
-        plan = env.read(_peek)
-        return {"write": False, "preview": f"将确认 {plan['ticker']} 的止损单挂单价 {plan['stop']}。确认后写入。"}
+        plan, held = env.read(_peek)
+        shares = f"，持仓 {quantity_value(held)} 股" if held is not None else ""
+        return {"write": False, "preview": f"将确认 {plan['ticker']} 的止损单挂单价 {plan['stop']}{shares}。确认后写入。"}
 
     def _work(conn):
         plan = _plan_or_error(conn, plan_id)
@@ -302,16 +370,18 @@ def confirm_stop_order(env: ToolEnv, *, plan_id, price, request_id, confirmed) -
         amount = number_arg(price, "price")
         if plan["stop"] is None or amount != plan["stop"]:
             raise ValueError(f"stop_mismatch: 挂单价需等于当前止损 {plan['stop']}")
-        plan = plan_repo.update_plan(conn, plan_id, confirmed_stop_order=amount)
+        plan = plan_repo.update_plan(conn, plan_id, confirmed_stop_order=amount, stop_quantity_stale=False)
+        held = _held_quantity(conn, env, plan["ticker"])
+        shares = f"，数量 {quantity_value(held)} 股" if held is not None else ""
         event = plan_repo.insert_event(
             conn,
             {
                 "plan_id": plan_id,
                 "session": env.session,
                 "event": "stop_order_confirmed",
-                "reason": f"已确认挂单，价位 {amount}",
+                "reason": f"已确认挂单，价位 {amount}{shares}",
                 "before": {},
-                "after": {"confirmed_stop_order": amount},
+                "after": {"confirmed_stop_order": amount, "stop_quantity_stale": False},
                 "source": "user",
                 "refs": [request_id],
             },
@@ -399,6 +469,7 @@ def cancel_plan(env: ToolEnv, *, plan_id, request_id, confirmed, reason: str = "
                 "refs": [request_id],
             },
         )
+        facts_rotation.withdraw_orphans(conn, session=env.session)  # 取消的是换仓的 B：撤回 A 的指令（spec §6.6）
         return {"plan": plan, "event": event}
 
     return env.write(_work)

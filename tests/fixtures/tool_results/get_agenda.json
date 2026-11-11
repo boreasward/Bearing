@@ -5,6 +5,12 @@
       "done": false,
       "mode": "slot",
       "rank": 1,
+      "rotation": {
+        "blocked": null,
+        "blocked_text": null,
+        "compare": false,
+        "short": false
+      },
       "ticker": "MSFT",
       "victim_plan_id": null
     }
@@ -27,5 +33,9 @@
   ],
   "replacement": null,
   "research": [],
+  "rotation": {
+    "compared_today": false,
+    "last_session": null
+  },
   "summary_done": false
 }

@@ -517,3 +517,190 @@ def test_ensure_data_calls_collect_extra(chat_env, monkeypatch):
     # 非美股代码 -> 'invalid_ticker'，collect_extra 不被调用
     assert call(chat_env, "ensure_data", {"ticker": "600519.SH"})["error"].startswith("invalid_ticker")
     assert len(seen) == 1
+
+
+# ---- v3.3：卖出推进换仓指令、部分卖出的止损单数量、买入后超出仓位上限（spec §5.3、§6.6）----
+# 参考场景同 _rotation_seed.seed_c4：AAA 301 股（成本 39.50，收盘 40）、CCC 1000 股（补录），账户 100160.50。
+
+
+def _v33_env():
+    import _rotation_seed as rot
+
+    return make_env(session=rot.SESSION, mode="chat", agent_session="t-v33-chat", cfg=rot.CFG, now=rot.NOW)
+
+
+def _sell(env, ticker, quantity, request_id, *, price=40, day="2026-11-05"):
+    return call(
+        env,
+        "record_trade",
+        {
+            "ticker": ticker,
+            "side": "sell",
+            "quantity": quantity,
+            "price": price,
+            "executed_at": f"{day}T15:00:00+00:00",
+            "request_id": request_id,
+            "confirmed": True,
+        },
+    )
+
+
+def _instructed_a(v3_tx, quantity=150):
+    import _rotation_seed as rot
+
+    ids = rot.seed_c4(v3_tx)
+    rotation, funded = rot.instruct(v3_tx, ids["a"], quantity=quantity, valid_until=date(2026, 11, 20))
+    v3_tx.commit()
+    return ids["a"], rotation, funded
+
+
+def _instruction(conn, plan_id):
+    plan = plan_repo.plan(conn, plan_id)
+    return plan["sell_instruction"], plan["sell_quantity"], plan["rotation_id"]
+
+
+def test_sell_under_rotation_decrements_then_clears(v3_tx):
+    """指令 150：卖 100 → sell_quantity 50；再卖 50 → 三列一起清空，计划仍 open（A 还剩 151 股）。"""
+    held, rotation, _ = _instructed_a(v3_tx)
+    env = _v33_env()
+
+    first = _sell(env, "AAA", 100, "rs-1")["data"]
+    assert first["plan"]["sell_instruction"] == "rotation" and first["plan"]["sell_quantity"] == "50.000000"
+    assert first["plan"]["rotation_id"] == rotation["id"] and first["plan"]["status"] == "open"
+
+    second = _sell(env, "AAA", 50, "rs-2")["data"]
+    assert (second["plan"]["sell_instruction"], second["plan"]["sell_quantity"], second["plan"]["rotation_id"]) == (
+        None,
+        None,
+        None,
+    )
+    assert second["plan"]["status"] == "open" and second["outcome"] is None
+
+
+def test_full_rotation_sale_closes_as_rotation(v3_tx):
+    """C5：全仓指令 301：卖完 → 已平仓，离场原因「换仓」（计划此时仍带 rotation）。"""
+    held, _, _ = _instructed_a(v3_tx, quantity=301)
+    env = _v33_env()
+
+    done = _sell(env, "AAA", 301, "rf-1")["data"]
+
+    assert done["plan"]["status"] == "closed" and done["plan"]["end_reason"] == "换仓"
+    assert done["outcome"]["exit_reason"] == "rotation" and done["plan"]["sell_instruction"] == "rotation"
+    assert done["plan"]["outcome"]["exit_reason"] == "rotation"
+
+
+def test_selling_more_than_instructed_closes_as_rotation(v3_tx):
+    """Review Focus 6：半仓指令 150 之后一次把 A 全卖了 → 平仓，离场原因「换仓」，不留下负的待卖股数；
+    卖得比指令多但没卖完 → 指令清空（不是负数）。"""
+    import _rotation_seed as rot
+
+    held, rotation, _ = _instructed_a(v3_tx)
+    other = rot.add_holding(v3_tx, "DDD", 100, "40", 40.0)
+    rot.holding_review(v3_tx, other["id"])
+    rot.instruct(v3_tx, other, candidate="EEE", quantity=30, funded_status="cancelled")  # B 已取消的孤儿，仅作多一份指令
+    v3_tx.commit()
+    env = _v33_env()
+
+    partial = _sell(env, "DDD", 60, "ro-0")["data"]  # 指令 30，卖了 60，没卖完
+    assert partial["plan"]["status"] == "open"
+    assert (partial["plan"]["sell_instruction"], partial["plan"]["sell_quantity"], partial["plan"]["rotation_id"]) == (
+        None,
+        None,
+        None,
+    )
+    done = _sell(env, "AAA", 301, "ro-1")["data"]
+
+    assert done["plan"]["status"] == "closed" and done["outcome"]["exit_reason"] == "rotation"
+    stored = plan_repo.plan(v3_tx, held["id"])
+    assert stored["sell_quantity"] is None or D(stored["sell_quantity"]) > 0  # 约束 CHECK 通过，没有负数
+    assert rotation["id"] == stored["rotation_id"]
+
+
+def test_half_then_stop_closes_as_stop(v3_tx):
+    """C22：半仓换卖出 150 股、指令随之清空；剩余 151 股后来止损触及并卖完 → 离场原因止损，盈亏合并两批。"""
+    held, _, _ = _instructed_a(v3_tx)
+    env = _v33_env()
+    _sell(env, "AAA", 150, "hs-1", price=40)  # 赚 150 × 0.5 = 75
+    assert _instruction(v3_tx, held["id"]) == (None, None, None)
+    plan_repo.update_plan(v3_tx, held["id"], stop_hit_session=date(2026, 11, 5))
+    v3_tx.commit()
+
+    done = _sell(env, "AAA", 151, "hs-2", price=36, day="2026-11-06")["data"]  # 亏 151 × 3.5 = 528.5
+
+    assert done["plan"]["status"] == "closed" and done["outcome"]["exit_reason"] == "initial_stop"
+    assert D(done["outcome"]["realized_pnl"]) == D("-453.5")
+    assert done["plan"]["end_reason"] == "初始止损"
+
+
+def test_partial_sell_marks_stop_quantity_stale(v3_tx):
+    """C10：已确认过止损单的持仓部分卖出 → stop_quantity_stale 为真、事件原因逐字、返回 stop_order_quantity；
+    再次确认挂单后清除；A 的止损价不变；没确认过止损单则不标。"""
+    import _rotation_seed as rot
+
+    ids = rot.seed_c4(v3_tx)
+    confirmed = rot.add_holding(v3_tx, "STP", 100, "40", 40.0, confirmed_stop_order=D(36))
+    v3_tx.commit()
+    env = _v33_env()
+
+    unconfirmed = _sell(env, "AAA", 100, "ps-0")["data"]  # AAA 没确认过止损单
+    assert unconfirmed["plan"]["stop_quantity_stale"] is False and unconfirmed["stop_order_quantity"] is None
+
+    sold = _sell(env, "STP", 40, "ps-1")["data"]
+
+    assert sold["plan"]["stop_quantity_stale"] is True and D(sold["stop_order_quantity"]) == D(60)
+    event = [e for e in plan_repo.events(v3_tx, confirmed["id"]) if e["event"] == "stop_quantity_stale"][0]
+    assert event["reason"] == "止损单数量需改为 60 股" and event["source"] == "user"
+    assert event["refs"] == ["ps-1"]
+    assert plan_repo.plan(v3_tx, confirmed["id"])["stop"] == confirmed["stop"]  # 止损价不变
+    rows = today_actions(v3_tx, session=rot.SESSION, cutoff_at=rot.NOW, cfg=rot.CFG)
+    stale = next(row for row in rows if row["ticker"] == "STP")
+    assert stale["kind"] == "stop_order" and stale["text"] == "止损单数量需改为 60 股"
+
+    again = call(env, "confirm_stop_order", {"plan_id": confirmed["id"], "price": 36, "request_id": "ps-c", "confirmed": True})
+    assert again["data"]["plan"]["stop_quantity_stale"] is False
+    assert again["data"]["event"]["reason"] == "已确认挂单，价位 36，数量 60 股"
+    assert "STP" not in [row["ticker"] for row in today_actions(v3_tx, session=rot.SESSION, cutoff_at=rot.NOW, cfg=rot.CFG)]
+    assert ids["a"]["id"]
+
+
+def test_buy_over_cap_records_deviation(v3_tx):
+    """C11：买入后仓位占比 65% 高于上限 60% → 成交照记，记一行 deviation（原因逐字、after 带占比与上限），
+    返回 over_cap；复盘出现 over_cap 标签；没越线的买入 over_cap 为空。"""
+    import _rotation_seed as rot
+
+    rot.seed_run(v3_tx, ("BBB", "EEE"))
+    rot.seed_opening(v3_tx)
+    plan_b = plan_repo.insert_plan(
+        v3_tx,
+        rot.plan_row("BBB", valid_until=date(2026, 11, 20), entry_low=D(49), entry_high=D(51), stop=D(46),
+                     initial_stop=D(46), target1=D(58)),
+    )  # fmt: skip
+    v3_tx.commit()
+    env = _v33_env()
+
+    bought = call(
+        env,
+        "record_trade",
+        {"ticker": "BBB", "side": "buy", "quantity": 1300, "price": 50, "executed_at": "2026-11-04T15:00:00+00:00",
+         "request_id": "oc-1", "confirmed": True},
+    )["data"]  # fmt: skip
+
+    assert bought["trade"]["quantity"] == "1300.000000" and bought["plan"]["status"] == "open"
+    assert D(bought["over_cap"]["pct"]) == D("0.65") and D(bought["over_cap"]["cap"]) == D("0.6")
+    deviations = [e for e in plan_repo.events(v3_tx, plan_b["id"]) if e["event"] == "deviation"]
+    assert [e["reason"] for e in deviations] == ["买入后仓位占比 65.0%，高于上限 60%"]
+    assert D(deviations[0]["after"]["exposure_pct"]) == D("0.65") and D(deviations[0]["after"]["cap"]) == D("0.6")
+    assert deviations[0]["source"] == "user" and deviations[0]["refs"] == ["oc-1"]
+
+    sold = _sell(env, "BBB", 1300, "oc-2", price=50, day="2026-11-05")["data"]
+    assert sold["plan"]["status"] == "closed"
+    record = next(row for row in records(v3_tx, session=rot.SESSION, cutoff_at=rot.NOW, cfg=rot.CFG) if row["plan_id"] == plan_b["id"])
+    assert "over_cap" in [tag["code"] for tag in record["tags"]]
+
+    small = call(
+        env,
+        "record_trade",
+        {"ticker": "EEE", "side": "buy", "quantity": 10, "price": 50, "executed_at": "2026-11-05T15:00:00+00:00",
+         "request_id": "oc-3", "confirmed": True},
+    )["data"]  # fmt: skip
+    assert small["over_cap"] is None and small["stop_order_quantity"] is None

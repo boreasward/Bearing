@@ -153,6 +153,17 @@ def cooldown_last_session(conn, *, session: date, cfg: AssistantConfig) -> date 
     return rotation_math.cooldown_last(rows, session=session, cooldown_sessions=cooldown)
 
 
+def recent_switch_count(conn, *, session: date, cfg: AssistantConfig) -> int:
+    """冷却窗口（``rotation_cooldown_sessions`` 个交易日，含当天）内半仓 / 全仓结论的条数，供复述里写
+    「最近 N 个交易日已换仓 K 次」（spec §7.3）。"""
+    cooldown = cfg.v3.rotation_cooldown_sessions
+    return sum(
+        1
+        for row in rotation_repo.effective_since(conn, add_trading_days(session, -cooldown))
+        if row["session"] <= session and len(trading_days_between(row["session"], session)) <= cooldown
+    )
+
+
 def gate(
     conn, *, session: date, cutoff_at: datetime, cfg: AssistantConfig, ticker: str, mode: str
 ) -> dict:
@@ -479,6 +490,7 @@ __all__ = [
     "comparison_table",
     "exposure_row",
     "gate",
+    "recent_switch_count",
     "rotation_view",
     "rule_sizing",
     "week_rotations",

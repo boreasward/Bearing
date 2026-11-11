@@ -13,6 +13,7 @@ from investment_assistant.execution.positions import PositionError, build
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
 from investment_assistant.facts.account import account_view
+from investment_assistant.facts.rotation import exposure_row
 from investment_assistant.toolsurface.env import ToolEnv
 from investment_assistant.toolsurface.validation import (
     confirmed_flag,
@@ -33,13 +34,19 @@ EXIT_TEXT = {
     "trailing_stop": "移动止损",
     "max_hold": "持有到期",
     "thesis_broken": "论点失效",
+    "rotation": "换仓",
     "manual": "用户自行卖出",
 }
 
 
 def get_account(env: ToolEnv) -> dict:
-    """账户视图：账本、最近对账与差额、最近平仓结果、仓位本金快照（spec §8）。"""
-    return env.read(lambda conn: account_view(conn, session=env.session, cutoff_at=env.cutoff_at))
+    """账户视图：账本、最近对账与差额、最近平仓结果、仓位本金快照（spec §8），v3.3 加仓位占比 ``exposure``。"""
+    return env.read(
+        lambda conn: {
+            **account_view(conn, session=env.session, cutoff_at=env.cutoff_at),
+            "exposure": exposure_row(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg),
+        }
+    )
 
 
 def record_equity(env: ToolEnv, *, equity, request_id, confirmed, as_of=None, note: str = "") -> dict:

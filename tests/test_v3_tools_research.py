@@ -464,11 +464,12 @@ def test_get_research_filters(v3_tx):
     assert call(env, "get_research", {"status": "wat"})["error"].startswith("invalid_status")
 
 
-def test_tool_counts_35_chat_23_brief(v3_tx):
-    """四个新工具登记后：chat 35、brief 23；start/drop 仅对话模式。"""
+def test_tool_counts_38_chat_25_brief(v3_tx):
+    """v3.3 的三个换仓工具登记后：chat 38、brief 25（get_rotation_table、save_rotation 两种模式，withdraw_rotation 仅对话）；
+    start/drop 仅对话模式。"""
     brief_tools = {tool.name for tool in tool_defs("brief")}
     chat_tools = {tool.name for tool in tool_defs("chat")}
-    assert len(chat_tools) == 35 and len(brief_tools) == 23
+    assert len(chat_tools) == 38 and len(brief_tools) == 25
     assert {"start_research", "conclude_research", "drop_research", "get_research"} <= chat_tools
     assert {"conclude_research", "get_research"} <= brief_tools
     assert "start_research" not in brief_tools and "drop_research" not in brief_tools

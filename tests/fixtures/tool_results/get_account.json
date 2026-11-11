@@ -1,4 +1,10 @@
 {
+  "exposure": {
+    "cap": "0.6",
+    "incomplete": false,
+    "pct": "0.1000",
+    "room": "5000.00"
+  },
   "latest_equity": null,
   "ledger": {
     "cash": "9000.000000000000",

@@ -305,15 +305,16 @@ CHAT_ONLY = {
     "ensure_data",
     "start_research",
     "drop_research",
+    "withdraw_rotation",
 }
 
 
-def test_tool_surface_has_35_tools_with_12_chat_only():
+def test_tool_surface_has_38_tools_with_13_chat_only():
     brief_tools = {tool.name for tool in tool_defs("brief")}
     chat_tools = {tool.name for tool in tool_defs("chat")}
-    assert len(chat_tools) == 35
+    assert len(chat_tools) == 38
     assert chat_tools - brief_tools == CHAT_ONLY
-    assert len(brief_tools) == 23
+    assert len(brief_tools) == 25  # v3.3 加 get_rotation_table、save_rotation
 
 
 def test_get_candidates_carries_streak_plan_and_dropped(env, v3_tx):
@@ -485,8 +486,11 @@ def test_get_agenda_reads_the_day(env, v3_tx):
         "summary_done",
         "free_slots",
         "replacement",
+        "rotation",
         "complete",
     }
     assert data["free_slots"] == 3 and data["replacement"] is None
     assert [item["ticker"] for item in data["confirmations"]] == TOP5
     assert data["complete"] is False
+    assert data["rotation"] == {"compared_today": False, "last_session": None}
+    assert all(item["rotation"]["short"] is False for item in data["confirmations"])  # 没有资金记录：从不判钱不够

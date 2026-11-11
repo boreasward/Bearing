@@ -19,8 +19,10 @@ from investment_assistant.execution.plan_levels import (
     validity,
 )
 from investment_assistant.execution.plan_line import free_slots, replacement
-from investment_assistant.facts import plan_repo, research_repo
+from investment_assistant.execution.rotation import HOLD_REJECT_TEXT, NO_ROOM_TEXT, short_of_room
+from investment_assistant.facts import plan_repo, research_repo, rotation_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts import rotation as facts_rotation
 from investment_assistant.facts.account import account_view
 from investment_assistant.toolsurface.env import ToolEnv
 from investment_assistant.toolsurface.reads import holdings_rows, scope_tickers, session_bars
@@ -32,6 +34,8 @@ from investment_assistant.toolsurface.validation import (
 )
 
 VERDICTS = ("confirm", "veto", "unknown")
+INCOMPLETE_WARNING = "有持仓缺日线，仓位占比偏低"  # Review Focus 1：钱够而有持仓缺收盘时计划照常保存，只加这一条警告
+NEEDS_ROTATION_TEXT = "仓位已到上限，需先保存换仓结论"
 
 
 def _equity_snapshot(conn, env: ToolEnv) -> dict | None:
@@ -93,6 +97,7 @@ def compute_plan_levels(env: ToolEnv, *, ticker: str) -> dict:
         invalid, warnings = earnings_flags(
             earnings, signal_date=env.session, valid_from=valid_from, valid_until=valid_until
         )
+        sized = _sized(sizing)
         return {
             "ticker": ticker,
             "session": env.session,
@@ -101,7 +106,10 @@ def compute_plan_levels(env: ToolEnv, *, ticker: str) -> dict:
             "levels": {key: str(value) for key, value in levels.items()},
             "valid_from": valid_from,
             "valid_until": valid_until,
-            "sizing": _sized(sizing),
+            "sizing": sized,
+            "uncapped_shares": sized.get("uncapped_shares"),
+            "short_of_room": short_of_room(sized, min_fill=Decimal(str(env.cfg.v3.rotation_min_fill))),
+            "exposure": facts_rotation.exposure_row(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg),
             "earnings": {"invalid": invalid, "warnings": warnings},
             "entry_types": list(ENTRY_TYPES),
             "max_hold_range": list(MAX_HOLD_RANGE),
@@ -160,6 +168,7 @@ def save_verdict(
                     "refs": refs,
                 },
             )
+            facts_rotation.withdraw_orphans(conn, session=env.session)  # 作废的是换仓的 B：撤回 A 的指令
         return saved
 
     return env.write(_work)
@@ -236,6 +245,264 @@ def _check_slot(conn, env: ToolEnv, ticker: str) -> dict | None:
     return slot
 
 
+def _prepare_plan(
+    conn,
+    env: ToolEnv,
+    *,
+    ticker: str,
+    entry_type: str,
+    hold: int | None,
+    levels: dict | None,
+    funding: dict | None,
+) -> dict:
+    """``save_plan`` 与 ``save_rotation`` 共用的全部检查与算数，不写任何东西（spec §6.5）：入场类型 →
+    最长持有 → 价位 → 财报 → 已有有效计划 → 名额与替换 → （非换仓的）仓位闸门 → 股数。
+    ``funding`` 给出时价位只用宿主规则价位，股数按 ``total_value − funding['sold_value']`` 算。"""
+    if entry_type not in ENTRY_TYPES:
+        allowed = "、".join(ENTRY_TYPES)
+        raise ValueError(f"invalid_entry_type: 需为 {allowed} 之一")
+    chosen_hold = hold if hold is not None else env.cfg.v3.max_hold_default  # 缺省最长持有取配置
+    if not MAX_HOLD_RANGE[0] <= chosen_hold <= MAX_HOLD_RANGE[1]:
+        raise ValueError(f"invalid_max_hold: 需为 {MAX_HOLD_RANGE[0]}–{MAX_HOLD_RANGE[1]} 的整数")
+    if levels is not None and not isinstance(levels, dict):
+        raise ValueError("invalid_argument: levels 必须是对象")
+    if funding is not None and levels is not None:
+        raise ValueError("rotation_levels_fixed: 换仓的计划只用宿主规则价位")
+    bars, atr = _bars_atr(conn, env, ticker)
+    last_close = Decimal(str(bars[-1]["close"]))
+    linked = research_repo.watching_research(conn, ticker)
+    is_research = linked is not None and linked["verdict"] == "ready"  # 仅 ready 算关联（spec §6.6）
+    chosen, source, sizing_ref = _levels_of(
+        env,
+        conn,
+        ticker,
+        levels,
+        last_close,
+        atr,
+        entry_atr=Decimal(str(env.cfg.v3.research_entry_atr)) if is_research else Decimal(2),
+    )
+    valid_from, valid_until = validity(env.session, env.cfg.v3.valid_sessions)
+    earnings = data_repo.latest_earnings(conn, ticker, cutoff_at=env.cutoff_at)
+    invalid, warnings = earnings_flags(earnings, signal_date=env.session, valid_from=valid_from, valid_until=valid_until)
+    if "earnings_in_validity" in invalid:
+        raise ValueError("earnings_in_validity")
+    existing = plan_repo.active_plan(conn, ticker)
+    if existing is not None:
+        raise ToolError("active_plan_exists: 该股票已有有效计划", detail=existing)
+    if linked is not None and not is_research:
+        raise ValueError("research_not_ready: 研究尚未给出「可以出计划」的结论")
+    slot_replacement = None if is_research else _check_slot(conn, env, ticker)
+    if funding is None:
+        _check_room_gate(conn, env, ticker)
+    snapshot = _equity_snapshot(conn, env)
+    ticker_value, total_value = _exposure(conn, env, ticker)
+    sold_value = funding["sold_value"] if funding is not None else Decimal(0)
+    sizing, size_invalid = size(
+        snapshot=snapshot,
+        ref_price=sizing_ref,
+        stop=chosen["stop"],
+        entry_high=chosen["entry_high"],
+        ticker_value=ticker_value,
+        total_value=total_value - sold_value,
+        params=env.cfg.workbench,
+    )
+    sizing = _sized(sizing)
+    if funding is not None:
+        if sizing["shares"] is None or sizing["shares"] < 1:
+            raise ValueError("no_room_after_rotation: 换仓之后额度仍不够买 1 股，换仓结论不成立")
+    elif sizing["shares"] == 0:  # 待办判为「钱够」而自报价位算出 0 股：不留 0 股的计划（spec §5.2）
+        raise ToolError(f"no_room: {NO_ROOM_TEXT}")
+    plan_warnings = [*warnings, *size_invalid]
+    if sizing["status"] == "no_equity":
+        plan_warnings.append(NO_EQUITY_TEXT)
+    if facts_rotation.exposure_row(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg)["incomplete"]:
+        plan_warnings.append(INCOMPLETE_WARNING)
+    return {
+        "chosen": chosen,
+        "source": source,
+        "atr": atr,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "hold": chosen_hold,
+        "sizing": sizing,
+        "warnings": plan_warnings,
+        "linked": linked,
+        "is_research": is_research,
+        "slot_replacement": slot_replacement,
+    }
+
+
+def _check_room_gate(conn, env: ToolEnv, ticker: str) -> None:
+    """仓位闸门（spec §6.5）：「钱不够」时没有换仓结论就不出计划；当天已比较过且继续持有 → 拒绝并写明。"""
+    gate = facts_rotation.gate(
+        conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg, ticker=ticker, mode=env.mode
+    )
+    if not gate["short"]:
+        return
+    held_today = any(
+        row["candidate"] == ticker and row["verdict"] == "hold" for row in rotation_repo.rotations_on(conn, env.session)
+    )
+    if held_today:
+        raise ToolError(f"no_room: {HOLD_REJECT_TEXT}")
+    if gate["compare"]:
+        raise ToolError(f"needs_rotation: {NEEDS_ROTATION_TEXT}", detail=gate)
+    raise ToolError(f"no_room: {gate['blocked_text']}")
+
+
+def _commit_plan(
+    conn,
+    env: ToolEnv,
+    ctx: dict,
+    *,
+    ticker: str,
+    thesis: str,
+    invalidation: str,
+    entry_type: str,
+    counter: str,
+    refs: list,
+    funding: dict | None,
+) -> dict:
+    """写入 ``_prepare_plan`` 算好的计划：计划行、created 事件、研究关联、被替换的待入场计划。
+    ``funding`` 带上 ``rotation_id`` 时计划记资金来源（spec §6.5）。"""
+    sizing, reason = ctx["sizing"], thesis
+    funded_by = None
+    if funding is not None:
+        funded_by = funding["rotation_id"]
+        sizing = {
+            **sizing,
+            "funded": {
+                "rotation_id": funded_by,
+                "holding_ticker": funding["holding_ticker"],
+                "sell_quantity": funding["sell_quantity"],
+            },
+        }
+        reason = f"{thesis}；资金来自换仓 {funding['holding_ticker']}"
+    chosen, linked = ctx["chosen"], ctx["linked"]
+    is_research = ctx["is_research"]
+    saved = plan_repo.insert_plan(
+        conn,
+        {
+            "session": env.session,
+            "ticker": ticker,
+            "origin": env.origin,
+            "entry_type": entry_type,
+            "entry_low": chosen["entry_low"],
+            "entry_high": chosen["entry_high"],
+            "stop": chosen["stop"],
+            "target1": chosen["target1"],
+            "initial_stop": chosen["stop"],
+            "atr": ctx["atr"],
+            "levels_source": ctx["source"],
+            "max_hold_sessions": ctx["hold"],
+            "valid_from": ctx["valid_from"],
+            "valid_until": ctx["valid_until"],
+            "shares": sizing["shares"],
+            "sizing": sizing,
+            "warnings": ctx["warnings"],
+            "thesis": thesis,
+            "invalidation": invalidation,
+            "counter": counter,
+            "refs": refs,
+            "agent_session": env.agent_session,
+            "research_id": linked["id"] if linked is not None and is_research else None,
+            "funded_by_rotation_id": funded_by,
+        },
+    )
+    plan_repo.insert_event(
+        conn,
+        {
+            "plan_id": saved["id"],
+            "session": env.session,
+            "event": "created",
+            "reason": reason,
+            "before": {},
+            "after": {"status": "pending"},
+            "source": "agent",
+            "refs": refs,
+        },
+    )
+    if linked is not None and is_research:
+        # 研究记 planned 并关联计划（spec §6.3）：之后这份计划与别的计划一样
+        research_repo.update_research(
+            conn,
+            linked["id"],
+            status="planned",
+            plan_id=saved["id"],
+            ended_session=env.session,
+            end_reason="已转计划",
+        )
+        research_repo.insert_research_event(
+            conn,
+            {
+                "research_id": linked["id"],
+                "session": env.session,
+                "event": "planned",
+                "reason": f"已转计划 {saved['id']}",
+                "before": {"status": "watching"},
+                "after": {"status": "planned", "plan_id": saved["id"]},
+                "source": "agent",
+                "refs": refs,
+            },
+        )
+    slot_replacement = ctx["slot_replacement"]
+    if slot_replacement is not None:
+        reason = f"名额替换：换成 {ticker}"
+        plan_repo.update_plan(
+            conn,
+            slot_replacement["victim_plan_id"],
+            status="replaced",
+            ended_session=env.session,
+            end_reason=reason,
+        )
+        plan_repo.insert_event(
+            conn,
+            {
+                "plan_id": slot_replacement["victim_plan_id"],
+                "session": env.session,
+                "event": "replaced",
+                "reason": reason,
+                "before": {"status": "pending"},
+                "after": {"status": "replaced"},
+                "source": "host",
+                "refs": [],
+            },
+        )
+        facts_rotation.withdraw_orphans(conn, session=env.session)  # 被替换的可能是别的换仓的 B
+    return saved
+
+
+def _save_plan_tx(
+    conn,
+    env: ToolEnv,
+    *,
+    ticker: str,
+    thesis: str,
+    invalidation: str,
+    entry_type: str,
+    hold: int | None,
+    levels: dict | None,
+    counter: str,
+    refs: list,
+    funding: dict | None = None,
+) -> dict:
+    """事务内的保存计划（``save_plan`` 与 ``save_rotation`` 共用，spec §6.5）：入场类型 → 最长持有 → 价位 →
+    财报 → 已有有效计划 → 名额与替换 → 股数 → 写入。``funding = {rotation_id, holding_ticker, sell_quantity,
+    sold_value}``；有 ``funding`` 时 ``levels`` 必须为 ``None``。"""
+    ctx = _prepare_plan(conn, env, ticker=ticker, entry_type=entry_type, hold=hold, levels=levels, funding=funding)
+    return _commit_plan(
+        conn,
+        env,
+        ctx,
+        ticker=ticker,
+        thesis=thesis,
+        invalidation=invalidation,
+        entry_type=entry_type,
+        counter=counter,
+        refs=refs,
+        funding=funding,
+    )
+
+
 def save_plan(
     env: ToolEnv,
     *,
@@ -249,7 +516,7 @@ def save_plan(
     refs: list | None = None,
 ) -> dict:
     """检查顺序固定（spec §6、§6.4）：范围 → 确认结论 → 入场类型 → 最长持有（缺省取配置）→
-    价位 → 财报日 → 已有有效计划 → 名额与替换。"""
+    价位 → 财报日 → 已有有效计划 → 名额与替换 → 仓位闸门（v3.3）→ 股数。"""
     ticker = normalize_ticker(ticker)
     refs = list(refs or [])
     if (
@@ -267,141 +534,17 @@ def save_plan(
         verdict = facts_repo.verdicts(conn, env.session).get(ticker)
         if verdict is None or verdict["verdict"] != "confirm":
             raise ValueError("no_confirm_verdict")
-        if entry_type not in ENTRY_TYPES:
-            allowed = "、".join(ENTRY_TYPES)
-            raise ValueError(f"invalid_entry_type: 需为 {allowed} 之一")
-        chosen_hold = hold if hold is not None else env.cfg.v3.max_hold_default  # 缺省最长持有取配置
-        if not MAX_HOLD_RANGE[0] <= chosen_hold <= MAX_HOLD_RANGE[1]:
-            raise ValueError(f"invalid_max_hold: 需为 {MAX_HOLD_RANGE[0]}–{MAX_HOLD_RANGE[1]} 的整数")
-        if levels is not None and not isinstance(levels, dict):
-            raise ValueError("invalid_argument: levels 必须是对象")
-        bars, atr = _bars_atr(conn, env, ticker)
-        last_close = Decimal(str(bars[-1]["close"]))
-        linked = research_repo.watching_research(conn, ticker)
-        is_research = linked is not None and linked["verdict"] == "ready"  # 仅 ready 算关联（spec §6.6）
-        chosen, source, sizing_ref = _levels_of(
+        return _save_plan_tx(
+            conn,
             env,
-            conn,
-            ticker,
-            levels,
-            last_close,
-            atr,
-            entry_atr=Decimal(str(env.cfg.v3.research_entry_atr)) if is_research else Decimal(2),
+            ticker=ticker,
+            thesis=thesis,
+            invalidation=invalidation,
+            entry_type=entry_type,
+            hold=hold,
+            levels=levels,
+            counter=counter,
+            refs=refs,
         )
-        valid_from, valid_until = validity(env.session, env.cfg.v3.valid_sessions)
-        earnings = data_repo.latest_earnings(conn, ticker, cutoff_at=env.cutoff_at)
-        invalid, warnings = earnings_flags(
-            earnings, signal_date=env.session, valid_from=valid_from, valid_until=valid_until
-        )
-        if "earnings_in_validity" in invalid:
-            raise ValueError("earnings_in_validity")
-        existing = plan_repo.active_plan(conn, ticker)
-        if existing is not None:
-            raise ToolError("active_plan_exists: 该股票已有有效计划", detail=existing)
-        if linked is not None and not is_research:
-            raise ValueError("research_not_ready: 研究尚未给出「可以出计划」的结论")
-        slot_replacement = None if is_research else _check_slot(conn, env, ticker)
-        snapshot = _equity_snapshot(conn, env)
-        ticker_value, total_value = _exposure(conn, env, ticker)
-        sizing, size_invalid = size(
-            snapshot=snapshot,
-            ref_price=sizing_ref,
-            stop=chosen["stop"],
-            entry_high=chosen["entry_high"],
-            ticker_value=ticker_value,
-            total_value=total_value,
-            params=env.cfg.workbench,
-        )
-        sizing = _sized(sizing)
-        plan_warnings = [*warnings, *size_invalid]
-        if sizing["status"] == "no_equity":
-            plan_warnings.append(NO_EQUITY_TEXT)
-        saved = plan_repo.insert_plan(
-            conn,
-            {
-                "session": env.session,
-                "ticker": ticker,
-                "origin": env.origin,
-                "entry_type": entry_type,
-                "entry_low": chosen["entry_low"],
-                "entry_high": chosen["entry_high"],
-                "stop": chosen["stop"],
-                "target1": chosen["target1"],
-                "initial_stop": chosen["stop"],
-                "atr": atr,
-                "levels_source": source,
-                "max_hold_sessions": chosen_hold,
-                "valid_from": valid_from,
-                "valid_until": valid_until,
-                "shares": sizing["shares"],
-                "sizing": sizing,
-                "warnings": plan_warnings,
-                "thesis": thesis,
-                "invalidation": invalidation,
-                "counter": counter,
-                "refs": refs,
-                "agent_session": env.agent_session,
-                "research_id": linked["id"] if linked is not None and is_research else None,
-            },
-        )
-        plan_repo.insert_event(
-            conn,
-            {
-                "plan_id": saved["id"],
-                "session": env.session,
-                "event": "created",
-                "reason": thesis,
-                "before": {},
-                "after": {"status": "pending"},
-                "source": "agent",
-                "refs": refs,
-            },
-        )
-        if linked is not None and is_research:
-            # 研究记 planned 并关联计划（spec §6.3）：之后这份计划与别的计划一样
-            research_repo.update_research(
-                conn,
-                linked["id"],
-                status="planned",
-                plan_id=saved["id"],
-                ended_session=env.session,
-                end_reason="已转计划",
-            )
-            research_repo.insert_research_event(
-                conn,
-                {
-                    "research_id": linked["id"],
-                    "session": env.session,
-                    "event": "planned",
-                    "reason": f"已转计划 {saved['id']}",
-                    "before": {"status": "watching"},
-                    "after": {"status": "planned", "plan_id": saved["id"]},
-                    "source": "agent",
-                    "refs": refs,
-                },
-            )
-        if slot_replacement is not None:
-            reason = f"名额替换：换成 {ticker}"
-            plan_repo.update_plan(
-                conn,
-                slot_replacement["victim_plan_id"],
-                status="replaced",
-                ended_session=env.session,
-                end_reason=reason,
-            )
-            plan_repo.insert_event(
-                conn,
-                {
-                    "plan_id": slot_replacement["victim_plan_id"],
-                    "session": env.session,
-                    "event": "replaced",
-                    "reason": reason,
-                    "before": {"status": "pending"},
-                    "after": {"status": "replaced"},
-                    "source": "host",
-                    "refs": [],
-                },
-            )
-        return saved
 
     return env.write(_work)

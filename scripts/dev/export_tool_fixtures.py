@@ -1,4 +1,5 @@
-"""Export 35 successful tool payloads from an isolated disposable PostgreSQL schema.
+"""Export 35 successful tool payloads (the 38 chat tools minus the three hand-written rotation ones)
+from an isolated disposable PostgreSQL schema.
 
 Run from the repository root with ``.venv/bin/python -m scripts.dev.export_tool_fixtures``
 and INVESTMENT_ASSISTANT_TEST_DATABASE_URL set to the documented localhost:55433 DB.
@@ -278,13 +279,17 @@ def export(conn, output: Path, directory: Path) -> int:
         patch.object(chat_tools, "datetime", Clock),
     ):
         capture("ensure_data", ticker="NFLX")
-    assert set(payloads) == {tool.name for tool in tool_defs("chat")}
+    # v3.3 的三个换仓工具样例是手写的（脚本不布换仓场景），导出时不覆盖
+    assert set(payloads) == {tool.name for tool in tool_defs("chat")} - HAND_WRITTEN
     output.mkdir(parents=True, exist_ok=True)
     for name, data in payloads.items():
         with (output / f"{name}.json").open("w", encoding="utf-8") as stream:
             json.dump(core_tx._jsonable(data), stream, ensure_ascii=False, indent=2, sort_keys=True)
             stream.write("\n")
     return len(payloads)
+
+
+HAND_WRITTEN = {"get_rotation_table", "save_rotation", "withdraw_rotation"}
 
 
 def main():

@@ -1,6 +1,6 @@
 # Tool result snapshots
 
-These 35 JSON files contain each tool's successful `data` payload, exported through real tool dispatch against an isolated disposable PostgreSQL schema. Confirmation tools use `confirmed=true` and fixed request IDs. Plan snapshots retain every original database column.
+These 38 JSON files contain each tool's successful `data` payload, exported through real tool dispatch against an isolated disposable PostgreSQL schema. Confirmation tools use `confirmed=true` and fixed request IDs. Plan snapshots retain every original database column. The three v3.3 rotation snapshots (`get_rotation_table`, `save_rotation`, `withdraw_rotation`) were written by hand from the tool result shapes: the exporter does not seed a rotation scenario.
 
 Regenerate from the repository root with the documented disposable server on port 55433:
 

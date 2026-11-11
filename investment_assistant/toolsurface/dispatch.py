@@ -15,6 +15,7 @@ from investment_assistant.toolsurface import chat as chat_tools
 from investment_assistant.toolsurface import ledger as ledger_tools
 from investment_assistant.toolsurface import planning, reads
 from investment_assistant.toolsurface import plans as plan_tools
+from investment_assistant.toolsurface import rotation as rotation_tools
 from investment_assistant.toolsurface import research as research_tools
 from investment_assistant.toolsurface import watchlist as watchlist_tools
 from investment_assistant.toolsurface.env import ToolEnv
@@ -233,6 +234,59 @@ _DEFS: tuple[ToolDef, ...] = (
                 "refs": _STRINGS,
             },
             ("ticker", "thesis", "invalidation"),
+        ),
+    ),
+    ToolDef(
+        "get_rotation_table",
+        rotation_tools.get_rotation_table,
+        BOTH,
+        "读取换仓比较表：仅当某只已确认的候选被待办标明「仓位已到上限、需要比较」时调用；列出候选的名次、规则价位、"
+        "计划风险与各持仓的占比、盈亏、止损距离、相对强度、当天复查结论，以及半仓 / 全仓换仓后候选能买多少股、"
+        "手续费估计与最近的换仓频率；额度足够时拒绝。",
+        _schema({"ticker": _STRING}, ("ticker",)),
+    ),
+    ToolDef(
+        "save_rotation",
+        rotation_tools.save_rotation,
+        BOTH,
+        "保存换仓结论（hold 继续持有 / half 半仓换 / full 全仓换）：缺省继续持有；半仓或全仓必须选定一只可比持仓"
+        "（holding_plan_id）、写明它哪里没按预期走（weakness）、回应表里的手续费（cost_response），引用里要有一次"
+        "对它的单只读取，并同一次调用里带候选的论点与作废条件；卖出股数、买入股数与价位全由宿主算，入参里没有任何"
+        "数字字段；对话模式先复述（含最近换仓次数），confirmed 为真才写，必须带 request_id。",
+        _schema(
+            {
+                "ticker": _STRING,
+                "verdict": _STRING,
+                "reasons": _STRING,
+                "holding_plan_id": {"type": "integer"},
+                "weakness": _STRING,
+                "counter": _STRING,
+                "cost_response": _STRING,
+                "refs": _STRINGS,
+                "thesis": _STRING,
+                "invalidation": _STRING,
+                "entry_type": _STRING,
+                "max_hold_sessions": {"type": "integer"},
+                "request_id": _STRING,
+                "confirmed": {"type": "boolean"},
+            },
+            ("ticker", "verdict", "reasons"),
+        ),
+    ),
+    ToolDef(
+        "withdraw_rotation",
+        rotation_tools.withdraw_rotation,
+        CHAT_ONLY,
+        "撤回一只持仓上还没执行完的换仓卖出指令（仅对话模式，页面也转发它）；先复述，confirmed 为真才写，"
+        "按 request_id 幂等；候选的计划不动。",
+        _schema(
+            {
+                "plan_id": {"type": "integer"},
+                "request_id": _STRING,
+                "confirmed": {"type": "boolean"},
+                "reason": _STRING,
+            },
+            ("plan_id", "request_id", "confirmed"),
         ),
     ),
     ToolDef(

@@ -16,6 +16,7 @@ from investment_assistant.facts.account import account_view
 from investment_assistant.facts.agenda import agenda
 from investment_assistant.facts.coverage import coverage_lines
 from investment_assistant.facts.holdings import holdings_view
+from investment_assistant.facts.rotation import exposure_row
 from investment_assistant.facts.view import actions_by_ticker
 from investment_assistant.toolsurface.env import ToolEnv
 from investment_assistant.toolsurface.validation import normalize_ticker
@@ -278,13 +279,18 @@ def get_plans(
 
 
 def get_account(env: ToolEnv) -> dict:
-    """账户视图：账本、最近对账与差额、最近平仓结果、仓位本金快照（spec §8）。"""
-    return env.read(lambda conn: account_view(conn, session=env.session, cutoff_at=env.cutoff_at))
+    """账户视图：账本、最近对账与差额、最近平仓结果、仓位本金快照（spec §8），v3.3 加仓位占比 ``exposure``。"""
+    return env.read(
+        lambda conn: {
+            **account_view(conn, session=env.session, cutoff_at=env.cutoff_at),
+            "exposure": exposure_row(conn, session=env.session, cutoff_at=env.cutoff_at, cfg=env.cfg),
+        }
+    )
 
 
 def get_agenda(env: ToolEnv) -> dict:
     """当天待办：持仓复查、再次上榜、二次确认队列与名额/替换（spec §9.3）。"""
-    return env.read(lambda conn: agenda(conn, session=env.session, cfg=env.cfg))
+    return env.read(lambda conn: agenda(conn, session=env.session, cfg=env.cfg, cutoff_at=env.cutoff_at))
 
 
 def get_concept(env: ToolEnv, *, concept_id: str | None = None) -> dict:

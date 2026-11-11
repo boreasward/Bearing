@@ -14,7 +14,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "tool_results"
 
 def test_every_tool_has_a_fixture_and_it_parses():
     names = {tool.name for tool in tool_defs("chat")}
-    assert len(names) == 35
+    assert len(names) == 38
     assert {path.stem for path in FIXTURES.glob("*.json")} == names
     for name in sorted(names):
         json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))

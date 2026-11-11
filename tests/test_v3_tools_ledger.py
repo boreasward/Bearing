@@ -167,3 +167,16 @@ def test_sizing_takes_ledger_equity_after_opening(env, v3_tx):
     assert D(sized["sizing"]["equity"]) == D(100000)  # 账本：100000 现金 + 10000 市值
     # 风险 1% = 1000 / 每股 4 = 250；单票 (25000 − 10000 已持) / 101 = 148 → 取较小者
     assert sized["sizing"]["shares"] == 148
+
+
+def test_account_has_exposure(v3_tx):
+    """v3.3：get_account 多一个 exposure（仓位占比、上限、剩余额度、是否有持仓缺日线）。"""
+    import _rotation_seed as rot
+
+    rot.seed_c4(v3_tx)
+    v3_tx.commit()
+    env = make_env(session=rot.SESSION, mode="brief", agent_session="t-exposure", cfg=rot.CFG, now=rot.NOW)
+
+    data = call(env, "get_account", {})["data"]
+
+    assert data["exposure"] == {"pct": "0.5493", "cap": "0.6", "room": "5076.30", "incomplete": False}

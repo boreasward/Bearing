@@ -649,3 +649,258 @@ def test_replacement_skips_watching_ticker_like_agenda(v3_tx):
     assert saved["status"] == "pending" and saved["research_id"] is None
     replaced = plan_repo.plan(v3_tx, victim["id"])
     assert replaced is not None and replaced["status"] == "replaced"
+
+
+# ---- v3.3：保存计划的仓位闸门、换仓的 B 与换仓指令的取代 / 撤回（spec §5.2、§6.5、§6.6）----
+# 参考场景同 _rotation_seed.seed_c4：账户 100160.50，持仓 55020.00（AAA 301 股、CCC 1000 股），BBB 钱不够。
+
+
+def _rot_env(mode="brief", agent="t-v33"):
+    import _rotation_seed as rot
+
+    return make_env(session=rot.SESSION, mode=mode, agent_session=agent, cfg=rot.CFG, now=rot.NOW)
+
+
+def _count_plans(conn):
+    return conn.execute("SELECT count(*) FROM v3_plans").fetchone()[0]
+
+
+def test_save_plan_needs_rotation_when_short(v3_tx):
+    """钱不够且可比较：needs_rotation，detail 带闸门；不比较的原因（冷却期）写进 no_room。"""
+    import _rotation_seed as rot
+
+    from investment_assistant.data.calendar import add_trading_days
+    from investment_assistant.execution.rotation import BLOCKED_TEXT
+
+    ids = rot.seed_c4(v3_tx)
+    v3_tx.commit()
+    env = _rot_env()
+    confirm(env, "BBB")
+
+    short = call(env, "save_plan", {"ticker": "BBB", **TEXTS})
+
+    assert short["error"] == "needs_rotation: 仓位已到上限，需先保存换仓结论"
+    assert short["detail"]["short"] is True and short["detail"]["compare"] is True
+    assert short["detail"]["blocked"] is None and short["detail"]["sizing"]["sizing"]["shares"] == 99
+    assert _count_plans(v3_tx) == 2
+
+    two_ago = add_trading_days(rot.SESSION, -2)
+    rot.add_rotation(v3_tx, session=two_ago, verdict="half", origin="chat", holding=(ids["a"]["id"], "AAA"))
+    v3_tx.commit()
+    blocked = call(env, "save_plan", {"ticker": "BBB", **TEXTS})
+    assert blocked["error"] == "no_room: " + BLOCKED_TEXT["cooldown"].format(last=two_ago)
+    assert _count_plans(v3_tx) == 2
+
+
+def test_save_plan_rejects_zero_shares(v3_tx):
+    """C21：待办判为「钱够」（额度内 1 股 ≥ 不受限 2 股的一半）而自报价位算出 0 股 → no_room「仓位已到上限」，不留 0 股计划。"""
+    import _rotation_seed as rot
+
+    rot.seed_run(v3_tx, ("BBB",))
+    rot.seed_opening(v3_tx, 1000)
+    rot.add_holding(v3_tx, "AAA", 9, "61", 61.0)  # 市值 549，上限 600，额度 51
+    v3_tx.commit()
+    env = _rot_env()
+    confirm(env, "BBB")
+
+    agent_levels = {"entry_low": 50, "entry_high": 52, "stop": 46, "target1": 60}  # 入场上沿 52：额度 51 买不起 1 股
+    rejected = call(env, "save_plan", {"ticker": "BBB", **TEXTS, "levels": agent_levels})
+
+    assert rejected["error"] == "no_room: 仓位已到上限"
+    assert _count_plans(v3_tx) == 1
+    saved = call(env, "save_plan", {"ticker": "BBB", **TEXTS})["data"]  # 规则价位入场上沿 51：恰好 1 股
+    assert saved["shares"] == 1
+
+
+def test_save_plan_without_equity_still_saves(v3_tx):
+    """C19：没有任何资金记录：不判钱不够，照旧保存（股数为空，警告写明）。"""
+    import _rotation_seed as rot
+
+    from investment_assistant.core.texts import NO_EQUITY_TEXT
+
+    rot.seed_run(v3_tx, ("BBB",))
+    rot.add_holding(v3_tx, "AAA", 300, "40", 40.0)
+    v3_tx.commit()
+    env = _rot_env()
+    confirm(env, "BBB")
+
+    saved = call(env, "save_plan", {"ticker": "BBB", **TEXTS})
+
+    assert "data" in saved, saved
+    assert saved["data"]["shares"] is None and NO_EQUITY_TEXT in saved["data"]["warnings"]
+
+
+def test_save_plan_warns_when_exposure_is_incomplete(v3_tx):
+    """Review Focus 1：钱够、有持仓缺收盘 → 计划照常保存，warnings 含「有持仓缺日线，仓位占比偏低」。"""
+    import _rotation_seed as rot
+
+    rot.seed_run(v3_tx, ("BBB",))
+    rot.seed_opening(v3_tx)
+    rot.add_holding(v3_tx, "AAA", 300, "40", 40.0)
+    rot.add_holding(v3_tx, "DDD", 10, "10", 10.0, with_bars=False)
+    v3_tx.commit()
+    env = _rot_env()
+    confirm(env, "BBB")
+
+    saved = call(env, "save_plan", {"ticker": "BBB", **TEXTS})["data"]
+
+    # 缺日线的 DDD 市值算不进去，总资产也偏低 100（成本已扣、市值为 0）：风险项 999 ÷ 4 = 249 股
+    assert saved["shares"] == 249 and "有持仓缺日线，仓位占比偏低" in saved["warnings"]
+
+
+def test_compute_plan_levels_reports_room(v3_tx):
+    """uncapped_shares、short_of_room、exposure：钱不够与钱够各一例。"""
+    import _rotation_seed as rot
+
+    rot.seed_c4(v3_tx)
+    v3_tx.commit()
+    env = _rot_env()
+
+    short = call(env, "compute_plan_levels", {"ticker": "BBB"})["data"]
+
+    assert short["uncapped_shares"] == 250 and short["short_of_room"] is True
+    assert short["sizing"]["shares"] == 99 and short["sizing"]["uncapped_shares"] == 250
+    assert short["exposure"] == {"pct": "0.5493", "cap": "0.6", "room": "5076.30", "incomplete": False}
+
+    v3_tx.execute("DELETE FROM v3_trades WHERE ticker = 'CCC'")
+    v3_tx.commit()
+    roomy = call(env, "compute_plan_levels", {"ticker": "BBB"})["data"]
+    assert roomy["short_of_room"] is False and roomy["sizing"]["shares"] == 250
+
+
+def test_rotation_plan_levels_are_fixed(v3_tx):
+    """C20：换仓的 B：revise_plan 带 levels → rotation_levels_fixed；只改论点可以。"""
+    import _rotation_seed as rot
+
+    ids = rot.seed_c4(v3_tx)
+    _, funded = rot.instruct(v3_tx, ids["a"], valid_until=date(2026, 11, 20))
+    v3_tx.commit()
+    env = _rot_env()
+    confirm(env, "BBB")
+    ref = call(env, "get_market", {})["ref"]
+    new_levels = {"entry_low": 49.5, "entry_high": 50.5, "stop": 47, "target1": 56}
+
+    refused = call(
+        env, "revise_plan", {"plan_id": funded["id"], "reason": "想改价位", "levels": new_levels, "refs": [ref]}
+    )
+    assert refused["error"] == "rotation_levels_fixed: 换仓的计划只用宿主规则价位"
+    revised = call(
+        env, "revise_plan", {"plan_id": funded["id"], "reason": "补充论点", "thesis": "新论点", "refs": [ref]}
+    )["data"]
+    assert revised["thesis"] == "新论点" and D(str(revised["stop"])) == D(46)
+
+
+def test_continue_rotation_plan_keeps_funded_basis(v3_tx):
+    """C20：A 的换仓指令还在：延续时股数仍按「待卖 150 股已卖出」算（217）；指令撤回或 A 卖完后按普通口径（99）。"""
+    import _rotation_seed as rot
+
+    ids = rot.seed_c4(v3_tx)
+    _, funded = rot.instruct(v3_tx, ids["a"], valid_until=date(2026, 11, 20))
+    v3_tx.commit()
+    env = _rot_env()
+    confirm(env, "BBB")
+    ref = call(env, "get_market", {})["ref"]
+
+    kept = call(env, "continue_plan", {"plan_id": funded["id"], "refs": [ref]})["data"]
+    assert kept["shares"] == 217 and kept["sizing"]["funded"]["holding_ticker"] == "AAA"
+
+    plan_repo.update_plan(v3_tx, ids["a"]["id"], sell_instruction=None, sell_quantity=None, rotation_id=None)
+    v3_tx.commit()  # 指令撤回
+    withdrawn = call(env, "continue_plan", {"plan_id": funded["id"], "refs": [ref]})["data"]
+    assert withdrawn["shares"] == 99 and "funded" not in withdrawn["sizing"]
+
+    plan_repo.update_plan(
+        v3_tx, ids["a"]["id"], sell_instruction="rotation", sell_quantity=D(150), rotation_id=funded["funded_by_rotation_id"]
+    )
+    plan_repo.update_plan(v3_tx, ids["a"]["id"], status="closed", ended_session=rot.SESSION, end_reason="换仓")
+    v3_tx.commit()  # A 已平仓（指令随计划留在库里，但已不再待卖）
+    closed = call(env, "continue_plan", {"plan_id": funded["id"], "refs": [ref]})["data"]
+    assert closed["shares"] == 99
+
+
+def test_broken_review_supersedes_rotation(v3_tx):
+    """C9：论点失效覆盖换仓指令（三列同一条 UPDATE 清空），事件原因逐字；成立的复查不动指令。"""
+    import _rotation_seed as rot
+
+    ids = rot.seed_c4(v3_tx)
+    rotation, _ = rot.instruct(v3_tx, ids["a"], valid_until=date(2026, 11, 20))
+    v3_tx.commit()
+    env = _rot_env()
+    ref = call(env, "get_market", {})["ref"]
+
+    kept = call(env, "save_holding_review", {"plan_id": ids["a"]["id"], "verdict": "holds", "reasons": "仍成立"})["data"]
+    assert kept["plan"]["sell_instruction"] == "rotation" and kept["plan"]["rotation_id"] == rotation["id"]
+
+    broken = call(
+        env,
+        "save_holding_review",
+        {"plan_id": ids["a"]["id"], "verdict": "broken", "reasons": "论点不成立", "refs": [ref]},
+    )["data"]
+
+    plan = broken["plan"]
+    assert (plan["sell_instruction"], plan["sell_quantity"], plan["rotation_id"]) == ("thesis_broken", None, None)
+    events = {e["event"]: e for e in plan_repo.events(v3_tx, ids["a"]["id"])}
+    assert events["sell_instruction"]["reason"] == "论点失效"
+    assert events["rotation_superseded"]["reason"] == "换仓指令被取代：论点失效"
+    assert events["rotation_superseded"]["source"] == "agent"
+    assert events["rotation_superseded"]["before"] == {"rotation_id": rotation["id"], "sell_quantity": "150"}
+
+
+def _small_world(v3_tx):
+    """A（AAA，持 100 股、换仓指令 50 股）与资金来自这次换仓的 B（BBB，待入场）；名额被 B、FFF、GGG 占满，
+    名次 EEE 1、FFF 2、GGG 3、BBB 4。账户很小的仓位：钱够，不触发换仓闸门。"""
+    import _rotation_seed as rot
+
+    rot.seed_run(v3_tx, ("EEE", "FFF", "GGG", "BBB"))
+    rot.seed_opening(v3_tx)
+    held = rot.add_holding(v3_tx, "AAA", 100, "40", 40.0)
+    rot.holding_review(v3_tx, held["id"])
+    _, funded = rot.instruct(v3_tx, held, quantity=50, valid_until=date(2026, 11, 20))
+    for ticker in ("FFF", "GGG"):
+        _plan(v3_tx, ticker, valid_until=date(2026, 11, 20))
+    v3_tx.commit()
+    return held, funded
+
+
+def _withdrawn(conn, plan_id):
+    plan = plan_repo.plan(conn, plan_id)
+    assert (plan["sell_instruction"], plan["sell_quantity"], plan["rotation_id"]) == (None, None, None)
+    events = [e for e in plan_repo.events(conn, plan_id) if e["event"] == "rotation_withdrawn"]
+    assert len(events) == 1 and events[0]["source"] == "host"
+    return events[0]["reason"]
+
+
+def test_ending_a_candidate_plan_withdraws_on_cancel(v3_tx):
+    """C8：cancel_plan 取消 B 的待入场计划 → A 的换仓指令撤回。"""
+    held, funded = _small_world(v3_tx)
+    env = _rot_env("chat", "t-cancel")
+
+    call(env, "cancel_plan", {"plan_id": funded["id"], "request_id": "c-1", "confirmed": True})
+
+    assert _withdrawn(v3_tx, held["id"]) == "换仓指令撤回：BBB 的计划已取消"
+
+
+def test_ending_a_candidate_plan_withdraws_on_veto(v3_tx):
+    """C8：save_verdict 否决使 B 的待入场计划作废 → A 的换仓指令撤回。"""
+    held, funded = _small_world(v3_tx)
+    env = _rot_env(agent="t-veto")
+    ref = call(env, "get_market", {})["ref"]
+
+    vetoed = call(env, "save_verdict", {"ticker": "BBB", "verdict": "veto", "reasons": "不再看好", "refs": [ref]})
+
+    assert "data" in vetoed, vetoed
+    assert plan_repo.plan(v3_tx, funded["id"])["status"] == "invalidated"
+    assert _withdrawn(v3_tx, held["id"]) == "换仓指令撤回：BBB 的计划已作废"
+
+
+def test_ending_a_candidate_plan_withdraws_on_replacement(v3_tx):
+    """C8：名额替换使 B 的待入场计划被替换 → A 的换仓指令撤回。"""
+    held, funded = _small_world(v3_tx)
+    env = _rot_env(agent="t-replace")
+    confirm(env, "EEE")
+
+    saved = call(env, "save_plan", {"ticker": "EEE", **TEXTS})
+
+    assert "data" in saved, saved
+    assert plan_repo.plan(v3_tx, funded["id"])["status"] == "replaced"
+    assert _withdrawn(v3_tx, held["id"]) == "换仓指令撤回：BBB 的计划被替换"

@@ -7,15 +7,18 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from investment_assistant.core.texts import quantity_value
 from investment_assistant.data import repo as data_repo
 from investment_assistant.data.identity import stock_id
 from investment_assistant.derivation.indicators import price as price_indicators
 from investment_assistant.execution.plan_levels import rule_levels, validity
 from investment_assistant.execution.plan_line import close_outcome, deviations
 from investment_assistant.execution.positions import PositionError, build
+from investment_assistant.execution.rotation import exposure, over_cap_sentence
 from investment_assistant.facts import collect as facts_collect
 from investment_assistant.facts import plan_repo
 from investment_assistant.facts import repo as facts_repo
+from investment_assistant.facts.account import account_view
 from investment_assistant.facts.coverage import coverage, coverage_lines
 from investment_assistant.toolsurface.env import ToolEnv
 from investment_assistant.toolsurface.validation import (
@@ -36,6 +39,7 @@ EXIT_TEXT = {
     "trailing_stop": "移动止损",
     "max_hold": "持有到期",
     "thesis_broken": "论点失效",
+    "rotation": "换仓",
     "manual": "用户自行卖出",
 }
 
@@ -113,10 +117,13 @@ def record_trade(
 
 
 def _respond(conn, env: ToolEnv, trade: dict, *, transition: bool) -> dict:
-    """按 spec §6.5 推进计划线并拼出返回：trade / plan / stop_order / outcome。"""
+    """按 spec §6.5 推进计划线并拼出返回：trade / plan / stop_order / outcome，v3.3 加 over_cap（买入后
+    仓位占比越线）与 stop_order_quantity（部分卖出后止损单数量需改成多少）。"""
     ticker = trade["ticker"]
     plan = plan_repo.active_plan(conn, ticker)
     outcome = None
+    over_cap = None
+    stop_order_quantity = None
     trades = facts_repo.list_trades(conn, ticker)
     splits = data_repo.split_events(conn, ticker, cutoff_at=env.cutoff_at)
     built = build(trades, splits=splits)
@@ -168,6 +175,7 @@ def _respond(conn, env: ToolEnv, trade: dict, *, transition: bool) -> dict:
                     "refs": [trade["request_id"]],
                 },
             )
+        over_cap = _record_over_cap(conn, env, trade, plan)
     elif transition and trade["side"] == "sell" and plan is not None:
         plan_repo.insert_event(
             conn,
@@ -206,10 +214,92 @@ def _respond(conn, env: ToolEnv, trade: dict, *, transition: bool) -> dict:
                     "refs": [trade["request_id"]],
                 },
             )
+        elif plan["status"] == "open" and built["position"] is not None:
+            plan, stop_order_quantity = _partial_sell(conn, env, plan, trade, built["position"]["quantity"])
     stop_order = None
     if trade["side"] == "buy" and plan is not None and plan["stop"] is not None and built["position"] is not None:
         stop_order = {"price": plan["stop"], "quantity": built["position"]["quantity"]}
-    return {"trade": trade, "plan": plan, "stop_order": stop_order, "outcome": outcome}
+    return {
+        "trade": trade,
+        "plan": plan,
+        "stop_order": stop_order,
+        "outcome": outcome,
+        "over_cap": over_cap,
+        "stop_order_quantity": stop_order_quantity,
+    }
+
+
+def _partial_sell(conn, env: ToolEnv, plan: dict, trade: dict, remaining: Decimal) -> tuple[dict, Decimal | None]:
+    """没卖完的卖出（spec §6.6）：换仓指令的待卖股数减去这笔（减到 0 或以下三列一起清空，否则只更新数量）；
+    计划确认过止损单则标「数量待改」并记一行。返回 (计划, 止损单该改成的股数 | None)。"""
+    fields: dict = {}
+    if plan["sell_instruction"] == "rotation" and plan["sell_quantity"] is not None:
+        left = Decimal(plan["sell_quantity"]) - Decimal(trade["quantity"])
+        if left <= 0:  # 库约束：sell_instruction / rotation_id / sell_quantity 同一条 UPDATE 一起改
+            fields.update(sell_instruction=None, sell_quantity=None, rotation_id=None)
+        else:
+            fields["sell_quantity"] = left
+    stale = plan["confirmed_stop_order"] is not None
+    if stale:
+        fields["stop_quantity_stale"] = True
+    if fields:
+        plan = plan_repo.update_plan(conn, plan["id"], **fields)
+    if not stale:
+        return plan, None
+    plan_repo.insert_event(
+        conn,
+        {
+            "plan_id": plan["id"],
+            "session": env.session,
+            "event": "stop_quantity_stale",
+            "reason": f"止损单数量需改为 {quantity_value(remaining)} 股",
+            "before": {},
+            "after": {"stop_quantity_stale": True, "quantity": remaining},
+            "source": "user",
+            "refs": [trade["request_id"]],
+        },
+    )
+    return plan, remaining
+
+
+def _record_over_cap(conn, env: ToolEnv, trade: dict, plan: dict) -> dict | None:
+    """买入后仓位占比高于上限时记一行偏差（spec §5.3 / R9）：这笔按成交价，该股票买入前的持仓与其他持仓按
+    最新收盘，总资产按账本；算出的数随偏差记录保存，复盘读这条记录。"""
+    view = account_view(conn, session=env.session, cutoff_at=env.cutoff_at)
+    snapshot = view["sizing_snapshot"]
+    if snapshot is None:
+        return None
+    positions = view["ledger"]["positions"]
+    quantity, price = Decimal(trade["quantity"]), Decimal(trade["price"])
+    others = sum(
+        (row["market_value"] for row in positions if row["ticker"] != trade["ticker"] and row["market_value"] is not None),
+        Decimal(0),
+    )
+    own = next((row for row in positions if row["ticker"] == trade["ticker"]), None)
+    prior_value = Decimal(0)
+    if own is not None and own["last_close"] is not None:
+        prior_value = (own["quantity"] - quantity) * own["last_close"]
+    row = exposure(
+        equity=Decimal(snapshot["equity"]),
+        market_value=others + prior_value + quantity * price,
+        cap=Decimal(str(env.cfg.workbench.total_cap)),
+    )
+    if row["pct"] is None or row["pct"] <= row["cap"]:
+        return None
+    plan_repo.insert_event(
+        conn,
+        {
+            "plan_id": plan["id"],
+            "session": env.session,
+            "event": "deviation",
+            "reason": over_cap_sentence(row["pct"], row["cap"]),
+            "before": {},
+            "after": {"exposure_pct": row["pct"], "cap": row["cap"]},
+            "source": "user",
+            "refs": [trade["request_id"]],
+        },
+    )
+    return {"pct": row["pct"], "cap": row["cap"]}
 
 
 def _sessions_since_stop_hit(plan: dict, session) -> int | None:

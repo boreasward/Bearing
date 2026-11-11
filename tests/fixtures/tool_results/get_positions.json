@@ -5,8 +5,11 @@
     "kind": "planned",
     "last_close": 100.0,
     "next_action": {
+      "counterpart": null,
       "kind": "stop_order",
       "reason": null,
+      "sell_quantity": null,
+      "stale_quantity": false,
       "stop": "96.00",
       "text": "未确认止损单"
     },
