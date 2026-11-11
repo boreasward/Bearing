@@ -64,6 +64,7 @@ def test_exposure_basic():
     assert row == {"pct": D("0.5500"), "cap": D("0.6"), "room": D("5000.00"), "incomplete": False}
     over = rotation.exposure(equity=D(100000), market_value=D(70000), cap=D("0.6"))
     assert over["pct"] == D("0.7000") and over["room"] == D(0)
+    assert "剩余额度 $0.00" in rotation.exposure_text(over)
 
 
 def test_exposure_without_positive_equity():

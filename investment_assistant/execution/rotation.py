@@ -69,7 +69,7 @@ def exposure(*, equity: Decimal | None, market_value: Decimal, cap: Decimal, mis
     return {
         "pct": (market_value / equity).quantize(_FOUR, rounding=ROUND_HALF_UP),
         "cap": cap,
-        "room": max(Decimal(0), _cent(equity * cap - market_value)),
+        "room": _cent(max(Decimal(0), equity * cap - market_value)),
         "incomplete": missing_close,
     }
 
