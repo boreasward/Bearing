@@ -217,7 +217,14 @@ def test_missing_bar_marks_holding_unchecked():
         held_sessions=1,
         trail_atr=D(3),
     )
-    assert result == {"events": [], "stop": D(100), "trailing": False, "sell_instruction": None, "unchecked": True}
+    assert result == {
+        "events": [],
+        "stop": D(100),
+        "trailing": False,
+        "sell_instruction": None,
+        "unchecked": True,
+        "rotation_superseded": None,
+    }
 
 
 def test_next_action_priority():
@@ -465,3 +472,119 @@ def test_stop_order_raise_text_trims_storage_zeros():
     plan = {**_open_plan(), "stop": D("100.500000"), "confirmed_stop_order": D("95.000000")}
     action = plan_line.next_action(plan=plan, position=position, unchecked=False)
     assert action["text"] == "止损单需上调至 100.50（当前挂单 95.00）"
+
+
+# ---- v3.3：换仓指令（spec §6.5–§6.6） ----
+
+
+def _rotation_plan(**over):
+    row = {"sell_instruction": "rotation", "sell_quantity": D(150), "rotation_id": 5, "confirmed_stop_order": D(100)}
+    return _open_plan(**{**row, **over})
+
+
+def test_next_action_rotation_sell_ranks_after_other_sells():
+    plan = _rotation_plan()
+    position = {"quantity": D(300)}
+    action = plan_line.next_action(plan=plan, position=position, unchecked=False, counterpart="BBB")
+    assert action == {
+        "kind": "rotation_sell",
+        "text": "下次开盘卖出 150 股（换仓至 BBB）",
+        "stop": None,
+        "reason": "换仓",
+        "sell_quantity": D(150),
+        "counterpart": "BBB",
+    }
+    # 止损触及仍排在最前
+    hit = plan_line.next_action(
+        plan={**plan, "stop_hit_session": date(2026, 11, 5)}, position=position, unchecked=False, counterpart="BBB"
+    )
+    assert hit["kind"] == "stop_hit_unresolved"
+    # 缺日线时换仓指令仍排在「缺日线」之前
+    unchecked = plan_line.next_action(plan=plan, position=position, unchecked=True, counterpart="BBB")
+    assert unchecked["kind"] == "rotation_sell"
+    # 其他卖出指令的返回形状不变（没有新键）
+    sell = plan_line.next_action(plan=_open_plan(sell_instruction="max_hold"), position=position, unchecked=False)
+    assert sell == {"kind": "sell_next_open", "text": "下次开盘卖出", "stop": None, "reason": "持有到期"}
+
+
+def test_next_action_stale_stop_quantity():
+    position = {"quantity": D(151)}
+    plan = _open_plan(confirmed_stop_order=D(100), stop_quantity_stale=True)
+    action = plan_line.next_action(plan=plan, position=position, unchecked=False)
+    assert action == {"kind": "stop_order", "text": "止损单数量需改为 151 股", "stop": D(100), "reason": None}
+    # 价位同时需要上调：仍是原来的「止损单需上调至 …」文案
+    raise_first = plan_line.next_action(
+        plan={**plan, "stop": D(104), "confirmed_stop_order": D(100)}, position=position, unchecked=False
+    )
+    assert raise_first["text"] == "止损单需上调至 104.00（当前挂单 100.00）"
+    # 数量没有待改标记时照旧继续持有
+    fresh = plan_line.next_action(plan=_open_plan(confirmed_stop_order=D(100)), position=position, unchecked=False)
+    assert fresh["kind"] == "hold"
+
+
+def _check(plan, bar, *, session=date(2026, 11, 10), held=3):
+    return plan_line.holding_check(
+        plan=plan,
+        bar=bar,
+        session=session,
+        highest_close=D(105),
+        avg_cost=D(95),
+        held_sessions=held,
+        trail_atr=D(3),
+    )
+
+
+def test_holding_check_max_hold_supersedes_rotation():
+    check = _check(_rotation_plan(max_hold_sessions=20), _bar("105"), held=20)
+    assert check["sell_instruction"] == "max_hold" and check["rotation_superseded"] == "持有到期"
+    assert [e["event"] for e in check["events"]] == ["sell_instruction", "rotation_superseded"]
+    assert check["events"][1] == {
+        "event": "rotation_superseded",
+        "reason": "换仓指令被取代：持有到期",
+        "before": {"rotation_id": 5, "sell_quantity": D(150)},
+        "after": {},
+    }
+
+
+def test_holding_check_stop_hit_supersedes_rotation():
+    check = _check(_rotation_plan(), _bar("102", low="99", high="104"))
+    assert check["sell_instruction"] is None and check["rotation_superseded"] == "止损触及"
+    assert [e["event"] for e in check["events"]] == ["stop_hit", "rotation_superseded"]
+    assert check["events"][1]["reason"] == "换仓指令被取代：止损触及"
+    assert check["events"][1]["before"] == {"rotation_id": 5, "sell_quantity": D(150)}
+
+
+def test_holding_check_keeps_rotation_on_a_quiet_day():
+    check = _check(_rotation_plan(), _bar("105", low="103", high="106"))
+    assert check["sell_instruction"] == "rotation" and check["rotation_superseded"] is None
+    assert check["events"] == []
+    # 缺日线：什么都不做，指令保留
+    missing = _check(_rotation_plan(), None)
+    assert missing["sell_instruction"] == "rotation" and missing["rotation_superseded"] is None
+    # 其他指令不受影响：持有到期时没有换仓可取代
+    plain = _check(_open_plan(max_hold_sessions=20), _bar("105"), held=20)
+    assert plain["sell_instruction"] == "max_hold" and plain["rotation_superseded"] is None
+    assert [e["event"] for e in plain["events"]] == ["sell_instruction"]
+
+
+def test_close_outcome_rotation_exit_reason():
+    lots = [{"quantity": D(100), "entry_cost_per_share": D(50), "realized_pnl": D(800)}]
+    plan = {"kind": "planned", "initial_stop": D(46), "sell_instruction": "rotation", "stop_hit_session": None}
+    outcome = plan_line.close_outcome(plan=plan, closed_lots=lots, trades=[], sessions_since_stop_hit=None)
+    assert outcome["exit_reason"] == "rotation"
+    hit = plan_line.close_outcome(
+        plan={**plan, "stop_hit_session": date(2026, 11, 5), "trailing": False},
+        closed_lots=lots,
+        trades=[],
+        sessions_since_stop_hit=0,
+    )
+    assert hit["exit_reason"] == "initial_stop"
+
+
+def test_split_adjust_scales_rotation_sell_quantity():
+    plan = {"stop": D("30.00"), "shares": 100, "sell_quantity": D(150)}
+    before, after = plan_line.split_adjust(plan, D(2))
+    assert before["sell_quantity"] == D(150) and after["sell_quantity"] == D(300)
+    assert after["shares"] == 200
+    none_before, none_after = plan_line.split_adjust({"stop": D("30.00"), "sell_quantity": None}, D(2))
+    assert "sell_quantity" not in none_before and "sell_quantity" not in none_after

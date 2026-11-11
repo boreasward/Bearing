@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from investment_assistant.core.texts import price_text
+from investment_assistant.core.texts import price_text, quantity_value
 
 from investment_assistant.data.calendar import trading_days_between
 from investment_assistant.execution.plan_levels import _cent, earnings_flags
@@ -18,7 +18,7 @@ from investment_assistant.execution.plan_levels import _cent, earnings_flags
 ACTIVE = ("pending", "open")
 ENDED = ("closed", "expired", "invalidated", "replaced", "cancelled")
 
-# 五种「下一个交易日的操作」的固定文案（spec §7.4；stop_order 的「需上调」文案另拼）
+# 「下一个交易日的操作」的固定文案（spec §7.4；stop_order 的「需上调」「数量需改」与 rotation_sell 的文案另拼）
 NEXT_ACTION_TEXT = {
     "stop_hit_unresolved": "止损已触及，未见卖出记录",
     "sell_next_open": "下次开盘卖出",
@@ -26,7 +26,7 @@ NEXT_ACTION_TEXT = {
     "stop_order": "未确认止损单",
     "hold": "继续持有",
 }
-_SELL_REASON = {"max_hold": "持有到期", "thesis_broken": "论点失效"}
+_SELL_REASON = {"max_hold": "持有到期", "thesis_broken": "论点失效", "rotation": "换仓"}
 
 
 def pending_check(*, plan: dict, bar: dict | None, earnings: dict | None, session: date) -> dict | None:
@@ -73,8 +73,19 @@ def holding_check(
             "trailing": trailing,
             "sell_instruction": sell_instruction,
             "unchecked": True,
+            "rotation_superseded": None,
         }
     events: list[dict] = []
+    superseded: str | None = None  # v3.3：换仓指令被止损触及 / 持有到期取代时的原因（spec §6.6）
+    rotation_before = {"rotation_id": plan.get("rotation_id"), "sell_quantity": plan.get("sell_quantity")}
+
+    def supersede(cause: str) -> None:
+        nonlocal superseded
+        if superseded is None:
+            superseded = cause
+            events.append(
+                {"event": "rotation_superseded", "reason": f"换仓指令被取代：{cause}", "before": rotation_before, "after": {}}
+            )
     start_session = plan["start_session"]
     if stop is not None:
         if session == start_session:  # 起算日只看收盘（最低价可能在买入之前）
@@ -83,6 +94,9 @@ def holding_check(
             hit, how = bar["low"] <= stop, f"最低 {price_text(bar['low'])} 触及止损 {price_text(stop)}"
         if hit:
             events.append({"event": "stop_hit", "reason": how, "before": {}, "after": {}})
+            if sell_instruction == "rotation":
+                supersede("止损触及")
+                sell_instruction = None
         if (
             not trailing
             and session > start_session
@@ -117,17 +131,21 @@ def holding_check(
                     }
                 )
                 stop = new_stop
-    if held_sessions >= plan["max_hold_sessions"] and not sell_instruction:
+    if held_sessions >= plan["max_hold_sessions"] and sell_instruction in (None, "rotation"):
+        was_rotation = sell_instruction == "rotation"
         sell_instruction = "max_hold"
         events.append(
             {"event": "sell_instruction", "reason": "持有到期", "before": {}, "after": {"sell_instruction": "max_hold"}}
         )
+        if was_rotation:
+            supersede("持有到期")
     return {
         "events": events,
         "stop": stop,
         "trailing": trailing,
         "sell_instruction": sell_instruction,
         "unchecked": False,
+        "rotation_superseded": superseded,
     }
 
 
@@ -147,8 +165,9 @@ def trailing_stop(
     return max(current_stop, _cent(highest_close - trail_atr * atr), floor)
 
 
-def next_action(*, plan: dict, position: dict | None, unchecked: bool) -> dict:
-    """The first applicable rule of spec §7.4 for one open position."""
+def next_action(*, plan: dict, position: dict | None, unchecked: bool, counterpart: str | None = None) -> dict:
+    """The first applicable rule of spec §7.4 for one open position (v3.3 adds the rotation sell
+    after the other two sell instructions and before 缺日线; ``counterpart`` is B's ticker)."""
     if plan.get("stop_hit_session") is not None and position is not None and position["quantity"] > 0:
         return {
             "kind": "stop_hit_unresolved",
@@ -157,12 +176,21 @@ def next_action(*, plan: dict, position: dict | None, unchecked: bool) -> dict:
             "reason": None,
         }
     instruction = plan.get("sell_instruction")
-    if instruction in _SELL_REASON:
+    if instruction in ("max_hold", "thesis_broken"):
         return {
             "kind": "sell_next_open",
             "text": NEXT_ACTION_TEXT["sell_next_open"],
             "stop": None,
             "reason": _SELL_REASON[instruction],
+        }
+    if instruction == "rotation":
+        return {
+            "kind": "rotation_sell",
+            "text": f"下次开盘卖出 {quantity_value(plan['sell_quantity'])} 股（换仓至 {counterpart}）",
+            "stop": None,
+            "reason": _SELL_REASON["rotation"],
+            "sell_quantity": plan["sell_quantity"],
+            "counterpart": counterpart,
         }
     if unchecked:
         return {"kind": "unchecked", "text": NEXT_ACTION_TEXT["unchecked"], "stop": None, "reason": None}
@@ -174,6 +202,13 @@ def next_action(*, plan: dict, position: dict | None, unchecked: bool) -> dict:
         return {
             "kind": "stop_order",
             "text": f"止损单需上调至 {price_text(stop)}（当前挂单 {price_text(confirmed)}）",
+            "stop": stop,
+            "reason": None,
+        }
+    if plan.get("stop_quantity_stale") and position is not None:
+        return {
+            "kind": "stop_order",
+            "text": f"止损单数量需改为 {quantity_value(position['quantity'])} 股",
             "stop": stop,
             "reason": None,
         }
@@ -235,7 +270,7 @@ def close_outcome(
         r_text = None
     if plan.get("stop_hit_session") is not None:
         exit_reason = "trailing_stop" if plan.get("trailing") else "initial_stop"
-    elif plan.get("sell_instruction") in ("max_hold", "thesis_broken"):
+    elif plan.get("sell_instruction") in ("max_hold", "thesis_broken", "rotation"):
         exit_reason = plan["sell_instruction"]
     else:
         exit_reason = "manual"
@@ -270,7 +305,7 @@ def split_adjust(plan: dict, factor: Decimal) -> tuple[dict, dict]:
             before[key], after[key] = value, _cent(value / factor)
         elif key == "atr" and value is not None:
             before[key], after[key] = value, value / factor
-        elif key == "shares" and value is not None:
+        elif key in ("shares", "sell_quantity") and value is not None:
             before[key], after[key] = value, value * factor
     return before, after
 
