@@ -8,11 +8,11 @@ afterEach(cleanup)
 describe('ToolsPane', () => {
   it('lists five collapsible groups with counts and every tool', () => {
     render(ToolsPane)
-    expect(screen.getByText('助手在对话里能调用的 35 个工具')).toBeVisible()
-    for (const title of ['看数据 · 15', '计划与持仓 · 10', '研究 · 3', '账本 · 4', '关注与数据 · 3']) {
+    expect(screen.getByText('助手在对话里能调用的 38 个工具')).toBeVisible()
+    for (const title of ['看数据 · 15', '计划与持仓 · 13', '研究 · 3', '账本 · 4', '关注与数据 · 3']) {
       expect(screen.getByRole('button', { name: title })).toBeVisible()
     }
-    expect(document.querySelectorAll('code')).toHaveLength(35)
+    expect(document.querySelectorAll('code')).toHaveLength(38)
     expect(screen.getByText('get_market')).toBeVisible()
     expect(screen.getByText('watchlist_remove')).toBeVisible()
   })

@@ -59,6 +59,15 @@ it('a historical brief shows that day\'s text, no action buttons and a latest ta
  expect(screen.getByRole('region', { name:'账户' })).toHaveTextContent('最新')
  expect(screen.getByRole('region', { name:'行情' })).toHaveTextContent('2026-11-06')
 })
+it('历史简报里的换仓行不显示写入按钮', async () => {
+ const rotation = { plan_id:11, ticker:'AAA', kind:'rotation_sell', text:'AAA 下次开盘卖出 150 股（换仓至 BBB）', stop:'36', quantity:'301', reason:null, sell_quantity:'150', counterpart:'BBB', stale_quantity:false }
+ install({ today:{ session:'2026-11-09', cutoff_at:'2026-11-10T00:00:00Z', actions:[rotation], account:{ cash:'1', equity:'2', unrealized_pnl:'0', realized_pnl:'0', cash_negative:false, notes:[] } }, bySession:{ '2026-11-06':brief('2026-11-06') } })
+ render(TodayView, { session:'2026-11-06' })
+ const actions = await screen.findByRole('region', { name:'今日操作' })
+ expect(within(actions).queryByRole('button', { name:'撤回' })).toBeNull()
+ expect(within(actions).queryByRole('button', { name:'记成交' })).toBeNull()
+ expect(actions).not.toHaveTextContent('换仓至 BBB')
+})
 it('historical actions use the empty reason when their section is absent', async () => {
  install({ bySession:{ '2026-11-06':brief('2026-11-06',{ sections:sections.filter(section => section.key !== 'actions') }) } }); render(TodayView,{session:'2026-11-06'})
  expect(await screen.findByRole('region',{name:'今日操作'})).toHaveTextContent('当天没有需要操作的事项')

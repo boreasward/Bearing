@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { invalidateAll } from '$lib/stores'
 import RetrospectPanel from './RetrospectPanel.svelte'
-import type { Retrospect } from './types'
+import type { Retrospect, RotationRetroData } from './types'
 
 beforeEach(() => { invalidateAll() })
 
@@ -165,7 +165,78 @@ function stubRetrospect(view: () => Retrospect = () => VIEW) {
   return router
 }
 
+const ROTATIONS: RotationRetroData = {
+  records: [
+    {
+      rotation_id: 3,
+      session: '2026-11-04',
+      origin: 'brief',
+      candidate: 'BBB',
+      verdict: 'half',
+      verdict_text: '半仓换',
+      holding_ticker: 'AAA',
+      reasons: 'BBB 的相对强度与行业都更强',
+      weakness: 'AAA 放量不足',
+      sell_quantity: '150',
+      buy_shares: '217',
+      fee_estimate: '2.00',
+      execution: { state: 'pending', sold_quantity: '0', sold_session: null, bought: false },
+      compare: [
+        { horizon: 5, status: 'unfinished', a_pct: null, b_pct: null, diff: null },
+        { horizon: 10, status: 'unfinished', a_pct: null, b_pct: null, diff: null },
+        { horizon: 20, status: 'unfinished', a_pct: null, b_pct: null, diff: null },
+      ],
+    },
+  ],
+  summary: {
+    counts: { hold: 0, half: 1, full: 0 },
+    executed: 0,
+    fee_total: '0.00',
+    switched: { sample: 0, enough: false, b_win_rate: null, mean_diff: null },
+    held: { sample: 0, enough: false, b_win_rate: null, mean_diff: null },
+  },
+  min_sample: 10,
+}
+
 describe('RetrospectPanel', () => {
+  it('有 rotations 时在规则检验之后渲染换仓块', async () => {
+    stubRetrospect(() => ({ ...VIEW, rotations: ROTATIONS }))
+    render(RetrospectPanel)
+    const block = await screen.findByRole('region', { name: '换仓比较' })
+    expect(block).toHaveTextContent('BBB')
+    expect(block).toHaveTextContent('半仓换')
+    const rules = screen.getByRole('region', { name: '规则检验' })
+    expect(rules.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('没有已结束的计划但已有换仓比较时，仍显示换仓块', async () => {
+    stubRetrospect(() => ({ ...VIEW, records: [], empty: true, rotations: ROTATIONS }))
+    render(RetrospectPanel)
+    expect(await screen.findByRole('region', { name: '换仓比较' })).toBeInTheDocument()
+    expect(screen.queryByText('还没有已结束的计划')).toBeNull()
+  })
+
+  it('缺 rotations 这个键时不报错、不渲染换仓块', async () => {
+    stubRetrospect()
+    render(RetrospectPanel)
+    expect(await screen.findByText('AAPL')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '换仓比较' })).toBeNull()
+  })
+
+  it('周汇总的离场原因认「换仓」，并列出本周的换仓结论', async () => {
+    stubRetrospect(() => ({
+      ...VIEW,
+      weekly: {
+        ...VIEW.weekly,
+        closed: [{ plan_id: 20, ticker: 'AAA', r_multiple: '0.13', exit_reason: 'rotation', tags: [] }],
+        rotations: [{ session: '2026-11-04', candidate: 'BBB', verdict: 'half', verdict_text: '半仓换', holding_ticker: 'AAA' }],
+      },
+    }))
+    render(RetrospectPanel)
+    expect(await screen.findByText(/AAA：R 0\.13（换仓）/)).toBeInTheDocument()
+    expect(screen.getByText(/本周换仓：2026-11-04 BBB 半仓换（卖出 AAA）/)).toBeInTheDocument()
+  })
+
   it('shows the empty message when there is nothing to review', async () => {
     stubRetrospect(() => ({ ...VIEW, records: [], empty: true, weekly: { ...VIEW.weekly, ended: 0, not_bought: [], tag_counts: {} }, rules: { realized: { trigger_rules: [], setup_tier: [], industry: [] }, hypothetical: { trigger_rules: [], setup_tier: [], industry: [] } } }))
     render(RetrospectPanel)

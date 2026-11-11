@@ -6,6 +6,7 @@ const MUTATING_TOOLS = new Set([
   'record_trade', 'record_cash_flow', 'record_equity',
   'start_research', 'conclude_research', 'drop_research',
   'continue_plan', 'revise_plan', 'cancel_plan', 'raise_stop', 'confirm_stop_order',
+  'save_rotation', 'withdraw_rotation',
   'void_record', 'watchlist_add', 'watchlist_remove', 'ensure_data',
 ])
 

@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/svelte'
 import AccountView from './AccountView.svelte'
 import { loadWorkbench } from './workbench-fixtures'
+import { fixture } from './test-fixtures'
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 it('renders five cards with their own header actions', async () => {
  await loadWorkbench(); const { container } = render(AccountView)
@@ -15,6 +16,27 @@ it('renders five cards with their own header actions', async () => {
  expect(container.querySelector('[data-muted="true"]')).toHaveTextContent('录错股数')
  expect(screen.getByRole('button', { name:'显示更多' })).toBeInTheDocument()
  expect(screen.getByRole('button', { name:'显示更多' }).closest('[role="region"]')).toBeNull()
+})
+const exposure = (extra: Record<string, unknown> = {}) => ({ pct:'0.5500', cap:'0.6', room:'5000.00', incomplete:false, ...extra })
+const accountWith = (patch: (row: Record<string, unknown>) => void) => { const row = structuredClone(fixture('get_account') as Record<string, unknown>); patch(row); return row }
+it('概览显示仓位占比、上限与剩余额度', async () => {
+ await loadWorkbench({ '/api/account':accountWith(row => { row.exposure = exposure() }) }); render(AccountView)
+ expect(screen.getByRole('region', { name:'概览' })).toHaveTextContent('仓位占比 55.0%（上限 60%），剩余额度 $5000.00')
+ expect(screen.getByRole('region', { name:'概览' })).not.toHaveTextContent('缺日线')
+})
+it('没有资金记录时显示占位', async () => {
+ await loadWorkbench({ '/api/account':accountWith(row => { row.exposure = exposure({ pct:null, room:null }) }) }); render(AccountView)
+ expect(screen.getByRole('region', { name:'概览' })).toHaveTextContent('仓位占比 —（未提供账户资金）')
+})
+it('有持仓缺日线时带提示', async () => {
+ await loadWorkbench({ '/api/account':accountWith(row => { row.exposure = exposure({ incomplete:true }) }) }); render(AccountView)
+ expect(screen.getByRole('region', { name:'概览' })).toHaveTextContent('仓位占比 55.0%（上限 60%），剩余额度 $5000.00')
+ expect(screen.getByRole('region', { name:'概览' })).toHaveTextContent('有持仓缺日线，占比偏低')
+})
+it('接口没有 exposure 字段时不报错', async () => {
+ await loadWorkbench({ '/api/account':accountWith(row => { delete row.exposure }) }); render(AccountView)
+ expect(screen.getByRole('region', { name:'概览' })).toHaveTextContent('现金')
+ expect(screen.getByRole('region', { name:'概览' })).not.toHaveTextContent('仓位占比')
 })
 it('each header action opens its form', async () => {
  await loadWorkbench(); render(AccountView)

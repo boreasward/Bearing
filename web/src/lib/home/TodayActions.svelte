@@ -10,16 +10,16 @@
   import { errorText, type TodayAction, type WritePreview } from './types'
 
   // 今日操作（spec §12）：置顶块，没有内容时整块不出现。每条一行带直接可点的动作：
-  // 「确认已挂单」两步确认，「记成交」打开预填表单。
+  // 「确认已挂单」两步确认，「记成交」打开预填表单；换仓卖出一行另有「撤回」（v3.3 spec §8，两步确认）。
   let { actions, onChanged }: { actions: TodayAction[]; onChanged?: () => void } = $props()
 
-  // spec §7.4 的规则次序：止损触及未卖出最紧急，其后依次卖出指令、缺日线、止损单、持有
-  const ORDER: Record<string, number> = { stop_hit_unresolved: 0, sell_next_open: 1, unchecked: 2, stop_order: 3, hold: 4 }
+  // spec §7.4 的规则次序：止损触及未卖出最紧急，其后依次卖出指令、换仓卖出（v3.3 §8）、缺日线、止损单、持有
+  const ORDER: Record<string, number> = { stop_hit_unresolved: 0, sell_next_open: 1, rotation_sell: 2, unchecked: 3, stop_order: 4, hold: 5 }
   const sorted = $derived([...actions].sort((a, b) => (ORDER[a.kind] ?? 9) - (ORDER[b.kind] ?? 9)))
 
   let busy = $state(false)
   let confirmOpen = $state(false)
-  let pending = $state<{ preview: string; write: () => Promise<unknown> } | null>(null)
+  let pending = $state<{ title: string; actionLabel: string; done: string; preview: string; write: () => Promise<unknown> } | null>(null)
   let writing = $state(false)
 
   // 「确认已挂单」（A18）：先 confirmed=false 取 preview，对话框确认后 confirmed=true
@@ -39,7 +39,7 @@
         request_id: requestId,
         confirmed: false,
       })
-      pending = { preview: first.preview ?? '', write: () => send(true) }
+      pending = { title: '确认已挂单', actionLabel: '确认已挂单', done: '已确认挂单', preview: first.preview ?? '', write: () => send(true) }
       confirmOpen = true
     } catch (cause) {
       notify.error(errorText(cause))
@@ -48,12 +48,35 @@
     }
   }
 
-  async function writeStopOrder() {
+  // 「撤回」换仓指令：同样先 confirmed=false 取复述，对话框确认后 confirmed=true
+  async function withdrawRotation(action: TodayAction) {
+    if (busy) return
+    busy = true
+    try {
+      const requestId = crypto.randomUUID()
+      const url = `/api/plans/${action.plan_id}/rotation/withdraw`
+      const first = await post<WritePreview>(url, { request_id: requestId, confirmed: false })
+      pending = {
+        title: '撤回换仓指令',
+        actionLabel: '撤回换仓',
+        done: '已撤回换仓指令',
+        preview: first.preview ?? '',
+        write: () => post<unknown>(url, { request_id: requestId, confirmed: true }),
+      }
+      confirmOpen = true
+    } catch (cause) {
+      notify.error(errorText(cause))
+    } finally {
+      busy = false
+    }
+  }
+
+  async function writePending() {
     if (!pending) return
     writing = true
     try {
       await pending.write()
-      notify.success('已确认挂单')
+      notify.success(pending.done)
       confirmOpen = false
       pending = null
       onChanged?.()
@@ -90,7 +113,7 @@
             {#if action.kind === 'stop_order' && action.stop != null}
               <Button size="sm" onclick={() => confirmPlaced(action)}>确认已挂单</Button>
             {/if}
-            {#if action.kind === 'stop_hit_unresolved' || action.kind === 'sell_next_open'}
+            {#if action.kind === 'stop_hit_unresolved' || action.kind === 'sell_next_open' || action.kind === 'rotation_sell'}
               <Button
                 size="sm"
                 variant="outline"
@@ -99,6 +122,9 @@
                   tradeOpen = true
                 }}>记成交</Button
               >
+            {/if}
+            {#if action.kind === 'rotation_sell'}
+              <Button size="sm" variant="outline" onclick={() => withdrawRotation(action)}>撤回</Button>
             {/if}
           </div>
         </li>
@@ -113,11 +139,11 @@
 
 <ConfirmDialog
   bind:open={confirmOpen}
-  title="确认已挂单"
+  title={pending?.title ?? '确认已挂单'}
   consequence={pending?.preview ?? ''}
-  actionLabel="确认已挂单"
+  actionLabel={pending?.actionLabel ?? '确认已挂单'}
   busy={writing}
-  onConfirm={writeStopOrder}
+  onConfirm={writePending}
   onCancel={() => (pending = null)}
 />
 
@@ -125,6 +151,7 @@
   bind:open={tradeOpen}
   ticker={tradeTarget?.ticker ?? ''}
   planId={tradeTarget?.plan_id ?? null}
-  shares={tradeTarget?.quantity ?? null}
+  shares={tradeTarget?.kind === 'rotation_sell' ? (tradeTarget.sell_quantity ?? tradeTarget.quantity) : (tradeTarget?.quantity ?? null)}
+  side={tradeTarget?.kind === 'rotation_sell' ? 'sell' : 'buy'}
   onDone={onChanged}
 />

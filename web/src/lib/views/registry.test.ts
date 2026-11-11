@@ -7,8 +7,8 @@ import GenericCard from './cards/GenericCard.svelte'
 const tools = Object.keys(fixtures)
 afterEach(cleanup)
 it('every_tool_has_an_entry', () => {
-  expect(tools).toHaveLength(35)
-  expect(Object.keys(REGISTRY)).toHaveLength(35)
+  expect(tools).toHaveLength(38)
+  expect(Object.keys(REGISTRY)).toHaveLength(38)
   for (const tool of tools) {
     expect(REGISTRY[tool as keyof typeof REGISTRY]).toBeDefined()
     expect(viewFor(tool).component).toBe(REGISTRY[tool as keyof typeof REGISTRY].component)

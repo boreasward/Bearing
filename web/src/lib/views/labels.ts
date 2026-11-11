@@ -22,6 +22,7 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   "get_positions": "当前持仓",
   "get_price_bars": "日线",
   "get_research": "研究列表",
+  "get_rotation_table": "换仓比较表",
   "raise_stop": "上调止损",
   "record_cash_flow": "记录出入金",
   "record_equity": "记录对账",
@@ -29,12 +30,14 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   "revise_plan": "修订计划",
   "save_holding_review": "保存持仓复查",
   "save_plan": "保存计划",
+  "save_rotation": "保存换仓结论",
   "save_summary": "保存总结",
   "save_verdict": "保存判断",
   "start_research": "发起研究",
   "void_record": "作废记录",
   "watchlist_add": "加入观察名单",
-  "watchlist_remove": "移出观察名单"
+  "watchlist_remove": "移出观察名单",
+  "withdraw_rotation": "撤回换仓指令"
 }
 export const FIELD_LABELS: Record<string, string> = {
   "ticker": "股票",
@@ -176,5 +179,21 @@ export const FIELD_LABELS: Record<string, string> = {
   "volume": "量",
   "date": "日期",
   "knowledge_version": "知识版本",
-  "point_in_time": "数据时点"
+  "point_in_time": "数据时点",
+  "exposure": "仓位占比",
+  "account": "账户仓位",
+  "candidate": "候选",
+  "excluded": "排除项",
+  "fees": "手续费",
+  "history": "历史比较",
+  "holding": "持仓计划",
+  "rotation": "换仓记录",
+  "funded_by_rotation_id": "资金来源换仓",
+  "rotation_id": "换仓编号",
+  "sell_quantity": "换仓卖出股数",
+  "stop_quantity_stale": "止损单数量待改",
+  "short_of_room": "额度不足",
+  "uncapped_shares": "不受上限的股数",
+  "over_cap": "超出仓位上限",
+  "stop_order_quantity": "止损单股数"
 }

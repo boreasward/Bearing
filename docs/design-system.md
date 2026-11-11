@@ -127,10 +127,12 @@
 | `feature_flag` | 功能当前值 | enabled 成功；disabled 中性 |
 | `roadmap_version` | roadmap_versions.status | planned 信息；in_progress 运行中；engineering_done 成功；user_acceptance_pending 警告；done 成功；dropped 中性 |
 | `plan` | v3.1 计划线状态（`GET /api/plans` 的 `status`） | pending 待入场信息；open 已买入成功；closed、expired、invalidated、replaced、cancelled 五种已结束状态全部中性 |
-| `plan_action` | 「下一个交易日的操作」五种（`next_action.kind`，v3.1 spec §7.4）；固定文案来自接口 `text`，`stop_order` 的「需上调」变体用 `StatusPill` 的 `text` 覆盖 | stop_hit_unresolved 危险、sell_next_open 警告（两种警示语气）；unchecked、stop_order 信息、hold 中性（常规） |
+| `plan_action` | 「下一个交易日的操作」六种（`next_action.kind`，v3.1 spec §7.4，v3.3 加 `rotation_sell`）；固定文案来自接口 `text`，`stop_order` 的「需上调」变体用 `StatusPill` 的 `text` 覆盖 | stop_hit_unresolved 危险、sell_next_open 与 rotation_sell（换仓卖出）警告（警示语气）；unchecked、stop_order 信息、hold 中性（常规） |
 | `stop_order` | 持仓的止损挂单状态（`stop_order_status`） | none 中性；needs_raise 警告；confirmed 成功 |
 | `research` | v3.2 研究五态（`GET /api/research` 的 `status`，spec §6.1） | watching（观察中）信息；planned（已转计划）成功；rejected、expired、dropped 三个终态中性 |
-| `retro_tag` | v3.2 复盘偏差标签（`execution.retrospect` 的 `tag.code`）+ `followed`（照做） | followed 成功；not_filled（未买入：价格未进入场区间）中性、不算偏差；七个偏差代码（not_bought_in_zone、entry_out_of_zone、over_bought、stop_order_missing、late_sell_after_stop、late_sell_after_instruction、early_sell）全部警告。带 N 的两个（晚卖 N 个交易日）由组件拼句后经 `StatusPill` 的 `text` 传入，表里存不带数字的文案 |
+| `retro_tag` | v3.2 复盘偏差标签（`execution.retrospect` 的 `tag.code`）+ `followed`（照做） | followed 成功；not_filled（未买入：价格未进入场区间）中性、不算偏差；七个偏差代码（not_bought_in_zone、entry_out_of_zone、over_bought、stop_order_missing、late_sell_after_stop、late_sell_after_instruction、early_sell、over_cap（买入后超出仓位上限，v3.3））全部警告。带 N 的两个（晚卖 N 个交易日）由组件拼句后经 `StatusPill` 的 `text` 传入，表里存不带数字的文案 |
+| `rotation` | v3.3 换仓比较结论（`rotation.verdict`） | hold 继续持有中性；half 半仓换、full 全仓换信息 |
+| `rotation_state` | v3.3 换仓指令的执行情况（复盘记录 `execution.state`） | pending 待执行信息；done 已执行成功；withdrawn 已撤回、superseded 被取代中性 |
 | `regime` | 市场热度 | risk_on 进攻成功；neutral 中性；risk_off 防守警告；insufficient 样本不足警告 |
 | `etf_state` | ETF 强弱 | strong 强成功；mixed 混合、weak 弱中性 |
 | `write` | 写入结果 | written 已写入成功；preview 待确认警告；replayed 重放中性 |
@@ -226,15 +228,16 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | --- | --- | --- |
 | `types.ts` | — | 接口契约的类型与 `errorText`（把 `{"error": "code: 说明"}` 的中文部分取出来） |
 | `markdown.ts` + `Markdown.svelte` | `{ source }` | 简报 Markdown 解析成块结构（标题 / 段落 / `-` 列表 / `|` 表格 / `**粗体**`，不认识的行按段落），用 `{#each}` 渲染，表格用 `ui/table`；不输出 HTML 字符串、不用 `{@html}` |
-| `TodayActions.svelte` | `{ actions, onChanged? }` | 今日操作卡；空列表显示「今天没有需要操作的事项」，`PageCard` 的标题旁显示操作条数；`stop_hit_unresolved` 排第一；每行可带进对话；「确认已挂单」两步确认；卖出类动作带「记成交」 |
-| `PlanCard.svelte` | `{ card, expanded?, onChanged? }` | 一份计划卡：状态、价位（`PlanLevels`）、下一个交易日的操作（`plan_action`）；持仓另有浮动盈亏、已持有天数、止损单状态；已结束显示平仓结果；展开拉 `GET /api/plans/{id}` 看变化记录；pending 显示「最新收盘高于入场区间」、可取消计划；open 可调高止损；根节点带 `id="plan-{plan_id}"`；研究卡链接使用 `#plans/{id}`；expanded 控制初始展开，仍可手动折叠；「带进对话」走 ContextChip 事件 |
+| `TodayActions.svelte` | `{ actions, onChanged? }` | 今日操作卡；空列表显示「今天没有需要操作的事项」，`PageCard` 的标题旁显示操作条数；`stop_hit_unresolved` 排第一；每行可带进对话；「确认已挂单」两步确认；卖出类动作带「记成交」；v3.3 加 `rotation_sell`（换仓卖出）行，排在 `sell_next_open` 之后、`unchecked` 之前：「记成交」预填方向为卖出、股数为 `sell_quantity`，另有「撤回」（`POST /api/plans/{id}/rotation/withdraw`，两步确认，复述取自接口 preview）；`stale_quantity` 的止损单行文案取 `text`，仍是「确认已挂单」；历史简报不渲染本组件，没有写入按钮 |
+| `PlanCard.svelte` | `{ card, expanded?, onChanged? }` | 一份计划卡：状态、价位（`PlanLevels`）、下一个交易日的操作（`plan_action`）；持仓另有浮动盈亏、已持有天数、止损单状态；已结束显示平仓结果；展开拉 `GET /api/plans/{id}` 看变化记录；pending 显示「最新收盘高于入场区间」、可取消计划；open 可调高止损；v3.3：open 且换仓指令还在时显示「换仓指令：卖出 N 股，换至 B」，pending 且有 `funded_by` 时显示「资金来自换仓 A（N 股）」，pending 且股数为 0 并带 `no_room` 警告时显示「仓位已到上限」（不再写「建议 0 股」），已平仓离场原因认「换仓」；根节点带 `id="plan-{plan_id}"`；研究卡链接使用 `#plans/{id}`；expanded 控制初始展开，仍可手动折叠；「带进对话」走 ContextChip 事件 |
 | `PlanCards.svelte` | `{ id?, onChanged? }` | 三组：持仓、待入场、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态显示原因；「持仓」组标题旁「补录持仓」打开不带 `plan_id` 的 `TradeForm`（宿主补录计划，spec §6.6）；订阅 plans(group)，写入后 invalidateAll；id 自动展开变化记录（含已结束及默认页之外的对象） |
 | `AccountStrip.svelte` | `{ account?, onChanged?, tag? }` | 默认读 today store（可显式传 account 快照）；写入后 invalidateAll 并追加本地操作说明。账户卡：现金 / 总资产 / 浮动盈亏 / 已实现盈亏；现金为负显示 `notes`；「记出入金」「对账」入口；可在标题旁显示 `tag`（历史简报标「最新」） |
-| `TradeForm.svelte` / `CashFlowForm.svelte` / `ReconcileForm.svelte` | `{ bind:open, onDone? }`（TradeForm 另有 `ticker`/`planId`/`shares` 预填） | 三个写入表单（Dialog）：预填、失败保留草稿与 `request_id`、表单内 `Alert` 显示原因；提交先拿 `preview` 再 `ConfirmDialog` 确认写入。v3.2 spec §7：TradeForm 的「时间」拆成「日期（美东）」「时间（美东）」两个原生控件（`type="date"` / `type="time" step="60"`，默认 `nowInNewYork()`，提交拼 `newYorkIso` 带美东偏移）；出入金与对账的日期也是 `type="date"` 控件，提交口径不变 |
+| `TradeForm.svelte` / `CashFlowForm.svelte` / `ReconcileForm.svelte` | `{ bind:open, onDone? }`（TradeForm 另有 `ticker`/`planId`/`shares`（数字或字符串）/`side`（默认买入，换仓卖出传 `sell`）预填） | 三个写入表单（Dialog）：预填、失败保留草稿与 `request_id`、表单内 `Alert` 显示原因；提交先拿 `preview` 再 `ConfirmDialog` 确认写入。v3.2 spec §7：TradeForm 的「时间」拆成「日期（美东）」「时间（美东）」两个原生控件（`type="date"` / `type="time" step="60"`，默认 `nowInNewYork()`，提交拼 `newYorkIso` 带美东偏移）；出入金与对账的日期也是 `type="date"` 控件，提交口径不变 |
 | `SettingsSheet.svelte` | `{ bind:open, onSaved? }` | 设置（`Sheet`）：运行时 / 提供方 / 模型，选项来自 `GET /api/settings/options`，每项可在 `Select` 与自由 `Input` 间切换；保存 `PUT /api/settings`，错误用 toast 显示原因 |
 | `ResearchCards.svelte` | `{ id?, onChanged?, onStartResearch? }` | 研究两组（v3.2 spec §10）：观察中、已结束（折叠）；空组走 `DataBlock` 的 `empty` 态；观察中组标题旁「发起研究」按钮调 `onStartResearch('研究 ')`（研究 + 空格，用户补股票与论点；页面打开助手并预填，研究在对话里发起，spec §10「股票留空时预填『研究 』」）；订阅 research(group)，写入后 invalidateAll；id 打开相应对象（含已结束及默认页之外的对象） |
 | `ResearchCard.svelte` | `{ card, expanded?, onChanged? }` | 一张研究卡：股票、`StatusPill`（`research` 域）、第几天、论点、条件与最新收盘（`MetricValue` 的 `currency`）、显示文案（优先级：真触发 `triggered_session` → 无条件 → 缺日线 `missing_bar`（stale 日线上的 condition_met 盖不过它）→ 当日条件已到 → 均线日线不足 → 观察中，从卡片字段推导）、agent 结论一句；三种价位条件的文案由 `condition.kind` + `moneyText(condition.level)` 拼（`收盘站上 $105.00` 等，spec §7），`close_above_ma` 沿用服务端文案；「已转计划 #id」是锚点链接（`#plans/{plan_id}`，打开计划完整视图）；展开拉 `GET /api/research/{id}` 看时间线；观察中的「放弃研究」两步确认（`POST /api/research/{id}/drop`，`confirmed=false` 先拿 preview）；expanded 控制初始展开，仍可手动折叠；「带进对话」走 ContextChip 事件 |
 | `RetrospectPanel.svelte` | `无` | 复盘（v3.2 spec §10）：顶部周汇总（`Select` 切周，本周与之前 8 周，值用各周周五；已结束 / 照做 / 有偏差、R 合计、已实现盈亏与周初周末总资产带 `$`）、中间执行复盘 `ui/table`（每份已结束计划一行：股票、起止、计划说的 `PlanLevels`、实际做的、R、偏差标签 `StatusPill`（`retro_tag` 域，带 N 的句子经 `text` 传入）、假设结果一句）、底部规则检验两张表（真实成交 / 假设结果）× 三个分组键，样本不足的组只显示样本数与「样本不足」，表头上方一行接口 `note`；执行复盘记录「可翻」：`limit` 阶梯 20 → 50 → 100（契约上限 100，不扩接口，「显示更多」按钮）。周汇总除数字与金额外还显示接口携带的 §5.4 明细：偏差各出现几次、已平仓各份一行（R 与离场原因、标签）、未买各份一行（结束原因与假设结果）、本周名单（新上榜 / 掉出 / 再次上榜最多）。`empty` 时整块「还没有已结束的计划」（B5）；共享 retrospectFor(week,limit)，全站写入后重取且保留当前周与条数 |
+| `RotationRetro.svelte` | `{ data: RotationRetroData }` | 复盘页的换仓块（v3.3 spec §9），挂在 `RetrospectPanel` 规则检验之后（`rotations` 缺失时不挂；没有已结束的计划但已有换仓比较时整页仍显示）：开头一句「规则未经验证；样本不足的组不给数」；汇总（三种结论各几次、已执行几次、手续费估计合计、换仓与继续持有两组的 20 日后 B 跑赢 A 占比与平均差值，样本不足的组只给次数与 `StatusPill`「样本不足」）；`ui/table` 每次比较一行（日期、B、A、结论 `StatusPill`（`rotation` 域）、执行情况 `StatusPill`（`rotation_state` 域）与一句说明、第 5 / 10 / 20 个交易日 B 减 A 的差，日线不够写「进行中」，继续持有且没指明持仓的记录对照列为空）；没有记录时「还没有换仓比较」。`RetrospectPanel` 的周汇总另列本周换仓结论各一行，离场原因认「换仓」 |
 
 ### 6.2.2 工作台壳与取数（`web/src/lib/shell/`、`stores/`）
 
@@ -259,7 +262,7 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 
 | 组件 / 模块 | API | 职责 |
 | --- | --- | --- |
-| `registry.ts` | `ToolName`（35 个字面量）、`REGISTRY: Record<ToolName, ViewEntry>`、`viewFor(tool)` | 条目 `{ component, title(data) }`；未知工具回退 `GenericCard`；组件渲染调用时快照，动作跳对象页读取现状 |
+| `registry.ts` | `ToolName`（38 个字面量）、`REGISTRY: Record<ToolName, ViewEntry>`、`viewFor(tool)` | 条目 `{ component, title(data) }`；未知工具回退 `GenericCard`；组件渲染调用时快照，动作跳对象页读取现状 |
 | `CallMeta` | `{ tool; ref; session; calledAt; write?: 'written' \| 'preview' \| 'replayed' }` | 裸工具名、真实调用编号与时点，不为页面接口编造调用编号 |
 | `labels.ts` | `FIELD_LABELS`、`TOOL_LABELS` | 工具中文标题与接口字段中文，覆盖后端共用 fixtures 的顶层键 |
 | `cards/SourceLine` | `{ meta: CallMeta; calcVersion? }` | 等宽来源行 `{tool} · call:N · {session}`；无 session 用北京时间；无 ref 写 `{tool} · 调用中`；有计算版本才附加 |
@@ -271,14 +274,14 @@ v3.1 首页（`routes/Home.svelte`）的组合件：只组合通用层与领域�
 | `AccountView` | 无 props，自取共享 store | 五张卡：概览、持仓、成交、出入金、对账；概览与持仓共用账户数据，三张账本卡共用 ledger；表单动作位于所属卡片 |
 | `PageCard` | `{ title, tag?, actions?, children }` | 完整视图的通用卡片外壳，标题、次要标记、标题行操作与正文；区域以标题命名 |
 | `TodayColumns` | `{ aside, children }` | 今日页按容器宽度排为文字与右侧数字两栏、账户与行情并排或单列；右栏窄时内容在上 |
-| `cards/AccountMetrics` / `cards/AccountPositions` | `{ data: unknown }` | `AccountMetrics` 仅计算与展示账户概览指标，`AccountPositions` 展示账户持仓；供页面与对话账户快照卡复用。现金警告、账本提示与仓位快照来源由父组件 `AccountView` / `AccountCard` 按各自顺序组合 |
+| `cards/AccountMetrics` / `cards/AccountPositions` | `{ data: unknown }` | `AccountMetrics` 仅计算与展示账户概览指标（v3.3 加一行「仓位占比 X%（上限 Y%），剩余额度 $Z」：`exposure.pct` 为 null 时写「仓位占比 —（未提供账户资金）」，`incomplete` 时加「有持仓缺日线，占比偏低」，旧数据没有 `exposure` 键时整行不出现），`AccountPositions` 展示账户持仓；供页面与对话账户快照卡复用。现金警告、账本提示与仓位快照来源由父组件 `AccountView` / `AccountCard` 按各自顺序组合 |
 | `cards/AccountCard` | `{ data: unknown; meta? }` | 快照账户卡；组合 `AccountMetrics`、`AccountPositions`、对账差额与写入口。页面接口省略 meta，快照必须提供真实 CallMeta |
 | `cards/LevelsCard` / `TradeCard` / `NoteCard` | `{ data: unknown; meta }` | PlanLevels 与 ATR / 口径；成交、计划变化、止损单、平仓结果；保存的文字与写入徽标 |
 | `cards/AgendaCard` / `BarsTable` | `{ data: unknown; meta }` | facts agenda 四组清单（空组「无」）；日期 / 开高低收 / 量表格，数字右对齐 |
 | `cards/GenericCard` | `{ data: unknown; meta }` | 平面字典键值两列；字典列表取字段并集前 8 列并写剩余列数；其他 JSON 前 40 行可展开；空与缺值有原因 |
 | `views/tool-write.ts` | `isMutatingTool(tool)`、`toolWriteStatus(tool,data,error?)` | 显式写工具集合（含 ensure_data）；共享给终态刷新与 ToolCard。实际错误无徽标、write:false 为待确认、replay:true 为重放、其余成功写为已写入；读工具不显示写入徽标 |
-| `views/tool-catalog.ts` | `ToolWrite`、`TOOL_GROUPS`、`TOOL_CATALOG`、`toolsByGroup()` | 面板专用的 35 个工具目录：五组、中文说明与写入类型；工具名取自注册表，写入类型与后端目录一致性测试核对 |
-| `drawer/ToolsPane` | 无 props | 只读展示对话可调用的 35 个工具，按五组显示中文名、工具名、说明及写入标记；不提供搜索、工具参数或发起动作 |
+| `views/tool-catalog.ts` | `ToolWrite`、`TOOL_GROUPS`、`TOOL_CATALOG`、`toolsByGroup()` | 面板专用的 38 个工具目录：五组、中文说明与写入类型；工具名取自注册表，写入类型与后端目录一致性测试核对 |
+| `drawer/ToolsPane` | 无 props | 只读展示对话可调用的 38 个工具，按五组显示中文名、工具名、说明及写入标记；不提供搜索、工具参数或发起动作 |
 | `ResourceBlock` / `RunStatus` | `{ resource, emptyMessage, children }` / `{ brief }` | 共享 store 五态与重试，no_run 映射 empty；daily_run 状态，unfinished 额外徽标 |
 | `drawer/DashboardPane` | `{ onBring(chip) }` | 今日操作 / 账户 / 持仓与计划 / 研究中 / 市场温度五块；今日操作复用两步确认接口和 TradeForm；止损确认保留预览请求的计划、价格与 request_id，独立于成交表单的预填目标；每个对象行可带进对话 |
 | `drawer/MarketPane` | `{ onBring(chip) }` | 共享 MarketCard 的 pane 模式，打开完整行情链接；回调只触发一次 |

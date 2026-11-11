@@ -20,6 +20,13 @@ describe('TradeForm', () => {
     expect((screen.getByLabelText('股数') as HTMLInputElement).value).toBe('120')
   })
 
+  it('side and a string quantity prefill a sell (rotation_sell 「记成交」)', async () => {
+    render(TradeForm, { open: true, ticker: 'AAA', planId: 11, shares: '150', side: 'sell' })
+    await screen.findByRole('dialog')
+    expect(screen.getByLabelText('方向')).toHaveTextContent('卖出')
+    expect((screen.getByLabelText('股数') as HTMLInputElement).value).toBe('150')
+  })
+
   it('submits with confirmed=false first, shows the preview, then writes with confirmed=true', async () => {
     const calls: { url: string; body: Record<string, unknown> }[] = []
     const fetchRouter = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

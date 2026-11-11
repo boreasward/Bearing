@@ -46,7 +46,7 @@ describe('status vocabulary', () => {
   it('every domain of the type is in TONES and LABELS', () => {
     expect(domains.sort()).toEqual([
       'daily_run', 'etf_state', 'regime', 'write', 'account', 'agent', 'block', 'card', 'chain', 'connection', 'consistency', 'data_request', 'execution', 'feature_flag', 'fetch', 'instruction',
-      'knowledge', 'node', 'paper_decision', 'paper_order', 'plan', 'plan_action', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research', 'research_request', 'retro', 'retro_tag', 'roadmap_version', 'run', 'stop_order', 'system', 'tool_write',
+      'knowledge', 'node', 'paper_decision', 'paper_order', 'plan', 'plan_action', 'portfolio_verdict', 'proposal', 'push', 'reconcile', 'research', 'research_request', 'retro', 'retro_tag', 'roadmap_version', 'rotation', 'rotation_state', 'run', 'stop_order', 'system', 'tool_write',
     ].sort())
     expect(Object.keys(LABELS).sort()).toEqual(domains)
   })
@@ -90,8 +90,19 @@ describe('status vocabulary', () => {
     expect(LABELS.plan_action.stop_order).toBe('未确认止损单')
     expect(LABELS.plan_action.hold).toBe('继续持有')
     expect(TONES.plan_action).toEqual({
-      stop_hit_unresolved: 'danger', sell_next_open: 'warn', unchecked: 'info', stop_order: 'info', hold: 'neutral',
+      stop_hit_unresolved: 'danger', sell_next_open: 'warn', rotation_sell: 'warn', unchecked: 'info', stop_order: 'info', hold: 'neutral',
     })
+  })
+
+  it('v3.3 rotation words: rotation_sell shares the sell_next_open tone, rotation verdicts and states', () => {
+    expect(TONES.plan_action.rotation_sell).toBe(TONES.plan_action.sell_next_open)
+    expect(LABELS.plan_action.rotation_sell).toBe('换仓卖出')
+    expect(TONES.retro_tag.over_cap).toBe('warn')
+    expect(LABELS.retro_tag.over_cap).toBe('买入后超出仓位上限')
+    expect(LABELS.rotation).toEqual({ hold: '继续持有', half: '半仓换', full: '全仓换' })
+    expect(LABELS.rotation_state).toEqual({ pending: '待执行', done: '已执行', withdrawn: '已撤回', superseded: '被取代' })
+    for (const key of Object.keys(LABELS.rotation)) expect(statusOf('rotation', key).known).toBe(true)
+    for (const key of Object.keys(LABELS.rotation_state)) expect(statusOf('rotation_state', key).known).toBe(true)
   })
 
   it('stop_order states: none neutral, needs_raise warn, confirmed success', () => {
@@ -130,10 +141,11 @@ describe('status vocabulary', () => {
       late_sell_after_stop: '止损触及后晚卖',
       late_sell_after_instruction: '卖出指令后晚卖',
       early_sell: '早卖',
+      over_cap: '买入后超出仓位上限',
     })
     expect(TONES.retro_tag.followed).toBe('success')
     expect(TONES.retro_tag.not_filled).toBe('neutral')
-    for (const key of ['not_bought_in_zone', 'entry_out_of_zone', 'over_bought', 'stop_order_missing', 'late_sell_after_stop', 'late_sell_after_instruction', 'early_sell'] as const) {
+    for (const key of ['not_bought_in_zone', 'entry_out_of_zone', 'over_bought', 'stop_order_missing', 'late_sell_after_stop', 'late_sell_after_instruction', 'early_sell', 'over_cap'] as const) {
       expect(TONES.retro_tag[key], key).toBe('warn')
     }
   })

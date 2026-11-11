@@ -26,3 +26,16 @@ it('explains missing values', () => {
  const { container } = render(AccountCard, { data: {}, meta })
  expect(container).toHaveTextContent('没算')
 })
+it('shows the exposure line from the get_account result and tolerates its absence', () => {
+ const base = fixture('get_account') as Record<string, unknown>
+ const withLine = render(AccountCard, { data:{ ...base, exposure:{ pct:'0.5500', cap:'0.6', room:'5000.00', incomplete:true } }, meta })
+ expect(withLine.container).toHaveTextContent('仓位占比 55.0%（上限 60%），剩余额度 $5000.00')
+ expect(withLine.container).toHaveTextContent('有持仓缺日线，占比偏低')
+ withLine.unmount()
+ const placeholder = render(AccountCard, { data:{ ...base, exposure:{ pct:null, cap:'0.6', room:null, incomplete:false } }, meta })
+ expect(placeholder.container).toHaveTextContent('仓位占比 —（未提供账户资金）')
+ placeholder.unmount()
+ const { exposure: _drop, ...legacy } = base
+ const old = render(AccountCard, { data:legacy, meta })
+ expect(old.container).not.toHaveTextContent('仓位占比')
+})

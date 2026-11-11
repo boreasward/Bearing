@@ -37,6 +37,10 @@ const PENDING: PlanCardData = {
   end_reason: null,
   close_above_entry: true,
   missing_bar: false,
+  rotation: null,
+  funded_by: null,
+  stop_quantity_stale: false,
+  warnings: [],
 }
 
 const OPEN: PlanCardData = {
@@ -106,6 +110,46 @@ describe('PlanCard', () => {
     const { container } = render(PlanCard, { card: CLOSED })
     expect(container.textContent).toContain('相当于计划风险 2.10 倍')
     expect(container.textContent).toContain('离场原因：移动止损')
+  })
+
+  it('持仓卡片显示换仓指令', () => {
+    const card: PlanCardData = {
+      ...OPEN,
+      rotation: { rotation_id: 3, sell_quantity: '150', counterpart: 'BBB' },
+      next_action: { kind: 'rotation_sell', text: 'AAPL 下次开盘卖出 150 股（换仓至 BBB）', stop: '201.50', reason: null, sell_quantity: '150', counterpart: 'BBB' },
+    }
+    const { container } = render(PlanCard, { card })
+    expect(container.textContent).toContain('换仓指令：卖出 150 股，换至 BBB')
+    expect(screen.getByText('AAPL 下次开盘卖出 150 股（换仓至 BBB）')).toBeInTheDocument()
+  })
+
+  it('没有换仓指令的持仓卡片不显示这一行', () => {
+    const { container } = render(PlanCard, { card: OPEN })
+    expect(container.textContent).not.toContain('换仓指令')
+  })
+
+  it('待入场卡片显示资金来源', () => {
+    const card: PlanCardData = { ...PENDING, funded_by: { rotation_id: 3, holding_ticker: 'AAA', sell_quantity: '150' } }
+    const { container } = render(PlanCard, { card })
+    expect(container.textContent).toContain('资金来自换仓 AAA（150 股）')
+  })
+
+  it('已平仓卡片的离场原因「换仓」', () => {
+    const card: PlanCardData = { ...CLOSED, outcome: { ...CLOSED.outcome, exit_reason: 'rotation' } }
+    const { container } = render(PlanCard, { card })
+    expect(container.textContent).toContain('离场原因：换仓')
+  })
+
+  it('待入场卡片股数为 0 且带 no_room 警告时显示「仓位已到上限」', () => {
+    const card: PlanCardData = { ...PENDING, shares: 0, warnings: ['no_room'] }
+    const { container } = render(PlanCard, { card })
+    expect(screen.getByText('仓位已到上限')).toBeInTheDocument()
+    expect(container.textContent).not.toContain('建议 0 股')
+  })
+
+  it('有股数时不显示「仓位已到上限」，其他警告码也不触发', () => {
+    render(PlanCard, { card: { ...PENDING, warnings: ['earnings_unknown'] } })
+    expect(screen.queryByText('仓位已到上限')).toBeNull()
   })
 
   it('expanding fetches the plan detail and lists the event timeline', async () => {

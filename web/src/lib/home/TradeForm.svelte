@@ -17,13 +17,17 @@
     open = $bindable(false),
     ticker = '',
     planId = null as number | null,
-    shares = null as number | null,
+    shares = null as number | string | null,
+    side = 'buy' as 'buy' | 'sell',
     onDone,
   }: {
     open?: boolean
     ticker?: string
     planId?: number | null
-    shares?: number | null
+    /** 预填股数；换仓卖出一行传计划卖出股数（字符串） */
+    shares?: number | string | null
+    /** 预填方向；默认买入，换仓卖出一行传 'sell' */
+    side?: 'buy' | 'sell'
     onDone?: () => void
   } = $props()
 
@@ -37,7 +41,7 @@
       const now = nowInNewYork()
       draft = {
         ticker,
-        side: 'buy',
+        side,
         quantity: shares == null ? '' : String(shares),
         price: '',
         date: now.date,

@@ -29,9 +29,12 @@
     max_hold: '持有到期',
     thesis_broken: '论点失效',
     manual: '手动',
+    rotation: '换仓',
   }
   const ENDED = new Set(['closed', 'expired', 'invalidated', 'replaced', 'cancelled'])
   const ended = $derived(ENDED.has(card.status))
+  // v3.3 spec §5.3：延续后额度用完的待入场计划，股数 0 且带 no_room 警告，不显示「建议 0 股」
+  const noRoom = $derived(card.status === 'pending' && !card.shares && (card.warnings ?? []).includes('no_room'))
 
   // 接口价位是字符串：转成数字交给 PlanLevels（design-system §6.2 的约定），转不了的按缺失
   function num(value: string | number | null | undefined): number | null {
@@ -166,13 +169,15 @@
       high={num(card.levels.entry_high)}
       stop={num(card.levels.stop)}
       target1={num(card.levels.target1)}
-      shares={num(card.shares)}
+      shares={noRoom ? null : num(card.shares)}
     />
 
     {#if card.status === 'pending'}
       {#if card.valid_until}<p class="text-xs text-muted-foreground">有效至 {card.valid_until}</p>{/if}
       {#if card.close_above_entry}<p class="text-sm text-warn">最新收盘高于入场区间</p>{/if}
       {#if card.missing_bar}<p class="text-sm text-warn">缺日线，未复查</p>{/if}
+      {#if noRoom}<p class="text-sm text-warn">仓位已到上限</p>{/if}
+      {#if card.funded_by}<p class="text-xs text-muted-foreground">资金来自换仓 {card.funded_by.holding_ticker}（{card.funded_by.sell_quantity} 股）</p>{/if}
       {#if card.thesis}<p class="text-xs text-muted-foreground">{card.thesis}</p>{/if}
     {:else if card.status === 'open' && card.position}
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
@@ -184,6 +189,9 @@
         {#if card.held_sessions != null}已持有 {card.held_sessions} 个交易日 · {/if}
         止损单 <StatusPill domain="stop_order" value={card.stop_order_status} />
       </p>
+      {#if card.rotation}
+        <p class="text-sm">换仓指令：卖出 {card.rotation.sell_quantity} 股，换至 {card.rotation.counterpart}</p>
+      {/if}
       {#if card.next_action}
         <div class="flex flex-wrap items-center gap-2 text-sm">
           <span class="text-muted-foreground">下一个交易日</span>

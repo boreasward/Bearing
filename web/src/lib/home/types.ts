@@ -16,6 +16,20 @@ export interface TodayAction {
   stop: string | null
   quantity: number
   reason: string | null
+  /** v3.3：换仓卖出行的计划卖出股数与对方（B）；其余行为 null */
+  sell_quantity: string | null
+  counterpart: string | null
+  /** v3.3：止损单数量需要改（文案已在 text 里），仍走「确认已挂单」 */
+  stale_quantity: boolean
+}
+
+/** v3.3 账户仓位占比（today.account.exposure、GET /api/account）：pct 与 room 没有资金或运行记录时为 null，cap 总有。
+ * pct / cap 是比例字符串（"0.5493"、"0.6"），页面自己乘 100 显示。 */
+export interface Exposure {
+  pct: string | null
+  cap: string
+  room: string | null
+  incomplete: boolean
 }
 
 export interface AccountRow {
@@ -25,6 +39,7 @@ export interface AccountRow {
   realized_pnl: string
   cash_negative: boolean
   notes: string[]
+  exposure?: Exposure
 }
 
 export interface Today {
@@ -77,13 +92,16 @@ export interface PlanPosition {
   unrealized_pct: string | null
 }
 
-export type NextActionKind = 'stop_hit_unresolved' | 'sell_next_open' | 'unchecked' | 'stop_order' | 'hold'
+export type NextActionKind = 'stop_hit_unresolved' | 'sell_next_open' | 'rotation_sell' | 'unchecked' | 'stop_order' | 'hold'
 
 export interface NextAction {
   kind: NextActionKind
   text: string
   stop: string | null
   reason: string | null
+  /** rotation_sell 才有 */
+  sell_quantity?: string | null
+  counterpart?: string | null
 }
 
 export interface CloseOutcome {
@@ -123,6 +141,14 @@ export interface PlanCardData {
   close_above_entry: boolean
   /** pending plans whose session bar is missing — renders 「缺日线，未复查」 (spec §6.3 末段) */
   missing_bar: boolean
+  /** v3.3：这份计划是 A 且换仓指令还在（只在 open 的计划上非 null） */
+  rotation: { rotation_id: number; sell_quantity: string; counterpart: string } | null
+  /** v3.3：这份计划是 B，资金来自哪次换仓 */
+  funded_by: { rotation_id: number; holding_ticker: string; sell_quantity: string } | null
+  /** v3.3：止损单数量需要改 */
+  stop_quantity_stale: boolean
+  /** v3.3：计划的警示码，如 `no_room`（延续后额度用完） */
+  warnings: string[]
 }
 
 export interface PlanEvent {
@@ -311,6 +337,8 @@ export interface WeeklySummary {
   equity_end: string | null
   realized_pnl: string
   listing: { new: string[]; dropped: string[]; most_relisted: string | null }
+  /** v3.3：本周的换仓结论各一行（含继续持有）；旧数据没有这个键 */
+  rotations?: { session: string; candidate: string; verdict: 'hold' | 'half' | 'full'; verdict_text: string; holding_ticker: string | null }[]
 }
 
 // 样本不足的组胜率 / 平均 R / R 合计为 null，insufficient 为真（spec §5.5）。
@@ -332,6 +360,54 @@ export interface Retrospect {
   empty: boolean
   min_sample: number
   note: string
+  /** v3.3：换仓比较块；旧数据没有这个键 */
+  rotations?: RotationRetroData
+}
+
+/** v3.3 换仓复盘（retrospect_view.rotations）：股数已去尾零、手续费取到分；样本不足的组 b_win_rate / mean_diff 为 null。 */
+export interface RotationRecord {
+  rotation_id: number
+  session: string
+  origin: 'brief' | 'chat'
+  candidate: string
+  verdict: 'hold' | 'half' | 'full'
+  verdict_text: string
+  holding_ticker: string | null
+  reasons: string
+  weakness: string
+  sell_quantity: string | null
+  buy_shares: string | null
+  fee_estimate: string
+  /** hold 为 null */
+  execution: {
+    state: 'pending' | 'done' | 'withdrawn' | 'superseded'
+    sold_quantity: string
+    sold_session: string | null
+    bought: boolean
+  } | null
+  /** hold 且没指 A 为 null；日线不够的时点 status 为 unfinished 且数值为 null */
+  compare: { horizon: number; status: 'done' | 'unfinished'; a_pct: string | null; b_pct: string | null; diff: string | null }[] | null
+}
+
+export interface RotationGroup {
+  sample: number
+  enough: boolean
+  b_win_rate: string | null
+  mean_diff: string | null
+}
+
+export interface RotationSummary {
+  counts: { hold: number; half: number; full: number }
+  executed: number
+  fee_total: string
+  switched: RotationGroup
+  held: RotationGroup
+}
+
+export interface RotationRetroData {
+  records: RotationRecord[]
+  summary: RotationSummary
+  min_sample: number
 }
 
 /** The server error envelope is `{"error": "code[: 中文说明]"}`: show the Chinese part, drop the code prefix. */

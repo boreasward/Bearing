@@ -10,6 +10,7 @@
   import { bringToChat } from '$lib/views/context'
   import { retrospectFor } from '$lib/stores'
   import { moneyText } from '$lib/format'
+  import RotationRetro from './RotationRetro.svelte'
   import { type Hypothetical, type RetroRecord, type RuleKey, type RuleStatRow, type WeeklySummary } from './types'
 
   // 复盘（spec §10 复盘块）：顶部周汇总（Select 切周，本周与之前 8 周）、中间执行复盘表
@@ -23,8 +24,10 @@
 
   const resource = $derived(retrospectFor(loadedWeek, recordLimit))
   const view = $derived(resource.data)
-  const blockState = $derived(resource.state === 'ready' && view?.empty ? 'empty' : resource.state)
-  const message = $derived(resource.error || (view?.empty ? '还没有已结束的计划' : ''))
+  // 没有已结束的计划但已有换仓比较时仍显示整页（换仓块要能看到）
+  const nothingToShow = $derived(Boolean(view?.empty) && !view?.rotations?.records.length)
+  const blockState = $derived(resource.state === 'ready' && nothingToShow ? 'empty' : resource.state)
+  const message = $derived(resource.error || (nothingToShow ? '还没有已结束的计划' : ''))
 
   const RECORD_LIMIT_STEPS = [20, 50, 100]
   const RECORD_LIMIT_MAX = 100
@@ -63,6 +66,7 @@
     max_hold: '持有到期',
     thesis_broken: '论点失效',
     manual: '手动',
+    rotation: '换仓',
   }
   const NOT_FILLED_TEXT: Record<string, string> = { close_below_stop: '收盘跌破止损', never_in_zone: '价格未进入场区间' }
 
@@ -137,7 +141,7 @@
               <span class="flex items-center gap-1">周末总资产 <MetricValue value={null} raw={view.weekly.equity_end} currency /></span>
             </div>
             <!-- 审查 P1-4：周报的 §5.4 明细——偏差计数、已平仓各份、未买各行、名单变化 -->
-            {#if Object.keys(view.weekly.tag_counts).length || view.weekly.closed.length || view.weekly.not_bought.length || listingText(view.weekly.listing)}
+            {#if Object.keys(view.weekly.tag_counts).length || view.weekly.closed.length || view.weekly.not_bought.length || listingText(view.weekly.listing) || view.weekly.rotations?.length}
               <ul class="grid gap-1 text-xs text-muted-foreground">
                 {#if Object.keys(view.weekly.tag_counts).length}
                   <li>本周偏差：{Object.entries(view.weekly.tag_counts).map(([tag, count]) => `${tag} ×${count}`).join('；')}</li>
@@ -151,6 +155,9 @@
                 {#if listingText(view.weekly.listing)}
                   <li>本周名单：{listingText(view.weekly.listing)}</li>
                 {/if}
+                {#each view.weekly.rotations ?? [] as row, index (index)}
+                  <li>本周换仓：{row.session} {row.candidate} {row.verdict_text}{row.holding_ticker ? `（${row.verdict === 'hold' ? '对照' : '卖出'} ${row.holding_ticker}）` : ''}</li>
+                {/each}
               </ul>
             {/if}
           </div>
@@ -267,6 +274,8 @@
           {@render ruleSide('真实成交', view.rules.realized)}
           {@render ruleSide('假设结果', view.rules.hypothetical)}
         </section>
+
+        {#if view.rotations}<RotationRetro data={view.rotations} />{/if}
       </div>
     {/if}
   </DataBlock>
