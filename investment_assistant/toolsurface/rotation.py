@@ -149,7 +149,9 @@ def save_rotation(
         if env.mode == "chat" and request_id:
             replay = rotation_repo.rotation_by_request(conn, request_id)
             if replay is not None:  # 同一 request_id 重发：返回原行，不重复写（Review Focus 4）
-                if replay["candidate"] != ticker:
+                if (replay["candidate"], replay["verdict"], replay.get("holding_plan_id")) != (
+                    ticker, verdict, holding_plan_id
+                ):
                     raise ValueError(f"request_id_reused: 该 request_id 已用于 {replay['candidate']} 的换仓结论")
                 return _replayed(conn, replay)
         _scoped_confirmed(conn, env, ticker)

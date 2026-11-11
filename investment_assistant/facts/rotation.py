@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
+from investment_assistant.analysis.screen_rules import BENCHMARK
 from investment_assistant.config import AssistantConfig
 from investment_assistant.core.texts import money_value, quantity_value
 from investment_assistant.data import repo as data_repo
@@ -195,9 +196,9 @@ def gate(
 
 
 def _stock_metrics(conn, ticker: str, *, session: date, cutoff_at: datetime, groups: dict, industry: dict) -> dict:
-    """相对强度（与名单同一公式，基准 QQQ）、行业与行业档位；没有日线 / 没有基准 / 日线不够 60 天时 rs 为空。"""
+    """相对强度（与名单同一公式，基准同 screen_rules.BENCHMARK）、行业与行业档位；没有日线 / 没有基准 / 日线不够 60 天时 rs 为空。"""
     bars = data_repo.read_bars(conn, ticker, session, cutoff_at=cutoff_at, limit=300)
-    bench = data_repo.read_bars(conn, "QQQ", session, cutoff_at=cutoff_at, limit=300)
+    bench = data_repo.read_bars(conn, BENCHMARK, session, cutoff_at=cutoff_at, limit=300)
     rs = None
     if len(bars) > 60 and len(bench) > 60:
         rs = screen_rs(bars, _ret(bench, 20), _ret(bench, 60))

@@ -388,6 +388,8 @@ def test_chat_replay_returns_same_rotation(v3_tx):
     assert _count(v3_tx, "v3_rotations") == 1 and _count(v3_tx, "v3_plans") == 3
     other = _half(env, ids["a"], refs, request_id="chat-r", confirmed=True, ticker="EEE")
     assert other["error"].startswith("request_id_reused")
+    changed = _half(env, ids["a"], refs, request_id="chat-r", confirmed=True, verdict="full")
+    assert changed["error"].startswith("request_id_reused")
 
 
 def test_chat_user_names_the_holding(v3_tx):
