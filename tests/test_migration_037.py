@@ -69,15 +69,15 @@ def test_rerun_is_idempotent(v3_db):
     )  # 已有数据不被改写
     indexes = conn.execute(
         "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() "
-        "AND indexname IN ('uq_v3_rotations_brief_once', 'idx_v3_rotations_session')"
+        "AND indexname IN ('uq_v3_rotations_brief_once', 'idx_v3_rotations_session', 'uq_v3_plans_funded_by_rotation')"
     ).fetchone()[0]
-    assert indexes == 2  # 索引重跑后仍是各一份
+    assert indexes == 3  # 索引重跑后仍是各一份
     constraints = conn.execute(
         "SELECT count(*) FROM pg_constraint WHERE conname IN ("
-        "'v3_plans_sell_instruction_check', 'v3_plans_rotation_check', 'v3_plan_events_event_check')"
-        " AND connamespace = current_schema()::regnamespace"
+        "'v3_plans_sell_instruction_check', 'v3_plans_rotation_check', 'v3_plan_events_event_check', "
+        "'v3_rotations_half_full_check') AND connamespace = current_schema()::regnamespace"
     ).fetchone()[0]
-    assert constraints == 3  # 约束重跑后仍是各一份
+    assert constraints == 4  # 约束重跑后仍是各一份
 
 
 def test_one_brief_rotation_per_session(v3_db):
@@ -108,7 +108,9 @@ def test_half_and_full_need_the_holding_fields(v3_db):
         {"weakness": ""},
         {"cost_response": ""},
         {"sell_quantity": 0},
+        {"sell_quantity": None},
         {"buy_shares": 0},
+        {"buy_shares": None},
     ):
         with pytest.raises(errors.CheckViolation):
             _insert_rotation(conn, verdict="half", **{**full_fields, **broken})
@@ -118,6 +120,22 @@ def test_half_and_full_need_the_holding_fields(v3_db):
     _insert_rotation(conn, verdict="hold", origin="chat")  # hold 不带任何持仓字段
     conn.commit()
     assert conn.execute("SELECT count(*) FROM v3_rotations").fetchone()[0] == 3
+
+
+def test_one_rotation_funds_at_most_one_plan(v3_db):
+    conn = v3_db
+    rotation_id = _insert_rotation(conn)
+    other_id = _insert_rotation(conn, origin="chat")
+    _insert_plan(conn, "AAA", funded_by_rotation_id=rotation_id)
+    conn.commit()
+    with pytest.raises(errors.UniqueViolation):  # 同一次换仓出资第二个计划
+        _insert_plan(conn, "BBB", funded_by_rotation_id=rotation_id)
+    conn.rollback()
+    _insert_plan(conn, "BBB", funded_by_rotation_id=other_id)  # 另一次换仓可以
+    _insert_plan(conn, "CCC")
+    _insert_plan(conn, "DDD")  # 多个 NULL 不冲突
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM v3_plans").fetchone()[0] == 4
 
 
 def test_rotation_instruction_columns_move_together(v3_db):
