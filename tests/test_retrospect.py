@@ -130,6 +130,7 @@ def test_tags_each_code_once():
         "late_sell_after_stop",
         "late_sell_after_instruction",
         "early_sell",
+        "over_cap",
     )
     assert retrospect.NOT_FILLED == "not_filled"
     assert retrospect.FOLLOWED_TEXT == "照做"
@@ -141,6 +142,7 @@ def test_tags_each_code_once():
     assert retrospect.TAG_TEXT["late_sell_after_stop"] == "止损触及后晚卖 {n} 个交易日"
     assert retrospect.TAG_TEXT["late_sell_after_instruction"] == "卖出指令后晚卖 {n} 个交易日"
     assert retrospect.TAG_TEXT["early_sell"] == "早卖"
+    assert retrospect.TAG_TEXT["over_cap"] == "买入后超出仓位上限"
     touch = [_bar(date(2026, 11, 3), open_="32.00", high="32.20", low="31.90", close="32.00")]
     miss = [_bar(date(2026, 11, 3), open_="31.00", high="31.50", low="30.80", close="31.00")]
     # 未买入：价格进过入场区间（expired 且无成交）
@@ -727,3 +729,47 @@ def test_rule_stats_threshold_and_separation():
             "insufficient": False,
         }
     ]
+
+
+def test_over_cap_tag_from_deviation_event():
+    """v3.3：买入后仓位占比高于上限的 deviation 事件 → 标签 over_cap（spec §5.3 / §9）。"""
+    plan = _plan(
+        status="closed", outcome={"entry_in_zone": True, "exit_reason": "max_hold", "stop_delay_sessions": None}
+    )
+    trades = [
+        _trade("buy", date(2026, 11, 3), "32.00", 100, tid=1),
+        _trade("sell", date(2026, 11, 6), "32.50", 100, tid=2),
+    ]
+    events = [
+        _event("deviation", date(2026, 11, 3), "买入后仓位占比 63.2%，高于上限 60%"),
+        _event("stop_order_confirmed", date(2026, 11, 3)),
+        _event("sell_instruction", date(2026, 11, 5), "持有到期"),
+    ]
+    tags = retrospect.deviation_tags(plan=plan, events=events, trades=trades, bars=[])
+    assert tags == [{"code": "over_cap", "text": "买入后超出仓位上限", "sessions": None}]
+    assert "over_cap" in retrospect.DEVIATIONS
+    # 别的偏差原因不会误打这个标签
+    other = [_event("deviation", date(2026, 11, 3), "成交价 33.00 不在入场区间 31.80–32.10"), *events[1:]]
+    codes = [tag["code"] for tag in retrospect.deviation_tags(plan=plan, events=other, trades=trades, bars=[])]
+    assert "over_cap" not in codes
+
+
+def test_rotation_instruction_is_not_a_late_sell():
+    """换仓指令不是纪律：只有 rotation_instruction 事件、几天后才卖，不打「卖出指令后晚卖」。"""
+    plan = _plan(
+        status="closed", outcome={"entry_in_zone": True, "exit_reason": "rotation", "stop_delay_sessions": None}
+    )
+    tags = retrospect.deviation_tags(
+        plan=plan,
+        events=[
+            _event("rotation_instruction", date(2026, 11, 2), "换仓指令：卖出 150 股，换至 BBB"),
+            _event("stop_order_confirmed", date(2026, 11, 3)),
+        ],
+        trades=[
+            _trade("buy", date(2026, 11, 3), "32.00", 300, tid=1),
+            _trade("sell", date(2026, 11, 10), "31.00", 300, tid=2),
+        ],
+        bars=[],
+    )
+    assert "late_sell_after_instruction" not in [tag["code"] for tag in tags]
+    assert tags == []

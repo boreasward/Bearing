@@ -29,6 +29,7 @@ DEVIATIONS = (
     "late_sell_after_stop",
     "late_sell_after_instruction",
     "early_sell",
+    "over_cap",
 )
 NOT_FILLED = "not_filled"
 TAG_TEXT = {
@@ -40,6 +41,7 @@ TAG_TEXT = {
     "late_sell_after_stop": "止损触及后晚卖 {n} 个交易日",
     "late_sell_after_instruction": "卖出指令后晚卖 {n} 个交易日",
     "early_sell": "早卖",
+    "over_cap": "买入后超出仓位上限",
 }
 FOLLOWED_TEXT = "照做"
 
@@ -86,6 +88,13 @@ def _deviation_reason(events: list[dict], keyword: str) -> bool:
     return any(event["event"] == "deviation" and keyword in event.get("reason", "") for event in events)
 
 
+def _over_cap_deviation(events: list[dict]) -> bool:
+    """v3.3：买入后仓位占比高于上限的偏差（原因以「买入后仓位占比」开头，spec §5.3）。"""
+    return any(
+        event["event"] == "deviation" and event.get("reason", "").startswith("买入后仓位占比") for event in events
+    )
+
+
 def _instruction_delay(events: list[dict], sells: list[dict]) -> int | None:
     """卖出指令（交易日 X）后晚卖的交易日数：Y 晚于 X 的下一个交易日才算，N = X 后第 2 个交易日起到 Y。"""
     instructions = [event["session"] for event in events if event["event"] == "sell_instruction"]
@@ -117,6 +126,8 @@ def deviation_tags(*, plan: dict, events: list[dict], trades: list[dict], bars: 
         tags.append(_tag("entry_out_of_zone"))
     if _deviation_reason(events, "多于计划"):
         tags.append(_tag("over_bought"))
+    if _over_cap_deviation(events):
+        tags.append(_tag("over_cap"))
     if buys and not any(event["event"] == "stop_order_confirmed" for event in events):
         tags.append(_tag("stop_order_missing"))
     if (outcome.get("stop_delay_sessions") or 0) >= 1:
