@@ -63,3 +63,22 @@ it('confirms the previewed stop request after another row opens its trade form',
  await waitFor(() => expect(calls).toHaveLength(2))
  expect(calls[1]).toEqual({ url:'/api/plans/1/stop-order', body:{ price:96, request_id:calls[0].body.request_id, confirmed:true } })
 })
+const rotationAction = { plan_id:11, ticker:'AAA', kind:'rotation_sell', text:'AAA 下次开盘卖出 150 股（换仓至 BBB）', stop:'36', quantity:'301', reason:null, sell_quantity:'150', counterpart:'BBB', stale_quantity:false }
+it('换仓卖出排在止损触及与下次开盘卖出之后、缺日线与继续持有之前', async () => {
+ const base = todayData.actions[0]
+ const row = (plan_id: number, ticker: string, kind: string) => ({ ...base, plan_id, ticker, kind, text:`${ticker} ${kind}`, sell_quantity:null, counterpart:null })
+ await loadWorkbench({ '/api/today':{ ...todayData, actions:[row(5,'HLD','hold'), row(6,'UNC','unchecked'), rotationAction, row(7,'SEL','sell_next_open'), row(8,'STP','stop_hit_unresolved')] } })
+ render(DashboardPane, { onBring:vi.fn() })
+ const items = within(screen.getByRole('region', { name:/今日操作/ })).getAllByRole('listitem').map(item => item.textContent ?? '')
+ expect(items.map(text => ['STP','SEL','AAA','UNC','HLD'].findIndex(ticker => text.includes(ticker)))).toEqual([0,1,2,3,4])
+})
+it('换仓卖出一行的「记成交」预填卖出与股数，仪表里没有「撤回」', async () => {
+ await loadWorkbench({ '/api/today':{ ...todayData, actions:[rotationAction] } })
+ render(DashboardPane, { onBring:vi.fn() })
+ const actions = screen.getByRole('region', { name:/今日操作/ })
+ expect(within(actions).queryByRole('button', { name:'撤回' })).toBeNull()
+ await fireEvent.click(within(actions).getByRole('button', { name:'记成交' }))
+ expect(await screen.findByLabelText('股票')).toHaveValue('AAA')
+ expect(screen.getByLabelText('方向')).toHaveTextContent('卖出')
+ expect(screen.getByLabelText('股数')).toHaveValue('150')
+})

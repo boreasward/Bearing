@@ -66,6 +66,7 @@
           <Table.Head>A（持仓）</Table.Head>
           <Table.Head>结论</Table.Head>
           <Table.Head>执行情况</Table.Head>
+          <Table.Head>理由</Table.Head>
           {#each HORIZONS as horizon (horizon)}
             <Table.Head class="text-right">{horizon} 日 B 减 A</Table.Head>
           {/each}
@@ -86,6 +87,7 @@
                 </span>
               {/if}
             </Table.Cell>
+            <Table.Cell class="max-w-64 text-xs text-muted-foreground" title={record.reasons}><span class="line-clamp-3">{record.reasons}</span></Table.Cell>
             {#each HORIZONS as horizon (horizon)}
               {@const item = cell(record, horizon)}
               <Table.Cell class="text-right">

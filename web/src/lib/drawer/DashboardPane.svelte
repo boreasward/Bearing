@@ -8,6 +8,7 @@
   import { Button } from '$lib/ui/button/index'
   import ConfirmDialog from '$lib/ui/confirm-dialog/ConfirmDialog.svelte'
   import TradeForm from '$lib/home/TradeForm.svelte'
+  import { sortActions } from '$lib/home/action-order'
   import { post } from '$lib/api'
   import { notify } from '$lib/ui/toast'
   import { errorText, type WritePreview } from '$lib/home/types'
@@ -21,8 +22,7 @@
   const watching = research('watching')
   const planRows = $derived([...(holdings.data?.plans ?? []), ...(pending.data?.plans ?? [])])
   type Action = TodayData['actions'][number]
-  const order: Record<string, number> = { stop_hit_unresolved:0, sell_next_open:1, unchecked:2, stop_order:3, hold:4 }
-  const todayActions = $derived([...(today.data?.actions ?? [])].sort((a,b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9)))
+  const todayActions = $derived(sortActions(today.data?.actions ?? []))
   let tradeTarget = $state<Action | null>(null)
   type StopRequest = Readonly<{ planId: number; price: number | null; requestId: string }>
   let stopRequest = $state<StopRequest | null>(null)
@@ -61,7 +61,7 @@
           <li class="grid gap-1"><span>{action.ticker} · {action.text}</span>
             <div class="flex flex-wrap gap-1">
               {#if action.kind === 'stop_order' && action.stop != null}<Button size="sm" variant="primary" disabled={busy} onclick={() => confirmPlaced(action)}>确认已挂单</Button>{/if}
-              {#if action.kind === 'stop_hit_unresolved' || action.kind === 'sell_next_open'}<Button size="sm" variant="primary" onclick={() => { tradeTarget = action; tradeOpen = true }}>记成交</Button>{/if}
+              {#if action.kind === 'stop_hit_unresolved' || action.kind === 'sell_next_open' || action.kind === 'rotation_sell'}<Button size="sm" variant="primary" onclick={() => { tradeTarget = action; tradeOpen = true }}>记成交</Button>{/if}
               <Button size="sm" variant="ghost" onclick={() => onBring({ kind:'plan', ticker:action.ticker, id:action.plan_id })}>带进对话</Button>
             </div>
           </li>
@@ -110,5 +110,5 @@
     </ResourceBlock>
   </Section>
 </div>
-<TradeForm bind:open={tradeOpen} ticker={tradeTarget?.ticker ?? ''} planId={tradeTarget?.plan_id ?? null} shares={num(tradeTarget?.quantity)} onDone={() => completed('已记录成交')} />
+<TradeForm bind:open={tradeOpen} ticker={tradeTarget?.ticker ?? ''} planId={tradeTarget?.plan_id ?? null} shares={tradeTarget?.kind === 'rotation_sell' ? (tradeTarget.sell_quantity ?? num(tradeTarget.quantity)) : num(tradeTarget?.quantity)} side={tradeTarget?.kind === 'rotation_sell' ? 'sell' : 'buy'} onDone={() => completed('已记录成交')} />
 <ConfirmDialog bind:open={confirmOpen} title="确认已挂单" consequence={preview} actionLabel="确认已挂单" busy={writing} onConfirm={writeStop} onCancel={() => { preview = ''; stopRequest = null }} />

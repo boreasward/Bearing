@@ -75,6 +75,7 @@ describe('RotationRetro', () => {
     expect(within(first).getByText('半仓换')).toBeInTheDocument()
     expect(within(first).getByText('已执行')).toBeInTheDocument()
     expect(first).toHaveTextContent('卖出 150 股')
+    expect(first).toHaveTextContent('BBB 的相对强度与行业都更强') // 理由摘要（spec §9）
     expect(first).toHaveTextContent('+3.50%')
     expect(first).toHaveTextContent('-1.00%')
   })

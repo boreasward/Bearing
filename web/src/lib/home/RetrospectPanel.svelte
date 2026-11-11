@@ -165,56 +165,60 @@
 
         <section class="grid gap-2" aria-label="执行复盘">
           <h3 class="text-base font-medium">执行复盘</h3>
-          <Table.Root>
-            <Table.Header>
-              <Table.Row>
-                <Table.Head>股票</Table.Head>
-                <Table.Head>起止</Table.Head>
-                <Table.Head>计划说的</Table.Head>
-                <Table.Head>实际做的</Table.Head>
-                <Table.Head class="text-right">R</Table.Head>
-                <Table.Head>标签</Table.Head>
-                <Table.Head>假设结果</Table.Head>
-              </Table.Row>
-            </Table.Header>
-            <Table.Body>
-              {#each view.records as record (record.plan_id)}
+          {#if view.records.length === 0}
+            <p class="text-xs text-muted-foreground">还没有已结束的计划</p>
+          {:else}
+            <Table.Root>
+              <Table.Header>
                 <Table.Row>
-                  <Table.Cell>{record.ticker} <Button size="sm" variant="ghost" onclick={() => bringToChat({ kind:'plan', ticker:record.ticker, id:record.plan_id })}>带进对话</Button></Table.Cell>
-                  <Table.Cell class="whitespace-nowrap text-xs">{record.session}{record.ended_session ? `–${record.ended_session}` : ''}</Table.Cell>
-                  <Table.Cell>
-                    <PlanLevels
-                      low={num(record.planned.entry_low)}
-                      high={num(record.planned.entry_high)}
-                      stop={num(record.planned.initial_stop)}
-                      target1={num(record.planned.target1)}
-                      shares={record.planned.shares}
-                    />
-                  </Table.Cell>
-                  <Table.Cell class="whitespace-nowrap text-xs">{actualText(record)}</Table.Cell>
-                  <Table.Cell class="text-right">
-                    {#if record.r_text}
-                      <span class="text-xs text-muted-foreground">{record.r_text}</span>
-                    {:else}
-                      <MetricValue value={null} raw={record.r_multiple} />
-                    {/if}
-                  </Table.Cell>
-                  <Table.Cell>
-                    <span class="flex flex-wrap gap-1">
-                      {#if record.followed}
-                        <StatusPill domain="retro_tag" value="followed" />
-                      {:else}
-                        {#each record.tags as tag (tag.code)}
-                          <StatusPill domain="retro_tag" value={tag.code} text={tag.text} />
-                        {/each}
-                      {/if}
-                    </span>
-                  </Table.Cell>
-                  <Table.Cell class="text-xs">{hypotheticalText(record.hypothetical)}</Table.Cell>
+                  <Table.Head>股票</Table.Head>
+                  <Table.Head>起止</Table.Head>
+                  <Table.Head>计划说的</Table.Head>
+                  <Table.Head>实际做的</Table.Head>
+                  <Table.Head class="text-right">R</Table.Head>
+                  <Table.Head>标签</Table.Head>
+                  <Table.Head>假设结果</Table.Head>
                 </Table.Row>
-              {/each}
-            </Table.Body>
-          </Table.Root>
+              </Table.Header>
+              <Table.Body>
+                {#each view.records as record (record.plan_id)}
+                  <Table.Row>
+                    <Table.Cell>{record.ticker} <Button size="sm" variant="ghost" onclick={() => bringToChat({ kind:'plan', ticker:record.ticker, id:record.plan_id })}>带进对话</Button></Table.Cell>
+                    <Table.Cell class="whitespace-nowrap text-xs">{record.session}{record.ended_session ? `–${record.ended_session}` : ''}</Table.Cell>
+                    <Table.Cell>
+                      <PlanLevels
+                        low={num(record.planned.entry_low)}
+                        high={num(record.planned.entry_high)}
+                        stop={num(record.planned.initial_stop)}
+                        target1={num(record.planned.target1)}
+                        shares={record.planned.shares}
+                      />
+                    </Table.Cell>
+                    <Table.Cell class="whitespace-nowrap text-xs">{actualText(record)}</Table.Cell>
+                    <Table.Cell class="text-right">
+                      {#if record.r_text}
+                        <span class="text-xs text-muted-foreground">{record.r_text}</span>
+                      {:else}
+                        <MetricValue value={null} raw={record.r_multiple} />
+                      {/if}
+                    </Table.Cell>
+                    <Table.Cell>
+                      <span class="flex flex-wrap gap-1">
+                        {#if record.followed}
+                          <StatusPill domain="retro_tag" value="followed" />
+                        {:else}
+                          {#each record.tags as tag (tag.code)}
+                            <StatusPill domain="retro_tag" value={tag.code} text={tag.text} />
+                          {/each}
+                        {/if}
+                      </span>
+                    </Table.Cell>
+                    <Table.Cell class="text-xs">{hypotheticalText(record.hypothetical)}</Table.Cell>
+                  </Table.Row>
+                {/each}
+              </Table.Body>
+            </Table.Root>
+          {/if}
           {#if view.records.length >= recordLimit && recordLimit < RECORD_LIMIT_MAX}
             <div>
               <Button size="sm" variant="outline" onclick={showMore}>显示更多</Button>

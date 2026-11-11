@@ -213,7 +213,8 @@ describe('RetrospectPanel', () => {
     stubRetrospect(() => ({ ...VIEW, records: [], empty: true, rotations: ROTATIONS }))
     render(RetrospectPanel)
     expect(await screen.findByRole('region', { name: '换仓比较' })).toBeInTheDocument()
-    expect(screen.queryByText('还没有已结束的计划')).toBeNull()
+    // 执行复盘表为空时写一句，不留空表
+    expect(screen.getByText('还没有已结束的计划')).toBeInTheDocument()
   })
 
   it('缺 rotations 这个键时不报错、不渲染换仓块', async () => {

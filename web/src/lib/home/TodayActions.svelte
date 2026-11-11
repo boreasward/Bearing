@@ -7,15 +7,14 @@
   import { post } from '$lib/api'
   import { notify } from '$lib/ui/toast'
   import TradeForm from './TradeForm.svelte'
+  import { sortActions } from './action-order'
   import { errorText, type TodayAction, type WritePreview } from './types'
 
   // 今日操作（spec §12）：置顶块，没有内容时整块不出现。每条一行带直接可点的动作：
   // 「确认已挂单」两步确认，「记成交」打开预填表单；换仓卖出一行另有「撤回」（v3.3 spec §8，两步确认）。
   let { actions, onChanged }: { actions: TodayAction[]; onChanged?: () => void } = $props()
 
-  // spec §7.4 的规则次序：止损触及未卖出最紧急，其后依次卖出指令、换仓卖出（v3.3 §8）、缺日线、止损单、持有
-  const ORDER: Record<string, number> = { stop_hit_unresolved: 0, sell_next_open: 1, rotation_sell: 2, unchecked: 3, stop_order: 4, hold: 5 }
-  const sorted = $derived([...actions].sort((a, b) => (ORDER[a.kind] ?? 9) - (ORDER[b.kind] ?? 9)))
+  const sorted = $derived(sortActions(actions))
 
   let busy = $state(false)
   let confirmOpen = $state(false)
