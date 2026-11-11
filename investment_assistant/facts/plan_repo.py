@@ -12,7 +12,8 @@ _PLAN_COLUMNS = (
     "max_hold_sessions, valid_from, valid_until, shares, sizing, warnings, thesis, "
     "invalidation, counter, refs, agent_session, start_session, reviewed_through, "
     "stop_hit_session, target_hit_session, sell_instruction, ended_session, end_reason, "
-    "outcome, research_id, created_at, updated_at"
+    "outcome, research_id, sell_quantity, rotation_id, funded_by_rotation_id, stop_quantity_stale, "
+    "created_at, updated_at"
 )
 _EVENT_COLUMNS = "id, plan_id, session, event, reason, before, after, source, refs, created_at"
 _REVIEW_COLUMNS = "id, plan_id, session, verdict, reasons, counter, refs, agent_session, created_at, updated_at"
@@ -42,10 +43,10 @@ def insert_plan(conn, row: dict) -> dict:
         "valid_until, shares, sizing, warnings, thesis, invalidation, counter, refs, "
         'agent_session, status, kind, "trailing", confirmed_stop_order, start_session, '
         "reviewed_through, stop_hit_session, target_hit_session, sell_instruction, "
-        "ended_session, end_reason, outcome, research_id) "
+        "ended_session, end_reason, outcome, research_id, funded_by_rotation_id) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, "
         "%s::jsonb, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-        "%s, %s::jsonb, %s) "
+        "%s, %s::jsonb, %s, %s) "
         f"RETURNING {_PLAN_COLUMNS}",
         [
             row["session"],
@@ -83,6 +84,7 @@ def insert_plan(conn, row: dict) -> dict:
             row.get("end_reason"),
             _plan_json(row.get("outcome") or {}),
             row.get("research_id"),
+            row.get("funded_by_rotation_id"),
         ],
     )
     assert saved is not None  # RETURNING always yields the inserted row
@@ -116,6 +118,9 @@ UPDATABLE = (
     "invalidation",
     "max_hold_sessions",
     "levels_source",
+    "sell_quantity",
+    "rotation_id",
+    "stop_quantity_stale",
 )
 _JSONB_UPDATABLE = ("sizing", "warnings", "outcome")
 
@@ -154,6 +159,15 @@ def update_plan(conn, plan_id: int, **fields) -> dict:
 
 def plan(conn, plan_id: int) -> dict | None:
     return _one(conn, f"SELECT {_PLAN_COLUMNS} FROM v3_plans WHERE id = %s", (plan_id,))
+
+
+def plan_funded_by(conn, rotation_id: int) -> dict | None:
+    """The plan opened with the proceeds of one rotation, if any."""
+    return _one(
+        conn,
+        f"SELECT {_PLAN_COLUMNS} FROM v3_plans WHERE funded_by_rotation_id = %s ORDER BY id LIMIT 1",
+        (rotation_id,),
+    )
 
 
 def active_plan(conn, ticker: str) -> dict | None:

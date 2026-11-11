@@ -1,10 +1,11 @@
 """plan_repo SQL against migration 034, in a disposable-schema Postgres (v3_db fixture)."""
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 
-from investment_assistant.facts import plan_repo, repo, research_repo
+from investment_assistant.facts import plan_repo, repo, research_repo, rotation_repo
 
 SESSION = date(2026, 11, 9)
 NEXT_SESSION = date(2026, 11, 10)
@@ -313,6 +314,56 @@ def test_plan_row_carries_research_id(v3_db):
     assert plan_repo.plan(conn, saved["id"]) == saved
     plain = plan_repo.insert_plan(conn, _plan_row("MU"))
     assert plain["research_id"] is None  # 不带研究的计划也可以
+
+
+def _rotation_row(plan_id):
+    return {
+        "session": SESSION,
+        "origin": "chat",
+        "candidate": "MU",
+        "verdict": "half",
+        "holding_plan_id": plan_id,
+        "holding_ticker": "AAPL",
+        "reasons": "MU 更强",
+        "weakness": "AAPL 动能弱",
+        "counter": "MU 可能追高",
+        "cost_response": "成本不是理由",
+        "refs": [],
+        "snapshot": {"cap": 0.6},
+        "sell_quantity": Decimal("150"),
+        "buy_shares": Decimal("40"),
+        "agent_session": "as-1",
+        "request_id": None,
+    }
+
+
+def test_plan_row_carries_rotation_columns(v3_db):
+    conn = v3_db
+    saved = plan_repo.insert_plan(conn, _plan_row("AAPL"))
+    assert saved["sell_quantity"] is None and saved["rotation_id"] is None
+    assert saved["funded_by_rotation_id"] is None
+    assert saved["stop_quantity_stale"] is False  # 缺省 False
+    rid = rotation_repo.insert_rotation(conn, _rotation_row(saved["id"]))["id"]
+    updated = plan_repo.update_plan(
+        conn, saved["id"], sell_instruction="rotation", sell_quantity=Decimal("150"), rotation_id=rid
+    )
+    assert updated["sell_instruction"] == "rotation"
+    assert updated["sell_quantity"] == Decimal("150")
+    assert updated["rotation_id"] == rid
+    assert plan_repo.plan(conn, saved["id"]) == updated  # 读回一致
+    stale = plan_repo.update_plan(conn, saved["id"], stop_quantity_stale=True)
+    assert stale["stop_quantity_stale"] is True
+
+
+def test_plan_funded_by(v3_db):
+    conn = v3_db
+    holding = plan_repo.insert_plan(conn, _plan_row("AAPL"))
+    rid = rotation_repo.insert_rotation(conn, _rotation_row(holding["id"]))["id"]
+    assert plan_repo.plan_funded_by(conn, rid) is None  # 还没有计划由这次换仓出资
+    funded = plan_repo.insert_plan(conn, _plan_row("MU", funded_by_rotation_id=rid))
+    assert funded["funded_by_rotation_id"] == rid
+    assert plan_repo.plan_funded_by(conn, rid) == funded
+    assert plan_repo.plan_funded_by(conn, rid + 1000) is None
 
 
 def test_brief_weekly_columns_update_and_survive_upsert(v3_db):

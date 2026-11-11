@@ -55,6 +55,7 @@ WORKBENCH_MIGRATIONS = (
     "034_v3_1_plan_line.sql",
     "035_v3_2_research_and_retro.sql",
     "036_v3_2_1_tool_results.sql",
+    "037_v3_3_rotation.sql",
 )
 
 
@@ -90,13 +91,13 @@ def _workbench_schema(migrations):
 
 @pytest.fixture
 def workbench_db():
-    """The schema through migration 036: the fact tables and the v3_ tables, the v2 tables dropped."""
+    """The schema through migration 037: the fact tables and the v3_ tables, the v2 tables dropped."""
     yield from _workbench_schema(WORKBENCH_MIGRATIONS)
 
 
 @pytest.fixture
 def v3_db():
-    """The schema after migration 036: v3.2 research/weekly briefs plus optional tool results."""
+    """The schema after migration 037: v3.3 rotation records on top of v3.2 research/weekly briefs and tool results."""
     yield from _workbench_schema(WORKBENCH_MIGRATIONS)
 
 

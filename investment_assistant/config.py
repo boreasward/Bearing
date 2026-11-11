@@ -37,13 +37,13 @@ class WorkbenchConfig:
 
     risk_pct: float = 0.01
     single_cap: float = 0.25
-    total_cap: float = 1.0
+    total_cap: float = 0.6
 
 
 @dataclass(frozen=True)
 class V3Config:
     """v3 agent-first phase parameters (v3 spec §15.6); the v3.1 keys follow the v3.1 design §14
-    and the v3.2 keys the v3.2 design §12. Fixed values are the spec's, verbatim."""
+    the v3.2 keys the v3.2 design §12 and the v3.3 keys the v3.3 design §12. Fixed values are the spec's, verbatim."""
 
     top_n: int = 5
     collect_workers: int = 6
@@ -67,6 +67,10 @@ class V3Config:
     daily_hour: int = 11
     daily_minute: int = 30
     tool_result_max_bytes: int = 524288
+    rotation_cooldown_sessions: int = 5
+    rotation_min_fill: float = 0.5
+    rotation_fee_trades: int = 20
+    rotation_horizons: tuple[int, ...] = (5, 10, 20)
     sector_etfs: tuple[str, ...] = (
         "QQQ",
         "SMH",
@@ -216,10 +220,25 @@ def _validate_v3(cfg: V3Config) -> V3Config:
         raise ValueError("v3.daily_minute must be in [0, 59]")
     if not 65536 <= cfg.tool_result_max_bytes <= 8388608:
         raise ValueError("v3.tool_result_max_bytes must be in [65536, 8388608]")
+    if not 1 <= cfg.rotation_cooldown_sessions <= 20:
+        raise ValueError("v3.rotation_cooldown_sessions must be in [1, 20]")
+    if not 0 < cfg.rotation_min_fill <= 1:
+        raise ValueError("v3.rotation_min_fill must be in (0, 1]")
+    if not 1 <= cfg.rotation_fee_trades <= 200:
+        raise ValueError("v3.rotation_fee_trades must be in [1, 200]")
+    horizons = cfg.rotation_horizons
+    if (
+        not isinstance(horizons, (list, tuple))
+        or not 1 <= len(horizons) <= 5
+        or any(type(days) is not int or not 1 <= days <= 60 for days in horizons)
+        or any(later <= earlier for earlier, later in zip(horizons, horizons[1:]))
+    ):
+        raise ValueError("v3.rotation_horizons must be 1-5 ascending integers in [1, 60]")
     return replace(
         cfg,
         sector_etfs=tuple(str(etf).strip().upper() for etf in cfg.sector_etfs),
         daily_weekdays=tuple(cfg.daily_weekdays),
+        rotation_horizons=tuple(cfg.rotation_horizons),
     )
 
 

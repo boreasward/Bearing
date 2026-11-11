@@ -76,6 +76,54 @@ def test_v3_2_ranges(tmp_path):
     assert (cfg.v3.research_sessions, cfg.v3.research_entry_atr, cfg.v3.retro_min_sample) == (60, 8.0, 100)
 
 
+def test_v3_3_defaults(tmp_path):
+    cfg = load_config(tmp_path / "missing.json")
+    assert cfg.workbench.total_cap == 0.6
+    assert cfg.v3.rotation_cooldown_sessions == 5
+    assert cfg.v3.rotation_min_fill == 0.5
+    assert cfg.v3.rotation_fee_trades == 20
+    assert cfg.v3.rotation_horizons == (5, 10, 20)
+
+
+def test_v3_3_ranges(tmp_path):
+    horizons = r"v3\.rotation_horizons must be 1-5 ascending integers in \[1, 60\]"
+    for bad, message in (
+        ({"rotation_cooldown_sessions": 0}, r"v3\.rotation_cooldown_sessions must be in \[1, 20\]"),
+        ({"rotation_cooldown_sessions": 21}, r"v3\.rotation_cooldown_sessions must be in \[1, 20\]"),
+        ({"rotation_min_fill": 0}, r"v3\.rotation_min_fill must be in \(0, 1\]"),
+        ({"rotation_min_fill": 1.1}, r"v3\.rotation_min_fill must be in \(0, 1\]"),
+        ({"rotation_fee_trades": 0}, r"v3\.rotation_fee_trades must be in \[1, 200\]"),
+        ({"rotation_fee_trades": 201}, r"v3\.rotation_fee_trades must be in \[1, 200\]"),
+        ({"rotation_horizons": []}, horizons),
+        ({"rotation_horizons": [1, 2, 3, 4, 5, 6]}, horizons),
+        ({"rotation_horizons": [0, 5]}, horizons),
+        ({"rotation_horizons": [5, 61]}, horizons),
+        ({"rotation_horizons": [10, 5]}, horizons),
+        ({"rotation_horizons": [5, 5]}, horizons),
+        ({"rotation_horizons": [5, 10.5]}, horizons),
+    ):
+        with pytest.raises(ValueError, match=message):
+            load_config(_write(tmp_path, {"v3": bad}))
+    ok = {
+        "rotation_cooldown_sessions": 20,
+        "rotation_min_fill": 1,
+        "rotation_fee_trades": 200,
+        "rotation_horizons": [1, 2, 3, 4, 60],
+    }
+    cfg = load_config(_write(tmp_path, {"v3": ok}))  # 边界值本身合法
+    assert (cfg.v3.rotation_cooldown_sessions, cfg.v3.rotation_min_fill, cfg.v3.rotation_fee_trades) == (20, 1.0, 200)
+    assert cfg.v3.rotation_horizons == (1, 2, 3, 4, 60)  # JSON 列表读成元组
+    low = {"rotation_cooldown_sessions": 1, "rotation_min_fill": 0.01, "rotation_fee_trades": 1}
+    low["rotation_horizons"] = [7]
+    assert load_config(_write(tmp_path, {"v3": low})).v3.rotation_horizons == (7,)
+
+
+def test_example_config_matches_the_v3_3_defaults(tmp_path):
+    example = load_config(Path(__file__).resolve().parents[1] / "config" / "investment-assistant.example.json")
+    assert example.workbench.total_cap == 0.6
+    assert example.v3.rotation_horizons == (5, 10, 20) and example.v3.rotation_fee_trades == 20
+
+
 def test_file_overrides_and_validation(tmp_path):
     cfg = load_config(_write(tmp_path, {"v3": {"top_n": 3, "win_hi": 0.7}}))
     assert cfg.v3.top_n == 3 and cfg.v3.win_hi == 0.7
