@@ -2,7 +2,7 @@
 
 版本号与 roadmap 版本对应，见 [roadmap](docs/roadmap.md)。
 
-## [3.3.0] - 未发布
+## [3.3.0] - 2026-11-11
 
 账户维度：总仓位上限与换仓比较（[设计 spec](docs/specs/2026-11-11-v3.3-account-cap-and-rotation-design.md)、[实施 plan](docs/plans/2026-11-11-v3.3-account-cap-and-rotation.md)，在 v3.1 的计划线、账户与 v3.2 的复盘之上加一层账户判断；每笔风险 1%、单只上限 25%、名额 3 份、有效期 5 天、止损与目标的 ATR 倍数都没动）。按 spec §2 的目标八条：
 
@@ -22,7 +22,7 @@
 - **页面**：`/api/today` 的 `account.exposure`、`/api/account` 的 `exposure`、计划卡片的 `rotation` / `funded_by` / `warnings` / `stop_quantity_stale`、今日操作 `actions[]` 的 `sell_quantity` / `counterpart` / `stale_quantity` 与 `kind = rotation_sell`、`/api/retrospect` 的 `rotations`；前端：今日操作换仓卖出一行（「记成交」预填股票、计划与卖出股数，另有「撤回」）、计划卡片的换仓指令与「资金来自换仓」注记、账户概览的仓位占比与上限、复盘页「换仓」块（`RotationRetro`）、工具面板 38 个。
 - **与 v3.1、v3.2 设计的出入**（spec §16，冲突时以 v3.3 设计为准）：上限 100% → 60%；已买入的股票额度不够时可以被拿来比较；卖出指令第三种来源「换仓」（带数量、可撤回、可被取代）；部分卖出后提示改止损单数量；离场原因加「换仓」；待办的候选项可带一次换仓比较；仓位满时没有换仓结论的保存计划被拒绝；偏差标签加 `over_cap`。
 - 概念卡 `plan.sizing` 口径改为上限 60%（`version` 2 → 3）、`plan.max_hold` 补换仓指令被取代（`version` 2 → 3），新增 `plan.rotation`，共 43 张。
-- **上线状态**：2026-11-11 经用户授权（「备份真实库并执行迁移 037，完成上线」）执行 spec §14 第 1–4 步：备份、迁移 037、重建 `web/dist` 并 `launchctl kickstart -k` 重载页面服务、核对账户页。第 5 步（观察第一次真实换仓比较，或连续 5 个定时交易日没有触发而简报正常）进行中；发布日期、tag 与 push 待第 5 步完成后另行授权，所以本版仍标「未发布」。
+- **上线状态**：2026-11-11 经用户授权（「备份真实库并执行迁移 037，完成上线」）执行 spec §14 第 1–4 步：备份、迁移 037、重建 `web/dist` 并 `launchctl kickstart -k` 重载页面服务、核对账户页。第 5 步（观察第一次真实换仓比较，或连续 5 个定时交易日没有触发而简报正常）仍在观察；2026-11-12 经用户授权（「完成打 tag 与 push」）不等观察结束，先打 tag `v3.3.0` 并 push，观察结果之后补记。
 - 上线前三套全量测试：离线 pytest 953 通过、524 跳过（跳过的是需要库的用例）；一次性库 pytest 1477 通过；前端 `npm test` 72 个文件 537 通过，`npm run build` 成功，svelte-check 954 个文件 0 错误 0 警告。
 
 ## [3.2.2] - 2026-11-10
